@@ -176,3 +176,30 @@ targets to hit.
    messages (`--concurrency=1` as the first debugging step).
 5. **Vendored-rewriter drift.** We fork `rewrite.py`; upstream keeps moving. Pin a known-good pytest
    commit, record it, and re-vendor deliberately rather than tracking.
+
+## 11. Outstanding decisions
+
+Four things the examples surfaced:
+
+1. Nothing in the spec makes tests/fixtures.py importable. This is the real one. spec/02 §5 says velox never touches sys.path; spec/03 imports test modules under generated velox_tests.* names. Neither makes the test tree a package, so from tests.fixtures import api_client — the only way to share a fixture, since there's no conftest — cannot resolve. The examples assume velox prepends the rootdir to sys.path once at startup: one predictable insertion, not pytest's per-conftest-directory games. Whatever the answer, it needs writing down, because it's load-bearing for the no-conftest decision.
+
+A: Editing sys.path is trivial. What matters is that we need a convention that will work with all the mainstream tooling: ruff, pyright/pyrefly, VSCode language server etc. There is no use of imports that show in red in the IDE or require intricate configuration for every new dev tool.
+
+2. spec/01 §3's own api_client snippet has the footgun spec/08 §3 warns about. It mutates a module-level app's dependency_overrides — per-instance state that concurrent tests would clobber. Example 01 uses a create_app(settings) factory; the spec snippet should probably follow, since it's the first code a reader sees.
+
+A: this is a fundamental problem with FastAPI: the overrides are not well fleshed-out. I am concerned that constructing the app may be slow in real life (it builds all the route resolvers etc.) and that a lot of existing code asumes it's a global singleton. However, most app access in tests is via a test client, which people hand-roll based on the docs and their other requirements, so there is a natural surface for a factory. I would be open to some hacks with shallow/deep copy, since I believe the app itself is mostly immutable after construction - we should leverage that. FastAPI doesn't change very dynamically nowadays, so as long as we have good test coverage of our assumptions, this should be easy to maintain.
+
+
+3. B008 fires on every test in a velox suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["velox.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started. Inline with_() is worse: relay.with_(transport=fake) has no qualified name to whitelist, so the examples bind derived fixtures to module-level names. That reads better and is shareable, so it should just be the documented idiom.
+
+A: I am confused here. I know pytest people would build fixtures like that, but I never saw a FastAPI dep built this way. With that note, the FastAPI DI has an annoying limitation that dep functions cannot be parametrized. I'd rather have `value: T = Depends(dep_factory, param=...)` than have to call the factories this way. In any case, I believe your example is resolved the FastAPI way with something like:
+```python
+def flaky_client() -> AsyncClient:
+    yield relay.with_(transport=fake).client()
+```
+
+4. velox.tmp_path_factory has no named type. Used here as velox.TmpPathFactory with .mktemp(name).
+
+I also added fastapi to ruff's extend-exclude in the root pyproject.toml — CLAUDE.md lists it as reference-only alongside pytest/research/spec but it was missing, so just fmt-check was failing on markdown code blocks in the submodule. just check passes now.
+
+I have not touched the spec files. Say the word and I'll fold findings 1–4 in.
