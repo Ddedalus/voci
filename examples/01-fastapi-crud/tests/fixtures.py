@@ -55,7 +55,7 @@ async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]
         await e.dispose()
 
 
-@velox.fixture
+@velox.fixture()
 async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
     """A real session inside a transaction that is always rolled back.
 
@@ -79,12 +79,12 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture
+@velox.fixture()
 def settings() -> Settings:
     return Settings(database_url="unused: the session is injected", signup_bonus_cents=0)
 
 
-@velox.fixture
+@velox.fixture()
 async def api_client(
     session: AsyncSession = Depends(session),
     settings: Settings = Depends(settings),
@@ -111,7 +111,7 @@ async def api_client(
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture
+@velox.fixture()
 async def alice(session: AsyncSession = Depends(session)) -> User:
     """A committed-enough user for tests that need one to exist.
 

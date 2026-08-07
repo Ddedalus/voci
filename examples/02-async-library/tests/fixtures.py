@@ -13,7 +13,7 @@ from relay.settings import Settings
 from relay.transport import FakeTransport, Response
 
 
-@velox.fixture
+@velox.fixture()
 def settings() -> Settings:
     """Configuration as a value.
 
@@ -24,23 +24,23 @@ def settings() -> Settings:
     return Settings(endpoint="https://hooks.test/v1", retries=3, cache_ttl=30.0)
 
 
-@velox.fixture
+@velox.fixture()
 def transport() -> FakeTransport:
     return FakeTransport()
 
 
-@velox.fixture
+@velox.fixture()
 def flaky_transport() -> FakeTransport:
     """Fails twice with 503, then succeeds."""
     return FakeTransport(responses=[Response(503), Response(503), Response(200, b"ok")])
 
 
-@velox.fixture
+@velox.fixture()
 def dead_transport() -> FakeTransport:
     return FakeTransport(responses=[Response(500)])
 
 
-@velox.fixture
+@velox.fixture()
 def relay(
     transport: FakeTransport = Depends(transport),
     settings: Settings = Depends(settings),
@@ -53,12 +53,12 @@ def relay(
     return Relay(transport, retries=settings.retries, base_delay=0.001)
 
 
-@velox.fixture
+@velox.fixture()
 def clock() -> FakeClock:
     return FakeClock()
 
 
-@velox.fixture
+@velox.fixture()
 def cache(
     clock: FakeClock = Depends(clock),
     settings: Settings = Depends(settings),

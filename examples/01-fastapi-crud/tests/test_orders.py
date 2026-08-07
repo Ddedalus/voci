@@ -51,7 +51,7 @@ async def test_list_orders_filters_by_minimum(
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture
+@velox.fixture()
 def premium_settings() -> Settings:
     return Settings(database_url="unused", signup_bonus_cents=5_000, max_orders_per_user=2)
 

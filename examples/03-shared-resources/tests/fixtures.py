@@ -58,7 +58,7 @@ async def migrated_store(path: Path = Depends(app_db)) -> AsyncIterator[Store]:
         await asyncio.to_thread(store.truncate)
 
 
-@velox.fixture
+@velox.fixture()
 def account(info: velox.TestInfo = Depends(velox.test_info)) -> str:
     """A per-test account namespace derived from the test id.
 
@@ -69,7 +69,7 @@ def account(info: velox.TestInfo = Depends(velox.test_info)) -> str:
     return f"acct::{info.id}"
 
 
-@velox.fixture
+@velox.fixture()
 async def ledger(store: Store = Depends(migrated_store)) -> LedgerService:
     return LedgerService(store)
 
@@ -127,7 +127,7 @@ async def receiver() -> AsyncIterator[Receiver]:
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture
+@velox.fixture()
 def feature_flags() -> Iterator[ModuleType]:
     """Save/restore around a test that mutates the global flag registry.
 
