@@ -1,0 +1,16 @@
+[project]
+name = "velox"
+version = "0.1.0"
+description = "Fast, concurrent test runner for Python."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
+    "pyrefly>=1.2.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]

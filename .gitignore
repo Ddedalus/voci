@@ -1,0 +1,12 @@
+# Python cache files
+__pycache__
+*.py[cod]
+__pypackages__
+
+# Distribution / packaging
+.Python
+/build
+
+# Ruff, uv, pytest
+.ruff_cache
+.pytest_cache
