@@ -126,7 +126,7 @@ sequenced in the roadmap sections of the component specs.
 | Reporter: tty blocks, non-tty mode, short summary | live footer, `--durations`, JUnit XML, `--report-json`, GH annotations, `--stream-failures` |
 | Marks: skip/skipif | xfail/parametrize/tags, `-k`/`-m` |
 | Ctrl-C choreography, un-awaited-coroutine failure |  Loop-starvation watchdog, unraisable attribution polish, warnings-in-parallel story |
-| DI-override mocking; stock `unittest.mock` detected and scheduled **solo** | Task-local routing `velox.patch` (tier c) |
+| DI-override mocking; `velox.fastapi` ContextVar-layered `dependency_overrides`/`app.state`; stock `unittest.mock` detected and scheduled **solo** | General-purpose task-local routing `velox.patch` (tier c) |
 | — | Migration codegen (separate deliverable, starts after v0.1 API freeze) |
 
 ## 8. Milestones
@@ -162,7 +162,8 @@ targets to hit.
 | JUnit/JSON emitters | 250 | |
 | CLI/config (single parse) | 200 | |
 | Patch router (tier c) | 300 | Not in MVP — see [08](08-patching-and-isolation.md) |
-| **Fresh total** | **~3.3k** | |
+| `velox.fastapi` layered client | 120 | Layered overrides + state, install-once, escalation ([08](08-patching-and-isolation.md) §3.1) |
+| **Fresh total** | **~3.4k** | |
 | Vendored rewriter + explanation engine | ~2.4k | Plus upstream tests |
 
 ## 10. Principal risks
@@ -181,17 +182,16 @@ targets to hit.
 
 ## 11. Outstanding decisions
 
-Four things the examples surfaced:
+Four things the examples surfaced. The second is **resolved**; it stays here with its resolution
+because the reasoning is load-bearing for the reference stack.
 
 ### Fixture import path
 1. Nothing in the spec makes tests/fixtures.py importable. This is the real one. spec/02 §5 says velox never touches sys.path; spec/03 imports test modules under generated velox_tests.* names. Neither makes the test tree a package, so from tests.fixtures import api_client — the only way to share a fixture, since there's no conftest — cannot resolve. The examples assume velox prepends the rootdir to sys.path once at startup: one predictable insertion, not pytest's per-conftest-directory games. Whatever the answer, it needs writing down, because it's load-bearing for the no-conftest decision.
 
 A: Editing sys.path is trivial. What matters is that we need a convention that will work with all the mainstream tooling: ruff, pyright/pyrefly, VSCode language server etc. There is no use of imports that show in red in the IDE or require intricate configuration for every new dev tool.
 
-### FastAPI testing
-2. spec/01 §3's own api_client snippet has the footgun spec/08 §3 warns about. It mutates a module-level app's dependency_overrides — per-instance state that concurrent tests would clobber. Example 01 uses a create_app(settings) factory; the spec snippet should probably follow, since it's the first code a reader sees.
-
-A: this is a fundamental problem with FastAPI: the overrides are not well fleshed-out. I am concerned that constructing the app may be slow in real life (it builds all the route resolvers etc.) and that a lot of existing code asumes it's a global singleton. However, most app access in tests is via a test client, which people hand-roll based on the docs and their other requirements, so there is a natural surface for a factory. I would be open to some hacks with shallow/deep copy, since I believe the app itself is mostly immutable after construction - we should leverage that. FastAPI doesn't change very dynamically nowadays, so as long as we have good test coverage of our assumptions, this should be easy to maintain.
+### FastAPI testing — RESOLVED (2026-08-07)
+2. `app.dependency_overrides` and `app.state` are per-app-instance mutable dicts, so the docs-blessed idiom — mutate a module-level singleton's overrides and reset in teardown — is a process-global write that concurrent tests clobber; the `create_app(settings)` factory that dodges it is adoption-hostile, because real FastAPI code is singleton-shaped and no team rewrites production wiring to adopt a test runner. The resolution keeps the singleton and moves the *view*: routes bake in only a pointer to the app (`dependency_overrides_provider`, captured at route-decoration time) and read the override dynamically on every request via `getattr(provider, "dependency_overrides", {}).get(call, call)`, so replacing that attribute once with a ContextVar-layered `Mapping` proxy makes overrides per-test while the app object stays shared and untouched. A new MVP module, `velox.fastapi`, installs the proxy once per app object and scopes each `client()` block's mappings to a layer — reads consult layer then base, writes inside a layer stay in the layer, nested clients stack inner-wins — with `app.state` layered the same way and a loud I6 escalation if the proxy is ever replaced out from under velox. This is tier (c)'s ContextVar-routing insight applied to exactly one well-behaved surface (~120 LOC, no general patch machinery); general-purpose `velox.patch` remains deferred. It rests on a handful of upstream facts, which velox pins with assumption tests (`tests/test_fastapi_layering.py`) so that an upstream change breaks velox's own suite rather than adopters' runs. Mechanism, limits, and rejected alternatives: [08](08-patching-and-isolation.md) §3.1; the surface and the canonical fixture: [01](01-public-api.md) §3.
 
 ### B008 false positives
 3. B008 fires on every test in a velox suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["velox.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started. Inline with_() is worse: relay.with_(transport=fake) has no qualified name to whitelist, so the examples bind derived fixtures to module-level names. That reads better and is shareable, so it should just be the documented idiom.

@@ -8,7 +8,7 @@ app/
   settings.py     frozen dataclass, injectable, reads env through a parameter
   models.py       User, Order
   db.py           get_session — the seam tests override
-  main.py         routes + create_app(settings) factory
+  main.py         routes + the module-level `app = FastAPI(...)`, written for production only
 tests/
   fixtures.py     engine, session, api_client, alice, payment_sandbox
   test_users.py   the baseline shape: parametrize, marks, class grouping
@@ -96,10 +96,24 @@ it was tried on. Here the concurrency is inside one process, so the expensive th
 real schema and sees none of its neighbours' writes. This is what makes concurrency safe for a
 database suite without giving each test its own database.
 
-**`tests/fixtures.py::api_client`** — a *fresh app per test*. `app.dependency_overrides` is
-per-instance state; sixteen concurrent tests mutating one module-level app's overrides is the most
-likely footgun in this stack (spec/08 §3). Building an app costs microseconds, and the payoff is
-that there is nothing to clean up afterwards.
+**`tests/fixtures.py::api_client`** — *your* app. `app/main.py` ends with a module-level
+`app = FastAPI(lifespan=lifespan)`, the way it would be written if this suite did not exist, and
+the tests use that object. No factory, no per-test rebuild, no production code shaped by its tests.
+
+The override itself is the line from the FastAPI docs, unchanged:
+`{get_session: lambda: session}`. What velox adds is where it is *stored*.
+`app.dependency_overrides` and `app.state` are per-app-instance dicts, so sixteen concurrent tests
+writing them are sixteen tests writing one dict — and the `dependency_overrides.clear()` those docs
+put in teardown wipes it out from under the fifteen still in flight. `velox.fastapi.client()` swaps
+each attribute, once, for a proxy that layers a `ContextVar` over the original, so every test reads
+and writes its own layer through the same singleton. Collisions are not possible, and the teardown
+line is not needed: the layer is dropped when the fixture's `async with` exits, on the failure path
+as on the success path.
+
+The app's `lifespan` never runs under the test client — `httpx.ASGITransport` sends no lifespan
+scope — so no real engine is built and `app.state.sessionmaker` is never set. Nothing reads it,
+because `get_session` is overridden. For an app whose startup puts something under test in place,
+`velox.fastapi.lifespan(app)` is a session-scoped fixture that runs it once for the whole run.
 
 **`test_orders.py::test_premium_signup_grants_credit`** — `api_client.with_(settings=premium_settings)`
 replaces one node of the graph for one test. No patching, no override registry, no teardown; the

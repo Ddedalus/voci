@@ -12,6 +12,7 @@ velox = "velox.cli:main"
 [dependency-groups]
 dev = [
     "fastapi>=0.141.1",
+    "httpx>=0.28",
     "pydantic>=2.13.4",
     "pyrefly>=1.2.0",
     "pytest>=9.1.1",
@@ -42,6 +43,9 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["velox"]
+# The `fastapi/` reference submodule at the repo root otherwise makes isort read the installed
+# `fastapi` package as first-party and file it next to velox's own imports.
+known-third-party = ["fastapi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -71,6 +71,36 @@ values keep working).
 
 The annotation is encouraged, but not required: `client = Depends(api_client)` works.
 
+### The FastAPI client fixture
+
+`api_client` is the fixture almost every suite in the reference stack writes first, so it is the
+canonical shape:
+
+```python
+from app.main import app  # the real, module-level app — untouched
+
+@velox.fixture()
+async def api_client(
+    session: AsyncSession = Depends(session),
+    settings: Settings = Depends(settings),
+) -> AsyncIterator[AsyncClient]:
+    async with velox.fastapi.client(
+        app,
+        overrides={get_session: lambda: session},
+        state={"settings": settings},
+    ) as client:
+        yield client
+```
+
+**Production code is not restructured to be testable.** The app stays the module-level singleton it
+already is; no `create_app()` factory, no import-time indirection, nothing in `app/` changes.
+`velox.fastapi.client` replaces `app.dependency_overrides` (and, when `state=` is passed, `app.state`)
+exactly once per app object with a layered proxy whose reads consult a `ContextVar` layer before the
+underlying dict — so the override *view* is per-test even though the app object is shared, and two
+tests overriding `get_session` with different sessions at the same time cannot see each other's
+values. Overrides keep FastAPI's own semantics: the value is a dependency *callable*, not the
+resolved object. Mechanism, escalation, lifespan policy, and limits: [08](08-patching-and-isolation.md) §3.1.
+
 ### Direct call / overriding
 
 A fixture object is also callable in ordinary Python (`await engine()` returns the underlying
@@ -138,6 +168,7 @@ editor integrations transfer unchanged.
 | `velox.capture` | Access to the current test's captured stdout/stderr text ([09](09-capture-and-logging.md)). |
 | `velox.log_records` | The `caplog` equivalent: structured `LogRecord`s captured for this test, plus a `set_level()` context manager. |
 | `velox.test_info` | Test id, tags, timeout, worker slot — the `request` replacement, deliberately tiny and read-only. |
+| `velox.fastapi.lifespan` | Session-scoped; runs one app's lifespan exactly once per run, since the test client never triggers startup. Writes land in the app's base state ([08](08-patching-and-isolation.md) §3.1). |
 | `velox.monkeypatch` | *Not provided.* Use `unittest.mock` (which velox schedules solo) or a DI override — see [08](08-patching-and-isolation.md). |
 
 ## 7. Class-grouped tests
@@ -163,6 +194,8 @@ velox.approx(0.3)
 - `skip`, `skipif`, `tag`, `timeout`, `parametrize`, `solo`.
 - `raises`, `approx`, plain asserts.
 - Class grouping as namespacing.
+- `velox.fastapi.client(app, overrides=, state=, base_url=)` and `velox.fastapi.lifespan(app)` —
+  the layered-override client for the reference stack ([08](08-patching-and-isolation.md) §3.1).
 
 ## 10. Roadmap
 

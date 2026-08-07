@@ -1,7 +1,13 @@
-"""HTTP layer and the app factory."""
+"""HTTP layer and the app.
+
+Nothing in this file is arranged for the tests. `app` is a module-level singleton built at import
+— the shape every FastAPI tutorial, deployment guide and `uvicorn app.main:app` command line
+assumes — and the test suite consumes it exactly as it is. See `tests/fixtures.py::api_client`.
+"""
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -126,6 +132,13 @@ async def list_orders(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Real startup: one engine, one sessionmaker, disposed on shutdown.
+
+    The test suite never runs this. `httpx.ASGITransport` sends no lifespan scope, and building a
+    real engine per test would be the wrong thing to do anyway — the tests override `get_session`
+    outright, so nothing reads `app.state.sessionmaker`. An app whose startup *does* put something
+    under test in place would depend on `velox.fastapi.lifespan(app)` instead.
+    """
     settings: Settings = app.state.settings
     engine = create_async_engine(settings.database_url)
     app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
@@ -135,14 +148,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
-def create_app(settings: Settings) -> FastAPI:
-    """Build an app instance.
-
-    A *factory*, not a module-level `app`. Tests build one app per test and override
-    `get_session` on it; `dependency_overrides` is per-instance state, so a shared module-level app
-    would have concurrent tests clobbering each other's overrides — see spec/08 §3.
-    """
-    app = FastAPI(lifespan=lifespan)
-    app.state.settings = settings
-    app.include_router(router)
-    return app
+app = FastAPI(lifespan=lifespan)
+app.state.settings = Settings.from_env(os.environ)
+app.include_router(router)

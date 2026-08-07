@@ -60,9 +60,14 @@ premium_client = api_client.with_(settings=premium_settings)
 """`Fixture.with_()` returns a *derived* fixture with one dependency replaced by name.
 
 `api_client` takes a `settings` parameter; this swaps it. Everything else in the graph — the
-session, the engine — is untouched and still shared. There is no patching, no registry override,
-and no ordering hazard, because the substitution is part of the static graph: the scheduler and the
-validator both see the truth.
+session, the engine, the app itself — is untouched and still shared. There is no patching, no
+registry override, and no ordering hazard, because the substitution is part of the static graph:
+the scheduler and the validator both see the truth.
+
+The tests below run against the same singleton `app` as every other test in this suite, and read
+`settings.max_orders_per_user == 2` while their neighbours read the default. That is the layering
+in `api_client` doing its job: the substituted value reaches `app.state` for this test's context
+and no other.
 
 Bound to a name rather than written inline in the `Depends(...)`. Both work, but the inline form
 trips ruff's B008 with no qualified name to whitelist — and a named derived fixture reads better

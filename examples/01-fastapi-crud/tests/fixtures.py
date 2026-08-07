@@ -15,12 +15,13 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import velox
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from velox import Depends
+from velox import fastapi as velox_fastapi
 
 from app.db import get_session
-from app.main import create_app
+from app.main import app
 from app.models import Base, User
 from app.settings import Settings
 
@@ -89,20 +90,36 @@ async def api_client(
     session: AsyncSession = Depends(session),
     settings: Settings = Depends(settings),
 ) -> AsyncIterator[AsyncClient]:
-    """An HTTP client bound to a fresh app instance.
+    """An HTTP client speaking to `app` — the real one, the module-level singleton.
 
-    Fresh *per test*, deliberately. `app.dependency_overrides` is per-app-instance state; a
-    module-level app shared by sixteen concurrent tests would have them overwriting each other's
-    overrides and never notice. Building the app costs microseconds — see spec/08 §3.
+    Not a copy, not a factory call, not a per-test rebuild. `app/main.py` is written the way every
+    FastAPI deployment guide writes it, and the tests take it as it is.
 
-    Because the app is per-test, there is nothing to clean up: no `dependency_overrides.clear()`,
-    no ordering hazard if a test fails partway.
+    Read the two mappings below and compare them to what you already hand-roll from the FastAPI
+    testing docs: `app.dependency_overrides[get_session] = lambda: session`. Character for
+    character the same substitution, with the same semantics — the value is a *dependency
+    callable*, which is why the session is passed as `lambda: session`.
+
+    What is gone is the part the docs cannot help with. `dependency_overrides` and `state` are
+    per-app-instance dicts, so sixteen concurrent tests writing them are sixteen tests writing one
+    dict, and the `.clear()` those docs put in teardown wipes the fifteen that are still running.
+    velox routes both through a `ContextVar` keyed to this test's context (`velox/fastapi.py`), so
+    the writes cannot collide and the reset is unnecessary — the layer goes away when this fixture's
+    `async with` exits, whether the test passed, failed, or raised halfway through.
+
+    Note what did *not* have to happen for that: no change to `app/main.py`, no factory, no
+    `create_app(settings)` that exists only because the tests asked for it.
+
+    The app's `lifespan` does not run here — `ASGITransport` sends no lifespan scope — so no real
+    engine is created and `app.state.sessionmaker` stays unset. Nothing reads it, because
+    `get_session` is overridden above. For an app whose startup builds something the tests need,
+    depend on `velox.fastapi.lifespan(app)`, a session-scoped fixture that runs it once per run.
     """
-    app = create_app(settings)
-    app.dependency_overrides[get_session] = lambda: session
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with velox_fastapi.client(
+        app,
+        overrides={get_session: lambda: session},
+        state={"settings": settings},
+    ) as client:
         yield client
 
 

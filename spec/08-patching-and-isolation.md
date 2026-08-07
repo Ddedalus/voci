@@ -4,7 +4,9 @@
 indirection: modules and classes are process singletons, so a naive `mock.patch` /
 `monkeypatch.setattr` is unavoidably global (R§6). The insight that eventually rescues it: **the
 write is global, but the view doesn't have to be** — the install can be separated from the override.
-That insight is worth code only when it buys concurrency, which is why v0.1 doesn't ship it.*
+That insight is worth code only when it buys concurrency, which is why v0.1 ships it in exactly one
+place — FastAPI's `dependency_overrides`, where the upstream read path is already dynamic (§3.1) —
+and nowhere else.*
 
 ---
 
@@ -27,6 +29,7 @@ Three answers, and they are the tiers.
 | Tier | Mechanism | Who builds it | Concurrency | Status |
 |---|---|---|---|---|
 | **(a) DI override** | Pass a different fixture or value at the call site | Nobody — it's just DI | Fully concurrent | **MVP** |
+| **(a′) `velox.fastapi` layered client** | Tier (c)'s routing idea applied to exactly two attributes on one object the suite already owns | velox builds it, ~120 LOC | Fully concurrent | **MVP** (§3.1) |
 | **(b) `unittest.mock`, scheduled solo** | Stock `mock.patch`; velox detects it and drains the suite | velox builds *detection + scheduling*, not patching | Serializes the suite around it | **MVP** |
 | **(c) Routing `velox.patch`** | Router installed once at the slot; overrides live in the task's context | velox builds it | Fully concurrent | Roadmap (v0.2) |
 | **(d) `@velox.isolated`** | Subprocess, fresh loop | velox builds the worker | Concurrent, but a process spawn | Roadmap |
@@ -43,6 +46,11 @@ let two concurrent tests patch the same target differently. Until that exists, t
 "use `unittest.mock`, and velox will schedule your test safely" — which is also a much better
 migration story, since it means untouched `mock.patch` call sites keep working.
 
+Tier (a′) is not a counter-example to that rule. It is not a patch API and installs nothing at a
+module or class slot; it replaces two attributes on a single object the test suite already holds a
+reference to, whose upstream read path is dynamic by construction (§3.1). That is why 120 lines
+suffice there and 300 plus a proxy/descriptor zoo do not suffice for the general case.
+
 This resolves Q3 in the other direction from the first draft: **don't wrap, delegate.**
 
 ## 3. Tier (a): DI override — the intended default
@@ -58,10 +66,118 @@ async def test_retry(svc: Service = Depends(service.with_(http=fake_http))):
     ...
 ```
 
-FastAPI's own `app.dependency_overrides` is per-app-instance and is already concurrency-safe *if
-each test or scope builds its own app* — the recipes page must show that, because sharing one app
-instance across concurrent tests with mutated overrides is the most likely footgun in the reference
-stack.
+The reference stack has one seam where tier (a) does not reach, because the override point belongs
+to the application object rather than to velox's DI graph: FastAPI's `app.dependency_overrides`.
+That seam is specified in §3.1 and is the only place velox writes to an object it does not own.
+
+### 3.1 `velox.fastapi`: layered `dependency_overrides` (MVP)
+
+`app.dependency_overrides` and `app.state` are per-app-instance mutable dicts. The docs-blessed
+pytest idiom — import the module-level `app`, assign `app.dependency_overrides[dep] = fake`, clear
+it in teardown — is a process-global write under concurrency: two tests overriding the same
+dependency clobber each other, and a non-overriding test racing the assignment sees the fake. The
+obvious dodge, a `create_app(settings)` factory per test, is adoption-hostile: real FastAPI code is
+singleton-shaped (`app = FastAPI()` at module level, routers included at import), and no team
+rewrites production wiring to adopt a test runner. **velox therefore makes the override *view*
+per-test while leaving the app object shared and the production code untouched.**
+
+**Upstream facts the mechanism rests on.** All four are verified against the pinned FastAPI
+submodule and the installed Starlette/httpx, and all four are pinned by assumption tests (below).
+
+1. **Routes bake in a pointer to the app, not its overrides.** `FastAPI.__init__` passes
+   `dependency_overrides_provider=self` into its router (`fastapi/applications.py`), and the
+   pointer is propagated to every route at decoration/`include_router` time
+   (`fastapi/routing.py`). The lookup itself is dynamic, per request, in `solve_dependencies`:
+   `getattr(provider, "dependency_overrides", {}).get(original_call, original_call)`
+   (`fastapi/dependencies/utils.py`). Replacing the attribute after routes exist is therefore seen
+   by every subsequent request.
+2. **FastAPI's entire contract with the attribute is a truthiness check plus `.get(key, default)`** —
+   two adjacent call sites, no `in`, no iteration, no mutation. A read-only `Mapping` proxy with a
+   truthy `__bool__` satisfies it exactly.
+3. **`request.app` is the singleton and `app.state` is one object.** `Starlette.__call__` assigns
+   `scope["app"] = self`; `State` is pure attribute delegation over a `_state` dict, constructed
+   once and never reassigned upstream. So `state` can be layered the same way `overrides` is.
+4. **httpx's `ASGITransport` awaits the app inside the calling task**, so each request inherits the
+   test's `contextvars.Context` — which velox already makes fresh per test (I1). It also never
+   sends a `lifespan` scope.
+
+**Surface.** `velox.fastapi.client(app, *, overrides=None, state=None, base_url="http://testserver")`
+— an async context manager yielding an `httpx.AsyncClient` over `ASGITransport(app)`. The public
+shape and the canonical fixture live in [01](01-public-api.md) §3.
+
+**Install once, per app object, idempotently.** On first entry for a given `app`, `client()`
+replaces `app.dependency_overrides` with a `_LayeredOverrides(base=<the previous dict>)`, and — only
+if `state=` is used — replaces `app.state` with a `State` subclass layering per-context values over
+the existing `_state`. Subsequent entries see the proxy already installed and skip the swap. The
+installation is a one-time process-wide effect with no teardown: the proxy is behaviourally
+identical to the dict it replaced for any code holding no active layer.
+
+**Layer routing.**
+
+- **Read:** consult the `ContextVar` layer first, then `base`. Absent from both → the key is absent.
+- **Write inside an active layer:** goes to the layer. This is what makes a hand-written
+  `app.dependency_overrides[dep] = f` in the middle of a test concurrency-safe rather than merely
+  tolerated.
+- **Write outside any layer** (import time, a session fixture, app setup): goes to `base`, so
+  process-wide overrides still behave as before.
+- **Nesting:** entries stack; inner layers win key-by-key over outer ones, outer over `base`.
+- **Values keep FastAPI's exact semantics** — an override is a dependency *callable*
+  (`lambda: session`), never the value itself. velox does no auto-wrapping, because guessing would
+  break every override whose replacement is itself callable.
+
+**Escalation, not degradation (I6).** The pytest-docs teardown idiom `app.dependency_overrides = {}`
+*replaces* the proxy, silently reverting the app to unlayered global state. velox detects this on the
+next `client()` call — the attribute is no longer the installed proxy — and raises a loud, actionable
+error naming the app, the likely teardown line, and the fix (delete the reset; overrides are scoped
+to the `client()` block). It never reinstalls silently and never falls back to shared mutation.
+
+**Lifespan.** `client()` never runs the app's lifespan — matching `ASGITransport`, which sends no
+lifespan scope, and FastAPI's own documented warning that the test client does not trigger startup.
+Suites needing real startup use `velox.fastapi.lifespan(app)`, a session-scoped fixture that runs the
+lifespan exactly once per run; anything it writes to `app.state` lands in the **base** state, which is
+the correct scope for a resource shared by the whole suite.
+
+**Known limits, documented rather than papered over.**
+
+1. Work **detached from the test's context** — `asyncio.create_task` from a background thread, a
+   library worker pool, anything started outside the test's `Context` — reads the layer's default
+   and sees only `base`. Same class of limit as tier (c) §5, and the same guidance applies.
+2. `starlette.testclient.TestClient` (the sync thread-portal client) is **unsupported**: it runs the
+   app in a portal thread with its own context. velox is async-first; the migration answer is
+   `velox.fastapi.client`, not a shim.
+3. The mechanism is per-**app-object**. A suite that genuinely builds several apps gets several
+   independent installs, which is correct but means the escalation check is also per app.
+
+**Assumption tests are a shipping requirement, not a nicety.** `tests/test_fastapi_layering.py`
+must assert, against the real installed FastAPI/Starlette/httpx, each fact above, so that an upstream
+change fails velox's own suite loudly instead of corrupting adopters' runs:
+
+- `solve_dependencies` reads overrides dynamically per request (mutate after route registration →
+  the new value is used);
+- the only operations FastAPI performs on the attribute are a truthiness check and
+  `.get(key, default)` (a proxy exposing nothing else still works end to end);
+- `Starlette.__call__` sets `scope["app"] = self`, so `request.app` is the singleton;
+- `State` delegates attributes to `_state` and upstream never reassigns `app.state`;
+- `ASGITransport` runs the request in the caller's task/context and sends no lifespan scope.
+
+**Rejected alternatives.**
+
+| Alternative | Why rejected |
+|---|---|
+| Fresh-app factory per test (`create_app(settings)`) | Adoption-hostile — real code is singleton-shaped and prod wiring would have to change. Also repeats the per-route `Dependant` build and pydantic model construction on every test. |
+| `copy.copy(app)` | Isolates nothing: the copied routes still carry `dependency_overrides_provider` pointing at the *original* app, so overrides resolve against the shared dict. |
+| `copy.deepcopy(app)` | Slow at suite scale and breaks on the unpicklable objects real apps put in `state` (engines, clients, sockets). |
+| Lock-serialized override mutation | Serializes the single most common fixture in the reference stack, which is precisely the concurrency velox exists to buy. |
+
+**Cost and relation to tier (c).** ~120 LOC ([00](00-overview.md) §9), no proxy/descriptor
+machinery, no refcounted global install/remove: it is the tier-(c) insight — *the write is global,
+the view need not be* — applied to one attribute whose read path upstream already made dynamic.
+General-purpose `velox.patch` stays deferred (§5).
+
+**Migration bonus.** The docs-blessed idiom is mechanically recognizable (module-level `app` import +
+`app.dependency_overrides[x] = y` + a reset in teardown) and rewrites 1:1 to
+`velox.fastapi.client(app, overrides={x: y})`, which is the highest-value rewrite rule in
+[12](12-migration.md) for the reference stack.
 
 ## 4. Tier (b): `unittest.mock` + solo scheduling — the MVP mechanism
 
@@ -169,12 +285,16 @@ without adding a capability.
 
 ## 8. MVP
 
-Tier (a) fully (it is just DI). Tier (b): static detection via `func.patchings`, the runtime guard
-on `_patch.__enter__`, the scheduler write-lock ([06](06-scheduling-and-determinism.md) §3), and
-solo-cost reporting. Actionable errors for the undetectable cases. The documented ladder, including
-what is coming.
+Tier (a) fully (it is just DI). Tier (a′): `velox.fastapi.client` / `velox.fastapi.lifespan`, the
+layered overrides and state proxies, the replaced-proxy escalation, and `tests/test_fastapi_layering.py`
+(§3.1) — required for the M2 gate, since the reference FastAPI suite cannot run concurrently without
+it. Tier (b): static detection via `func.patchings`, the runtime guard on `_patch.__enter__`, the
+scheduler write-lock ([06](06-scheduling-and-determinism.md) §3), and solo-cost reporting. Actionable
+errors for the undetectable cases. The documented ladder, including what is coming.
 
-**No velox-owned patching code ships in v0.1.**
+**No general-purpose velox-owned patching code ships in v0.1.** The single exception is tier (a′),
+which patches no global slot: it swaps two attributes on one application object, under rules the
+upstream read path already permits.
 
 ## 9. Roadmap
 
