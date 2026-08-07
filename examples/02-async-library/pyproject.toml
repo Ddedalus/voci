@@ -1,0 +1,19 @@
+[project]
+name = "velox-example-async-library"
+version = "0.0.0"
+requires-python = ">=3.13"
+
+[tool.velox]
+testpaths = ["tests"]
+concurrency = 16
+timeout = 30
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["velox.Depends"]

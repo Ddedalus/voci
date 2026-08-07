@@ -1,0 +1,25 @@
+[project]
+name = "velox-example-fastapi-crud"
+version = "0.0.0"
+requires-python = ">=3.13"
+
+[tool.velox]
+testpaths = ["tests"]
+concurrency = 16
+timeout = 60
+env = { ENVIRONMENT = "test", SIGNUP_BONUS_CENTS = "0" }
+
+# Unknown keys here are an error, not a warning. A typo'd config key that silently does nothing
+# is a footgun the ecosystem taught users to expect, and velox does not have to.
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` in a parameter default is the injection syntax, for velox exactly as for FastAPI.
+# Without this, B008 fires on every test in the suite.
+extend-immutable-calls = ["velox.Depends", "fastapi.Depends"]
