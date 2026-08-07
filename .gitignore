@@ -10,6 +10,3 @@ __pypackages__
 # Ruff, uv, pytest
 .ruff_cache
 .pytest_cache
-
-# Reference clone of pytest itself (nested git repo, not part of velox)
-/pytest/

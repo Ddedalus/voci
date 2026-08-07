@@ -1,0 +1,6 @@
+[submodule "fastapi"]
+	path = fastapi
+	url = https://github.com/fastapi/fastapi.git
+[submodule "pytest"]
+	path = pytest
+	url = https://github.com/pytest-dev/pytest.git
