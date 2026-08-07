@@ -1,5 +1,7 @@
 # velox — Specification: Overview
 
+Status: human reviewed.
+
 ## 1. What velox is
 
 velox is a test runner for **fully-async Python codebases** (FastAPI + async SQLAlchemy is the
