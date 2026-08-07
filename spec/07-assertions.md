@@ -129,12 +129,31 @@ ported upstream tests.
   for `pytest_assertrepr_compare`).
 - Truncation policy tuning and a `--full-diff` flag.
 
-## 10. Open questions
+## 10. Resolved questions
 
 - **Q16** — Does velox rewrite *fixture* modules (`tests/fixtures.py`) by default? They are not
   named `test_*`, but assertions in fixtures are common and the PEP 657 floor is a weaker
-  experience. Proposed: rewrite any module imported from within the discovered test roots, which is
-  a superset of pytest's rule and costs one path check.
+  experience. **Resolved as proposed:** rewrite any module under the discovered test roots.
+  Implemented at zero cost to the vendored code — velox hands the rewriter a `Session` whose
+  `_initialpaths` is every discovered `.py` file, and upstream's existing `isinitpath` check
+  and early-bailout basename set do the rest (`velox/_rewrite.py`, `_DiscoveredPaths`).
 - **Q17** — Should the vendored code be reformatted to velox's style (ruff) or kept byte-identical
-  to upstream for diffability? Proposed: byte-identical, with `# ruff: noqa` at the top of vendored
-  files, because re-vendoring is the operation we need to stay cheap.
+  to upstream for diffability? **Resolved as proposed:** byte-identical, with `# ruff: noqa` and
+  `# fmt: off` headers, and `velox/_vendor` excluded from ruff and pyrefly entirely. Re-vendoring
+  is `scripts/vendor_assertion.py`, which records every edit and fails loudly when one stops
+  applying; `--check` guards the tree in CI.
+
+## 11. Implementation notes
+
+Landed as: `velox/_vendor/assertion/` (generated, plus the hand-written `_shim.py`),
+`velox/_assertion_state.py` (§4.1), `velox/_rewrite.py` (installation, cache, explanation hook),
+`velox/_pep657.py` (§4.3), `scripts/vendor_assertion.py`, `scripts/bench_cold_start.py` (§5).
+
+The vendoring came to **22 recorded edits across 62 upstream lines**, plus mechanical import
+rewrites — consistent with the research's 30-line estimate for `rewrite.py` alone once the
+explanation engine and the three fixes are included. `velox/_vendor/VENDOR.md` is generated and
+lists every edit with its rationale.
+
+Measured on the implementation (`just bench-cold-start`): cold rewrite **6.4x** a plain compile
+at ~376 µs/assert, warm pyc load **343x** faster than cold — the same order as R§2's 4.6x/154x,
+on a synthetic module rather than pytest's own test file.

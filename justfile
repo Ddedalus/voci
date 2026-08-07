@@ -39,5 +39,17 @@ typecheck *args:
 build:
     uv build
 
+# Re-vendor pytest's assertion subsystem from the pytest/ submodule (spec/07)
+vendor:
+    uv run python scripts/vendor_assertion.py
+
+# Verify the vendored tree matches what the vendoring script generates
+vendor-check:
+    uv run python scripts/vendor_assertion.py --check
+
+# Assert the assertion-rewrite cold/warm ratio is still within budget (spec/07 §5)
+bench-cold-start *args:
+    uv run python scripts/bench_cold_start.py "$@"
+
 # Run lint, format-check, typecheck and tests together
 check: lint fmt-check typecheck test

@@ -25,7 +25,9 @@ build-backend = "hatchling.build"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["pytest", "fastapi", "research", "spec"]
+# velox/_vendor is kept byte-identical to upstream pytest so re-vendoring stays a cheap,
+# readable diff (spec/07 Q17). Formatting it would defeat that, so ruff never touches it.
+extend-exclude = ["pytest", "fastapi", "research", "spec", "velox/_vendor"]
 
 [tool.ruff.lint]
 select = [
@@ -46,5 +48,6 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.pyrefly]
-project-includes = ["velox/**/*.py", "tests/**/*.py"]
-project-excludes = ["pytest/**", "research/**"]
+project-includes = ["velox/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+# Vendored code is upstream's problem, checked by upstream's own CI.
+project-excludes = ["pytest/**", "research/**", "velox/_vendor/assertion/**"]
