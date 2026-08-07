@@ -1,10 +1,13 @@
 # 02 — CLI and Configuration
 
+
+Status: initial human review.
+---
+
 *Small surface, one argv parse, no plugin-injected options. Pytest's startup costs 130–300 ms partly
 because plugins add options mid-flight and force **three** argv parses plus an entry-point scan that
-is O(installed plugins) whether used or not (R§3). velox has one parse because it has no plugins.*
+is O(installed plugins) whether used or not (R§3).
 
----
 
 ## 1. Invocation
 
@@ -77,6 +80,8 @@ config, no config inheritance. Rootdir = the directory containing the `pyproject
 `[tool.velox]`, searched upward from the common ancestor of `PATHS`; if none is found, the common
 ancestor itself is the rootdir and defaults apply.
 
+> Review note: pay attention to not cause carnage when traversing the path up to root. Traversal should stop at git root.
+
 ```toml
 [tool.velox]
 testpaths = ["tests"]
@@ -84,15 +89,13 @@ concurrency = 16
 timeout = 300
 test_file_patterns = ["test_*.py", "*_test.py"]
 ignore = [".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", "build", "dist"]
-basetemp_retention = 3          # keep N previous session temp roots
-env = { ENVIRONMENT = "test" }  # set before any test module import
+env = { ENVIRONMENT = "test" }
 watchdog_threshold = 1.0
 ```
 
 Precedence: **CLI > environment (`VELOX_*`) > `[tool.velox]` > built-in defaults.** Every option has
 exactly one name in all three places (`--concurrency` / `VELOX_CONCURRENCY` / `concurrency`).
-Unknown keys in `[tool.velox]` are an error, not a warning — a typo'd config key that silently does
-nothing is a footgun the ecosystem has taught users to expect, and we don't have to.
+Unknown keys in `[tool.velox]` are an error, not a warning.
 
 ## 4. Exit codes
 
@@ -105,12 +108,14 @@ Adopted verbatim from pytest, because every CI script branches on them (R§5):
 | `2` | Interrupted — Ctrl-C, `--maxfail` reached, internal cancellation. |
 | `3` | Internal error. |
 | `4` | Usage error — bad CLI, bad config, unknown option. |
-| `5` | **No tests collected.** Load-bearing: catches "the selector matched nothing and CI went green". |
+| `5` | No tests collected. |
 
 Static DI validation failures ([04](04-dependency-injection.md)) and import errors during collection
 exit `3` if they are velox's fault and `1` if they are the suite's — an unimportable test module is
 reported as a **collection error** attributed to that file, and the rest of the suite still runs.
 `--strict-collect` † makes any collection error exit `2` immediately.
+
+> Review note: the --strict-collect seems fishy. Programs should generally error out if there is an import error, like everyone expects.
 
 ## 5. Environment interaction
 
