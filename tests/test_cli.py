@@ -155,6 +155,37 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
     assert "1 errored" in out
 
 
+def test_bad_concurrency_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """M1 concurrency: `--concurrency` must be a positive integer -- `0`/negative is a usage
+    error (exit 4), same style as the other checks in `main` (`_invalid_path_argument`, the
+    `--rewrite-cache`/`--assert=plain` combo)."""
+    status = main(["--concurrency=0"])
+    assert status == 4
+    assert "--concurrency" in capsys.readouterr().err
+
+
+def test_main_runs_end_to_end_with_a_custom_concurrency(tmp_path: Path) -> None:
+    (tmp_path / "test_sample.py").write_text("async def test_ok():\n    pass\n")
+    assert main([str(tmp_path), "--concurrency=2"]) == 0
+
+
+def test_main_reports_a_timeout_as_its_own_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end `--timeout`: a hanging test surfaces `TIMEOUT`, distinct from `FAILED`/`ERROR`,
+    in both the per-test line and the summary's now-explicit `timed out` bucket."""
+    (tmp_path / "test_sample.py").write_text(
+        "import asyncio\n\nasync def test_hangs():\n    await asyncio.sleep(10)\n"
+    )
+
+    status = main([str(tmp_path), "--timeout=0.05"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "test_hangs TIMEOUT" in out
+    assert "1 timed out" in out
+
+
 def test_main_reports_a_skipped_test_and_still_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

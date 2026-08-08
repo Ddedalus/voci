@@ -1,8 +1,12 @@
 """Command-line entrypoint for velox.
 
-M0 (spec/00 §8): discover, import, run, print pass/fail, correct exit code. No fixtures, no
-concurrency, no `-k`/`-m`/`--collect-only` selection beyond what's already here — those are
-later milestones; see `_discovery`, `_collect`, and `_run` for the pieces this wires together.
+M0 (spec/00 §8): discover, import, run, print pass/fail, correct exit code. No `-k`/`-m`/
+`--collect-only` selection beyond what's already here — those are later milestones; see
+`_discovery`, `_collect`, and `_run` for the pieces this wires together.
+
+M1 concurrency slice (spec/05 §1-4): `--concurrency` and `--timeout` are now real, wired straight
+through to `_run.run_suite`, alongside `--assert`/`--rewrite-cache` in the "does real work"
+category this docstring already calls out.
 """
 
 from __future__ import annotations
@@ -45,6 +49,32 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Where rewritten .pyc files go. Defaults to a platform cache dir, or "
         f"${_rewrite.ENV_CACHE_DIR} if set. If it is unwritable, velox warns and falls "
         f"back to --assert=plain rather than silently paying the cold-import cost.",
+    )
+    # Concurrency is implemented (spec/05 §1): tests dispatch as concurrent `asyncio.Task`s under
+    # a shared `asyncio.Semaphore(N)`. `type=int` lets argparse reject non-numeric input on its
+    # own (its own usage-error exit code, 2); "positive" is checked by hand in `main`, same
+    # pattern as `_invalid_path_argument`/the `--rewrite-cache`+`--assert=plain` check just above,
+    # so it can report exit code 4 with a velox-styled message instead of argparse's generic one.
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=_run.DEFAULT_CONCURRENCY,
+        metavar="N",
+        help=f"Maximum number of tests running at once (spec/05 §1). Must be a positive "
+        f"integer; 1 means exactly serial. Default: {_run.DEFAULT_CONCURRENCY}.",
+    )
+    # Also implemented (spec/05 §2-4): wraps each test's setup+call in `asyncio.timeout`.
+    # Default is `None` (off) rather than some finite value — spec/05 §11 Q12 leaves "should the
+    # default be finite" an explicit open question, and pytest itself has no default test timeout
+    # either, so leaving this off keeps an existing suite's behavior unchanged until the user
+    # opts in.
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Per-test setup+call budget, in seconds (spec/05 §2-4). A test that exceeds it is "
+        "reported as TIMEOUT rather than FAILED/ERROR. Default: no limit.",
     )
     return parser
 
@@ -98,6 +128,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    # `type=int` above already rejects non-numeric input (argparse's own exit code 2); this is
+    # the "positive" half, checked by hand so a bad value gets the same velox-styled exit-4 usage
+    # error as every other check in this function rather than argparse's differently-shaped one.
+    # `run_suite` itself also raises `ValueError` for `concurrency < 1` (defense in depth for
+    # callers that skip `main`, e.g. tests calling it directly), but by the time that would fire
+    # here it's too late to produce a clean exit code — this check is what actually stops a bad
+    # `--concurrency` from ever reaching it.
+    if args.concurrency < 1:
+        print(
+            f"velox: --concurrency must be a positive integer, got {args.concurrency}",
+            file=sys.stderr,
+        )
+        return 4
+
     # A typo'd path and a genuinely empty suite must not look the same (I8) — without this,
     # both `velox /typo` and `velox tests/test_run.py::test_x` (the id form spec/02 §1
     # documents, unimplemented in M0) would silently walk to nothing and exit 5 "no tests
@@ -142,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         files = _discovery.discover_files(roots)
         collected = _collect.collect(files, rootdir=rootdir)
-        results = _run.run_suite(collected.records)
+        results = _run.run_suite(
+            collected.records, concurrency=args.concurrency, timeout=args.timeout
+        )
 
         # `Outcome.value` ("passed"/"failed"/"error") upper-cased rather than a three-way
         # if/elif: adding a further outcome (skipped/xfailed/... , spec/05 §4) later must not
@@ -162,14 +208,21 @@ def main(argv: list[str] | None = None) -> int:
         passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
         failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
         errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
-        # `other` exists so this line can't silently stop adding up to `len(results)`: the three
+        # Named explicitly, same reasoning as `passed`/`failed`/`errored`: `Outcome.TIMEOUT` is
+        # its own outcome (see `_run.Outcome.TIMEOUT`'s docstring for why it isn't folded into
+        # `FAILED`/`ERROR`), so the summary line should say so too rather than let it fall into
+        # the `other` catch-all below.
+        timed_out = sum(1 for result in results if result.outcome is _run.Outcome.TIMEOUT)
+        # `other` exists so this line can't silently stop adding up to `len(results)`: the four
         # named `sum()`s above are each independent counts, not `len(results) - the rest` the way
         # a two-outcome world could get away with, so a future `Outcome` member (`skipped`/
         # `xfailed`/..., spec/05 §4) that starts reaching `run_suite`'s results before this line
         # is updated for it shows up here as a nonzero "other" bucket instead of vanishing from
         # the total with nothing to say the count is now wrong.
-        other = len(results) - passed - failed - errored
+        other = len(results) - passed - failed - errored - timed_out
         summary = f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored"
+        if timed_out:
+            summary += f", {timed_out} timed out"
         if other:
             summary += f", {other} other"
         summary += (
