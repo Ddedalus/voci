@@ -159,6 +159,13 @@ def test_bad_concurrency_value_is_a_usage_error(capsys: pytest.CaptureFixture[st
     """M1 concurrency: `--concurrency` must be a positive integer -- `0`/negative is a usage
     error (exit 4), same style as the other checks in `main` (`_invalid_path_argument`, the
     `--rewrite-cache`/`--assert=plain` combo)."""
+    # Review: only `0` is exercised, though `main`'s check is `< 1` and its message interpolates the
+    # value — `--concurrency=-4` costs one extra line via a loop and covers the other side. The
+    # gap that matters more is the neighbouring flag: there is no `--timeout` validation test here
+    # because there is no `--timeout` validation (see the note in `cli.py`). `main(["--timeout=0",
+    # tmp_path])` and `--timeout=-1` currently run the suite rather than reporting a usage error,
+    # and produce outcomes that depend on whether each test happens to suspend. Whichever way that
+    # is resolved, it wants a test in this file next to this one.
     status = main(["--concurrency=0"])
     assert status == 4
     assert "--concurrency" in capsys.readouterr().err

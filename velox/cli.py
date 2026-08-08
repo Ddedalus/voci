@@ -68,6 +68,19 @@ def build_parser() -> argparse.ArgumentParser:
     # default be finite" an explicit open question, and pytest itself has no default test timeout
     # either, so leaving this off keeps an existing suite's behavior unchanged until the user
     # opts in.
+    # Review (should fix): `--concurrency` gets a hand-written positivity check in `main`;
+    # `--timeout` gets none, and the asymmetry is not benign. `asyncio.timeout(0)` and
+    # `asyncio.timeout(-5)` do not raise and do not mean "no limit" — `Timeout.__aenter__` calls
+    # `loop.call_at(when)` with a deadline already in the past, so the cancellation is delivered at
+    # the *first suspension point* inside the block and never at all if the block does not suspend.
+    # Verified through `run_suite`: with `timeout=0`, `async def test_quick(): pass` reports PASSED
+    # while `async def test_slow(): await asyncio.sleep(0)` reports TIMEOUT, in the same run. So
+    # `--timeout=0` is not "everything times out" — it is "everything that ever awaits times out",
+    # which makes a test's outcome depend on whether it happens to yield to the loop. Negative
+    # values behave identically and additionally produce the message "test exceeded the
+    # --timeout=-5.0s budget". `float` also accepts `nan` (never fires) and `inf` (never fires).
+    # Either reject `<= 0`/non-finite here with the same exit-4 style as `--concurrency`, or define
+    # `0` explicitly as "fail every test that suspends" — the current state is neither.
     parser.add_argument(
         "--timeout",
         type=float,
@@ -212,6 +225,14 @@ def main(argv: list[str] | None = None) -> int:
         # its own outcome (see `_run.Outcome.TIMEOUT`'s docstring for why it isn't folded into
         # `FAILED`/`ERROR`), so the summary line should say so too rather than let it fall into
         # the `other` catch-all below.
+        # Review: the bucket itself is right — it is a straight count over `results`, `other` still
+        # means exactly what its comment says, and the five sum to `len(results)` by construction.
+        # The under-count is upstream, not here: `_run._run_one` can classify a test that genuinely
+        # exceeded its budget as FAILED instead of TIMEOUT (see the note on its `except
+        # TimeoutError` clause), so a suite can print "0 timed out" while a test was killed by
+        # `--timeout`. The exit code is unaffected (both map to 1), so this is a reporting fault
+        # only — but it is the one path where this line lies, and it is worth fixing where it
+        # originates rather than here.
         timed_out = sum(1 for result in results if result.outcome is _run.Outcome.TIMEOUT)
         # `other` exists so this line can't silently stop adding up to `len(results)`: the four
         # named `sum()`s above are each independent counts, not `len(results) - the rest` the way

@@ -49,6 +49,7 @@ def key_for(
     `step_id` only matters for `"call"` scope (see module docstring); it's threaded through
     unconditionally rather than branched on so callers never need to know which scopes care.
 
+    # AI: please do not reference spec in docstrings - the code should be self-contained.
     `param_key` is appended to every shape below and defaults to `None` — parametrized fixtures
     are still roadmap (spec/01 §10), but spec/04 §4 is explicit that the param slot belongs in the
     cache key "from day one... retrofitting a cache key is exactly the kind of change this spec
@@ -63,12 +64,14 @@ def key_for(
         case "function":
             return ("function", id(fixture), test_id, param_key)
         case "call":
+            # AI: this seems like bullshit - isn't just ("call", next(_call_site_ids)) enough?
             return ("call", id(fixture), test_id, step_id, next(_call_site_ids), param_key)
 
 
 @final
 @dataclass(slots=True)
 class _Entry:
+    # AI: please provide docstring
     scope: Scope
     fixture: Fixture[Any]
     future: asyncio.Future[Any]
@@ -219,6 +222,15 @@ class ScopeStore:
         resolves on first *use* is precisely a `build`-time (or later) call back into `acquire`,
         and whoever adds it needs to know this method is relying on that not happening yet.
         """
+        # Review (documentation, now stale): "every remaining (necessarily `session`-scope) entry"
+        # stopped being true when `_run.run_suite` went concurrent. `run_suite`'s own docstring
+        # already says so ("it no longer only ever finds session-scope entries once concurrency can
+        # leave other scopes stranded there too") — a module whose tests were still in flight when a
+        # `KeyboardInterrupt` landed never reaches `remaining_by_module == 0`, so its `module`-scope
+        # entries are swept here instead. The behaviour is right; the parenthetical is not, and the
+        # reverse-insertion-order justification below is now doing real cross-scope work rather than
+        # ordering one flat set of session fixtures. Worth updating, since this docstring is what
+        # anyone reasoning about end-of-run teardown reads first.
         errors: list[Exception] = []
         for key in reversed(list(self._entries)):
             entry = self._entries.pop(key, None)
@@ -287,6 +299,23 @@ async def setup(
         # is the one thing allowed to override that: it means "stop now" and outranks even the
         # original setup failure, the same precedence every other interrupt boundary in this
         # codebase gives it.
+        # Review (must fix, and the fix probably lives here rather than in `_run.py`): this cleanup
+        # releases *every* scope it acquired, including `module` and `session`. That was invisible
+        # under the sequential runner. It is not now: `_run.run_suite` builds its whole `module`-
+        # scope lifetime on "the only `release` for a module key is the one I issue after every
+        # test of that module has finished", and this line silently issues others. Reproduced —
+        # a module fixture built and torn down twice across two sibling tests when the first one's
+        # setup fails partway, and (with an async module fixture) a sibling handed the instance
+        # mid-`await entry.closer()`. See the long note at `_run._run_one`'s call to `setup`.
+        # Options: don't release non-`function`-scope keys here and return the partially-acquired
+        # list to the caller, or return which keys were released so `run_suite` can keep its counts
+        # honest. Either way `_run.py` cannot fix it alone.
+        #
+        # Review (separate, smaller): `except BaseException as cleanup_exc` also catches
+        # `asyncio.CancelledError`, so a cancellation arriving *during* cleanup is demoted to an
+        # `add_note` on the original exception and never re-raised — the run continues as if the
+        # task had not been cancelled. Pre-existing shape, newly reachable now that a `TaskGroup`
+        # cancels siblings for real.
         try:
             await _release_all(store, reversed(acquired))
         except (KeyboardInterrupt, SystemExit):
