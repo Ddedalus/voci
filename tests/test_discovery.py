@@ -74,3 +74,11 @@ def test_returns_absolute_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_nonexistent_root_yields_nothing(tmp_path: Path) -> None:
     assert discover_files([tmp_path / "does_not_exist"]) == []
+
+
+# Review: symlink-loop protection is the one genuinely tricky thing in this module — an
+# advertised feature (module docstring, spec/03 §2) with dedicated `(st_dev, st_ino)` code — and
+# it has no test. `(tmp_path/"a").symlink_to(tmp_path)` plus a `discover_files([tmp_path])` that
+# terminates is three lines; without it, deleting `visited` leaves this suite green and the
+# runner hanging. Also untested: duplicate/overlapping roots (which currently double-collect,
+# see the review note in `discover_files`) and an empty directory.

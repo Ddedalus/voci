@@ -82,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    # Review: `PATHS` are accepted without validation, and spec/02 §1's id form is silently
+    # mis-handled. `velox /typo` and `velox tests/test_run.py::test_x` both walk to nothing and
+    # exit 5 "no tests collected" (verified) — a typo and an empty suite are indistinguishable,
+    # and the id form (documented as supported invocation syntax) fails as a missing path
+    # rather than as "ids aren't in M0 yet". Exit 4 with the offending argument named is the
+    # spec/02 §4 answer; either way I8 says this must not resolve to a quiet count of zero.
     roots = [Path(p) for p in args.paths] if args.paths else _default_test_roots()
 
     # Resolved and probed up front so the cold-start guarantee (spec/07 §5) is visible before
@@ -99,6 +105,11 @@ def main(argv: list[str] | None = None) -> int:
     # Must be installed before any test module is imported below — a module already sitting in
     # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
     # above, so this call is handed the decision it made rather than re-probing the cache.
+    # Review: `install` walks the roots once (`_discover_python_files`, a full `os.walk` for
+    # every `.py`) and `discover_files` below walks them again — two complete traversals of
+    # the test tree per run, before a single test is imported. I7 budgets 50 ms
+    # from process start to first dispatch; on a large monorepo root this is the first thing
+    # that will blow it. The two walks want to be one, with `_initialpaths` fed from it.
     _rewrite.install(roots, setup=setup, warn=False)
     try:
         files = _discovery.discover_files(roots)
@@ -129,6 +140,15 @@ def main(argv: list[str] | None = None) -> int:
         # after this call returns would leak global state into whatever runs next. This must
         # fire on every exit path from here, including an exception bubbling out of collection
         # or execution; nothing above is caught, so a real velox bug still surfaces as one.
+        #
+        # Review: unconditional `uninstall()` tears down a hook `main` may not have installed.
+        # `_rewrite.install` is a documented no-op when a hook is already on `sys.meta_path`,
+        # so an embedder (or a nested/concurrent `main()`) that installed its own hook first
+        # has it removed here, along with `set_cache_root(None)` — the "don't leak global
+        # state" fix reaches into state that isn't ours. Uninstall only what this call
+        # installed (`install` returns the setup; `installed_hook()` before/after tells you
+        # whether it was yours) — and note that two `main()` calls on different threads race
+        # over the same module-global hook regardless.
         _rewrite.uninstall()
 
 

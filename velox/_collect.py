@@ -87,6 +87,13 @@ def module_name_for(path: Path, rootdir: Path) -> str:
 
 def _escape_segment(segment: str) -> str:
     """One dotted-name component: non-identifier characters replaced, leading digit guarded."""
+    # Review: the escape is lossy, so "never collide" isn't true — `api-v2/test_a.py` and
+    # `api_v2/test_a.py` both become `velox_tests.api_v2.test_a`. The second import then
+    # replaces the first in `sys.modules` (harmless today only because records capture the
+    # function objects eagerly), but the docstrings and
+    # `test_module_name_for_two_same_named_files_never_collide` claim a guarantee this doesn't
+    # give. Appending a short digest of the original relpath to a segment that had to be
+    # escaped restores it.
     escaped = _NON_IDENTIFIER_CHARS.sub("_", segment)
     if not escaped or escaped[0].isdigit():
         escaped = f"_{escaped}"
@@ -131,9 +138,21 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
         ]
         functions.sort(key=lambda func: func.__code__.co_firstlineno)
 
+        # Review: marks are dropped, and `velox.skip`/`velox.skipif` are already *public*
+        # (`velox.__all__`). A `@velox.skip`-marked test therefore runs in M0 and can fail the
+        # build — that is a wrong answer, not a missing feature, and it's a different class of
+        # gap from "no DI yet". If M1 is the real home for `MarkSet`, M0 should still refuse to
+        # run (or at least name) a test carrying marks it can't honour, per I6/I8.
         for func in functions:
             records.append(
                 TestRecord(
+                    # Review: `id` embeds the absolute path, so ids are machine-specific
+                    # (`/tmp/pytest-xxx/test_x.py::test_fail`). spec/03 §1 specifies
+                    # `path` "relative to rootdir" and ids of the form
+                    # `tests/api/test_users.py::test_create[admin]`; `collect` already takes
+                    # `rootdir`, so this is a `path.relative_to(rootdir)` away. It matters
+                    # beyond cosmetics: ids are the `--deselect`/`-k`/JUnit/collection-cache
+                    # key, and I2's byte-identical output can't hold with absolute paths in it.
                     id=f"{path}::{func.__qualname__}",
                     index=index,
                     path=path,
@@ -155,10 +174,28 @@ def _import_module(path: Path, module_name: str) -> object:
     half-initialized module is removed from `sys.modules` first so a later, unrelated import of
     the same dotted name can't observe it.
     """
+    # Review: this import path never consults `sys.meta_path`, so the assertion-rewriting hook
+    # `cli.main` now installs is never given a chance to intercept — no test module is ever
+    # rewritten. `spec_from_file_location` hands back a plain `SourceFileLoader`; only
+    # `import_module`/`__import__` run the meta-path finders. Verified end to end: a failing
+    # `assert x + 1 == 3 + 1` prints a bare `AssertionError` with no `assert 3 == 4`
+    # explanation, with `assertions: rewrite, cache ...` in the header. This defeats the
+    # headline feature of the commit and contradicts spec/03 §3 step 2 ("the assertion-rewriting
+    # meta-path finder intercepts at step 2"). Fix needs the hook consulted explicitly here
+    # (ask each `sys.meta_path` finder for a spec first, or call the hook's `find_spec`
+    # directly) — and note the two sides must agree on path form: `_rewrite._discover_python_
+    # files` uses `os.path.abspath` while `discover_files` uses `.resolve()`, so `isinitpath`
+    # would still miss under a symlinked root (macOS `/tmp` → `/private/tmp`, i.e. `tmp_path`).
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot build an import spec for {path}")
     module = importlib.util.module_from_spec(spec)
+    # Review: successful imports are never removed from `sys.modules`, so every `main()` call
+    # in a process permanently accumulates `velox_tests.*` entries (I1 — `cli.main` goes out of
+    # its way to unwind the rewrite hook in a `finally` and then leaves this behind). It also
+    # pins every module-level object the suite created for the life of the process, which is a
+    # real memory cost on a 5000-test suite and makes back-to-back in-process runs non-
+    # independent. Whatever the answer, it should be decided here rather than by omission.
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)

@@ -63,8 +63,22 @@ def run_suite(records: list[TestRecord]) -> list[TestResult]:
                 # `func` is typed as a plain `Callable[..., object]` (`TestRecord` never wraps
                 # it), but only `async def test_*` is ever collected (`_is_own_test_function`),
                 # so the call always produces a coroutine at runtime.
+                # Review: `record.func()` is called with no arguments, so a test written
+                # against the already-public DI surface (`db: DB = Depends(get_db)`) silently
+                # runs with the raw `Depends` marker as its value instead of erroring. Combined
+                # with marks being ignored at collection, M0 can report PASSED for a test that
+                # was never really executed as written — squarely an I8 "silent pass".
                 coro = cast("Coroutine[Any, Any, object]", record.func())
                 runner.run(coro)
+            # Review: `except Exception` lets a `BaseException` from the test abort the entire
+            # suite. `asyncio.CancelledError` is the realistic one — any test whose inner task
+            # gets cancelled re-raises it — and `runner.run` also surfaces `CancelledError`
+            # when the wrapping task is cancelled. Verified: a test raising `CancelledError`
+            # escapes `run_suite`, so every already-completed result is discarded, the
+            # remaining tests never run, and `main` returns no exit code at all. At minimum
+            # catch `BaseException` and re-raise `KeyboardInterrupt`/`SystemExit` after
+            # recording the partial results (`interrupted` is exactly spec/05 §4's case for
+            # this, even if the full enum is M1).
             except Exception:
                 failure = traceback.format_exc()
             duration = time.monotonic() - start

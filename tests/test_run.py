@@ -62,9 +62,19 @@ def test_run_suite_preserves_record_order() -> None:
     ]
 
 
+# Review: vacuous — a `time.monotonic()` delta is non-negative by construction, so this passes
+# even if `duration` were hard-coded to 0. Sleep for a known interval and assert the duration
+# brackets it, which is what "is timed" is meant to claim.
 def test_duration_is_timed() -> None:
     (result,) = run_suite([_record(0, _passes, "test_passes")])
     assert result.duration >= 0.0
+
+
+# Review: no test covers a test raising a `BaseException` (`asyncio.CancelledError` above all),
+# which is the one input that makes `run_suite` abandon the whole suite rather than report a
+# failure — see the review note on `_run.run_suite`'s `except Exception`. Also untested:
+# `run_suite([])` (empty selection still builds and closes a Runner) and a `func` that returns
+# a non-coroutine, which the `cast` in `run_suite` asserts can never happen.
 
 
 def _result(outcome: Outcome) -> Result:

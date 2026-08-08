@@ -76,6 +76,16 @@ def test_import_error_becomes_a_collection_error_and_does_not_abort(tmp_path: Pa
     assert result.records[0].index == 0
 
 
+# Review: two of `_collect`'s riskiest behaviours have no test at all.
+# (1) `_import_module`'s `sys.modules.pop` on failure — the whole point of that `except
+#     BaseException` is that a half-initialized module is not left behind for a later import to
+#     find, and nothing asserts `module_name_for(broken, root) not in sys.modules`.
+# (2) The `__module__` filter in `_is_own_test_function` — the "imported helper named `test_*`
+#     is not collected twice" rule from spec/03 §4 step 1. A module doing
+#     `from other import test_helper` would prove it; today the check could be deleted and the
+#     suite would stay green.
+# Worth adding alongside: a module importable only via the meta path, which would have caught
+# the rewrite hook never being consulted.
 def test_index_is_assigned_once_across_the_full_concatenation(tmp_path: Path) -> None:
     first = _write(tmp_path / "test_first.py", "async def test_one():\n    pass\n")
     second = _write(tmp_path / "test_second.py", "async def test_two():\n    pass\n")
