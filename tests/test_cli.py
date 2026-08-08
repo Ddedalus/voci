@@ -26,10 +26,19 @@ def test_build_parser_prints_version(capsys: pytest.CaptureFixture[str]) -> None
     assert __version__ in capsys.readouterr().out
 
 
-def test_main_not_yet_implemented() -> None:
-    # `main` returns its status rather than raising `SystemExit` (that mechanism belongs to the
-    # `if __name__ == "__main__": sys.exit(main())` block), so a caller invoking it directly —
-    # like this test — must still see a failing status.
+def test_main_with_no_paths_collects_this_repos_own_tests_dir() -> None:
+    """`main` returns its status rather than raising `SystemExit` (that mechanism belongs to the
+    `if __name__ == "__main__": sys.exit(main())` block), so a caller invoking it directly — like
+    this test — must still see it.
+
+    With no `PATHS`, `main` walks this repo's own `tests/` (`_default_test_roots`). Every file
+    there is an ordinary pytest-style module — `def test_*`, not `async def test_*` — so M0
+    collects zero records from all of them. `tests/assertion/test_explanations.py` also becomes
+    a collection error: its `from .conftest import ...` needs package context that velox's
+    flat, path-derived import names deliberately don't provide (spec/03 §3's traded-away
+    `__init__.py`/`ImportPathMismatchError` machinery). One error, zero records: exit code 1
+    (spec/02 §4), not 5 — "no tests collected" would be a lie about that error's existence.
+    """
     assert main([]) == 1
 
 
@@ -56,3 +65,24 @@ def test_rewrite_cache_with_plain_mode_is_a_usage_error(
     status = main(["--assert=plain", "--rewrite-cache=/tmp/wherever"])
     assert status == 4
     assert "--rewrite-cache" in capsys.readouterr().err
+
+
+def test_main_runs_a_passing_and_a_failing_async_test(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end M0 slice: discover -> import -> run -> print -> exit code (spec/00 §8)."""
+    (tmp_path / "test_sample.py").write_text(
+        "async def test_pass():\n"
+        "    assert 1 + 1 == 2\n"
+        "\n"
+        "async def test_fail():\n"
+        "    assert 1 + 1 == 3\n"
+    )
+
+    status = main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert status == 1  # one failure present
+    assert "test_pass PASSED" in out
+    assert "test_fail FAILED" in out
+    assert "AssertionError" in out

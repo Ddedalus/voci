@@ -1,8 +1,8 @@
 """Command-line entrypoint for velox.
 
-Placeholder: wires up the `velox` console script so the rest of the
-tooling (uv, ruff, pyrefly, pytest) has something concrete to point at.
-Real collection/scheduling/reporting lands in later commits.
+M0 (spec/00 §8): discover, import, run, print pass/fail, correct exit code. No fixtures, no
+concurrency, no `-k`/`-m`/`--collect-only` selection beyond what's already here — those are
+later milestones; see `_discovery`, `_collect`, and `_run` for the pieces this wires together.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from velox import __version__, _rewrite
+from velox import __version__, _collect, _discovery, _rewrite, _run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,23 +82,54 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    roots = [Path(p) for p in args.paths] if args.paths else _default_test_roots()
+
     # Resolved and probed up front so the cold-start guarantee (spec/07 §5) is visible before
     # a run commits to it — a benchmark that silently fell back to `plain` is a corrupted
     # benchmark. `plan` warns on stderr; the header line goes to stdout with the report.
-    setup = _rewrite.plan(
-        args.paths or _default_test_roots(),
-        mode=args.assert_mode,
-        cache_dir=args.rewrite_cache,
-    )
+    setup = _rewrite.plan(roots, mode=args.assert_mode, cache_dir=args.rewrite_cache)
     print(setup.header_line())
 
-    # Placeholder: real collection/scheduling/reporting lands in later commits. `parser.exit()`
-    # would raise `SystemExit`, making `main`'s `-> int` contract fiction and skipping any future
-    # cleanup (dropping the meta_path hook, flushing the report) run after this call. The
-    # `if __name__` block below already does `sys.exit(main())`, so returning is enough to signal
-    # failure to a caller that invokes `main` directly, too.
-    print(f"velox {__version__}: not yet implemented ({args.paths!r})", file=sys.stderr)
-    return 1
+    # rootdir: spec/02 §3's `[tool.velox]`-anchored upward search (stopping at the git root)
+    # doesn't exist yet — there is no config loader in this package at all. `cwd` is the honest
+    # placeholder until that lands, matching the same not-yet-built admission
+    # `_default_test_roots` already makes about `testpaths`.
+    rootdir = Path.cwd()
+
+    # Must be installed before any test module is imported below — a module already sitting in
+    # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
+    # above, so this call is handed the decision it made rather than re-probing the cache.
+    _rewrite.install(roots, setup=setup, warn=False)
+    try:
+        files = _discovery.discover_files(roots)
+        collected = _collect.collect(files, rootdir=rootdir)
+        results = _run.run_suite(collected.records)
+
+        for result in results:
+            status = "PASSED" if result.outcome is _run.Outcome.PASSED else "FAILED"
+            print(f"{result.id} {status} ({result.duration:.3f}s)")
+            if result.failure is not None:
+                print(result.failure)
+
+        for error in collected.errors:
+            print(f"{error.path} COLLECTION ERROR")
+            print(error.message)
+
+        passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
+        failed = len(results) - passed
+        print(
+            f"{len(results)} tests: {passed} passed, {failed} failed, "
+            f"{len(collected.errors)} collection error(s)"
+        )
+
+        return _run.exit_code_for(results, collected.errors)
+    finally:
+        # `main` is called repeatedly in-process (this package's own test suite does exactly
+        # that), and an embedding caller may too (I1) — leaving the hook on `sys.meta_path`
+        # after this call returns would leak global state into whatever runs next. This must
+        # fire on every exit path from here, including an exception bubbling out of collection
+        # or execution; nothing above is caught, so a real velox bug still surfaces as one.
+        _rewrite.uninstall()
 
 
 if __name__ == "__main__":
