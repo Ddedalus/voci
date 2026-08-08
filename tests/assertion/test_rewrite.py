@@ -9,9 +9,20 @@ is the contract velox depends on and the seams velox changed — soundness under
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 
 import pytest
-from velox._rewrite import Config, assertion_context, install, installed_hook, uninstall
+from velox._rewrite import (
+    Config,
+    _discover_python_files,
+    assertion_context,
+    install,
+    installed_hook,
+    plan,
+    uninstall,
+)
+from velox._vendor.assertion import rewrite as vendored
 
 
 def test_comparison_gets_an_explanation(rewritten) -> None:
@@ -196,3 +207,69 @@ class TestInstall:
         uninstall()
         uninstall()
         assert installed_hook() is None
+
+    def test_install_is_idempotent(self, tmp_path) -> None:
+        """A second `install()` must not push a second hook: two rewrites per import, and two
+        competing cache roots, since `set_cache_root` is module-global and the last caller
+        wins."""
+        try:
+            first = install([tmp_path], cache_dir=tmp_path / "cache")
+            second = install([tmp_path], cache_dir=tmp_path / "a-different-cache")
+            assert second is first
+            hooks = [e for e in sys.meta_path if isinstance(e, vendored.AssertionRewritingHook)]
+            assert len(hooks) == 1
+        finally:
+            uninstall()
+        assert installed_hook() is None
+
+    def test_install_accepts_a_precomputed_setup(self, tmp_path) -> None:
+        """`cli.main` runs `plan` once for the report header and must be able to hand the
+        result straight to `install` rather than triggering a second cache probe."""
+        setup = plan([tmp_path], cache_dir=tmp_path / "cache")
+        try:
+            installed = install(setup=setup)
+            assert installed is setup
+            assert installed_hook() is not None
+        finally:
+            uninstall()
+
+
+class TestDiscoverPythonFiles:
+    """`_discover_python_files` feeds `_initialpaths` (see `_DiscoveredPaths`), which forces a
+    rewrite and defeats the rewriter's own name-based bailout — so anything it finds under a
+    virtualenv or vendored tree used to get rewritten right along with the user's own tests."""
+
+    def test_prunes_a_directory_containing_a_pyvenv_cfg(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        (project / "tests").mkdir(parents=True)
+        (project / "tests" / "test_real.py").write_text("assert 1\n")
+
+        venv = project / "some-venv-name"
+        (venv / "lib" / "site").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (venv / "lib" / "site" / "sneaky.py").write_text("assert 1\n")
+
+        found = {p.resolve() for p in _discover_python_files([project])}
+
+        assert (project / "tests" / "test_real.py").resolve() in found
+        assert not any(venv.resolve() in path.parents for path in found)
+
+    def test_prunes_dot_directories_and_pycache(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        (project / "tests").mkdir(parents=True)
+        (project / "tests" / "test_real.py").write_text("assert 1\n")
+        (project / ".git" / "hooks").mkdir(parents=True)
+        (project / ".git" / "hooks" / "sneaky.py").write_text("assert 1\n")
+        (project / "tests" / "__pycache__").mkdir()
+        (project / "tests" / "__pycache__" / "cached.py").write_text("assert 1\n")
+
+        found = _discover_python_files([project])
+
+        assert {p.resolve() for p in found} == {(project / "tests" / "test_real.py").resolve()}
+
+
+def test_plan_rejects_an_unrecognised_mode() -> None:
+    """Only `"plain"` was ever tested for, so a typo from a programmatic caller — or a config
+    value that never went through argparse's `choices=` — used to silently mean "rewrite"."""
+    with pytest.raises(ValueError, match="bogus"):
+        plan([], mode="bogus")  # type: ignore[arg-type]

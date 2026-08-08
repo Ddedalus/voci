@@ -11,8 +11,8 @@ or a DI override.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from logging import LogRecord
 from pathlib import Path
@@ -77,11 +77,11 @@ class LogRecords:
     def messages(self) -> Sequence[str]:
         raise NotImplementedError(_RUNTIME)
 
-    @contextmanager
-    def set_level(self, level: int | str, *, logger: str | None = None) -> Iterator[None]:
+    def set_level(
+        self, level: int | str, *, logger: str | None = None
+    ) -> AbstractContextManager[None]:
         """Raise or lower a logger's level for the duration of the block, then restore it."""
         raise NotImplementedError(_RUNTIME)
-        yield  # pragma: no cover — signals a generator to the type checker
 
 
 @final

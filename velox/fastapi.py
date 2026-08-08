@@ -31,6 +31,7 @@ so the core package keeps zero hard dependencies; usage is `import velox.fastapi
 
 from __future__ import annotations
 
+import copy as _copy
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, MutableMapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
@@ -44,7 +45,7 @@ from starlette.datastructures import State
 
 from velox._fixtures import Fixture, fixture
 
-__all__ = ["client", "lifespan"]
+__all__ = ["client", "lifespan", "uninstall"]
 
 type Override = Callable[..., Any]
 """A dependency callable, and what it is overridden by — FastAPI's key and value, unchanged."""
@@ -95,7 +96,7 @@ class _Layers[K]:
                 return layer[key]
         return _MISSING
 
-    def any(self) -> bool:
+    def has_entries(self) -> bool:
         """Whether any layer in this context holds anything. Cheap enough for a hot path."""
         return any(self._var.get())
 
@@ -171,7 +172,7 @@ class _LayeredOverrides(MutableMapping[Override, Override]):
     def __bool__(self) -> bool:
         # FastAPI truth-tests this once per dependency per request before it reaches for `.get`,
         # so answer without materializing the merged view.
-        return bool(self._base) or self._layers.any()
+        return bool(self._base) or self._layers.has_entries()
 
     def clear(self) -> None:
         """Drop what this test overrode; outside a test, what the app overrode.
@@ -213,9 +214,50 @@ class _LayeredState(State):
         return self._layers.push(values)
 
     def __getattr__(self, key: Any) -> Any:
-        # Only reached when ordinary lookup fails, so `_state` and `_layers` never arrive here.
-        value = self._layers.lookup(key)
-        return super().__getattr__(key) if value is _MISSING else value
+        # Only reached when ordinary lookup fails. For an instance built through `__init__`,
+        # neither `_state` nor `_layers` ever lands here — both are real attributes by
+        # construction. But `_LayeredState.__new__(_LayeredState)` skips `__init__` entirely, and
+        # the default `copy.copy`/`copy.deepcopy` machinery builds via `__reduce_ex__` the same
+        # way — before `__copy__`/`__deepcopy__` below intercept it. On an instance built that
+        # way, `self._layers` misses the slot, which is itself an attribute-lookup failure: Python
+        # calls back into this very method to resolve it, and `self._layers` inside that call
+        # fails the same way again — unbounded recursion, not a single retry.
+        # `object.__getattribute__` is the raw lookup with no such fallback, so use it to ask "is
+        # this actually set" without risking another call into `__getattr__`.
+        try:
+            layers = object.__getattribute__(self, "_layers")
+        except AttributeError:
+            layers = None
+        if layers is not None:
+            value = layers.lookup(key)
+            if value is not _MISSING:
+                return value
+        try:
+            object.__getattribute__(self, "_state")
+        except AttributeError:
+            # No `_state` either: a bare `__new__` with nothing installed. Match `State`'s own
+            # message rather than falling into `super().__getattr__`, which would touch
+            # `self._state` and recurse exactly as above.
+            raise AttributeError(key) from None
+        return super().__getattr__(key)
+
+    def __copy__(self) -> State:
+        """`copy.copy(app.state)` predates this proxy, and real code calls it. A fresh
+        `_LayeredState` here would just share this instance's `_layers` `ContextVar`, which is not
+        what a copy means — and going through the default `__reduce_ex__` path recurses (see
+        `__getattr__`) because it tries to `setattr` the `_layers` slot before `_state` exists.
+        Hand back a plain `State` carrying this context's merged view instead: everything a
+        shallow copy of `app.state` should snapshot, with no proxy machinery riding along.
+        """
+        return State(self._layers.merged(self._state))
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> State:
+        """As `__copy__`, and for the same reason `copy.deepcopy` used to fail outright: a
+        `ContextVar` cannot be deep-copied, and `_layers` holds one. Deep-copying only the merged
+        *values* sidesteps it — `app.state` was deep-copyable before velox swapped it in, and this
+        keeps it that way.
+        """
+        return State(_copy.deepcopy(self._layers.merged(self._state), memo))
 
     def __setattr__(self, key: Any, value: Any) -> None:
         layer = self._layers.top()
@@ -258,13 +300,24 @@ class _LayeredState(State):
 @final
 @dataclass(slots=True)
 class _Install:
-    """What velox has swapped in on one app. `state` stays `None` until someone asks for it."""
+    """What velox has swapped in on one app, and what was there before.
+
+    `state` stays `None` until the first `client()` call — `lifespan()` never touches it (see its
+    own memoisation). `original_state` is the `State` object `_install_state` found on `app`, kept
+    only so `uninstall` has something to put back.
+    """
 
     overrides: _LayeredOverrides
     state: _LayeredState | None = None
+    original_state: State | None = None
 
 
 _INSTALLS: Final[WeakKeyDictionary[FastAPI, _Install]] = WeakKeyDictionary()
+
+_LIFESPANS: Final[WeakKeyDictionary[FastAPI, Fixture[FastAPI]]] = WeakKeyDictionary()
+"""Memoised `lifespan()` fixtures, keyed by app. Separate from `_INSTALLS` on purpose: asking for
+an app's lifespan fixture should not, by itself, swap in the overrides/state proxy — an app that
+only ever uses `lifespan()` and never `client()` shouldn't pay for an install it doesn't use."""
 
 _REPLACED = """\
 velox.fastapi.client(): app.{attribute} was replaced after velox installed its per-test layer.
@@ -294,6 +347,11 @@ def _install(app: FastAPI) -> _Install:
     interleave with another test's — a lock here would be a claim about threads that velox does
     not make. Escalating rather than reinstalling on a replaced attribute is spec/00 I6: a
     silently re-established layer would lose whatever the assignment discarded.
+
+    The swap outlives this call — nothing restores the object the user built until `uninstall`
+    says so explicitly. Fine inside a velox run; anything elsewhere in the same process that goes
+    on serving `app` after import (a notebook, an embedded uvicorn) keeps velox's proxy too, which
+    is why `uninstall` exists.
     """
     record = _INSTALLS.get(app)
     if record is None:
@@ -310,11 +368,34 @@ def _install(app: FastAPI) -> _Install:
 def _install_state(app: FastAPI, record: _Install) -> _LayeredState:
     """Swap in the state proxy, once per app object, over the app's *own* `_state` dict."""
     if record.state is None:
+        record.original_state = app.state
         record.state = _LayeredState(app.state._state)
         app.state = record.state
     elif app.state is not record.state:
         raise RuntimeError(_REPLACED.format(attribute="state"))
     return record.state
+
+
+def uninstall(app: FastAPI) -> None:
+    """Undo `_install`: put back the `dependency_overrides` dict and the `state` object velox
+    found on `app`, and drop the memoised `lifespan()` fixture so a later call builds a fresh one.
+
+    velox itself never calls this — the proxy is behaviourally identical to what it replaced for
+    any code holding no active layer, so nothing inside a velox run needs the original back. It
+    exists because this module is importable from anywhere and `_install` fires unconditionally on
+    the first `client()`: a notebook, an embedded uvicorn, or a script that happens to import the
+    same module a velox suite tests would otherwise go on serving `app` through velox's proxy for
+    the rest of the process. Symmetric with `_rewrite.uninstall`. Idempotent — uninstalling an app
+    that was never installed, or twice in a row, is a no-op.
+    """
+    record = _INSTALLS.pop(app, None)
+    if record is not None:
+        # Same narrowing gap as `_install`'s swap the other way: annotated `dict` upstream, used
+        # only as a `Mapping`.
+        app.dependency_overrides = record.overrides.base  # pyrefly: ignore[bad-assignment]
+        if record.original_state is not None:
+            app.state = record.original_state
+    _LIFESPANS.pop(app, None)
 
 
 def _render(dependency: object) -> str:
@@ -342,13 +423,16 @@ async def client(
         *dependency callable*, so a fixture value is passed as `lambda: session`. velox does not
         wrap non-callables for you: a silently-wrapped value would diverge from what the same
         dict means when written by hand.
-    :param state: `{name: value}` layered over `app.state` for the duration. Passing it once for
-        an app installs the state proxy for that app; contexts that never pass it read and write
-        the app's own state, which is where a lifespan's writes belong.
+    :param state: `{name: value}` layered over `app.state` for the duration, on top of whatever
+        the app already has.
     :param base_url: what relative request paths are resolved against.
 
-    The overrides layer is pushed even when `overrides` is empty, so an `app.dependency_overrides`
-    write inside the `async with` is this test's and no one else's.
+    Both the overrides layer and the state layer are pushed even when empty, so an
+    `app.dependency_overrides[...] = ...` or `app.state.x = ...` write inside the `async with` is
+    this test's and no one else's — including the one attribute a test never opted into by passing
+    `state=`. The app's own state still gets written to, just not from inside a `client()`:
+    `velox.fastapi.lifespan(app)` runs outside any `client()` context, so its writes land with no
+    layer active and become visible to every test, which is where a lifespan's writes belong.
 
     Nesting stacks: a `client()` entered while another is active sees the inner mappings first,
     then the outer ones, then the app's own — which is what makes a derived fixture that adds one
@@ -361,8 +445,10 @@ async def client(
     tokens: list[Token[Any]] = []
     try:
         tokens.append(record.overrides.push_layer(overrides or {}))
-        if state is not None:
-            tokens.append(_install_state(app, record).push_layer(state))
+        # Pushed unconditionally, like the overrides layer above: a test that writes
+        # `app.state.cache = x` without passing `state=` must still land in this context's layer,
+        # not on the app, or it would be visible to every test running alongside it.
+        tokens.append(_install_state(app, record).push_layer(state or {}))
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url=base_url) as http:
             yield http
@@ -387,11 +473,21 @@ def lifespan(app: FastAPI) -> Fixture[FastAPI]:
 
     Its writes land in the app's own state, since session setup runs outside any test's layer,
     which is exactly what makes them visible to every test.
+
+    Memoised per `app`: `Fixture` has no `__eq__`/`__hash__`, so the session cache keys on
+    identity, and calling this twice for the same app — a second test module writing the
+    docstring's line, a helper that calls it inside a fixture body — must return the *same*
+    object or the cache runs the app's startup and shutdown once per call site instead of once per
+    run, which is exactly the cost this function exists to avoid paying.
     """
+    found = _LIFESPANS.get(app)
+    if found is not None:
+        return found
 
     @fixture(scope="session", name=f"lifespan({app.title!r})")
     async def started() -> AsyncIterator[FastAPI]:
         async with app.router.lifespan_context(app):
             yield app
 
+    _LIFESPANS[app] = started
     return started

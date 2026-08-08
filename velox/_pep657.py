@@ -19,8 +19,9 @@ plan: it also makes `--assert=plain` a usable mode rather than a punishment.
 from __future__ import annotations
 
 import linecache
+import re
 from dataclasses import dataclass
-from types import TracebackType
+from types import CodeType, TracebackType
 
 __all__ = ["AssertionSource", "explain_assertion", "source_at"]
 
@@ -28,6 +29,10 @@ __all__ = ["AssertionSource", "explain_assertion", "source_at"]
 _PRIMARY = "^"
 #: Marks the operands either side of it.
 _SECONDARY = "~"
+
+#: The keyword, not a prefix: `\b` rejects `assert_called_once(...)`, `assertEqual(...)`, and
+#: other identifiers that merely start with the same six characters (see `explain_assertion`).
+_ASSERT_KEYWORD = re.compile(r"assert\b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +78,7 @@ def source_at(tb: TracebackType) -> AssertionSource | None:
     )
 
 
-def _caret_span(code: object, lasti: int, line: str, lineno: int) -> str | None:
+def _caret_span(code: CodeType, lasti: int, line: str, lineno: int) -> str | None:
     """The `~~~^^^~~~` marker for the instruction at `lasti`, aligned to `line.strip()`.
 
     Two spans are involved: the whole assert-test expression, and — when the test is a
@@ -112,17 +117,16 @@ def _caret_span(code: object, lasti: int, line: str, lineno: int) -> str | None:
     return " " * start + "".join(marks)
 
 
-def _positions_at(code: object, lasti: int) -> tuple[int, int, int, int] | None:
+def _positions_at(code: CodeType, lasti: int) -> tuple[int, int, int | None, int | None] | None:
     """`(start_line, end_line, start_col, end_col)` for the instruction at `lasti`.
 
     `co_positions()` yields one entry per instruction word; `lasti` is a byte offset, hence the
-    division. Entries may be all-None for synthesised code, which is a normal "no info" answer.
+    division. Entries may be all-None for synthesised code, which is a normal "no info" answer —
+    lines and columns are independently nullable in CPython's own typing of the API, which is why
+    only the line pair is checked here and the column pair is left for `_caret_span` to check.
     """
-    co_positions = getattr(code, "co_positions", None)
-    if co_positions is None:  # pragma: no cover - 3.11+ is the floor for velox
-        return None
     try:
-        entries = list(co_positions())
+        entries = list(code.co_positions())
     except Exception:  # pragma: no cover - defensive; introspection must never mask the failure
         return None
 
@@ -171,8 +175,27 @@ def _operator_span(expr: str) -> tuple[int, int] | None:
 
 
 def _skip_string(expr: str, i: int) -> int:
-    """Index just past the string literal starting at `i`, or past `i` if it is unterminated."""
+    """Index just past the string literal starting at `i`, or past `i` if it is unterminated.
+
+    Triple quotes are checked first: without this, `'''` reads as an empty `''` followed by a
+    fresh `'`, which desynchronises the scan for the rest of the line. Still a blind spot for
+    f-string replacement fields containing nested quotes (legal since 3.12) — a full lexer would
+    close that, but this function deliberately stays a character scan; where it can't scan
+    reliably, `_operator_span`'s callers fall back to no carets rather than wrong ones.
+    """
     quote = expr[i]
+    if expr[i : i + 3] == quote * 3:
+        delimiter = quote * 3
+        j = i + 3
+        while j < len(expr):
+            if expr[j] == "\\":
+                j += 2
+                continue
+            if expr[j : j + 3] == delimiter:
+                return j + 3
+            j += 1
+        return len(expr)
+
     j = i + 1
     while j < len(expr):
         if expr[j] == "\\":
@@ -206,6 +229,11 @@ def explain_assertion(exc: AssertionError) -> str | None:
         tb = tb.tb_next
 
     source = source_at(tb)
-    if source is None or not source.line.startswith("assert"):
+    # A word boundary, not just a prefix match: `assert_called_once()` (mock), `assertEqual(...)`
+    # (unittest), and `assert_frame_equal(...)` (pandas) all begin with the six characters
+    # "assert" but are identifiers, not the keyword — and all three commonly raise a bare
+    # `AssertionError` too. A plain `startswith` would hand `_operator_span` a call expression to
+    # underline as though it were a comparison, placing carets on the wrong tokens.
+    if source is None or _ASSERT_KEYWORD.match(source.line) is None:
         return None
     return source.render()

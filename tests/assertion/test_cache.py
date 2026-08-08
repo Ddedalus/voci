@@ -210,3 +210,82 @@ class TestColdStartGuarantee:
             uninstall()
         assert setup.mode == "plain"
         assert _rewrite.installed_hook() is None
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write to anything")
+    def test_install_warns_only_once_given_a_precomputed_setup(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`install` used to call `plan` again internally without forwarding `warn`, so a
+        caller that already ran `plan` for the report header (as `cli.main` does) got the same
+        two-line stderr warning a second time."""
+        readonly = tmp_path / "readonly"
+        readonly.mkdir()
+        readonly.chmod(0o555)
+        try:
+            setup = plan([], cache_dir=readonly / "nested")
+            install(setup=setup)
+        finally:
+            readonly.chmod(0o755)
+            uninstall()
+
+        warning = capsys.readouterr().err
+        assert warning.count("assertion rewriting disabled") == 1
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write to anything")
+    def test_install_forwards_warn_on_the_simple_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        readonly = tmp_path / "readonly"
+        readonly.mkdir()
+        readonly.chmod(0o555)
+        try:
+            install([], cache_dir=readonly / "nested", warn=False)
+        finally:
+            readonly.chmod(0o755)
+            uninstall()
+
+        assert capsys.readouterr().err == ""
+
+
+class TestProbeCleanup:
+    """A mistyped `--rewrite-cache` used to leave an empty directory tree behind: velox falls
+    back to `plain` and never uses it, but `mkdir(parents=True)` had already created it."""
+
+    def test_probe_failure_removes_a_freshly_created_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = tmp_path / "fresh" / "cache"
+        original_write_bytes = Path.write_bytes
+
+        def fake_write_bytes(self: Path, data: bytes) -> int:
+            if self.name == _rewrite._PROBE_NAME:
+                raise OSError("synthetic failure")
+            return original_write_bytes(self, data)
+
+        monkeypatch.setattr(Path, "write_bytes", fake_write_bytes)
+
+        problem = _rewrite._probe_writable(cache)
+
+        assert problem is not None
+        assert not cache.exists()
+
+    def test_probe_failure_leaves_a_pre_existing_dir_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        marker = cache / "already-here.txt"
+        marker.write_text("keep me")
+        original_write_bytes = Path.write_bytes
+
+        def fake_write_bytes(self: Path, data: bytes) -> int:
+            if self.name == _rewrite._PROBE_NAME:
+                raise OSError("synthetic failure")
+            return original_write_bytes(self, data)
+
+        monkeypatch.setattr(Path, "write_bytes", fake_write_bytes)
+
+        problem = _rewrite._probe_writable(cache)
+
+        assert problem is not None
+        assert marker.exists()

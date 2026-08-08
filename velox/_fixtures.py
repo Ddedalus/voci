@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast, final, overload
+from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
 
 __all__ = [
     "Constant",
@@ -93,6 +93,8 @@ def plan_of(
     if code is None:
         return ()
 
+    _reject_annotated_depends(func)
+
     overrides = overrides or {}
     injections: list[Injection] = []
 
@@ -110,12 +112,44 @@ def plan_of(
     return tuple(injections)
 
 
+def _reject_annotated_depends(func: Callable[..., Any]) -> None:
+    """Catch `Depends(...)` written inside `Annotated[...]` metadata instead of default position.
+
+    `def t(db: Annotated[Session, Depends(db_fx)])` is the FastAPI spelling, and it is a habit
+    users arrive with — it reads as injected, but since `plan_of` only ever looks at
+    `__defaults__`/`__kwdefaults__` (spec/01 rule 3, deliberately never `inspect.signature` or
+    `get_type_hints`), the parameter gets nothing and the test would run with a raw `Dependency`
+    object bound to `db`. Nothing downstream would ever catch that, so it is caught here instead,
+    at decoration time, pointing at the working spelling.
+
+    Best effort only: this reads raw `__annotations__` purely to detect the mistake, not to build
+    the plan, so a string annotation (postponed evaluation) or any other exotic annotation is
+    silently left alone rather than risking a spurious raise.
+    """
+    annotations = getattr(func, "__annotations__", None)
+    if not annotations:
+        return
+    for param, annotation in annotations.items():
+        try:
+            if get_origin(annotation) is not Annotated:
+                continue
+            stray = any(isinstance(m, Dependency) for m in get_args(annotation)[1:])
+        except Exception:  # diagnostics only; never let an odd annotation raise
+            continue
+        if stray:
+            name = getattr(func, "__name__", repr(func))
+            raise TypeError(
+                f"{name}({param!r}): Depends(...) found inside Annotated[...] metadata, which "
+                f"velox never reads. Use default position instead: `{param}: ... = Depends(...)`."
+            )
+
+
 def _injection(
     param: str, default: object, overrides: Mapping[str, object], *, keyword_only: bool
 ) -> Injection | None:
     if not isinstance(default, Dependency):
         return None
-    source = overrides.get(param, default.fixture) if param in overrides else default.fixture
+    source = overrides.get(param, default.fixture)
     if not isinstance(source, Fixture):
         source = Constant(source)
     return Injection(param=param, source=source, keyword_only=keyword_only)
@@ -145,6 +179,7 @@ class Fixture[T]:
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
         self._overrides: Mapping[str, object] = dict(overrides or {})
         self._plan = plan_of(func, self._overrides)
+        _check_acyclic(self)
 
     @property
     def func(self) -> Callable[..., Any]:
@@ -171,7 +206,12 @@ class Fixture[T]:
 
     @property
     def dependencies(self) -> tuple[Fixture[Any], ...]:
-        """The fixture nodes this one depends on, for graph walking."""
+        """The fixture nodes this one depends on, for graph walking.
+
+        Acyclic by construction — `Fixture.__init__` checks the moment a fixture is built, so
+        every walker downstream (the scheduler, `with_()`, a future `--graph` dump) can recurse
+        over this without a visited-set of its own.
+        """
         return tuple(i.source for i in self._plan if isinstance(i.source, Fixture))
 
     def with_(self, **overrides: object) -> Fixture[T]:
@@ -182,6 +222,23 @@ class Fixture[T]:
 
         MVP: direct dependencies only. Deep override by dependency path is roadmap.
         """
+        # REVIEW (design, decide before the runtime lands): `with_()` returns a fresh `Fixture`
+        # every call, and `Fixture` defines neither `__eq__` nor `__hash__` — so identity is the
+        # only key. Verified: `base.with_() is base.with_()` is False, and so is `==`.
+        #
+        # That is fine for `function`/`call` scope, but for `module`/`session` the cache key is
+        # what makes sharing mean anything. Two modules writing the identical
+        # `db.with_(url=TEST_URL)` get two distinct session-scoped fixtures and build the resource
+        # twice — and worse, an `exclusive=` token attached to one is not attached to the other,
+        # so the scheduler happily runs them concurrently against the resource they were meant to
+        # serialise on. This is the kind of bug that shows up as a flake under load.
+        #
+        # Two ways out: give `Fixture` structural `__eq__`/`__hash__` over
+        # `(func, scope, exclusive, resolved-overrides)` so equal derivations collide in the
+        # cache, or memoise `with_()` per `(self, sorted-overrides)`. The former also makes the
+        # static graph deduplicate, which the `--graph` dump will want anyway. Either way, note
+        # that override *values* must be hashable for this — worth deciding now, since it
+        # constrains what `Constant` may hold.
         injectable = {i.param for i in plan_of(self._func)}
         if unknown := sorted(set(overrides) - injectable):
             raise TypeError(
@@ -214,6 +271,29 @@ class Fixture[T]:
 
 def _render(value: object) -> str:
     return value.name if isinstance(value, Fixture) else repr(value)
+
+
+def _check_acyclic(root: Fixture[Any]) -> None:
+    """Raise if `root`'s dependency graph loops back on itself.
+
+    A single `@velox.fixture()` decoration can never produce a cycle — to depend on a fixture it
+    has to already exist as an object — but `with_()` or a future late rebind could, and the
+    check belongs here once rather than in every future graph walker. Identity-keyed (`id()`),
+    not `Fixture.__eq__`/`__hash__`: giving `Fixture` structural equality is the open question in
+    `with_()`'s REVIEW block, and this must not force that decision.
+    """
+    on_path: set[int] = set()
+
+    def walk(node: Fixture[Any]) -> None:
+        node_id = id(node)
+        if node_id in on_path:
+            raise ValueError(f"dependency cycle detected at fixture {node.name!r}")
+        on_path.add(node_id)
+        for dep in node.dependencies:
+            walk(dep)
+        on_path.discard(node_id)
+
+    walk(root)
 
 
 class FixtureDecorator(Protocol):

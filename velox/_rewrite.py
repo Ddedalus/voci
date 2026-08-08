@@ -18,6 +18,7 @@ Two things here are velox's own, not ports:
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager
@@ -35,10 +36,17 @@ from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET, TruncationBudg
 __all__ = [
     "AssertMode",
     "AssertionSetup",
+    "Config",
+    "Stash",
+    "assertion_context",
+    "compare_explanation",
+    "explanation_lines",
     "install",
+    "installed_hook",
     "plan",
     "resolve_cache_dir",
     "strip_rewriter_temps",
+    "uninstall",
 ]
 
 #: `rewrite` is the default; `plain` keeps bare asserts and leans on the PEP 657 floor
@@ -129,6 +137,10 @@ def _probe_writable(cache_dir: Path) -> str | None:
     against is a read-only or missing cache silently turning every run into a cold run, and
     that has to be visible before the run, not inferred from its timings.
     """
+    # A mistyped `--rewrite-cache` shouldn't litter: if `cache_dir` didn't exist before this
+    # call, it was created solely to run the probe, and velox falls back to `plain` and never
+    # uses it — so a probe failure below removes it again rather than leaving an empty tree.
+    pre_existing = cache_dir.exists()
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -139,6 +151,8 @@ def _probe_writable(cache_dir: Path) -> str | None:
         probe.write_bytes(b"velox")
         probe.unlink()
     except OSError as exc:
+        if not pre_existing:
+            shutil.rmtree(cache_dir, ignore_errors=True)
         return f"{cache_dir} is not writable: {exc.strerror or exc}"
     return None
 
@@ -164,15 +178,53 @@ class _DiscoveredPaths:
         return path in self._initialpaths
 
 
+#: Directories never worth descending into by name alone, regardless of what's inside them.
+_PRUNED_DIR_NAMES = frozenset({"__pycache__", "node_modules", "site-packages"})
+
+
+def _prune_dir(path: Path, skip_roots: frozenset[Path]) -> bool:
+    """Whether `path` (a directory found during the walk) should not be descended into.
+
+    Dot-directories (`.git`, `.venv`, `.mypy_cache`, ...), `__pycache__`, `node_modules`, and
+    `site-packages` are skipped by name alone — cheap, and covers the overwhelming majority of
+    what a bare `rglob` used to drag in. A `pyvenv.cfg` catches virtualenvs that weren't named
+    `.venv`, and `skip_roots` catches the interpreter's own install prefix, in case a root is
+    broad enough to reach it without going through a named venv directory at all.
+    """
+    name = path.name
+    if name.startswith(".") or name in _PRUNED_DIR_NAMES:
+        return True
+    if path in skip_roots:
+        return True
+    return (path / "pyvenv.cfg").is_file()
+
+
 def _discover_python_files(roots: Iterable[Path]) -> frozenset[Path]:
-    """Every `.py` file under `roots`, absolutely-pathed. Files are taken as-is."""
+    """Every `.py` file under `roots`, absolutely-pathed. Files are taken as-is.
+
+    Walked with `os.walk`, which allows pruning `dirnames` in place — `Path.rglob` cannot prune,
+    so it used to descend into virtualenvs, VCS directories, caches, and vendored trees just as
+    readily as the user's own tests. That mattered here specifically: every discovered file lands
+    in `_initialpaths` below, which not only forces a rewrite (`isinitpath`) but also feeds the
+    rewriter's name-based early-bailout set, so an unpruned walk meant velox recompiled and
+    rewrote asserts across the entire installed dependency tree on a cold run — the opposite of
+    the cold-start guarantee this module exists to defend.
+    """
     found: set[Path] = set()
+    skip_roots = frozenset(
+        Path(p).resolve() for p in (sys.prefix, sys.base_prefix, sys.exec_prefix) if p
+    )
     for root in roots:
         root = Path(os.path.abspath(root))
         if root.is_file():
             found.add(root)
-        elif root.is_dir():
-            found.update(p for p in root.rglob("*.py") if p.is_file())
+            continue
+        if not root.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            current = Path(dirpath)
+            dirnames[:] = [d for d in dirnames if not _prune_dir(current / d, skip_roots)]
+            found.update(current / name for name in filenames if name.endswith(".py"))
     return frozenset(found)
 
 
@@ -194,6 +246,13 @@ def plan(
     be made and reported before a run commits to it, and so it can be tested without touching
     `sys.meta_path`.
     """
+    # `AssertMode` is a `Literal`, which covers argparse's `choices=` path (see `cli.py`) but not
+    # a programmatic caller's typo or a config file read without going through argparse at all —
+    # those reach this function as a plain `str`, and an unrecognised one used to silently mean
+    # "rewrite" because only `"plain"` was ever tested for.
+    if mode not in ("rewrite", "plain"):
+        raise ValueError(f"unknown assertion mode {mode!r}; expected 'rewrite' or 'plain'")
+
     root_paths = tuple(Path(os.path.abspath(r)) for r in roots)
 
     if mode == "plain":
@@ -221,6 +280,11 @@ def plan(
     )
 
 
+#: What the currently-installed hook's `install()` call decided, so a later idempotent call —
+#: or `uninstall` — has something to report or clear. `None` whenever no hook is installed.
+_installed_setup: AssertionSetup | None = None
+
+
 def install(
     roots: Iterable[Path | str] = (),
     *,
@@ -229,16 +293,35 @@ def install(
     verbosity: int = 0,
     ini: dict[str, object] | None = None,
     trace: object = None,
+    warn: bool = True,
+    setup: AssertionSetup | None = None,
 ) -> AssertionSetup:
     """Put the rewriting import hook at the front of `sys.meta_path`.
 
     Must run before any test module is imported — a module already in `sys.modules` cannot be
     rewritten, and the hook warns rather than silently doing nothing.
 
+    Idempotent: if a hook is already installed, this is a no-op that returns the setup the first
+    call decided on. Without that guard a second call would push a second hook onto
+    `sys.meta_path` — two rewrites per import, and two competing cache roots, since
+    `set_cache_root` is module-global and the last caller wins.
+
+    Pass `setup` when the caller already ran `plan` — `cli.main` does, to print the report
+    header line — so the cache probe (and its stderr warning on a fallback) runs exactly once
+    instead of twice with the same two lines. Without `setup`, `install` calls `plan` itself and
+    forwards `warn`.
+
     Returns what actually happened, including any fallback. In `plain` mode, or after a failed
     cache probe, nothing is installed and the PEP 657 floor carries the whole load.
     """
-    setup = plan(roots, mode=mode, cache_dir=cache_dir)
+    global _installed_setup
+
+    if installed_hook() is not None:
+        assert _installed_setup is not None, "a hook is installed but its setup was not recorded"
+        return _installed_setup
+
+    if setup is None:
+        setup = plan(roots, mode=mode, cache_dir=cache_dir, warn=warn)
     if setup.mode == "plain":
         return setup
 
@@ -256,15 +339,18 @@ def install(
     # name-based early bailout is what keeps that cheap for every non-test import.
     sys.meta_path.insert(0, hook)
 
+    _installed_setup = setup
     return setup
 
 
 def uninstall(hook: object | None = None) -> None:
     """Remove velox's rewriting hook(s) from `sys.meta_path`. Idempotent."""
+    global _installed_setup
     for entry in list(sys.meta_path):
         if isinstance(entry, _rewrite.AssertionRewritingHook) and (hook is None or entry is hook):
             sys.meta_path.remove(entry)
     _rewrite.set_cache_root(None)
+    _installed_setup = None
 
 
 def installed_hook() -> _rewrite.AssertionRewritingHook | None:
@@ -353,7 +439,7 @@ def strip_rewriter_temps(variables: dict[str, object]) -> dict[str, object]:
     Without this, every failure in a rewritten module shows a wall of `@py_assert*` bindings
     above the ones the user wrote.
     """
-    return {k: v for k, v in variables.items() if not k.startswith(_TEMP_PREFIX)}
+    return dict(iter_user_locals(variables))
 
 
 def iter_user_locals(variables: dict[str, object]) -> Iterator[tuple[str, object]]:
@@ -361,14 +447,3 @@ def iter_user_locals(variables: dict[str, object]) -> Iterator[tuple[str, object
     for name, value in variables.items():
         if not name.startswith(_TEMP_PREFIX):
             yield name, value
-
-
-# Re-exported so callers need not reach into the vendored tree.
-__all__ += [
-    "Config",
-    "Stash",
-    "assertion_context",
-    "compare_explanation",
-    "explanation_lines",
-    "uninstall",
-]

@@ -9,9 +9,10 @@ depend on nothing in the runtime, and having them work makes the examples readab
 
 from __future__ import annotations
 
+import asyncio
 import re
 from math import isclose, isnan
-from types import TracebackType
+from types import NotImplementedType, TracebackType
 from typing import final
 
 __all__ = ["Approx", "ExceptionInfo", "RaisesContext", "approx", "raises"]
@@ -30,8 +31,11 @@ class ExceptionInfo[E: BaseException]:
 
     @property
     def value(self) -> E:
+        # RuntimeError, not AttributeError: AttributeError from a property is swallowed by
+        # `hasattr`, `getattr(info, "value", default)`, and most repr/debug machinery, so a test
+        # that reads `.value` too early would see a silent default instead of this error.
         if self._exc is None:
-            raise AttributeError("the raises() block has not completed yet")
+            raise RuntimeError("the raises() block has not completed yet")
         return self._exc
 
     @property
@@ -61,6 +65,18 @@ class RaisesContext[E: BaseException]:
     def __init__(
         self, expected: type[E] | tuple[type[E], ...], match: str | re.Pattern[str] | None
     ) -> None:
+        # `expected` is bounded by BaseException, so without this check `raises(SystemExit)`'s
+        # sibling `raises(asyncio.CancelledError)` (or `raises(BaseException)`) would swallow the
+        # cancellation velox's own timeout machinery uses to stop a runaway test, making that test
+        # un-timeout-able. SystemExit and KeyboardInterrupt are unaffected — testing a CLI's
+        # SystemExit is legitimate and common.
+        types = expected if isinstance(expected, tuple) else (expected,)
+        if any(issubclass(asyncio.CancelledError, t) for t in types):
+            raise TypeError(
+                "raises() cannot catch asyncio.CancelledError: velox uses cancellation to "
+                "enforce test timeouts, and a raises() block that swallows it would make that "
+                "test un-timeout-able."
+            )
         self._expected = expected
         self._match = match
         self._info: ExceptionInfo[E] = ExceptionInfo()
@@ -113,26 +129,48 @@ class Approx:
         self._abs = abs
         self._nan_ok = nan_ok
 
-    def __eq__(self, actual: object) -> bool:
+    def _tolerances(self) -> tuple[float, float]:
+        """`(rel_tol, abs_tol)`, applying pytest's rule for an `abs`-only comparison.
+
+        Naming `abs` without `rel` means *only* the absolute tolerance applies. Combining them the
+        way `isclose` does — loosest wins — would let the 1e-6 relative default swallow the
+        tolerance the caller actually asked for: `approx(1.0, abs=1e-13)` would accept a value off
+        by 1e-7, and `approx(1.0, abs=0)` ("exact") would be no stricter than the default. Naming
+        `rel` alone keeps `DEFAULT_ABS` underneath it, which is what makes comparisons against
+        zero work at all.
+        """
+        abs_tol = self.DEFAULT_ABS if self._abs is None else self._abs
+        if self._rel is None and self._abs is not None:
+            return 0.0, abs_tol
+        return (self.DEFAULT_REL if self._rel is None else self._rel), abs_tol
+
+    def __eq__(self, actual: object) -> bool | NotImplementedType:
         if not isinstance(actual, int | float | complex) or isinstance(actual, bool):
             return NotImplemented
+        rel_tol, abs_tol = self._tolerances()
         if isinstance(self._expected, complex) or isinstance(actual, complex):
-            return abs(complex(actual) - complex(self._expected)) <= (self._abs or self.DEFAULT_ABS)
+            expected_c = complex(self._expected)
+            actual_c = complex(actual)
+            # Same "or" as `isclose`: whichever tolerance is looser wins, scaled by the larger
+            # magnitude so it stays symmetric in both comparison directions.
+            tolerance = max(rel_tol * max(abs(expected_c), abs(actual_c)), abs_tol)
+            return abs(actual_c - expected_c) <= tolerance
         expected = float(self._expected)
         if isnan(expected) or isnan(float(actual)):
             return self._nan_ok and isnan(expected) and isnan(float(actual))
-        return isclose(
-            float(actual),
-            expected,
-            rel_tol=self.DEFAULT_REL if self._rel is None else self._rel,
-            abs_tol=self.DEFAULT_ABS if self._abs is None else self._abs,
-        )
+        return isclose(float(actual), expected, rel_tol=rel_tol, abs_tol=abs_tol)
 
-    def __hash__(self) -> int:
-        return hash(("velox.approx", self._expected))
+    # A tolerant `__eq__` cannot have a consistent hash (`1.0 == approx(1.0)` is True but the two
+    # would hash differently), so any hash we gave it would be a lie: `{approx(1.0): "x"}[1.0]`
+    # would raise KeyError, and `approx(1.0) in {1.0}` would be False. Unhashable, like pytest's
+    # ApproxBase, so the TypeError is loud instead of a container quietly losing the key.
+    __hash__ = None  # pyrefly: ignore[bad-assignment]
 
     def __repr__(self) -> str:
-        tolerance = f"rel={self._rel!r}, abs={self._abs!r}" if (self._rel or self._abs) else "±1e-6"
+        if self._rel is None and self._abs is None:
+            tolerance = f"±{self.DEFAULT_REL!r}"
+        else:
+            tolerance = f"rel={self._rel!r}, abs={self._abs!r}"
         return f"approx({self._expected!r} {tolerance})"
 
 

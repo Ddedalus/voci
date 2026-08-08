@@ -222,6 +222,89 @@ def test_state_reports_a_missing_key_as_an_attribute_error() -> None:
     run(main)
 
 
+def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
+    """Finding 3: before the fix, a `client()` call with no `state=` pushed no state layer at
+    all, so a bare `app.state.cache = x` inside one context wrote straight to the app and was
+    visible to every other concurrently-running `client()` — the exact hazard this module exists
+    to prevent, for the one attribute nobody opted into. Two contexts, no `state=` kwarg on
+    either, each writing the same attribute: neither write may reach the other, or the app.
+    """
+    other = FastAPI()
+
+    async def main() -> list[str]:
+        gate = asyncio.Barrier(2)
+
+        async def write(value: str) -> str:
+            async with velox_fastapi.client(other):
+                other.state.cache = value
+                await gate.wait()  # both contexts hold their write open at once
+                return other.state.cache
+
+        return list(await asyncio.gather(write("a"), write("b")))
+
+    assert run(main) == ["a", "b"]
+    assert not hasattr(other.state, "cache"), "neither in-test write should have reached the app"
+
+
+# --------------------------------------------------------------------------------------
+# 2b. Copying app.state
+# --------------------------------------------------------------------------------------
+
+
+def test_copy_of_layered_state_is_a_plain_state_with_the_merged_view() -> None:
+    """Finding 1: `copy.copy(app.state)` used to raise `RecursionError` — `copy` builds the
+    instance via `__reduce_ex__` without calling `__init__`, and the first attribute touch on the
+    half-built object recursed through `__getattr__`. `__copy__` now intercepts it and hands back
+    a plain `State` snapshotting the merged view instead.
+    """
+    import copy
+
+    from starlette.datastructures import State
+
+    other = fresh_app()
+    other.state.base_value = "from the app"
+
+    async def main() -> tuple[str, str, bool]:
+        async with velox_fastapi.client(other, state={"layered": "from the layer"}):
+            copied = copy.copy(other.state)
+            return copied.base_value, copied.layered, isinstance(copied, State)
+
+    base_value, layered, is_plain_state = run(main)
+    assert (base_value, layered) == ("from the app", "from the layer")
+    assert is_plain_state
+    assert type(copy.copy(other.state)) is State, "not the proxy — a plain State"
+
+
+def test_deepcopy_of_layered_state_no_longer_raises() -> None:
+    """Finding 1's second half: `copy.deepcopy(app.state)` used to raise `TypeError: cannot
+    pickle '_contextvars.ContextVar' object` — a regression, since `app.state` was deep-copyable
+    before velox swapped it in. `__deepcopy__` deep-copies only the merged values, never the
+    `ContextVar` itself, and the result is independent of the original.
+    """
+    import copy
+
+    other = fresh_app()
+    other.state.nested = {"count": 1}
+
+    async def main() -> dict[str, Any]:
+        async with velox_fastapi.client(other):
+            copied = copy.deepcopy(other.state)
+            other.state.nested["count"] = 2  # mutate the original's dict after copying
+            return copied.nested
+
+    assert run(main) == {"count": 1}, "the deep copy must not share the original's nested dict"
+
+
+def test_bare_new_state_reads_raise_attribute_error_not_recursion_error() -> None:
+    """Finding 1's other reachable path: `_LayeredState.__new__` with no `__init__` ever run
+    leaves both `_layers` and `_state` unset. Before the fix, any attribute read on it recursed
+    until the stack blew; now it reports a plain, ordinary `AttributeError`.
+    """
+    bare = velox_fastapi._LayeredState.__new__(velox_fastapi._LayeredState)
+    with pytest.raises(AttributeError):
+        _ = bare.anything
+
+
 # --------------------------------------------------------------------------------------
 # 3. Upstream-contract canaries
 # --------------------------------------------------------------------------------------
@@ -356,6 +439,24 @@ def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
     assert velox_fastapi.lifespan(other).scope == "session"
 
 
+def test_lifespan_is_memoised_per_app() -> None:
+    """Finding 2: `Fixture` has no `__eq__`/`__hash__`, so the session cache keys on identity.
+    Before the fix, `lifespan(app) is lifespan(app)` was `False` — two call sites (two test
+    modules writing the docstring's `started = velox.fastapi.lifespan(app)`) got two distinct
+    "session-scoped" fixtures, and the cache ran the app's startup and shutdown once per call site
+    instead of once per run.
+    """
+    other = FastAPI()
+
+    first = velox_fastapi.lifespan(other)
+    second = velox_fastapi.lifespan(other)
+
+    assert first is second
+
+    other_app = FastAPI()
+    assert velox_fastapi.lifespan(other_app) is not first, "memoisation is per app, not global"
+
+
 # --------------------------------------------------------------------------------------
 # 4. Installation and escalation
 # --------------------------------------------------------------------------------------
@@ -406,7 +507,76 @@ def test_replacing_state_escalates() -> None:
     run(main)
 
 
-def test_state_is_left_alone_until_someone_asks_for_it() -> None:
+def test_uninstall_restores_the_objects_velox_replaced() -> None:
+    """Finding 5: `_install`'s swap used to be permanent — nothing ever put back the
+    `dependency_overrides` dict or the `state` object the app was built with. `uninstall` is the
+    escape hatch: a process that goes on serving the real app after the suite that tested it can
+    get its original objects back, by identity.
+    """
+    other = FastAPI()
+    original_overrides = other.dependency_overrides
+
+    async def main() -> None:
+        async with velox_fastapi.client(other, overrides={flavor: lambda: "x"}, state={"a": 1}):
+            pass
+
+    run(main)
+    original_state = velox_fastapi._install(other).original_state
+    assert other.dependency_overrides is not original_overrides
+    assert isinstance(other.state, velox_fastapi._LayeredState)
+
+    velox_fastapi.uninstall(other)
+
+    assert other.dependency_overrides is original_overrides
+    assert other.state is original_state
+    assert other not in velox_fastapi._INSTALLS
+
+
+def test_uninstall_is_a_no_op_on_an_app_that_was_never_installed() -> None:
+    velox_fastapi.uninstall(FastAPI())  # must not raise
+
+
+def test_uninstall_is_idempotent() -> None:
+    other = FastAPI()
+
+    async def main() -> None:
+        async with velox_fastapi.client(other):
+            pass
+
+    run(main)
+    velox_fastapi.uninstall(other)
+    velox_fastapi.uninstall(other)  # must not raise the second time
+
+
+def test_uninstall_then_client_reinstalls_cleanly() -> None:
+    """Uninstalling doesn't leave the app in the escalated "was replaced" state — a fresh
+    `client()` afterward installs a brand new layer rather than raising."""
+    other = fresh_app()
+
+    async def main() -> str:
+        async with velox_fastapi.client(other):
+            pass
+        velox_fastapi.uninstall(other)
+        overrides = {flavor: lambda: "after uninstall"}
+        async with velox_fastapi.client(other, overrides=overrides) as http:
+            return (await http.get("/flavor")).json()["flavor"]
+
+    assert run(main) == "after uninstall"
+
+
+def test_uninstall_drops_the_memoised_lifespan_fixture() -> None:
+    other = FastAPI()
+    first = velox_fastapi.lifespan(other)
+
+    velox_fastapi.uninstall(other)
+
+    assert velox_fastapi.lifespan(other) is not first
+
+
+def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
+    """The state layer is now pushed unconditionally inside `client()` (finding 3), so the proxy
+    installs on first entry regardless of whether `state=` was passed — unlike `lifespan()`, which
+    never touches installation at all (see the canary below)."""
     other = FastAPI()
     before = other.state
 
@@ -415,4 +585,19 @@ def test_state_is_left_alone_until_someone_asks_for_it() -> None:
             pass
 
     run(main)
-    assert other.state is before
+    assert other.state is not before
+    assert isinstance(other.state, velox_fastapi._LayeredState)
+
+
+def test_lifespan_alone_never_installs_anything() -> None:
+    """Calling `lifespan(app)` without ever entering `client()` must not swap in the
+    overrides/state proxy — that install is `client()`'s job, and `lifespan()` uses its own
+    memoisation map precisely so asking for the fixture doesn't trigger it (finding 2)."""
+    other = FastAPI()
+    before_state = other.state
+    before_overrides = other.dependency_overrides
+
+    velox_fastapi.lifespan(other)
+
+    assert other.state is before_state
+    assert other.dependency_overrides is before_overrides

@@ -8,6 +8,7 @@ second time — the distinction that killed `--assert=reinterp` (spec/07 §7).
 
 from __future__ import annotations
 
+import linecache
 import textwrap
 from pathlib import Path
 
@@ -112,6 +113,36 @@ def test_operator_inside_a_string_literal_is_ignored(unrewritten) -> None:
     caret_line = explanation.splitlines()[1]
     # Exactly one operator span, and it is the real one.
     assert caret_line.count("^") == 2
+
+
+def test_operator_inside_a_triple_quoted_string_is_ignored(unrewritten) -> None:
+    """Minimal fix, not a full lexer: `'''` used to read as an empty `''` plus a stray `'`,
+    desynchronising the rest of the scan rather than skipping the string as one unit."""
+    mod = unrewritten("def check(x):\n    assert x == '''a == b'''\n")
+    explanation = _explain(mod.check, "nope")
+    assert explanation is not None
+    caret_line = explanation.splitlines()[1]
+    assert caret_line.count("^") == 2
+
+
+def test_assert_prefixed_identifier_is_not_mistaken_for_the_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`assert_called_once()` (mock), `assertEqual(...)` (unittest), and
+    `assert_frame_equal(...)` (pandas) all begin with the same six characters as the keyword but
+    are identifiers, not statements. A bare `startswith("assert")` would claim the line and hand
+    `_operator_span` a call expression to underline as though it were a comparison.
+
+    `linecache.getline` is patched rather than relying on some real library's internals, which
+    would depend on exactly how that library raises and could change out from under this test;
+    the point being tested is the keyword check, not any particular caller's plumbing.
+    """
+
+    def check() -> None:
+        raise AssertionError()
+
+    monkeypatch.setattr(linecache, "getline", lambda *a, **k: "    assert_called_once()\n")
+    assert _explain(check) is None
 
 
 def test_explicit_message_suppresses_the_floor(unrewritten) -> None:

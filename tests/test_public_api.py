@@ -166,6 +166,14 @@ def test_builtin_fixtures_are_fixtures() -> None:
     )
 
 
+def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
+    """Every other stub in `_builtins` raises the moment it is called; `set_level` used to defer
+    that to `__enter__` because it was a `@contextmanager`, so `cm = log_records.set_level(...)`
+    would succeed and only `with cm:` would fail."""
+    with pytest.raises(NotImplementedError):
+        velox.LogRecords().set_level("DEBUG")
+
+
 def test_approx_compares_both_ways() -> None:
     assert 0.1 + 0.2 == velox.approx(0.3)  # noqa: SIM300 — both orders are the point
     assert velox.approx(0.3) == 0.1 + 0.2

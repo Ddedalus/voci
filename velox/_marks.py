@@ -89,11 +89,36 @@ class Marks:
 
 def marks_of(fn: object) -> Marks:
     """The marks attached to `fn`, or an empty record. Never raises."""
-    return getattr(fn, MARKS_ATTR, None) or Marks()
+    # `fn.__dict__.get(...)`, not `getattr`: getattr walks the MRO, so a subclass would inherit
+    # its base's marks and `_amend` on the subclass would silently rewrite the *derived* record
+    # from the inherited one. Not every object has a `__dict__` (slots, builtins), hence the
+    # `getattr` guard around it — this must never raise.
+    marks_dict = getattr(fn, "__dict__", None)
+    if marks_dict is None:
+        return Marks()
+    return marks_dict.get(MARKS_ATTR) or Marks()
+
+
+# Marks still live on the function object (`__velox_marks__` is part of the tested surface — see
+# `marks_of`), so a helper reused as a test body in two modules would otherwise accumulate both
+# sites' marks, and a second `@skip` would silently overwrite the first. Accumulating marks
+# (`skipifs`, `tags`, `parametrizations`) legitimately stack across decorators; a *scalar* mark
+# applied twice to the same object is almost always a mistake — a duplicate `@skip`/`@xfail`/
+# `@timeout` with two different reasons/timeouts has no sensible "last one wins" reading — so
+# that case raises instead of overwriting silently.
+_SCALAR_MARKS = frozenset({"skip", "xfail", "timeout"})
 
 
 def _amend[F: Callable[..., Any]](fn: F, **changes: Any) -> F:
-    setattr(fn, MARKS_ATTR, dataclasses.replace(marks_of(fn), **changes))
+    current = marks_of(fn)
+    for field, value in changes.items():
+        if field in _SCALAR_MARKS and getattr(current, field) is not None:
+            name = getattr(fn, "__name__", repr(fn))
+            raise TypeError(
+                f"@velox.{field} applied twice to {name!r}: already set to "
+                f"{getattr(current, field)!r}, now {value!r}"
+            )
+    setattr(fn, MARKS_ATTR, dataclasses.replace(current, **changes))
     return fn
 
 
@@ -179,7 +204,14 @@ def parametrize[F: Callable[..., Any]](
     slowest. `indirect=` is not supported — the DI equivalent is a parametrized value passed into
     a fixture via `Fixture.with_()`.
     """
+    # Validated here, at decoration time, rather than left to fail in the collector: by then the
+    # traceback no longer points at the decorator, and a stale `ids` list would silently mislabel
+    # every later case instead of raising.
     names = _split(argnames)
+    if not names:
+        raise ValueError(f"parametrize({argnames!r}): no argument names given")
+    if len(set(names)) != len(names):
+        raise ValueError(f"parametrize({argnames!r}): duplicate argument name")
     cases = tuple(_case(v, len(names)) for v in argvalues)
     for case in cases:
         if len(case) != len(names):
@@ -187,7 +219,12 @@ def parametrize[F: Callable[..., Any]](
                 f"parametrize({argnames!r}): expected {len(names)} value(s) per case, "
                 f"got {len(case)}: {case!r}"
             )
-    param_set = ParamSet(names, cases, ids if ids is None or callable(ids) else tuple(ids))
+    fixed_ids = ids if ids is None or callable(ids) else tuple(ids)
+    if isinstance(fixed_ids, tuple) and len(fixed_ids) != len(cases):
+        raise ValueError(
+            f"parametrize({argnames!r}): {len(fixed_ids)} id(s) for {len(cases)} case(s)"
+        )
+    param_set = ParamSet(names, cases, fixed_ids)
 
     def decorate(fn: F) -> F:
         # Prepend: decorators apply bottom-up, so the last one applied is the outermost, and

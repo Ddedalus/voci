@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from contextvars import ContextVar, Token
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from velox._vendor.assertion._shim import Config
@@ -53,30 +53,56 @@ def get_config() -> Config | None:
     return _config.get()
 
 
-def set_config(config: Config | None) -> None:
-    """Set the config for the current context. Prefer `assertion_state` where it fits."""
-    _config.set(config)
+def set_config(config: Config | None) -> Token[Config | None]:
+    """Set the config for the current context. Prefer `assertion_state` where it fits.
+
+    Returns the `Token` so the set is reversible (`_config.reset(token)`) — the only thing that
+    otherwise stands between a caller of this escape hatch and a context it can never restore.
+    Callers who don't need it can simply ignore the return value.
+    """
+    return _config.set(config)
+
+
+#: Sentinel distinguishing "argument not passed" from "explicitly passed `None`" in
+#: `assertion_state`'s signature. A `None` default could not make that distinction, and nested
+#: blocks — the case this context manager exists for — need it: "not passed" must inherit the
+#: enclosing value, while `None` must clear it.
+class _Keep:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<KEEP>"
+
+
+_KEEP: Final[Any] = _Keep()
 
 
 @contextmanager
 def assertion_state(
     *,
-    config: Config | None = None,
-    reprcompare: Callable[[str, object, object], str | None] | None = None,
-    assertion_pass: Callable[[int, str, str], None] | None = None,
+    config: Config | None = _KEEP,
+    reprcompare: Callable[[str, object, object], str | None] | None = _KEEP,
+    assertion_pass: Callable[[int, str, str], None] | None = _KEEP,
 ) -> Iterator[None]:
     """Bind assertion state for the duration of the block, then restore it.
 
     Restoring is belt-and-braces: when each test runs in its own task the context is already
     copied, so the values cannot leak sideways. It matters for the synchronous case — nested
     blocks, and setup code that runs in the caller's own context.
+
+    Each parameter defaults to a private sentinel rather than `None`, so a nested
+    `assertion_state(reprcompare=f)` leaves the enclosing `config` and `assertion_pass` alone
+    instead of silently clearing them. Pass `None` explicitly to clear one.
     """
-    config_token = _config.set(config)
-    reprcompare_token = _reprcompare.set(reprcompare)
-    assertion_pass_token = _assertion_pass.set(assertion_pass)
+    tokens: list[tuple[ContextVar[Any], Token[Any]]] = []
+    if config is not _KEEP:
+        tokens.append((_config, _config.set(config)))
+    if reprcompare is not _KEEP:
+        tokens.append((_reprcompare, _reprcompare.set(reprcompare)))
+    if assertion_pass is not _KEEP:
+        tokens.append((_assertion_pass, _assertion_pass.set(assertion_pass)))
     try:
         yield
     finally:
-        _config.reset(config_token)
-        _reprcompare.reset(reprcompare_token)
-        _assertion_pass.reset(assertion_pass_token)
+        for var, token in reversed(tokens):
+            var.reset(token)
