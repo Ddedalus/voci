@@ -9,14 +9,14 @@ from velox import Depends
 
 from relay.client import DeliveryFailed, Relay, backoff_schedule
 from relay.transport import FakeTransport, Response
-from tests.fixtures import dead_transport, flaky_transport, relay, transport
-
-# Derived fixtures, bound to names. `relay.with_(transport=...)` replaces one dependency of the
-# `relay` fixture; everything else in its graph is untouched. Written inline inside `Depends(...)`
-# it works identically, but it trips ruff's B008 with no qualified name to whitelist, so binding it
-# is the idiom — and it lets a group of tests share the same override.
-flaky_relay = relay.with_(transport=flaky_transport)
-dead_relay = relay.with_(transport=dead_transport)
+from tests.fixtures import (
+    dead_relay,
+    dead_transport,
+    flaky_relay,
+    flaky_transport,
+    relay,
+    transport,
+)
 
 
 async def test_successful_delivery(
@@ -33,13 +33,12 @@ async def test_retries_until_success(
     r: Relay = Depends(flaky_relay),
     t: FakeTransport = Depends(flaky_transport),
 ) -> None:
-    """`with_()` swaps the transport for this test only.
+    """`flaky_relay` (`tests/fixtures.py`) swaps the transport for this test only.
 
-    Two things worth noticing. First, `relay.with_(transport=flaky_transport)` and
-    `Depends(flaky_transport)` resolve to the *same instance* — a fixture is constructed once per
-    test regardless of how many paths reach it, so the relay under test and the transport being
-    asserted on are the same object. Second, nothing was patched, so this test runs alongside
-    fifteen others.
+    Two things worth noticing. First, `flaky_relay` and `Depends(flaky_transport)` resolve to the
+    *same instance* — a fixture is constructed once per test regardless of how many paths reach
+    it, so the relay under test and the transport being asserted on are the same object. Second,
+    nothing was patched, so this test runs alongside fifteen others.
     """
     response = await r.deliver("https://hooks.test/v1", b"retry-me")
 

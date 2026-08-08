@@ -164,7 +164,8 @@ async generators, shielded construction for wide scopes.
 - Parametrized fixtures (`params=`) with per-param instances; the cache key already carries it.
 - `class` scope.
 - `--eager-teardown` (refcount session scope too).
-- Deep `with_()` overrides by dependency path.
+- Per-node fixture override (`Fixture.with_()`) and deep overrides by dependency path — see
+  [01](01-public-api.md) §10 for the caching-identity problem that deferred it.
 - A `--graph` dump (DOT/JSON) of the resolution graph: cheap, and a genuinely nice explainability
   feature that pytest structurally cannot offer.
 - Lazy/optional fixtures (`Depends(p, lazy=True)` yielding a factory) for expensive resources only some

@@ -13,12 +13,11 @@ implemented here; this module is the declarative half.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
 
 __all__ = [
-    "Constant",
     "Depends",
     "Fixture",
     "Injection",
@@ -43,23 +42,11 @@ type Exclusive = bool | str
 
 @final
 @dataclass(frozen=True, slots=True)
-class Constant:
-    """A plain value substituted for a dependency by `Fixture.with_`.
-
-    Kept as a distinct node type so the static graph can still be walked: an overridden edge is
-    visible as an edge, it just terminates immediately.
-    """
-
-    value: object
-
-
-@final
-@dataclass(frozen=True, slots=True)
 class Injection:
     """One `Depends(...)` site on a fixture or test callable."""
 
     param: str
-    source: Fixture[Any] | Constant
+    source: Fixture[Any]
     keyword_only: bool
 
 
@@ -80,9 +67,7 @@ def Depends[T](dependency: Fixture[T], /) -> T:
     return cast(T, Dependency(dependency))
 
 
-def plan_of(
-    func: Callable[..., Any], overrides: Mapping[str, object] | None = None
-) -> tuple[Injection, ...]:
+def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
     """Read the injection plan off a callable's defaults.
 
     A parameter is injected iff its default is a `Depends(...)` sentinel. Any other default is an
@@ -95,18 +80,17 @@ def plan_of(
 
     _reject_annotated_depends(func)
 
-    overrides = overrides or {}
     injections: list[Injection] = []
 
     positional = code.co_varnames[: code.co_argcount]
     defaults = func.__defaults__ or ()
     offset = len(positional) - len(defaults)
     for param, default in zip(positional[offset:], defaults, strict=True):
-        if (injection := _injection(param, default, overrides, keyword_only=False)) is not None:
+        if (injection := _injection(param, default, keyword_only=False)) is not None:
             injections.append(injection)
 
     for param, default in (func.__kwdefaults__ or {}).items():
-        if (injection := _injection(param, default, overrides, keyword_only=True)) is not None:
+        if (injection := _injection(param, default, keyword_only=True)) is not None:
             injections.append(injection)
 
     return tuple(injections)
@@ -144,25 +128,22 @@ def _reject_annotated_depends(func: Callable[..., Any]) -> None:
             )
 
 
-def _injection(
-    param: str, default: object, overrides: Mapping[str, object], *, keyword_only: bool
-) -> Injection | None:
+def _injection(param: str, default: object, *, keyword_only: bool) -> Injection | None:
     if not isinstance(default, Dependency):
         return None
-    source = overrides.get(param, default.fixture)
-    if not isinstance(source, Fixture):
-        source = Constant(source)
-    return Injection(param=param, source=source, keyword_only=keyword_only)
+    return Injection(param=param, source=default.fixture, keyword_only=keyword_only)
 
 
 @final
 class Fixture[T]:
     """A fixture: the callable, plus everything the scheduler needs to know statically.
 
-    Constructed by `@velox.fixture()`. Immutable; `with_()` derives a new one.
+    Constructed by `@velox.fixture()`. Immutable — there is no method that derives a modified
+    copy. Per-node override (replacing one named dependency of an existing `Fixture` to get a new
+    one) is roadmap; see spec/01 §10 for why it was deferred rather than shipped.
     """
 
-    __slots__ = ("_exclusive", "_func", "_name", "_overrides", "_plan", "_scope")
+    __slots__ = ("_exclusive", "_func", "_name", "_plan", "_scope")
 
     def __init__(
         self,
@@ -171,14 +152,12 @@ class Fixture[T]:
         scope: Scope = "function",
         exclusive: Exclusive = False,
         name: str | None = None,
-        overrides: Mapping[str, object] | None = None,
     ) -> None:
         self._func = func
         self._scope: Scope = scope
         self._exclusive: Exclusive = exclusive
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
-        self._overrides: Mapping[str, object] = dict(overrides or {})
-        self._plan = plan_of(func, self._overrides)
+        self._plan = plan_of(func)
         _check_acyclic(self)
 
     @property
@@ -201,7 +180,7 @@ class Fixture[T]:
 
     @property
     def plan(self) -> tuple[Injection, ...]:
-        """This fixture's own `Depends(...)` sites, overrides already applied."""
+        """This fixture's own `Depends(...)` sites."""
         return self._plan
 
     @property
@@ -209,58 +188,19 @@ class Fixture[T]:
         """The fixture nodes this one depends on, for graph walking.
 
         Acyclic by construction — `Fixture.__init__` checks the moment a fixture is built, so
-        every walker downstream (the scheduler, `with_()`, a future `--graph` dump) can recurse
-        over this without a visited-set of its own.
+        every walker downstream (the scheduler, a future `--graph` dump) can recurse over this
+        without a visited-set of its own.
         """
-        return tuple(i.source for i in self._plan if isinstance(i.source, Fixture))
-
-    def with_(self, **overrides: object) -> Fixture[T]:
-        """Derive a fixture whose named direct dependencies are replaced.
-
-        Each override is either another `Fixture` or a plain value. Overrides are part of the
-        static graph, so validation and scheduling still see the truth.
-
-        MVP: direct dependencies only. Deep override by dependency path is roadmap.
-        """
-        # REVIEW (design, decide before the runtime lands): `with_()` returns a fresh `Fixture`
-        # every call, and `Fixture` defines neither `__eq__` nor `__hash__` — so identity is the
-        # only key. Verified: `base.with_() is base.with_()` is False, and so is `==`.
-        #
-        # That is fine for `function`/`call` scope, but for `module`/`session` the cache key is
-        # what makes sharing mean anything. Two modules writing the identical
-        # `db.with_(url=TEST_URL)` get two distinct session-scoped fixtures and build the resource
-        # twice — and worse, an `exclusive=` token attached to one is not attached to the other,
-        # so the scheduler happily runs them concurrently against the resource they were meant to
-        # serialise on. This is the kind of bug that shows up as a flake under load.
-        #
-        # Two ways out: give `Fixture` structural `__eq__`/`__hash__` over
-        # `(func, scope, exclusive, resolved-overrides)` so equal derivations collide in the
-        # cache, or memoise `with_()` per `(self, sorted-overrides)`. The former also makes the
-        # static graph deduplicate, which the `--graph` dump will want anyway. Either way, note
-        # that override *values* must be hashable for this — worth deciding now, since it
-        # constrains what `Constant` may hold.
-        injectable = {i.param for i in plan_of(self._func)}
-        if unknown := sorted(set(overrides) - injectable):
-            raise TypeError(
-                f"{self._name}.with_(): no injected parameter named "
-                f"{', '.join(repr(u) for u in unknown)}. "
-                f"Injectable parameters are: {', '.join(sorted(injectable)) or '(none)'}."
-            )
-        rendered = ", ".join(f"{k}={_render(v)}" for k, v in overrides.items())
-        return Fixture(
-            self._func,
-            scope=self._scope,
-            exclusive=self._exclusive,
-            name=f"{self._name}.with_({rendered})",
-            overrides={**self._overrides, **overrides},
-        )
+        return tuple(i.source for i in self._plan)
 
     def __call__(self, *args: object, **kwargs: object) -> Any:
         """Call the underlying function directly, as ordinary Python.
 
         No injection is performed — any un-passed `Depends(...)` parameter keeps its sentinel
-        default. This exists so a fixture stays a normal callable; the supported override
-        mechanism is `with_()` at the call site.
+        default. This exists so a fixture stays a normal callable; overriding one dependency for
+        one test is done by writing a separate fixture function with the replacement wired in and
+        passing *that* to `Depends(...)` at the call site (tier (a), spec/08 §3) — replacing one
+        named dependency of an existing `Fixture` in place is roadmap (spec/01 §10).
         """
         return self._func(*args, **kwargs)
 
@@ -269,18 +209,15 @@ class Fixture[T]:
         return f"<Fixture {self._name} scope={self._scope}{exclusive}>"
 
 
-def _render(value: object) -> str:
-    return value.name if isinstance(value, Fixture) else repr(value)
-
-
 def _check_acyclic(root: Fixture[Any]) -> None:
     """Raise if `root`'s dependency graph loops back on itself.
 
     A single `@velox.fixture()` decoration can never produce a cycle — to depend on a fixture it
-    has to already exist as an object — but `with_()` or a future late rebind could, and the
-    check belongs here once rather than in every future graph walker. Identity-keyed (`id()`),
-    not `Fixture.__eq__`/`__hash__`: giving `Fixture` structural equality is the open question in
-    `with_()`'s REVIEW block, and this must not force that decision.
+    has to already exist as an object — but a future late-rebind mechanism (deep per-node
+    override, spec/01 §10, is the leading candidate) could, and the check belongs here once
+    rather than in every future graph walker. Identity-keyed (`id()`), not `Fixture.__eq__`/
+    `__hash__`: giving `Fixture` structural equality is exactly the open question that deferred
+    that feature, and this must not force that decision.
     """
     on_path: set[int] = set()
 

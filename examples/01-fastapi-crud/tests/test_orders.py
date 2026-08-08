@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import velox
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from velox import Depends
+from velox import fastapi as velox_fastapi
 
+from app.db import get_session
+from app.main import app
 from app.models import User
 from app.settings import Settings
-from tests.fixtures import PaymentSandbox, alice, api_client, payment_sandbox
+from tests.fixtures import PaymentSandbox, alice, api_client, payment_sandbox, session
 
 
 async def test_create_order(
@@ -56,23 +61,36 @@ def premium_settings() -> Settings:
     return Settings(database_url="unused", signup_bonus_cents=5_000, max_orders_per_user=2)
 
 
-premium_client = api_client.with_(settings=premium_settings)
-"""`Fixture.with_()` returns a *derived* fixture with one dependency replaced by name.
+@velox.fixture()
+async def premium_client(
+    session: AsyncSession = Depends(session),
+    settings: Settings = Depends(premium_settings),
+) -> AsyncIterator[AsyncClient]:
+    """`api_client`, rebuilt with `premium_settings` in place of the default.
 
-`api_client` takes a `settings` parameter; this swaps it. Everything else in the graph — the
-session, the engine, the app itself — is untouched and still shared. There is no patching, no
-registry override, and no ordering hazard, because the substitution is part of the static graph:
-the scheduler and the validator both see the truth.
+    Per-node override of an existing fixture — deriving this from `api_client` by writing
+    `api_client.with_(settings=premium_settings)` — is roadmap (spec/01 §10). `Fixture.with_()`
+    was prototyped and pulled before the runtime landed: it returns a fresh, identity-keyed
+    `Fixture` on every call, which is fine at function scope but breaks module/session-scope
+    caching (two callers of `.with_()` with equal overrides get two distinct instances of what
+    should be one shared resource). Until that is resolved, the replacement idiom is this: a
+    sibling fixture, built exactly like `api_client`, with one dependency swapped by hand.
 
-The tests below run against the same singleton `app` as every other test in this suite, and read
-`settings.max_orders_per_user == 2` while their neighbours read the default. That is the layering
-in `api_client` doing its job: the substituted value reaches `app.state` for this test's context
-and no other.
+    Everything else in the graph — the session, the engine, the app itself — is still shared with
+    every other test. There is no patching and no override registry; the substitution is an
+    ordinary fixture in the static graph, so the scheduler and the validator both see the truth.
 
-Bound to a name rather than written inline in the `Depends(...)`. Both work, but the inline form
-trips ruff's B008 with no qualified name to whitelist — and a named derived fixture reads better
-and can be shared by a group of tests, as it is below.
-"""
+    The tests below run against the same singleton `app` as every other test in this suite, and
+    read `settings.max_orders_per_user == 2` while their neighbours read the default. That is the
+    layering in `velox.fastapi.client` doing its job: the substituted value reaches `app.state`
+    for this test's context and no other.
+    """
+    async with velox_fastapi.client(
+        app,
+        overrides={get_session: lambda: session},
+        state={"settings": settings},
+    ) as client:
+        yield client
 
 
 async def test_premium_signup_grants_credit(
@@ -88,7 +106,7 @@ async def test_order_limit_is_enforced(
     user: User = Depends(alice),
     client: AsyncClient = Depends(premium_client),
 ) -> None:
-    """The same derived fixture, reused. `with_()` results are values."""
+    """The same `premium_client` fixture, reused. Fixtures are values."""
     url = f"/users/{user.id}/orders"
     for _ in range(2):
         assert (await client.post(url, json={"total_cents": 100})).status_code == 201

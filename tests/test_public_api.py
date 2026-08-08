@@ -1,7 +1,7 @@
 """Tests for the declarative half of the public API (spec/01).
 
 Nothing here runs a test through velox — the runtime does not exist yet. These pin the shapes:
-what the decorators build, what the plan reads off `__defaults__`, and what `with_` derives.
+what the decorators build and what the plan reads off `__defaults__`.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from collections.abc import AsyncIterator
 import pytest
 import velox
 from velox import Depends
-from velox._fixtures import Constant
 from velox._marks import marks_of
 
 
@@ -75,32 +74,6 @@ def test_generators_and_async_are_all_fixtures() -> None:
 
     assert isinstance(agen, velox.Fixture)
     assert isinstance(coro, velox.Fixture)
-
-
-def test_with_replaces_a_direct_dependency() -> None:
-    @velox.fixture()
-    def other() -> int:
-        return 2
-
-    derived = gamma.with_(a=other)
-
-    assert derived.dependencies == (other, beta)
-    assert gamma.dependencies == (alpha, beta), "the original is untouched"
-    assert derived.name == "gamma.with_(a=other)"
-    assert derived.scope == gamma.scope
-
-
-def test_with_accepts_a_plain_value() -> None:
-    derived = gamma.with_(a=7)
-
-    (a, _b) = derived.plan
-    assert a.source == Constant(7)
-    assert derived.dependencies == (beta,), "a constant is not a fixture node"
-
-
-def test_with_rejects_a_parameter_that_is_not_injected() -> None:
-    with pytest.raises(TypeError, match="no injected parameter named 'nope'"):
-        gamma.with_(nope=1)
 
 
 def test_marks_stack_into_one_record() -> None:

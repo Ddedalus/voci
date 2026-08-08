@@ -59,7 +59,7 @@ a stopwatch six months later.
 
 | Tier | Mechanism | Concurrency | In this suite |
 |---|---|---|---|
-| **(a)** | Dependency injection — `with_()`, a constructor argument, a `Protocol` | Full | 4 tests |
+| **(a)** | Dependency injection — a sibling fixture, a constructor argument, a `Protocol` | Full | 4 tests |
 | **(a)** | `MagicMock` / `create_autospec` as a *value* | Full | 1 test |
 | **(b)** | `@mock.patch(...)` — detected statically, scheduled solo | Suite drains | 2 tests |
 | **(b)** | `with mock.patch(...)` — invisible statically, must be marked `@velox.solo` | Suite drains | 1 test |

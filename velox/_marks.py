@@ -201,8 +201,9 @@ def parametrize[F: Callable[..., Any]](
     with several, each entry is a tuple aligned to the names.
 
     Stacked decorators produce the cartesian product in a stable, defined order: outermost varies
-    slowest. `indirect=` is not supported — the DI equivalent is a parametrized value passed into
-    a fixture via `Fixture.with_()`.
+    slowest. `indirect=` is not supported — the closest DI equivalent, a parametrized value passed
+    into a fixture via a per-node override, is roadmap (spec/01 §10); today the fixture itself
+    takes the parametrized value as an ordinary argument.
     """
     # Validated here, at decoration time, rather than left to fail in the collector: by then the
     # traceback no longer points at the decorator, and a stale `ids` list would silently mislabel

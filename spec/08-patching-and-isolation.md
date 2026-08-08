@@ -62,9 +62,18 @@ codegen tries hardest to reach.
 ```python
 fake_http = MagicMock(spec=HttpClient)          # a stock mock object — fine, concurrent
 
-async def test_retry(svc: Service = Depends(service.with_(http=fake_http))):
+@velox.fixture()
+def service_with_fake_http() -> Service:
+    return Service(fake_http)
+
+async def test_retry(svc: Service = Depends(service_with_fake_http)):
     ...
 ```
+
+(A method that derives `service_with_fake_http` from `service` automatically —
+`service.with_(http=fake_http)` — is roadmap; [01](01-public-api.md) §10 has the design problem
+that deferred it. The sibling-fixture form above needs no new API and is what tier (a) means
+today.)
 
 The reference stack has one seam where tier (a) does not reach, because the override point belongs
 to the application object rather than to velox's DI graph: FastAPI's `app.dependency_overrides`.

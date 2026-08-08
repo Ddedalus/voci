@@ -23,7 +23,8 @@ run against it.
 through `httpx.AsyncClient` against a real database.
 
 Shows: session-scoped `engine`, the transaction-rollback `session` fixture, a per-test app instance
-with `dependency_overrides`, `Fixture.with_()` to swap one node of the graph for one test,
+with `dependency_overrides`, a sibling fixture to swap one node of the graph for one test
+(`Fixture.with_()` would do this automatically, but it is roadmap — spec/01 §10),
 `@velox.parametrize`, class grouping, `velox.raises`, and one `exclusive=` external sandbox.
 
 The point: **one engine, N concurrent tests.** Under `pytest-xdist` this suite is four processes,
@@ -112,9 +113,14 @@ Writing these surfaced three things the spec does not currently answer.
    an app factory instead; the spec snippet should probably follow.
 4. **`Fixture.with_()` written inline inside `Depends(...)` trips ruff's B008**, and unlike
    `Depends` itself there is no qualified name to add to `extend-immutable-calls` — it is a method
-   on an arbitrary object. So the examples bind derived fixtures to module-level names
-   (`flaky_relay = relay.with_(transport=flaky_transport)`), which reads better and is shareable
-   anyway. Worth being the documented idiom rather than something every adopter rediscovers.
+   on an arbitrary object. Binding derived fixtures to module-level names
+   (`flaky_relay = relay.with_(transport=flaky_transport)`) dodged the lint but not the deeper
+   problem underneath it: this finding is one of the two reasons `Fixture.with_()` ended up
+   deferred to roadmap rather than shipped ([`spec/01 §10`](../spec/01-public-api.md)), the other
+   being a caching-identity bug at module/session scope. The examples now write the sibling
+   fixture directly — `flaky_relay` is its own `@velox.fixture()` in `tests/fixtures.py` — which
+   never trips B008 in the first place, since a function definition is not a call expression in
+   an argument default.
 
    Every example's `pyproject.toml` also carries
    `extend-immutable-calls = ["velox.Depends"]`; without it B008 fires on every test in the suite.

@@ -19,7 +19,7 @@ from velox._builtins import (
     tmp_path,
     tmp_path_factory,
 )
-from velox._fixtures import Constant, Depends, Fixture, Injection, Scope, fixture
+from velox._fixtures import Depends, Fixture, Injection, Scope, fixture
 from velox._marks import (
     Marks,
     ParamSet,
@@ -46,7 +46,6 @@ __version__ = "0.1.0"
 __all__ = [
     "Approx",
     "Capture",
-    "Constant",
     "Depends",
     "ExceptionInfo",
     "Fixture",

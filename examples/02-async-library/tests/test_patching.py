@@ -22,9 +22,7 @@ from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
 from relay.settings import Settings
 from relay.transport import FakeTransport, Response, Transport
-from tests.fixtures import flaky_transport, relay, transport
-
-flaky_relay = relay.with_(transport=flaky_transport)
+from tests.fixtures import flaky_relay, flaky_transport, relay, transport
 
 # ========================================================================================
 # Tier (a) — dependency injection. Fully concurrent. What the docs teach first.

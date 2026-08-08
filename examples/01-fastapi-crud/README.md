@@ -12,7 +12,7 @@ app/
 tests/
   fixtures.py     engine, session, api_client, alice, payment_sandbox
   test_users.py   the baseline shape: parametrize, marks, class grouping
-  test_orders.py  with_() overrides, raises/approx, built-ins, exclusive
+  test_orders.py  per-node override via a sibling fixture, raises/approx, built-ins, exclusive
 ```
 
 ## Setup
@@ -115,9 +115,13 @@ scope — so no real engine is built and `app.state.sessionmaker` is never set. 
 because `get_session` is overridden. For an app whose startup puts something under test in place,
 `velox.fastapi.lifespan(app)` is a session-scoped fixture that runs it once for the whole run.
 
-**`test_orders.py::test_premium_signup_grants_credit`** — `api_client.with_(settings=premium_settings)`
-replaces one node of the graph for one test. No patching, no override registry, no teardown; the
-substitution is part of the static graph, so validation and scheduling still see the truth.
+**`test_orders.py::test_premium_signup_grants_credit`** — `premium_client` is a sibling fixture
+that rebuilds `api_client` with `premium_settings` wired in by hand, replacing one node of the
+graph for one test. No patching, no override registry, no teardown; the substitution is an
+ordinary fixture in the static graph, so validation and scheduling still see the truth.
+Deriving `premium_client` from `api_client` automatically — `api_client.with_(settings=...)` — is
+roadmap ([spec/01 §10](../../spec/01-public-api.md)): it has a caching-identity problem that
+needs a design decision, not a patch.
 
 **`tests/fixtures.py::payment_sandbox`** — `exclusive="payments-sandbox"`. The constraint is declared
 on the *resource*; every test that transitively depends on it inherits the token and the scheduler

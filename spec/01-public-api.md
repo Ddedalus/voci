@@ -104,23 +104,29 @@ resolved object. Mechanism, escalation, lifespan policy, and limits: [08](08-pat
 ### Direct call / overriding
 
 A fixture object is also callable in ordinary Python (`await engine()` returns the underlying
-async generator context) — but the supported override mechanism is **passing a different value at the call site**, which is what makes DI-based mocking tier (a) work:
+async generator context) — but the supported override mechanism is **passing a different fixture
+or value at the call site**, which is what makes DI-based mocking tier (a) work:
 
 ```python
 @velox.parametrize("clock", [FrozenClock(...), RealClock()])
 async def test_expiry(clock: Clock, svc: Service = Depends(service)): ...
 ```
 
-and, for replacing one node in a graph for one test:
+and, for replacing one node of an existing fixture's graph for one test, a sibling fixture that
+builds the same object with the different dependency wired in directly:
 
 ```python
-async def test_retry(svc: Service = Depends(service.with_(http=fake_http))): ...
+@velox.fixture()
+def service_with_fake_http(http: HttpClient = Depends(fake_http)) -> Service:
+    return Service(http)
+
+
+async def test_retry(svc: Service = Depends(service_with_fake_http)): ...
 ```
 
-`Fixture.with_(**overrides)` returns a derived fixture whose named dependencies are replaced.
-Overrides are part of the static graph, so scheduling and validation still see the truth.
-
-> Review note: this construct seems weird, do not implement without further discussion.
+A method that derives that sibling automatically — `service.with_(http=fake_http)` — was
+prototyped and pulled before the runtime landed. It has a design problem, not a bug, so it is
+roadmap rather than shipped half-solved: see §10.
 
 
 ## 4. Marks
@@ -149,8 +155,9 @@ async def test_endpoint(verb: str, payload: dict, client: AsyncClient = Depends(
 Stacked decorators produce the cartesian product in a **stable, defined order** (outermost varies
 slowest), with generated ids from `repr`-based rules identical to pytest's for the common types
 (str/int/bool/None/enum → literal; everything else → `argname0`, `argname1`, …). No `set` iteration
-and no unpinned `hash()` anywhere in id generation (R§6). `indirect=` is not supported — the DI
-equivalent is a parametrized value passed into a fixture via `with_`.
+and no unpinned `hash()` anywhere in id generation (R§6). `indirect=` is not supported — the
+closest DI equivalent, a parametrized value passed into a fixture via a per-node override, is
+roadmap (§10); today the fixture itself takes the parametrized value as an ordinary argument.
 
 ## 5. Test IDs
 
@@ -200,7 +207,40 @@ velox.approx(0.3)
 ## 10. Roadmap
 
 - `tmp_path`, `tmp_path_factory`, `capture`, `log_records`, `test_info`.
-- `Fixture.with_()` for direct-dependency override.
+- **`Fixture.with_()` — derive a fixture with one named dependency replaced.** Prototyped and then
+  pulled before the runtime landed, because it has a design problem to be resolved, not patched
+  around: `with_()` returns a fresh `Fixture` object on every call, and `Fixture` defines neither
+  `__eq__` nor `__hash__` — so object identity is the only available cache key. (Verified:
+  `base.with_() is base.with_()` is `False`, and so is `==`.)
+
+  That is harmless at `call`/`function` scope, where nothing is shared. At `module`/`session`
+  scope the cache key is the entire mechanism by which sharing means anything, and identity is
+  the wrong key: two modules that each write the identical `db.with_(url=TEST_URL)` receive two
+  distinct session-scoped fixtures and build the resource twice. Worse, an `exclusive=` token
+  attached to one derived fixture is not attached to the other, so the scheduler is free to run
+  them concurrently against the very resource they were declared to serialise on — a bug that
+  surfaces as a flake under load rather than a clean failure.
+
+  Two candidate fixes: give `Fixture` structural `__eq__`/`__hash__` over `(func, scope,
+  exclusive, resolved-overrides)` so equal derivations collide in the cache — which also makes
+  the static graph deduplicate, something a future `--graph` dump wants anyway — or memoise
+  `with_()` per `(self, sorted-overrides)`. Either way the override *values* must become
+  hashable, which constrains what may be substituted for a dependency. That constraint is the
+  reason this is deferred rather than patched: it is a decision about the shape of the DI graph,
+  not a local fix.
+
+  There is also a smaller, independent argument for revisiting the surface rather than shipping
+  it as first prototyped: inline `with_()` inside `Depends(...)` trips ruff's B008, and unlike
+  `velox.Depends` it has no qualified name to whitelist via `extend-immutable-calls` (it is a
+  method call on an arbitrary object, not a fixed import). Every use ends up bound to a
+  module-level name instead of written inline, which is workable but is a sign the ergonomics
+  were not settled either.
+
+  Today's replacement idiom — used throughout the examples — is a separate `@velox.fixture()`
+  function that builds the same object with the different dependency wired in directly. No new
+  API, and it is what §3 now documents. Deep override by dependency path (reaching past a direct
+  dependency into *its* dependencies, rather than only the fixture's own parameters) is a further
+  extension on top of whichever fix above ships first.
 - `@velox.isolated` (needs the subprocess tier, [08](08-patching-and-isolation.md)).
 - `Annotated[T, Depends(fixture)]` as a second accepted form — FastAPI now recommends `Annotated`
   over the default-value form, so migrating codebases will expect it. It requires evaluating
@@ -208,7 +248,7 @@ velox.approx(0.3)
   documented default (Q1).
 - Parametrized fixtures (`@velox.fixture(params=[...])`) with per-param scope instances — the
   cache-key machinery in [04](04-dependency-injection.md) is already designed for it.
-- `class` scope; deep `with_()` override by dependency path.
+- `class` scope.
 - `velox.approx` for nested structures; richer `raises` (`ExceptionGroup` matching, `.group_contains`).
 
 ## 11. Open questions

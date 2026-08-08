@@ -193,14 +193,20 @@ A: Editing sys.path is trivial. What matters is that we need a convention that w
 ### FastAPI testing — RESOLVED (2026-08-07)
 2. `app.dependency_overrides` and `app.state` are per-app-instance mutable dicts, so the docs-blessed idiom — mutate a module-level singleton's overrides and reset in teardown — is a process-global write that concurrent tests clobber; the `create_app(settings)` factory that dodges it is adoption-hostile, because real FastAPI code is singleton-shaped and no team rewrites production wiring to adopt a test runner. The resolution keeps the singleton and moves the *view*: routes bake in only a pointer to the app (`dependency_overrides_provider`, captured at route-decoration time) and read the override dynamically on every request via `getattr(provider, "dependency_overrides", {}).get(call, call)`, so replacing that attribute once with a ContextVar-layered `Mapping` proxy makes overrides per-test while the app object stays shared and untouched. A new MVP module, `velox.fastapi`, installs the proxy once per app object and scopes each `client()` block's mappings to a layer — reads consult layer then base, writes inside a layer stay in the layer, nested clients stack inner-wins — with `app.state` layered the same way and a loud I6 escalation if the proxy is ever replaced out from under velox. This is tier (c)'s ContextVar-routing insight applied to exactly one well-behaved surface (~120 LOC, no general patch machinery); general-purpose `velox.patch` remains deferred. It rests on a handful of upstream facts, which velox pins with assumption tests (`tests/test_fastapi_layering.py`) so that an upstream change breaks velox's own suite rather than adopters' runs. Mechanism, limits, and rejected alternatives: [08](08-patching-and-isolation.md) §3.1; the surface and the canonical fixture: [01](01-public-api.md) §3.
 
-### B008 false positives
-3. B008 fires on every test in a velox suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["velox.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started. Inline with_() is worse: relay.with_(transport=fake) has no qualified name to whitelist, so the examples bind derived fixtures to module-level names. That reads better and is shareable, so it should just be the documented idiom.
+### B008 false positives — `with_()` portion superseded (2026-08-08)
+3. B008 fires on every test in a velox suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["velox.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started.
 
-A: I am confused here. I know pytest people would build fixtures like that, but I never saw a FastAPI dep built this way. With that note, the FastAPI DI has an annoying limitation that dep functions cannot be parametrized. I'd rather have `value: T = Depends(dep_factory, param=...)` than have to call the factories this way. In any case, I believe your example is resolved the FastAPI way with something like:
-```python
-def flaky_client() -> AsyncClient:
-    yield relay.with_(transport=fake).client()
-```
+   The rest of this entry was about `with_()`'s ergonomics specifically: inline `with_(transport=fake)` has no qualified name to whitelist, so the examples bound derived fixtures to module-level names instead. `with_()` itself is now deferred to roadmap ([01](01-public-api.md) §10) for a different, more fundamental reason — a caching-identity problem — but this B008 cost is recorded there too, as a second, independent argument against shipping the surface as first drafted.
+
+A: I am confused here. I know pytest people would build fixtures like that, but I never saw a FastAPI dep built this way. With that note, the FastAPI DI has an annoying limitation that dep functions cannot be parametrized. I'd rather have `value: T = Depends(dep_factory, param=...)` than have to call the factories this way.
+
+   That instinct is most of why `with_()` ended up deferred rather than shipped: today's replacement is exactly the plain-function form gestured at above — a sibling `@velox.fixture()` that wires in the replacement dependency directly, no derivation method involved:
+   ```python
+   @velox.fixture()
+   def flaky_relay(transport: FakeTransport = Depends(flaky_transport)) -> Relay:
+       return Relay(transport, retries=3, base_delay=0.001)
+   ```
+   Being an ordinary function definition rather than a call expression sitting in an argument default, it never trips B008 in the first place.
 
 ### tmp factory type
 4. velox.tmp_path_factory has no named type. Used here as velox.TmpPathFactory with .mktemp(name).
