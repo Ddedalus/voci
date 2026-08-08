@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.optional-dependencies]
+uvloop = ["uvloop>=0.21"]
+
 [project.scripts]
 velox = "velox.cli:main"
 
