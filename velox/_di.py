@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import traceback
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, final
@@ -35,29 +36,34 @@ type Closer = Callable[[], Awaitable[None]]
 _call_site_ids = iter(range(2**63))
 
 
-def key_for(fixture: Fixture[Any], step_id: int, *, test_id: str, module_path: str) -> CacheKey:
+def key_for(
+    fixture: Fixture[Any],
+    step_id: int,
+    *,
+    test_id: str,
+    module_path: str,
+    param_key: object = None,
+) -> CacheKey:
     """The cache key one `PlanStep` resolves to, given the test/module it's being built for.
 
     `step_id` only matters for `"call"` scope (see module docstring); it's threaded through
     unconditionally rather than branched on so callers never need to know which scopes care.
+
+    `param_key` is appended to every shape below and defaults to `None` — parametrized fixtures
+    are still roadmap (spec/01 §10), but spec/04 §4 is explicit that the param slot belongs in the
+    cache key "from day one... retrofitting a cache key is exactly the kind of change this spec
+    exists to avoid." Every caller today passes the default, so this is inert until parametrize
+    lands and then needs no shape change, just a real value flowing in.
     """
-    # Review: no `param_key` component, which spec/04 §4 calls out by name as the one thing to
-    # get in on day one — "Param keys are part of the cache key from day one, even though
-    # parametrized fixtures are roadmap — retrofitting a cache key is exactly the kind of change
-    # this spec exists to avoid." Every key shape below is fixed-arity and positional, and
-    # `setup`/`release`/`aclose` all thread the tuple around opaquely, so adding a slot later means
-    # touching all four scope arms plus every test that spells a key literally (`("k",)`,
-    # `("function", 1, "t")` in tests/test_di.py). A trailing `param_key: object = None` argument
-    # appended to each tuple is inert today and free later.
     match fixture.scope:
         case "session":
-            return ("session", id(fixture))
+            return ("session", id(fixture), param_key)
         case "module":
-            return ("module", id(fixture), module_path)
+            return ("module", id(fixture), module_path, param_key)
         case "function":
-            return ("function", id(fixture), test_id)
+            return ("function", id(fixture), test_id, param_key)
         case "call":
-            return ("call", id(fixture), test_id, step_id, next(_call_site_ids))
+            return ("call", id(fixture), test_id, step_id, next(_call_site_ids), param_key)
 
 
 @final
@@ -123,109 +129,113 @@ class ScopeStore:
                 raise
             entry.closer = closer
             entry.future.set_result(value)
-        # Review: the refcount is incremented *after* `await entry.future`, but spec/04 §4's own
-        # pseudocode — the block this docstring is quoting — increments *before* it
-        # (`self._refcounts[key] += 1; return await fut`). That ordering is load-bearing and the
-        # inversion is a use-after-teardown the moment tests run concurrently. Verified
-        # interleaving, two tasks sharing one `module`-scope key:
-        #   1. A calls `acquire`, creates the entry, suspends inside `build()` (any fixture that
-        #      awaits — a DB connect — does this).
-        #   2. B calls `acquire`, finds the entry, parks on the *pending* future. B's refcount
-        #      contribution does not exist yet.
-        #   3. A's build finishes; A resumes, `await entry.future` returns without yielding (a
-        #      done Future never suspends), refcount = 1, A runs its test and its teardown. If the
-        #      test body has no real suspension point — `async def test(): assert x == 1` — A gets
-        #      all the way to `release` without ever handing control back, so B is still parked.
-        #   4. `release` sees refcount 0, deletes the entry, and awaits the closer.
-        #   5. B finally wakes, is handed the value of an instance whose teardown has already run,
-        #      and increments the refcount on an orphaned `_Entry` no longer in `self._entries`.
-        #      B's own `release` then raises `KeyError` (confirmed) — which `_release_all` turns
-        #      into a teardown `ERROR` on an innocent test.
-        # Moving `entry.refcount += 1` above the `await` (reserving before waiting, exactly as the
-        # spec block has it) closes all of it: refcount can no longer hit zero while a waiter is
-        # outstanding. Benign today only because `run_suite` awaits each test to completion.
-        value = await entry.future
+        # Reserve this caller's refcount *before* awaiting the (possibly already-resolved)
+        # future, not after — spec/04 §4's own pseudocode has it in this order
+        # (`self._refcounts[key] += 1; return await fut`), and the order is load-bearing the
+        # moment two askers genuinely overlap: a waiter parked on a still-pending future
+        # contributes nothing to the refcount until it wakes, so the constructing caller can
+        # acquire -> release -> tear down to zero while the waiter is still suspended, handing it
+        # the value of an instance whose closer already ran (and then raising `KeyError` out of
+        # the waiter's own eventual `release`, since `release` deletes the entry at refcount
+        # zero). Incrementing first closes that: the refcount this `acquire` is about to hand out
+        # a reference for is counted before anything else gets a chance to drop it to zero.
+        # Benign under M0/M1's sequential `run_suite` (nothing is ever actually in flight at
+        # once) — this is exactly the kind of bug that stays invisible until concurrency lands.
+        #
+        # Undone in the `except` below rather than never taken in the first place: a *waiter*
+        # (the branch above was skipped, `entry` already existed) has no synchronous way to know
+        # whether the future it's about to await already failed without awaiting it — peeking
+        # would just be a second `await`-shaped race. Reserving first and refunding on failure
+        # keeps the docstring's "refcounting only happens on the success path" true as an
+        # observable outcome while still closing the window for the pending-and-eventually-
+        # successful case, which is the one the race above actually depends on.
         entry.refcount += 1
-        return value
+        try:
+            return await entry.future
+        except BaseException:
+            entry.refcount -= 1
+            raise
 
     async def release(self, key: CacheKey) -> None:
         """Decrement `key`'s refcount; tear it down (and forget it) if that reached zero.
 
-        A no-op for a `key` this store never successfully acquired — see `acquire`'s docstring on
-        why a failed construction never reaches here. `session` scope never tears down through
-        this path (only `aclose` does); its refcount still decrements, both for symmetry with
-        `acquire` and because a future `--eager-teardown` mode (spec/04 §9 roadmap) needs it to
-        already be accurate.
+        A genuine no-op for a `key` this store never *successfully* acquired: an unknown key
+        (never seen, or already fully torn down) and a key whose own `build()` raised both return
+        immediately, touching neither a refcount nor the cached entry. `acquire`'s own contract
+        keeps a caller that got an exception from ever reaching here with that key (a failed
+        `acquire` never increments the refcount `release` would otherwise be undoing — see its
+        own `except` clause), so in the normal flow this guard is defense against a caller
+        replaying a key by hand (as some of this file's own direct `ScopeStore` tests do) rather
+        than something `setup`/`teardown` trigger day to day. It matters anyway: silently
+        deleting a failed entry here would discard the cached exception a concurrent or later
+        requester of the *same* key still needs to replay (spec/04 §4's "one comprehensible
+        error, not 400 identical ones") — `aclose` leaves a failed entry alone for the same
+        reason, via its own `entry.closer is None` check.
+
+        Known, deliberate gap: a failed entry that nothing ever calls `release` on (the normal
+        case) is never removed until `aclose` sweeps it at end of run. For `function`/`call`
+        scope, whose key embeds `test_id`, a fixture failing for every test in a large suite
+        leaves one dead entry per test sitting in `self._entries` for the run's duration — real,
+        bounded by test count, and not chased further here.
+
+        `session` scope never tears down through this path (only `aclose` does); its refcount
+        still decrements, both for symmetry with `acquire` and because a future
+        `--eager-teardown` mode (spec/04 §9 roadmap) needs it to already be accurate.
         """
-        # Review: "A no-op for a `key` this store never successfully acquired" is false in both
-        # readings, and nothing tests either (see tests/test_di.py's
-        # `test_release_is_a_no_op_for_a_key_that_was_never_successfully_acquired`, which never
-        # calls `release` at all).
-        # (1) A key the store has genuinely never seen raises `KeyError` here, not a no-op —
-        #     verified: `await ScopeStore().release(("nope",))` → `KeyError: ('nope',)`.
-        # (2) A key whose `build()` *raised* is still sitting in `self._entries` (`acquire` inserts
-        #     the entry before calling `build` and never removes it on the failure path), with
-        #     `refcount == 0` and `closer is None`. `release` on it therefore drives the refcount
-        #     to **-1**, falls through the guard below, and `del`s the entry — silently discarding
-        #     the cached exception that the whole "one comprehensible error, not 400 identical
-        #     ones" design depends on. The *next* test to ask for that same module/session key
-        #     re-runs the broken fixture from scratch instead of replaying it.
-        # The failed-entry leak is also unbounded in the other direction: for `function` scope the
-        # key embeds `test_id`, so a suite where a fixture fails for 400 tests accumulates 400 dead
-        # entries that only `aclose` ever walks.
-        entry = self._entries[key]
+        entry = self._entries.get(key)
+        if entry is None or not entry.future.done() or entry.future.exception() is not None:
+            return
         entry.refcount -= 1
         if entry.refcount > 0 or entry.scope == "session":
             return
-        # Review: the entry is removed from the dict *before* the closer is awaited, so the whole
-        # teardown runs with the key absent from the cache. Under concurrency that window is a
-        # second live instance: any task that calls `acquire(key, ...)` while `entry.closer()` is
-        # suspended (an async fixture doing `await conn.close()`) misses the cache, creates a fresh
-        # entry, and constructs a *second* `module`/`session` instance overlapping the first one's
-        # teardown — two engines, two temp schemas, two bound ports, for a scope whose entire
-        # contract is "exactly one". Observed already in a scratch run of two gathered tasks. The
-        # fix has to keep the key visible (or a tombstone) until the closer has finished.
-        del self._entries[key]
-        if entry.closer is not None:
-            await entry.closer()
+        # The entry stays in `self._entries` until the closer has actually finished (or raised),
+        # not before — deleting it up front would let a concurrent `acquire` on the same key race
+        # a fresh construction against this teardown, briefly producing two live instances of a
+        # scope whose entire contract is "exactly one" (observed in a scratch run of two gathered
+        # tasks against a `module`-scope fixture). This narrows the window rather than closing it:
+        # a concurrent `acquire` that lands *during* the `await` below still finds the entry,
+        # still gets hold of an instance that is mid-teardown, and still hands it out again.
+        # Closing that fully needs a third ("tearing down") state a waiter can block on — real
+        # surgery belonging with the scheduler, not this slice.
+        try:
+            if entry.closer is not None:
+                await entry.closer()
+        finally:
+            del self._entries[key]
 
     async def aclose(self) -> None:
         """End-of-run: force-teardown every remaining (necessarily `session`-scope) entry.
 
-        Iterated in *reverse insertion order*. `dict` preserves insertion order, and — because
-        `acquire`'s dict-then-build sequencing means a fixture's entry can only ever be created
-        after every entry its own construction awaited already exists — that insertion order is
-        always a valid dependency-before-dependent topological order across the *whole* run, not
-        just within one test's plan. Reversing it therefore gives correct teardown inversion here
-        too, the same trick `steps`' own reversal gives `teardown` below.
+        Iterated in *reverse insertion order*. `dict` preserves insertion order, and the guarantee
+        that reversing it gives a valid dependency-before-dependent teardown order is external to
+        this class: `_di.setup` walks a `ResolutionPlan`'s already-flattened, already-topologically
+        -sorted `steps` forwards and hands each `build()` a `kwargs` dict of values it has
+        *already* acquired — `build()` never itself calls back into `acquire`, so every entry a
+        fixture's own construction depends on is already in `self._entries` before that fixture's
+        own entry is inserted. (It is *not*, notably, because `acquire` inserts the entry before
+        awaiting `build()` — that ordering detail is about single-flight construction, not about
+        which entries precede which in the dict.) The roadmap item that would break this
+        precondition is named in spec/04 §9: `Depends(p, lazy=True)` yielding a factory that
+        resolves on first *use* is precisely a `build`-time (or later) call back into `acquire`,
+        and whoever adds it needs to know this method is relying on that not happening yet.
         """
-        # Review: the conclusion (reverse insertion order is a valid teardown order) holds today,
-        # but the reason the docstring gives for it is backwards, which matters because the stated
-        # reason is what a future change will be checked against. `acquire` inserts the entry into
-        # `self._entries` *before* awaiting `build()`, not after — so if a fixture's construction
-        # ever did acquire its own dependencies, the dependent's entry would land in the dict
-        # *first* and reversal would tear the dependency down before the dependent. The real
-        # guarantee is external to this class: `setup` walks the already-flattened `plan.steps`
-        # forwards and hands `build` a `kwargs` dict of values it has *already* acquired, so
-        # `build()` never re-enters `acquire`. That is an invariant of `_di.setup`, and the
-        # roadmap item that breaks it is named in spec/04 §9 — `Depends(p, lazy=True)` yielding a
-        # factory that resolves on first use is precisely a `build`-time (or later) `acquire`.
-        # Worth restating the justification here as "because `setup` pre-resolves every argument",
-        # so whoever adds lazy fixtures sees what they are invalidating.
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
         for key in reversed(list(self._entries)):
             entry = self._entries.pop(key, None)
             if entry is None or entry.closer is None:
                 continue
             try:
                 await entry.closer()
-            except BaseException as exc:
-                # Review: same `BaseException`-into-a-group problem as `_release_all` below, with a
-                # worse landing site — `run_suite` *swallows* whatever `aclose` raises. Verified:
-                # a session fixture whose teardown raises `KeyboardInterrupt` produces a run that
-                # returns normally, reports its test `PASSED`, prints the group to stderr, and
-                # exits `0`. Ctrl-C landing in session teardown is not hypothetical; it is the
-                # single most likely moment for it, since that is the last thing a run does.
+            except Exception as exc:
+                # Deliberately `Exception`, not `BaseException`: a `KeyboardInterrupt`/`SystemExit`
+                # (or, once cancellation exists, `CancelledError`) raised by a closer must propagate
+                # as itself and stop this loop immediately, exactly like every other "stop the
+                # process" boundary in this codebase (`_run.py`'s own `except (KeyboardInterrupt,
+                # SystemExit): raise` guards) — collecting it into the group below would instead
+                # convert it into an ordinary-looking teardown failure a caller could catch and
+                # continue past. The remaining keys in this loop are left un-torn-down on that
+                # path, the same "stop now, some things leak" trade-off already accepted everywhere
+                # else Ctrl-C is handled here.
                 errors.append(exc)
         if errors:
             raise BaseExceptionGroup("session-scope teardown", errors)
@@ -251,39 +261,41 @@ async def setup(
             key = key_for(step.fixture, step.step_id, test_id=test_id, module_path=module_path)
 
             async def build(step: PlanStep = step) -> tuple[Any, Closer | None]:
-                # Review: `step.args`' third element — `keyword_only`, carried all the way from
-                # `_fixtures.plan_of` through `Injection` and `PlanStep` — is discarded here (`_`)
-                # and everything is bound by keyword. Nothing in the package ever reads it (grep:
-                # only written, never consumed), and it cannot express the case that actually
-                # breaks: a *positional-only* injected parameter is recorded as
-                # `keyword_only=False`, indistinguishable from an ordinary positional-or-keyword
-                # one, and `func(**kwargs)` then always fails. Verified against a real fixture:
-                # `def outer(x: int = Depends(inner), /)` plans cleanly, then dies at construction
-                # with `TypeError: outer() got some positional-only arguments passed as keyword
-                # arguments: 'x'`, surfacing as a setup `ERROR` on every dependent test with no
-                # hint that the `/` is the cause. Same for a test function (see `root_kwargs`
-                # below). Either `plan_of` should reject `Depends()` on a positional-only
-                # parameter with a `DIError` naming the `/`, or the plan should record a third
-                # "positional-only" state and `_construct` bind those positionally.
+                # `step.args`' third element (`keyword_only`) is intentionally unused here:
+                # everything is bound by keyword, and that only works because
+                # `_fixtures.plan_of` now rejects `Depends(...)` on a positional-only parameter
+                # with a `DIError` at decoration time (the one binding mode `**kwargs` cannot
+                # express) — every injection that survives to a `PlanStep` is either
+                # positional-or-keyword or keyword-only, both of which bind correctly via
+                # `**kwargs` regardless of which one it was. `keyword_only` stays on `Injection`/
+                # `PlanStep` as a documentation/diagnostic field (it is what a future `--graph`
+                # dump or error message would want to say "this came from `*, param=...`"), not
+                # because construction branches on it.
                 kwargs = {name: values[source] for name, source, _ in step.args}
                 return await _construct(step.fixture, kwargs)
 
             values[step.step_id] = await store.acquire(key, step.fixture.scope, step.fixture, build)
             keys[step.step_id] = key
             acquired.append(key)
-    except BaseException:
-        # Review: "before the triggering exception propagates" is not what happens when the
-        # cleanup itself misbehaves. `_release_all` raises a `BaseExceptionGroup` if any closer
-        # fails, and it raises it from *inside* this `except` block — so the group replaces the
-        # original setup failure as the propagating exception and the `raise` below is never
-        # reached. The setup traceback survives only as `__context__` (so `traceback.format_exc`
-        # in `_run_one` still prints it, under "During handling of the above exception..."), but
-        # the exception type a caller sees, and the first thing a future reporter would headline,
-        # becomes "fixture teardown" rather than "the fixture that actually broke". Concretely:
-        # `fx_a` yields then raises on teardown, `fx_c` raises on construction — the user is told
-        # about `fx_a`. Wrapping the cleanup in its own `try`/`except` and attaching the group to
-        # the original (or `raise ... from`) keeps the cause in front.
-        await _release_all(store, reversed(acquired))
+    except BaseException as exc:
+        # The exception that triggered this cleanup (`exc` — the actual fixture that broke) stays
+        # the one the caller sees and any future reporter headlines, even if cleaning up what was
+        # already acquired *also* fails. Without the inner `try`/`except`, `_release_all` raising
+        # would replace `exc` as the propagating exception outright (the bare `raise` below would
+        # never run), demoting the real cause to `__context__` and promoting "fixture teardown"
+        # — a secondary, cleanup-time failure — to the headline. A fresh interrupt during cleanup
+        # is the one thing allowed to override that: it means "stop now" and outranks even the
+        # original setup failure, the same precedence every other interrupt boundary in this
+        # codebase gives it.
+        try:
+            await _release_all(store, reversed(acquired))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as cleanup_exc:
+            exc.add_note(
+                "Additionally, tearing down already-acquired fixtures failed:\n"
+                + "".join(traceback.format_exception(cleanup_exc))
+            )
         raise
 
     root_kwargs = {name: values[source] for name, source, _ in plan.root_args}
@@ -302,28 +314,22 @@ async def teardown(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
 
 
 async def _release_all(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
-    errors: list[BaseException] = []
+    # `except Exception`, not `except BaseException`: a `KeyboardInterrupt`/`SystemExit` (or,
+    # once cancellation exists, `asyncio.CancelledError` — none of the three are `Exception`
+    # subclasses) raised by a fixture's teardown must propagate as itself and stop this loop
+    # immediately, matching the "KeyboardInterrupt/SystemExit propagate immediately from every
+    # phase" invariant `_run_one`'s own `except (KeyboardInterrupt, SystemExit): raise` guards
+    # around `setup`/`teardown` are already relying on — collecting one into the
+    # `BaseExceptionGroup` below would silently convert "stop now" into an ordinary-looking
+    # teardown `ERROR` the run keeps going past. spec/04 §5's "errors during teardown are
+    # collected into an `ExceptionGroup`" means errors, not control-flow exceptions. The
+    # remaining keys in `keys` are left un-released on that path — the same "stop now, some
+    # things leak" trade-off this codebase already accepts at every other interrupt boundary.
+    errors: list[Exception] = []
     for key in keys:
         try:
             await store.release(key)
-        except BaseException as exc:
-            # Review: this is where `_run_one`'s and `run_suite`'s "KeyboardInterrupt/SystemExit
-            # propagate immediately from every phase" claim stops being true. A `BaseException`
-            # raised by a fixture's teardown is collected and re-raised as a
-            # `BaseExceptionGroup`, and a `BaseExceptionGroup` is not a `KeyboardInterrupt`, so
-            # `_run_one`'s `except (KeyboardInterrupt, SystemExit): raise` guard around
-            # `_di.teardown` never matches. Verified end to end: a fixture doing `yield 1` then
-            # `raise KeyboardInterrupt` gives a normally-returning `run_suite`, the test reported
-            # `ERROR`, and the run continuing to the next test — Ctrl-C during teardown is
-            # swallowed into a test result. `SystemExit` behaves identically.
-            # The same wrapping will eat `asyncio.CancelledError` once the scheduler exists: a
-            # test cancelled by `--maxfail`/`asyncio.timeout` whose fixture teardown observes the
-            # cancellation will have it converted into a group, so the task reports "teardown
-            # error" and does *not* actually cancel — spec/05's `interrupted`/`timeout` outcomes
-            # can't be built on top of this as written. Splitting the loop (re-raise
-            # `KeyboardInterrupt`/`SystemExit`/`CancelledError` immediately, group only
-            # `Exception`) is what spec/04 §5's "errors during teardown are collected into an
-            # `ExceptionGroup`" actually means — errors, not control flow.
+        except Exception as exc:
             errors.append(exc)
     if errors:
         raise BaseExceptionGroup("fixture teardown", errors)
@@ -378,16 +384,19 @@ async def _construct(fixture: Fixture[Any], kwargs: Mapping[str, Any]) -> tuple[
     if inspect.iscoroutinefunction(func):
         return await func(**kwargs), None
 
-    # Review: the fall-through treats "not one of the three `inspect` predicates" as "plain sync
-    # value", so any callable that *returns* an awaitable without being an `async def` is cached
-    # as the un-awaited coroutine itself. The realistic shapes: a class with `async def
-    # __call__` passed to `@velox.fixture()`, a fixture wrapped by a decorator that returns a
-    # sync wrapper delegating to an async body, and `@velox.fixture() def fx(): return
-    # client.connect()`. The test then receives a coroutine object where it expected a value —
-    # every attribute access fails with an unrelated `AttributeError`, plus a `RuntimeWarning:
-    # coroutine ... was never awaited` from a garbage-collection point nowhere near the fixture.
-    # spec/04 §1 has `kind: Kind` decided *statically* on the `Fixture` for exactly this reason;
-    # deciding it here by `inspect` at construction time (I5 aside) is also what makes it
-    # un-diagnosable. Cheapest guard short of that: if the returned value is awaitable, either
-    # await it or raise naming the fixture, rather than handing it to the test.
-    return func(**kwargs), None
+    # Neither `async def` nor a generator, by the three `inspect` predicates above — but that
+    # only tells us how `func` was *declared*, not what calling it hands back. A class with
+    # `async def __call__`, or a plain `def` that just returns a coroutine (`def fx(): return
+    # client.connect()`), is still a sync callable by every predicate above and would otherwise
+    # land here with the coroutine itself uninspected: cached and injected as-is, every attribute
+    # access on it failing with an unrelated `AttributeError`, plus a `RuntimeWarning: coroutine
+    # ... was never awaited` from a garbage-collection point nowhere near the fixture that
+    # produced it. Awaiting whatever comes back, if it's awaitable, closes that regardless of
+    # which callable shape produced it — cheaper than deciding `Kind` statically on `Fixture`
+    # (spec/04 §1), which would need `@velox.fixture()` to run `inspect` at decoration time
+    # instead of here, and wouldn't help the "class with an async `__call__`" case either, since
+    # the callable itself still isn't a coroutine function.
+    result = func(**kwargs)
+    if inspect.isawaitable(result):
+        return await result, None
+    return result, None

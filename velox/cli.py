@@ -159,25 +159,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{error.path} COLLECTION ERROR")
             print(error.message)
 
-        # Review: nothing in `tests/` exercises either half of this commit's `cli.py` change —
-        # `test_cli.py` is untouched, and its one end-to-end test asserts only `PASSED`/`FAILED`.
-        # So neither `ERROR` reaching this output nor the new `errored` count is covered, and the
-        # counts no longer add up in the one case they used to by construction: `failed` was
-        # `len(results) - passed` before, and is now an independent `sum`, so any future outcome
-        # (`skipped`/`xfailed`/..., which the comment above explicitly plans for) will print in
-        # the per-test lines while silently vanishing from this summary — `10 tests: 2 passed,
-        # 1 failed, 0 errored` for a run of ten. An `other = len(results) - passed - failed -
-        # errored` guard, or building the counts with `collections.Counter(r.outcome for r in
-        # results)`, keeps the line honest without another edit per outcome. A `tmp_path` test
-        # with one setup-failing fixture, asserting `test_x ERROR` in stdout and `1 errored` in
-        # the summary, covers the whole path in about eight lines.
         passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
         failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
         errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
-        print(
-            f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored, "
-            f"{len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
+        # `other` exists so this line can't silently stop adding up to `len(results)`: the three
+        # named `sum()`s above are each independent counts, not `len(results) - the rest` the way
+        # a two-outcome world could get away with, so a future `Outcome` member (`skipped`/
+        # `xfailed`/..., spec/05 §4) that starts reaching `run_suite`'s results before this line
+        # is updated for it shows up here as a nonzero "other" bucket instead of vanishing from
+        # the total with nothing to say the count is now wrong.
+        other = len(results) - passed - failed - errored
+        summary = f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored"
+        if other:
+            summary += f", {other} other"
+        summary += (
+            f", {len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
+        print(summary)
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
     finally:

@@ -131,6 +131,30 @@ def test_main_runs_a_passing_and_a_failing_async_test(
     assert "assert 2 == 3" in out
 
 
+def test_main_reports_a_setup_failure_as_error_not_failed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M1: a fixture that raises during setup produces `Outcome.ERROR`, distinct from `FAILED` —
+    end to end through `main`, this covers both the per-test line (`ERROR`, not `FAILED`) and the
+    summary's `errored` bucket, neither of which anything exercised before this."""
+    (tmp_path / "test_sample.py").write_text(
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "def broken():\n"
+        "    raise RuntimeError('setup boom')\n\n"
+        "async def test_needs_it(value: int = velox.Depends(broken)):\n"
+        "    pass\n"
+    )
+
+    status = main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "test_needs_it ERROR" in out
+    assert "setup boom" in out
+    assert "1 errored" in out
+
+
 def test_main_reports_a_skipped_test_and_still_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

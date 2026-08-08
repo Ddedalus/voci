@@ -25,11 +25,12 @@ def _record(
     func: Callable[..., object],
     qualname: str,
     plan: ResolutionPlan = _EMPTY_PLAN,
+    path: Path = Path("mod.py"),
 ) -> Record:
     return Record(
-        id=f"mod.py::{qualname}",
+        id=f"{path}::{qualname}",
         index=index,
-        path=Path("mod.py"),
+        path=path,
         lineno=1,
         qualname=qualname,
         func=func,
@@ -181,16 +182,70 @@ def test_session_scope_fixture_is_shared_and_built_exactly_once_across_tests() -
     assert len(builds) == 1
 
 
-# Review: `module` scope — the other half of `run_suite`'s docstring claim that this store makes
-# "`module`/`session` scope fixtures actually shared across the tests that reach them rather than
-# rebuilt per test" — has no end-to-end test, and the claim is false for it. The obvious mirror of
-# the test above (`@velox.fixture(scope="module")`, two records, `assert len(builds) == 1`) fails:
-# the fixture is built twice and torn down twice, because each test's teardown drops the refcount
-# to 0 in a runner that never has two tests in flight. Whichever way that gets resolved (spec/04
-# §10 Q2), the behaviour deserves a test that states it out loud instead of a docstring asserting
-# the opposite. Also missing at this level: two tests in *different* modules must not share one
-# `module`-scope instance (the `module_path` component of `_di.key_for`, which nothing exercises —
-# every record built by `_record` here hardcodes `Path("mod.py")`).
+def test_module_scope_fixture_is_shared_and_torn_down_once_across_tests_in_one_module() -> None:
+    """The `module`-scope mirror of the `session` test above: `_run_one` holds `module`-scope
+    keys open instead of releasing them per test, and `run_suite` releases them together once it
+    reaches the last test sharing that `path` — proven here by both a build count and a teardown
+    count of exactly one across two tests, not two of each."""
+    builds: list[int] = []
+    torn_down: list[str] = []
+
+    @velox.fixture(scope="module")
+    def per_module():
+        builds.append(1)
+        yield len(builds)
+        torn_down.append("closed")
+
+    async def test_a(x: int = velox.Depends(per_module)) -> None:
+        assert x == 1
+
+    async def test_b(x: int = velox.Depends(per_module)) -> None:
+        assert x == 1  # same module-scope instance, not rebuilt for this test
+
+    results = run_suite(
+        [
+            _record(0, test_a, "test_a", plan=plan_for(test_a)),
+            _record(1, test_b, "test_b", plan=plan_for(test_b)),
+        ]
+    )
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    # One build, one teardown -- not two of each. Under the bug this fixes (each test's own
+    # teardown releasing its `module`-scope keys immediately), `test_b` would rebuild `per_module`
+    # from scratch (`builds == [1, 1]`) and it would tear down twice (`torn_down == ["closed",
+    # "closed"]"), since both tests share `path="mod.py"` by `_record`'s default and nothing in
+    # this suite ever holds it open across the boundary between them.
+    assert len(builds) == 1
+    assert torn_down == ["closed"]
+
+
+def test_module_scope_fixture_is_not_shared_across_different_modules() -> None:
+    """The `module_path` half of `_di.key_for`'s cache key, exercised for the first time at this
+    level: two tests in *different* files must each get their own instance."""
+    builds: list[int] = []
+
+    @velox.fixture(scope="module")
+    def per_module() -> int:
+        builds.append(1)
+        return len(builds)
+
+    async def test_a(x: int = velox.Depends(per_module)) -> None:
+        pass
+
+    async def test_b(x: int = velox.Depends(per_module)) -> None:
+        pass
+
+    results = run_suite(
+        [
+            _record(0, test_a, "test_a", plan=plan_for(test_a), path=Path("mod_a.py")),
+            _record(1, test_b, "test_b", plan=plan_for(test_b), path=Path("mod_b.py")),
+        ]
+    )
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert len(builds) == 2
+
+
 def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
     """`store.aclose()` after the loop, per spec/04 §3's "end of the run" — proven by observing
     the generator's teardown side effect only after `run_suite` has returned."""
@@ -260,21 +315,99 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
     assert "teardown boom" in result.failure
 
 
-# Review: the rewrite added three new `except BaseException` sites (`_run_one` around setup, call
-# and teardown) plus two `except (KeyboardInterrupt, SystemExit): raise` guards and a swallow in
-# `run_suite`, and not one of them is tested. The gaps, in descending order of how wrong the
-# current answer is:
-# - A fixture that raises `KeyboardInterrupt` after its `yield`. `_run_one`'s docstring promises
-#   immediate re-raise; the actual behaviour is `ERROR` for that test and the suite continuing,
-#   because `_di._release_all` has already wrapped it in a `BaseExceptionGroup`. `pytest.raises(
-#   KeyboardInterrupt): run_suite([...])` is the whole test and it is red today.
-# - The same for a setup-phase `KeyboardInterrupt`, and for `SystemExit` in either.
-# - A `KeyboardInterrupt` from the *call* phase leaving a `scope="session"` generator fixture
-#   untorn — `store.aclose()` is not in a `finally`. Assert the teardown side-effect list is
-#   still empty after the `pytest.raises`, which documents the leak until it's fixed.
-# - A session fixture whose teardown raises: assert `run_suite` returns, the message reaches
-#   stderr (`capsys`), and — the part that matters — `exit_code_for` on the returned results is
-#   still `0`, so the deliberate gap is pinned rather than assumed.
+# ------------------------------------------------------------------------------------------
+# KeyboardInterrupt/SystemExit from every phase, including from inside a fixture's teardown —
+# the `except (KeyboardInterrupt, SystemExit): raise` guards `_run_one` carries around setup,
+# call, and teardown; and `run_suite`'s own best-effort session-scope teardown in `finally`.
+# ------------------------------------------------------------------------------------------
+
+
+def test_keyboard_interrupt_from_a_fixture_setup_propagates_immediately() -> None:
+    @velox.fixture()
+    def broken():
+        raise KeyboardInterrupt
+
+    async def test_func(x: int = velox.Depends(broken)) -> None:
+        pass
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+
+def test_keyboard_interrupt_from_a_fixture_teardown_propagates_immediately() -> None:
+    """`_di._release_all` (which both `_di.setup`'s cleanup and `_di.teardown` funnel through)
+    re-raises `KeyboardInterrupt`/`SystemExit` immediately instead of folding them into its
+    `BaseExceptionGroup` — without that, this would surface as `ERROR` for the test and a run
+    that keeps going, not a `KeyboardInterrupt` propagating out of `run_suite`."""
+
+    @velox.fixture()
+    def flaky():
+        yield 1
+        raise KeyboardInterrupt
+
+    async def test_func(x: int = velox.Depends(flaky)) -> None:
+        pass
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+
+def test_system_exit_from_a_fixture_teardown_propagates_immediately() -> None:
+    @velox.fixture()
+    def flaky():
+        yield 1
+        raise SystemExit(1)
+
+    async def test_func(x: int = velox.Depends(flaky)) -> None:
+        pass
+
+    with pytest.raises(SystemExit):
+        run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+
+def test_session_scope_fixture_is_still_torn_down_after_a_keyboard_interrupt_mid_call() -> None:
+    """`store.aclose()` runs in a `finally` around the whole loop, so a `KeyboardInterrupt` raised
+    by the test body itself (not a fixture) still gets best-effort session-scope teardown on the
+    way out, rather than leaking the fixture — the bug `run_suite`'s docstring used to accept as
+    a known gap and now fixes."""
+    torn_down: list[str] = []
+
+    @velox.fixture(scope="session")
+    def db():
+        yield "db"
+        torn_down.append("db")
+
+    async def test_func(x: str = velox.Depends(db)) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert torn_down == ["db"]
+
+
+def test_session_scope_teardown_failure_is_reported_to_stderr_and_does_not_fail_the_run(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins `run_suite`'s documented "known, deliberate gap": a session-scope teardown failure
+    reaches stderr, does not touch the already-`PASSED` test's own outcome, and does not turn the
+    run's exit code nonzero on its own — there is no `TestResult` to attribute it to yet."""
+
+    @velox.fixture(scope="session")
+    def flaky_session():
+        yield 1
+        raise RuntimeError("session teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_session)) -> None:
+        assert x == 1
+
+    results = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert [r.outcome for r in results] == [Outcome.PASSED]
+    assert exit_code_for(results, []) == 0
+    assert "session teardown boom" in capsys.readouterr().err
+
+
 def _result(outcome: Outcome) -> Result:
     return Result(id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None)
 

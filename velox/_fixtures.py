@@ -109,18 +109,27 @@ def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
     positional = code.co_varnames[: code.co_argcount]
     defaults = func.__defaults__ or ()
     offset = len(positional) - len(defaults)
-    # Review: `co_argcount` covers positional-only *and* positional-or-keyword parameters, and
-    # both are recorded below as `keyword_only=False` — the plan cannot tell them apart. Since
-    # `_di.setup`/`_construct` bind every injection with `**kwargs`, a `Depends(...)` on a
-    # positional-only parameter (`def fx(db = Depends(pool), /)`) passes every static check here
-    # and then fails at construction with `TypeError: fx() got some positional-only arguments
-    # passed as keyword arguments: 'db'` (verified, for both a fixture and a test function). It is
-    # cheap to make static: `code.co_posonlyargcount` is right here, so `positional[:
-    # co_posonlyargcount]` carrying a `Dependency` default is a `DIError` at decoration time
-    # naming the `/`, which is the same class of "caught before anything runs" diagnostic
-    # `_reject_annotated_depends` above exists to give.
-    for param, default in zip(positional[offset:], defaults, strict=True):
+    # `co_argcount` covers positional-only *and* positional-or-keyword parameters, and both would
+    # otherwise be recorded below as `keyword_only=False` — indistinguishable, even though only
+    # one of them can actually be injected. `_di.setup`/`_construct` bind every injection with
+    # `**kwargs` (never positionally), so a `Depends(...)` on a positional-only parameter can
+    # never be supplied at construction time no matter what the plan says — caught here, at
+    # decoration time, rather than left to fail as an opaque `TypeError` naming no fixture, the
+    # same class of "caught before anything runs" diagnostic `_reject_annotated_depends` above
+    # gives for the `Annotated[...]` mistake.
+    posonly_count = code.co_posonlyargcount
+    for index, (param, default) in enumerate(
+        zip(positional[offset:], defaults, strict=True), start=offset
+    ):
         if (injection := _injection(param, default, keyword_only=False)) is not None:
+            if index < posonly_count:
+                name = getattr(func, "__name__", repr(func))
+                raise DIError(
+                    f"{name}({param!r}): Depends(...) on a positional-only parameter (before "
+                    f"'/') is not supported -- velox binds every injection by keyword, and a "
+                    f"positional-only parameter can never accept one. Move {param!r} after the "
+                    f"'/', or stop injecting it (spec/04 §2)."
+                )
             injections.append(injection)
 
     for param, default in (func.__kwdefaults__ or {}).items():
@@ -192,6 +201,16 @@ class Fixture[T]:
         self._exclusive: Exclusive = exclusive
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
         self._plan = plan_of(func)
+        # Every fixture's own body is checked for missing injections the moment it's built, not
+        # only when some test's `plan_for` walk happens to reach it: a fixture can only ever be
+        # called with the parameters `Depends(...)` supplies (there is no name-based lookup to
+        # fall back on), so a required, non-injected parameter is broken *by construction*,
+        # regardless of who ends up depending on it or whether anyone ever does. Checking here
+        # rather than in `plan_for`'s `visit` means it fires exactly once per fixture (not once
+        # per path a diamond graph reaches it by) and fires even for a fixture no collected test
+        # currently uses — the same "validate the whole graph once, at startup" spec/04 §2 opens
+        # by promising, just moved to the earliest point a fixture's own shape is fully known.
+        _check_missing_injections(func, self._plan)
         _check_acyclic(self)
 
     @property
@@ -374,19 +393,11 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
     `Depends()` argument at `Depends()`'s own call site.
     """
     root_injections = plan_of(func)
-    # Review: the missing-injection check runs on the *test function only*. `visit` below never
-    # calls it for the fixtures it walks, so spec/04 §2's "Missing injection" row is unenforced
-    # across the entire transitive graph — the part the section's own opening sentence advertises
-    # ("velox validates the whole graph once, at startup" versus pytest discovering it "lazily,
-    # one failing test at a time"). Verified: `@velox.fixture() def needs_arg(conn): ...` used via
-    # `Depends(needs_arg)` collects cleanly with a one-step plan, then fails at run time with
-    # `TypeError: needs_arg() missing 1 required positional argument: 'conn'` reported as a setup
-    # `ERROR` on every dependent test — which is exactly the lazy, per-test failure mode the
-    # explicit-DI design claims to delete, and it is a `CollectionError`/exit-4 case rather than a
-    # test outcome. One `_check_missing_injections(source.func, source.plan)` at the top of
-    # `visit` (before the memo check, or after — a memoized fixture was already checked) fixes it;
-    # note `Fixture.__init__` would be an even earlier home, since it already calls `plan_of` and
-    # `_check_acyclic` at decoration time.
+    # Only the test function's own missing-injection check happens here; every fixture `visit`
+    # below reaches has already had its own body checked at `Fixture.__init__` time (spec/04 §2's
+    # row applies to the whole graph, but a fixture's own shape is fully known — and wrong or
+    # right independent of who depends on it — the moment `@velox.fixture()` builds it, which is
+    # strictly earlier than any `plan_for` walk that happens to visit it).
     _check_missing_injections(func, root_injections)
 
     steps: list[PlanStep] = []

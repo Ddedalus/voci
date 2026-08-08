@@ -7,7 +7,13 @@ from typing import Annotated
 import pytest
 import velox
 from velox import Depends
-from velox._fixtures import DIError, Injection, _check_acyclic, plan_for
+from velox._fixtures import (
+    DIError,
+    Injection,
+    _check_acyclic,
+    _check_missing_injections,
+    plan_for,
+)
 
 
 @velox.fixture()
@@ -201,17 +207,6 @@ def test_plan_for_raises_on_a_missing_injection_naming_the_parameter() -> None:
         plan_for(test_func)
 
 
-# Review: every missing-injection case tested here is on the *test function*, which is also the
-# only place `plan_for` checks. The untested case is the one that reveals the gap: a **fixture**
-# with a required, non-injected parameter (`@velox.fixture() def needs_arg(conn): ...`, reached
-# via `Depends(needs_arg)`). `plan_for` accepts it and returns a one-step plan; the `TypeError`
-# surfaces at run time as a setup `ERROR`, per dependent test — the lazy failure mode spec/04 §2
-# opens by contrasting velox against. `with pytest.raises(DIError, match="conn")` is the test.
-# Also unexercised in `_check_missing_injections`, and worth pinning because the `co_varnames`
-# slicing is subtle enough to break silently under an edit: `*args`/`**kwargs` alone must be
-# accepted (they are — verified), `a` in `def t(a, *args)` must still be reported (it is), a
-# keyword-only parameter with no default must be reported, one *with* a default must not, and
-# `self` must be skipped only in positional position.
 def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan() -> None:
     async def test_func() -> None:
         pass
@@ -219,3 +214,75 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
     plan = plan_for(test_func)
     assert plan.steps == ()
     assert plan.root_args == ()
+
+
+def test_fixture_with_a_missing_injection_is_rejected_at_decoration_time() -> None:
+    """Not just the test function: `_check_missing_injections` now runs the moment any `Fixture`
+    is built (`Fixture.__init__`), so a fixture with a required, non-injected parameter is caught
+    as soon as it's decorated — before any test ever reaches it via `Depends(...)`, and even if
+    no test ever does."""
+    with pytest.raises(DIError, match="conn"):
+
+        @velox.fixture()
+        def needs_arg(conn: object) -> object:
+            return conn
+
+
+def test_depends_on_a_positional_only_parameter_is_rejected_at_decoration_time() -> None:
+    """`_di.setup`/`_construct` bind every injection by keyword; a positional-only parameter can
+    never receive one, so this is caught statically instead of surfacing as an opaque `TypeError`
+    at construction time."""
+    with pytest.raises(DIError, match="x"):
+
+        @velox.fixture()
+        def outer(x: int = Depends(alpha), /) -> int:
+            return x
+
+
+# ------------------------------------------------------------------------------------------
+# `_check_missing_injections` directly: the `co_varnames` slicing it relies on is subtle enough
+# to break silently under an edit, so each of its cases gets its own pin.
+# ------------------------------------------------------------------------------------------
+
+
+def test_check_missing_injections_allows_star_args_and_star_kwargs() -> None:
+    def t(*args: object, **kwargs: object) -> None:
+        pass
+
+    _check_missing_injections(t, ())  # must not raise
+
+
+def test_check_missing_injections_reports_a_required_positional_before_star_args() -> None:
+    def t(a: object, *args: object) -> None:
+        pass
+
+    with pytest.raises(DIError, match="a"):
+        _check_missing_injections(t, ())
+
+
+def test_check_missing_injections_reports_a_keyword_only_parameter_with_no_default() -> None:
+    def t(*, a: object) -> None:
+        pass
+
+    with pytest.raises(DIError, match="a"):
+        _check_missing_injections(t, ())
+
+
+def test_check_missing_injections_allows_a_keyword_only_parameter_with_a_default() -> None:
+    def t(*, a: object = 1) -> None:
+        pass
+
+    _check_missing_injections(t, ())  # must not raise
+
+
+def test_check_missing_injections_skips_self_only_in_positional_position() -> None:
+    def positional_self(self: object) -> None:
+        pass
+
+    _check_missing_injections(positional_self, ())  # must not raise
+
+    def keyword_only_self(*, self: object) -> None:
+        pass
+
+    with pytest.raises(DIError, match="self"):
+        _check_missing_injections(keyword_only_self, ())

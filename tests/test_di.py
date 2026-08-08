@@ -76,17 +76,73 @@ def test_acquire_single_flight_construction_runs_body_once_under_concurrency() -
     assert len(calls) == 1
 
 
-# Review: this is the only concurrency test in the file and it checks exactly one of the two
-# invariants the concurrent path has. It proves "`build` runs once"; it never looks at the
-# refcount, which is the half that is actually wrong (`ScopeStore.acquire` increments *after*
-# `await entry.future`, where spec/04 §4's pseudocode increments before). The missing test is the
-# one that would have caught it, and it is short: same racing shape, but the constructing task
-# calls `store.release(key)` immediately after its `acquire` returns and before yielding, while
-# the second task is still parked on the pending future. Assert (a) the waiter's value comes from
-# an instance whose closer has *not* run, and (b) the waiter's own `release` succeeds instead of
-# raising `KeyError`. Both fail today (verified by hand). A companion test for the reverse window
-# — `acquire` on a key whose closer is mid-`await` inside `release`, which currently constructs a
-# second instance of a `module`-scope fixture — belongs next to it.
+def test_acquire_reserves_the_waiters_refcount_before_the_constructor_can_release() -> None:
+    """The half of the concurrent race the two `build`-runs-once tests above don't touch:
+    refcount, not just single-flight construction. spec/04 §4's own pseudocode increments the
+    refcount *before* awaiting the future (`self._refcounts[key] += 1; return await fut`) — a
+    waiter parked on a still-pending future must already be counted, so the constructing task
+    cannot `acquire` -> `release` -> tear the instance down to zero while the waiter is still
+    suspended and about to receive that same instance.
+
+    The signal has to be "was the instance already torn down at the moment the waiter's own
+    `acquire` returns", checked from *inside* the waiter before it does anything else — a bare
+    "`release` didn't raise" isn't sensitive enough on its own, now that `release` is a deliberate
+    no-op for a key it no longer finds (see the tests above), which would otherwise silently
+    absorb exactly the orphaned-entry symptom this test exists to catch.
+    """
+    torn_down: list[str] = []
+    still_alive_when_waiter_got_it: list[bool] = []
+    build_started = asyncio.Event()
+    finish_build = asyncio.Event()
+
+    async def scenario() -> tuple[object, object]:
+        async def build():
+            build_started.set()
+            await finish_build.wait()
+
+            async def closer() -> None:
+                torn_down.append("closed")
+
+            return "value", closer
+
+        store = ScopeStore()
+        fx = velox.fixture(scope="module")(lambda: None)
+        key: tuple[object, ...] = ("module", 1, "m")
+
+        async def constructor() -> object:
+            value = await store.acquire(key, "module", fx, build)
+            await store.release(key)
+            return value
+
+        async def waiter() -> object:
+            await build_started.wait()
+            # `constructor`'s `build()` is now suspended on `finish_build.wait()`, so this
+            # `acquire` finds the entry already present and parks on its still-pending future —
+            # the "waiter" half of the race.
+            value = await store.acquire(key, "module", fx, build)
+            still_alive_when_waiter_got_it.append(len(torn_down) == 0)
+            await store.release(key)  # must not raise
+            return value
+
+        constructor_task = asyncio.create_task(constructor())
+        waiter_task = asyncio.create_task(waiter())
+        await build_started.wait()
+        # Give `waiter_task` a turn to actually reach and suspend on `await entry.future` before
+        # letting `constructor`'s build finish — otherwise there is no race to test.
+        await asyncio.sleep(0)
+        finish_build.set()
+        return await asyncio.gather(constructor_task, waiter_task)
+
+    v1, v2 = run(scenario())
+    assert v1 == v2 == "value"
+    # The instance was still alive at the exact moment the waiter got hold of it -- with the
+    # buggy ordering, the constructor's own `release` runs (and tears down) before the waiter's
+    # refcount is ever counted, so this would observe `[False]` instead.
+    assert still_alive_when_waiter_got_it == [True]
+    # Torn down exactly once, and only after *both* releases.
+    assert torn_down == ["closed"]
+
+
 @pytest.mark.parametrize("scope", ["function", "module", "call"])
 def test_non_session_scope_tears_down_when_refcount_reaches_zero(scope: str) -> None:
     """Function/module/call scope all tear down through `release` once nothing holds them —
@@ -137,33 +193,46 @@ def test_session_scope_never_tears_down_through_release_only_aclose() -> None:
     run(scenario())
 
 
-# Review: the docstring describes a test that isn't here. The body never calls `store.release`
-# at all — it only asserts that `acquire` re-raises the build error — so the claim it is named
-# for ("release is a no-op for a key never successfully acquired") is untested, and the
-# parenthetical about a closer that "would have raised, had it been reachable" refers to a closer
-# the test never defines. Adding the missing `await store.release(key)` makes it fail, twice over,
-# because the claim is false: the failed entry is still in `_entries`, so `release` drives its
-# refcount to -1 and deletes it, and for a key the store has genuinely never seen `release` raises
-# `KeyError` (both verified — see the notes in `ScopeStore.release`). What this file wants instead
-# is two tests: `release` on an unknown key, and `acquire` again after a failed build asserting
-# the *same* exception object comes back off the cached future rather than the body re-running.
-def test_release_is_a_no_op_for_a_key_that_was_never_successfully_acquired() -> None:
-    """`acquire`'s docstring: a failed construction never reaches `release` — proven here by
-    calling `release` on a key whose `build` raised, and confirming nothing blows up and the
-    closer (which would have raised, had it been reachable) is never invoked."""
+def test_release_on_a_never_acquired_key_is_a_no_op() -> None:
+    """A key the store has genuinely never seen: `release` returns quietly rather than raising
+    `KeyError`."""
 
     async def scenario() -> None:
+        store = ScopeStore()
+        await store.release(("nope", "never", "seen"))  # must not raise
+
+    run(scenario())
+
+
+def test_release_after_a_failed_build_is_a_no_op_and_the_exception_stays_cached() -> None:
+    """The other half of `acquire`'s exception-caching contract: a key whose `build()` raised
+    must survive a stray `release()` call on it — no refcount corruption, no entry deletion — so
+    a later `acquire` for the *same* key still replays the identical exception object instead of
+    silently re-running (and re-failing) `build`."""
+    calls: list[int] = []
+
+    async def scenario() -> tuple[BaseException, BaseException]:
+        async def failing_build():
+            calls.append(1)
+            raise RuntimeError("never built")
+
         store = ScopeStore()
         fx = velox.fixture()(lambda: None)
         key = ("function", 1, "t")
 
-        async def failing_build():
-            raise RuntimeError("never built")
-
-        with pytest.raises(RuntimeError, match="never built"):
+        with pytest.raises(RuntimeError) as first:
             await store.acquire(key, "function", fx, failing_build)
 
-    run(scenario())
+        await store.release(key)  # must not raise, must not corrupt or discard the cached entry
+
+        with pytest.raises(RuntimeError) as second:
+            await store.acquire(key, "function", fx, failing_build)
+
+        return first.value, second.value
+
+    first_exc, second_exc = run(scenario())
+    assert first_exc is second_exc  # the cached exception object, not a freshly-raised one
+    assert len(calls) == 1  # `failing_build` only ever actually ran once
 
 
 # ------------------------------------------------------------------------------------------
@@ -382,18 +451,56 @@ def test_call_scope_fixture_never_shares_an_instance_across_two_depends_sites() 
     assert len(built) == 2
 
 
-# Review: three shapes this file's "all four fixture shapes" claim doesn't reach, all of which
-# `_construct` gets wrong or leaves undiagnosed:
-# (1) A generator fixture whose *teardown* raises (post-`yield`), asserted at the `_construct`
-#     level — `test_run.py` covers it end to end, but nothing here pins that the exception is the
-#     user's, not `_construct`'s `finally: gen.close()` masking it.
-# (2) A fixture that returns an awaitable without being an `async def` (a class with `async def
-#     __call__`): today the coroutine object itself is injected, un-awaited. Assert whatever the
-#     decided behaviour is; there is currently none.
-# (3) A `Depends(...)` on a positional-only parameter (`def fx(x = Depends(inner), /)`), which
-#     plans fine and then raises `TypeError: ... positional-only arguments passed as keyword`
-#     from inside `_construct`. A test asserting *either* an early `DIError` or a working
-#     positional bind would pin the choice down.
+# ------------------------------------------------------------------------------------------
+# Three shapes `_construct` needs to handle correctly beyond the four "happy path" fixture
+# kinds above. (A `Depends(...)` on a positional-only parameter — the fourth shape that used to
+# be untested here — is now rejected at decoration time by `_fixtures.plan_of`, and is covered
+# next to that check in `tests/test_fixtures.py` instead of here.)
+# ------------------------------------------------------------------------------------------
+
+
+def test_generator_teardown_failure_is_the_users_exception_not_masked_by_gen_close() -> None:
+    """A generator fixture whose *post-`yield`* code raises: `_construct`'s closer runs
+    `finally: gen.close()` unconditionally, and that must not swallow or replace the user's own
+    exception with something from the close path."""
+
+    @velox.fixture(name="flaky_teardown")
+    def flaky():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def scenario() -> None:
+        value, closer = await _construct(flaky, {})
+        assert value == 1
+        assert closer is not None
+        with pytest.raises(RuntimeError, match="teardown boom"):
+            await closer()
+
+    run(scenario())
+
+
+def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
+    """A fixture whose body is a plain `def` but returns an awaitable (a class with `async def
+    __call__`, a sync wrapper delegating to an async body) is not `iscoroutinefunction` by
+    declaration, so it falls through `_construct`'s three `inspect` predicates — the value handed
+    to the test must still be the *resolved* value, not the un-awaited coroutine/awaitable
+    object."""
+
+    async def _resolve() -> str:
+        return "resolved"
+
+    @velox.fixture()
+    def returns_awaitable():
+        return _resolve()
+
+    async def scenario() -> None:
+        value, closer = await _construct(returns_awaitable, {})
+        assert value == "resolved"
+        assert closer is None
+
+    run(scenario())
+
+
 def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() -> None:
     """`key_for`'s own contract, isolated from the rest of the pipeline: two calls for the same
     `(fixture, step_id)` never collide, which is what lets the same call-scope step be resolved
