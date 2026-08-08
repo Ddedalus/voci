@@ -7,7 +7,7 @@ from typing import Annotated
 import pytest
 import velox
 from velox import Depends
-from velox._fixtures import Injection, _check_acyclic
+from velox._fixtures import DIError, Injection, _check_acyclic, plan_for
 
 
 @velox.fixture()
@@ -71,3 +71,140 @@ def test_check_acyclic_allows_a_diamond() -> None:
         return p + q
 
     _check_acyclic(top)  # must not raise
+
+
+# ------------------------------------------------------------------------------------------
+# `plan_for` (spec/04 §1-2) — M1.
+# ------------------------------------------------------------------------------------------
+
+
+def test_plan_for_orders_steps_dependency_before_dependent() -> None:
+    @velox.fixture()
+    def c() -> str:
+        return "c"
+
+    @velox.fixture()
+    def b(x: str = Depends(c)) -> str:
+        return f"b+{x}"
+
+    async def test_func(y: str = Depends(b)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+
+    assert [step.fixture.name for step in plan.steps] == ["c", "b"]
+    # `b` is step_id 1 (built second); the test's own `y` resolves to it.
+    assert plan.root_args == (("y", 1, False),)
+    assert plan.steps[1].args == (("x", 0, False),)  # `b`'s own `x` resolves to `c`'s step_id 0
+
+
+def test_plan_for_deduplicates_a_diamond_into_one_step() -> None:
+    """B and C both depending on D: D is built once, not twice, and `test_func`'s two distinct
+    `Depends()` sites (`p`, `q`) both resolve to the same steps for `b`/`c`."""
+
+    @velox.fixture()
+    def d() -> str:
+        return "d"
+
+    @velox.fixture()
+    def b(x: str = Depends(d)) -> str:
+        return x
+
+    @velox.fixture()
+    def c(x: str = Depends(d)) -> str:
+        return x
+
+    async def test_func(p: str = Depends(b), q: str = Depends(c)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+
+    names = [step.fixture.name for step in plan.steps]
+    assert names.count("d") == 1
+    assert len(plan.steps) == 3  # d, b, c — not four
+
+
+def test_plan_for_never_deduplicates_call_scope_even_in_a_diamond() -> None:
+    """The one deliberate exception to deduplication (module docstring): a `scope="call"`
+    fixture reached by two paths still gets two independent steps."""
+
+    @velox.fixture(scope="call")
+    def d() -> object:
+        return object()
+
+    @velox.fixture()
+    def b(x: object = Depends(d)) -> object:
+        return x
+
+    @velox.fixture()
+    def c(x: object = Depends(d)) -> object:
+        return x
+
+    async def test_func(p: object = Depends(b), q: object = Depends(c)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+
+    names = [step.fixture.name for step in plan.steps]
+    assert names.count("d") == 2
+    assert len(plan.steps) == 4  # d, d, b, c
+
+
+def test_plan_for_rejects_a_session_fixture_depending_on_a_function_fixture() -> None:
+    """spec/04 §2's canonical scope-compatibility example, with both offending names checked in
+    the message — the diagnostic is useless without them."""
+
+    @velox.fixture(name="narrow_fx")
+    def narrow() -> int:
+        return 1
+
+    @velox.fixture(scope="session", name="wide_fx")
+    def wide(x: int = Depends(narrow)) -> int:
+        return x
+
+    async def test_func(w: int = Depends(wide)) -> None:
+        pass
+
+    with pytest.raises(DIError) as excinfo:
+        plan_for(test_func)
+
+    message = str(excinfo.value)
+    assert "narrow_fx" in message
+    assert "wide_fx" in message
+
+
+def test_plan_for_rejects_a_module_fixture_depending_on_a_call_fixture() -> None:
+    @velox.fixture(scope="call", name="per_call")
+    def per_call() -> int:
+        return 1
+
+    @velox.fixture(scope="module", name="per_module")
+    def per_module(x: int = Depends(per_call)) -> int:
+        return x
+
+    async def test_func(w: int = Depends(per_module)) -> None:
+        pass
+
+    with pytest.raises(DIError) as excinfo:
+        plan_for(test_func)
+
+    message = str(excinfo.value)
+    assert "per_call" in message
+    assert "per_module" in message
+
+
+def test_plan_for_raises_on_a_missing_injection_naming_the_parameter() -> None:
+    async def test_func(missing_param: int, present: int = Depends(alpha)) -> None:
+        pass
+
+    with pytest.raises(DIError, match="missing_param"):
+        plan_for(test_func)
+
+
+def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan() -> None:
+    async def test_func() -> None:
+        pass
+
+    plan = plan_for(test_func)
+    assert plan.steps == ()
+    assert plan.root_args == ()

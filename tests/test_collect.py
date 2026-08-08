@@ -203,12 +203,12 @@ def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> 
     assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_always_skipped"]
 
 
-def test_depends_defaulted_parameter_is_a_collection_error_not_a_silent_pass(
+def test_depends_defaulted_parameter_is_collected_with_a_real_resolution_plan(
     tmp_path: Path,
 ) -> None:
-    """M0 has no DI — running a test whose parameter defaults to `Depends(...)` as-is would bind
-    the test to the raw sentinel object and very likely still report `PASSED` (an I8 silent
-    pass). Refusing it as a `CollectionError` instead makes the gap loud."""
+    """M1: a well-formed `Depends(...)` graph is no longer refused — collection resolves it via
+    `_fixtures.plan_for` and attaches the resulting `ResolutionPlan` to the `TestRecord` instead
+    of turning the test away."""
     path = _write(
         tmp_path / "test_sample.py",
         "import velox\n\n"
@@ -221,11 +221,67 @@ def test_depends_defaulted_parameter_is_a_collection_error_not_a_silent_pass(
 
     result = collect([path], rootdir=tmp_path)
 
+    assert result.errors == []
+    assert result.skipped == []
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert len(record.plan.steps) == 1
+    assert record.plan.steps[0].fixture.name == "db"
+    assert record.plan.root_args == (("value", 0, False),)
+
+
+def test_a_test_with_no_dependencies_still_gets_a_trivial_resolution_plan(
+    tmp_path: Path,
+) -> None:
+    """Every `TestRecord` carries a `plan`, even an empty one — `_run.py` has no "does this test
+    have fixtures" branch to keep in sync."""
+    path = _write(tmp_path / "test_sample.py", "async def test_plain():\n    pass\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert len(result.records) == 1
+    assert result.records[0].plan.steps == ()
+    assert result.records[0].plan.root_args == ()
+
+
+def test_a_malformed_di_graph_is_still_a_collection_error(tmp_path: Path) -> None:
+    """A test whose fixture graph fails `plan_for`'s static validation (here: a session-scoped
+    fixture depending on a function-scoped one, spec/04 §2) is refused exactly like a broken
+    import — attributed to the file, collection of the rest of the suite continues."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def narrow():\n"
+        "    return 1\n\n"
+        "@velox.fixture(scope='session')\n"
+        "async def wide(x: int = velox.Depends(narrow)):\n"
+        "    return x\n\n"
+        "async def test_needs_wide(value: int = velox.Depends(wide)):\n"
+        "    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
     assert result.records == []
     assert result.skipped == []
     assert len(result.errors) == 1
-    assert "test_needs_db" in result.errors[0].message
-    assert "Depends" in result.errors[0].message
+    assert "narrow" in result.errors[0].message
+    assert "wide" in result.errors[0].message
+
+
+def test_a_missing_injection_is_still_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "async def test_needs_something(value: int):\n    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "test_needs_something" in result.errors[0].message
+    assert "value" in result.errors[0].message
 
 
 def test_assertion_rewrite_hook_is_consulted_when_installed(tmp_path: Path) -> None:

@@ -144,9 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         collected = _collect.collect(files, rootdir=rootdir)
         results = _run.run_suite(collected.records)
 
+        # `Outcome.value` ("passed"/"failed"/"error") upper-cased rather than a three-way
+        # if/elif: adding a further outcome (skipped/xfailed/... , spec/05 §4) later must not
+        # require touching this line again to keep printing it correctly.
         for result in results:
-            status = "PASSED" if result.outcome is _run.Outcome.PASSED else "FAILED"
-            print(f"{result.id} {status} ({result.duration:.3f}s)")
+            print(f"{result.id} {result.outcome.value.upper()} ({result.duration:.3f}s)")
             if result.failure is not None:
                 print(result.failure)
 
@@ -158,9 +160,10 @@ def main(argv: list[str] | None = None) -> int:
             print(error.message)
 
         passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
-        failed = len(results) - passed
+        failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
+        errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
         print(
-            f"{len(results)} tests: {passed} passed, {failed} failed, "
+            f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored, "
             f"{len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
 

@@ -1,14 +1,16 @@
 """Collection: import test modules and build the flat list of test records (spec/03 §3-4).
 
-M0 scope only. `TestRecord` here is deliberately smaller than the full shape in spec/03 §1 — it
-carries just what M0's runner needs (`id`, `path`, `lineno`, `qualname`, `func`). The rest of
-`MarkSet`/`ResolutionPlan`/`exclusive` land in M1 alongside the DI graph and the scheduler that
-read them; growing this dataclass towards the spec shape is M1's job, not a thing to guess at
-now. Two exceptions, because leaving them unhandled is a *wrong answer* rather than a missing
-feature (I8): `@velox.skip`/`skipif` are already public API, so a marked test is read off the
-function object and excluded from `records` instead of silently running for real (see
-`Skipped`); and a parameter defaulted to `Depends(...)` is refused as a `CollectionError` instead
-of being called with the raw sentinel, which would otherwise report a fabricated `PASSED`.
+`TestRecord` here is still smaller than the full shape in spec/03 §1 — it carries what the M0/M1
+runner needs (`id`, `path`, `lineno`, `qualname`, `func`, and now `plan`). The rest of `MarkSet`/
+`exclusive` land alongside the scheduler that reads them; growing this dataclass further towards
+the spec shape is future work, not a thing to guess at now. Two exceptions, because leaving them
+unhandled is a *wrong answer* rather than a missing feature (I8): `@velox.skip`/`skipif` are
+already public API, so a marked test is read off the function object and excluded from `records`
+instead of silently running for real (see `Skipped`); and, as of M1, a `Depends(...)`-defaulted
+parameter is resolved via `_fixtures.plan_for` rather than refused outright — a *malformed* DI
+graph (bad scope nesting, a missing injection) still becomes a `CollectionError`, exactly the
+way a bad import does, but a well-formed one now produces a real `ResolutionPlan` on the record
+instead of being turned away wholesale.
 
 Import mechanics follow spec/03 §3: importlib only, one position, path-derived module names
 under `velox_tests.*`, an exception during `exec_module` becomes a `CollectionError` attributed
@@ -18,7 +20,7 @@ gives it the chance spec/03 §3 step 2 describes.
 
 Only `async def test_*` functions are collected (spec/01 §2 — "Only async def tests are supported
 in MVP"). A sync `test_*` is silently left uncollected for now; a loud diagnostic for that case is
-roadmap, not M0 (M0 has no reporter machinery to hang a warning off yet).
+roadmap, not implemented yet (there is no reporter machinery to hang a warning off yet).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from velox import _rewrite
-from velox._fixtures import plan_of
+from velox._fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 
 __all__ = [
@@ -65,6 +67,11 @@ class TestRecord:
     lineno: int
     qualname: str
     func: Callable[..., object]
+    plan: ResolutionPlan
+    """This test function's whole transitive fixture graph, already resolved (spec/04 §1). Every
+    record carries one, even a test with no `Depends(...)` at all (`steps=()`, `root_args=()`) —
+    uniformity here is what keeps `_run.py` a single code path instead of an "if it has fixtures"
+    branch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,9 +190,10 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
     3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
        order (spec/03 §4 step 2).
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
-       instead; a `Depends(...)`-defaulted parameter excludes it into `errors` instead (M0 has
-       no DI — running it as-is would silently bind the raw sentinel). Otherwise build one
-       `TestRecord`, `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`.
+       instead; a malformed DI graph (`_fixtures.plan_for` raising `DIError` — bad scope nesting,
+       a missing injection) excludes it into `errors` instead. Otherwise build one `TestRecord`,
+       `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`, carrying the
+       `ResolutionPlan` `plan_for` built.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order
@@ -217,11 +225,9 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
             test_id = f"{display_path}::{func.__qualname__}"
             try:
                 reason = _skip_reason(marks_of(func))
-                injections = () if reason is not None else plan_of(func)
             except Exception:
-                # `plan_of` can raise (e.g. a stray `Depends(...)` inside `Annotated[...]`,
-                # spec/01 rule 3) — one test's malformed marks/plan must not abort the file's
-                # remaining tests any more than a broken import aborts the remaining files.
+                # One test's malformed marks must not abort the file's remaining tests any more
+                # than a broken import aborts the remaining files.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
@@ -229,20 +235,17 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 skipped.append(Skipped(id=test_id, reason=reason))
                 continue
 
-            if injections:
-                params = ", ".join(injection.param for injection in injections)
-                errors.append(
-                    CollectionError(
-                        path=display_path,
-                        message=(
-                            f"{test_id}: parameter(s) {params} default to Depends(...), but "
-                            "dependency injection is not implemented until M1 (spec/04). "
-                            "Running this test as written would bind the raw Depends() sentinel "
-                            "instead of a resolved value -- an I8 silent pass -- so collection "
-                            "refuses it instead."
-                        ),
-                    )
-                )
+            try:
+                plan = plan_for(func)
+            except Exception:
+                # `plan_for` raises `DIError` for a malformed graph (bad scope nesting, a
+                # missing injection, spec/04 §2) and, via `plan_of`, a plain `TypeError` for a
+                # stray `Depends(...)` inside `Annotated[...]` metadata (spec/01 rule 3). Both
+                # are attributed to this test and collection continues — same reasoning as the
+                # `marks_of` catch above, and the same broad `except Exception` so a new static
+                # check added to `plan_for` later doesn't need a matching new `except` clause
+                # here to stay loud instead of aborting the whole file.
+                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
             records.append(
@@ -253,6 +256,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                     lineno=func.__code__.co_firstlineno,
                     qualname=func.__qualname__,
                     func=func,
+                    plan=plan,
                 )
             )
             index += 1

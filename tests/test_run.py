@@ -1,4 +1,4 @@
-"""Regression tests for velox._run (spec/05, M0 slice)."""
+"""Regression tests for velox._run (spec/05)."""
 
 from __future__ import annotations
 
@@ -7,13 +7,25 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import velox
 from velox._collect import CollectionError
 from velox._collect import TestRecord as Record  # `Test*` makes pytest try to collect it itself
+from velox._fixtures import ResolutionPlan, plan_for
 from velox._run import Outcome, exit_code_for, run_suite
 from velox._run import TestResult as Result  # same reason
 
+#: A test with no `Depends(...)` at all still needs a plan (`_collect.py` gives every `TestRecord`
+#: one, uniformly) — this is the trivial one, shared by every test below that doesn't care about
+#: DI at all.
+_EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
 
-def _record(index: int, func: Callable[..., object], qualname: str) -> Record:
+
+def _record(
+    index: int,
+    func: Callable[..., object],
+    qualname: str,
+    plan: ResolutionPlan = _EMPTY_PLAN,
+) -> Record:
     return Record(
         id=f"mod.py::{qualname}",
         index=index,
@@ -21,6 +33,7 @@ def _record(index: int, func: Callable[..., object], qualname: str) -> Record:
         lineno=1,
         qualname=qualname,
         func=func,
+        plan=plan,
     )
 
 
@@ -119,6 +132,124 @@ def test_empty_selection_still_builds_and_closes_a_runner() -> None:
     assert run_suite([]) == []
 
 
+# ------------------------------------------------------------------------------------------
+# Setup -> call -> teardown, driven by real `ResolutionPlan`s (spec/04, spec/05 §3). M0 covered
+# only a bare zero-argument call; these exercise the DI wiring `run_suite` now drives.
+# ------------------------------------------------------------------------------------------
+
+
+def test_function_scope_fixture_is_injected_with_a_working_value() -> None:
+    @velox.fixture()
+    def answer() -> int:
+        return 42
+
+    async def test_func(x: int = velox.Depends(answer)) -> None:
+        assert x == 42
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.PASSED
+    assert result.failure is None
+
+
+def test_session_scope_fixture_is_shared_and_built_exactly_once_across_tests() -> None:
+    """Two independently-`plan_for`-built plans referencing the same `Fixture` object still
+    resolve to the same session cache key (`_di.key_for` keys session scope by `id(fixture)`,
+    not by which test's plan asked for it) — so the second test observes the first's instance
+    rather than triggering a second construction."""
+    builds: list[int] = []
+
+    @velox.fixture(scope="session")
+    def counted() -> int:
+        builds.append(1)
+        return len(builds)
+
+    async def test_a(x: int = velox.Depends(counted)) -> None:
+        assert x == 1
+
+    async def test_b(x: int = velox.Depends(counted)) -> None:
+        assert x == 1  # same shared instance, not rebuilt for this test
+
+    results = run_suite(
+        [
+            _record(0, test_a, "test_a", plan=plan_for(test_a)),
+            _record(1, test_b, "test_b", plan=plan_for(test_b)),
+        ]
+    )
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert len(builds) == 1
+
+
+def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
+    """`store.aclose()` after the loop, per spec/04 §3's "end of the run" — proven by observing
+    the generator's teardown side effect only after `run_suite` has returned."""
+    torn_down: list[str] = []
+
+    @velox.fixture(scope="session")
+    def db():
+        yield "db"
+        torn_down.append("db")
+
+    async def test_func(x: str = velox.Depends(db)) -> None:
+        assert x == "db"
+
+    run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert torn_down == ["db"]
+
+
+def test_fixture_setup_failure_produces_error_not_failed() -> None:
+    @velox.fixture()
+    def broken() -> int:
+        raise RuntimeError("setup boom")
+
+    async def test_func(x: int = velox.Depends(broken)) -> None:
+        raise AssertionError("must never run: setup already failed")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure is not None
+    assert "setup boom" in result.failure
+
+
+def test_fixture_teardown_failure_after_a_passing_call_produces_error() -> None:
+    """spec/05 §3's phase table: a teardown failure surfaces as `error` "even if call passed" —
+    the aggregated outcome must not stay `PASSED` just because the call phase itself was clean."""
+
+    @velox.fixture()
+    def flaky_teardown():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+        assert x == 1  # the call phase genuinely passes
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure is not None
+    assert "teardown boom" in result.failure
+
+
+def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks() -> None:
+    @velox.fixture()
+    def flaky_teardown():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+        raise AssertionError("call boom")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure is not None
+    assert "call boom" in result.failure
+    assert "teardown boom" in result.failure
+
+
 def _result(outcome: Outcome) -> Result:
     return Result(id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None)
 
@@ -133,6 +264,11 @@ def test_exit_code_all_passed_is_zero() -> None:
 
 def test_exit_code_with_a_failure_is_one() -> None:
     assert exit_code_for([_result(Outcome.PASSED), _result(Outcome.FAILED)], []) == 1
+
+
+def test_exit_code_with_an_error_is_one() -> None:
+    """spec/05 §4's table: `error` and `failed` both contribute `1`."""
+    assert exit_code_for([_result(Outcome.PASSED), _result(Outcome.ERROR)], []) == 1
 
 
 def test_exit_code_with_a_collection_error_and_no_records_is_one() -> None:
