@@ -76,6 +76,17 @@ def test_acquire_single_flight_construction_runs_body_once_under_concurrency() -
     assert len(calls) == 1
 
 
+# Review: this is the only concurrency test in the file and it checks exactly one of the two
+# invariants the concurrent path has. It proves "`build` runs once"; it never looks at the
+# refcount, which is the half that is actually wrong (`ScopeStore.acquire` increments *after*
+# `await entry.future`, where spec/04 §4's pseudocode increments before). The missing test is the
+# one that would have caught it, and it is short: same racing shape, but the constructing task
+# calls `store.release(key)` immediately after its `acquire` returns and before yielding, while
+# the second task is still parked on the pending future. Assert (a) the waiter's value comes from
+# an instance whose closer has *not* run, and (b) the waiter's own `release` succeeds instead of
+# raising `KeyError`. Both fail today (verified by hand). A companion test for the reverse window
+# — `acquire` on a key whose closer is mid-`await` inside `release`, which currently constructs a
+# second instance of a `module`-scope fixture — belongs next to it.
 @pytest.mark.parametrize("scope", ["function", "module", "call"])
 def test_non_session_scope_tears_down_when_refcount_reaches_zero(scope: str) -> None:
     """Function/module/call scope all tear down through `release` once nothing holds them —
@@ -126,6 +137,16 @@ def test_session_scope_never_tears_down_through_release_only_aclose() -> None:
     run(scenario())
 
 
+# Review: the docstring describes a test that isn't here. The body never calls `store.release`
+# at all — it only asserts that `acquire` re-raises the build error — so the claim it is named
+# for ("release is a no-op for a key never successfully acquired") is untested, and the
+# parenthetical about a closer that "would have raised, had it been reachable" refers to a closer
+# the test never defines. Adding the missing `await store.release(key)` makes it fail, twice over,
+# because the claim is false: the failed entry is still in `_entries`, so `release` drives its
+# refcount to -1 and deletes it, and for a key the store has genuinely never seen `release` raises
+# `KeyError` (both verified — see the notes in `ScopeStore.release`). What this file wants instead
+# is two tests: `release` on an unknown key, and `acquire` again after a failed build asserting
+# the *same* exception object comes back off the cached future rather than the body re-running.
 def test_release_is_a_no_op_for_a_key_that_was_never_successfully_acquired() -> None:
     """`acquire`'s docstring: a failed construction never reaches `release` — proven here by
     calling `release` on a key whose `build` raised, and confirming nothing blows up and the
@@ -361,6 +382,18 @@ def test_call_scope_fixture_never_shares_an_instance_across_two_depends_sites() 
     assert len(built) == 2
 
 
+# Review: three shapes this file's "all four fixture shapes" claim doesn't reach, all of which
+# `_construct` gets wrong or leaves undiagnosed:
+# (1) A generator fixture whose *teardown* raises (post-`yield`), asserted at the `_construct`
+#     level — `test_run.py` covers it end to end, but nothing here pins that the exception is the
+#     user's, not `_construct`'s `finally: gen.close()` masking it.
+# (2) A fixture that returns an awaitable without being an `async def` (a class with `async def
+#     __call__`): today the coroutine object itself is injected, un-awaited. Assert whatever the
+#     decided behaviour is; there is currently none.
+# (3) A `Depends(...)` on a positional-only parameter (`def fx(x = Depends(inner), /)`), which
+#     plans fine and then raises `TypeError: ... positional-only arguments passed as keyword`
+#     from inside `_construct`. A test asserting *either* an early `DIError` or a working
+#     positional bind would pin the choice down.
 def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() -> None:
     """`key_for`'s own contract, isolated from the rest of the pipeline: two calls for the same
     `(fixture, step_id)` never collide, which is what lets the same call-scope step be resolved

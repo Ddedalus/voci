@@ -159,6 +159,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{error.path} COLLECTION ERROR")
             print(error.message)
 
+        # Review: nothing in `tests/` exercises either half of this commit's `cli.py` change —
+        # `test_cli.py` is untouched, and its one end-to-end test asserts only `PASSED`/`FAILED`.
+        # So neither `ERROR` reaching this output nor the new `errored` count is covered, and the
+        # counts no longer add up in the one case they used to by construction: `failed` was
+        # `len(results) - passed` before, and is now an independent `sum`, so any future outcome
+        # (`skipped`/`xfailed`/..., which the comment above explicitly plans for) will print in
+        # the per-test lines while silently vanishing from this summary — `10 tests: 2 passed,
+        # 1 failed, 0 errored` for a run of ten. An `other = len(results) - passed - failed -
+        # errored` guard, or building the counts with `collections.Counter(r.outcome for r in
+        # results)`, keeps the line honest without another edit per outcome. A `tmp_path` test
+        # with one setup-failing fixture, asserting `test_x ERROR` in stdout and `1 errored` in
+        # the summary, covers the whole path in about eight lines.
         passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
         failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
         errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)

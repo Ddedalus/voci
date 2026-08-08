@@ -109,6 +109,16 @@ def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
     positional = code.co_varnames[: code.co_argcount]
     defaults = func.__defaults__ or ()
     offset = len(positional) - len(defaults)
+    # Review: `co_argcount` covers positional-only *and* positional-or-keyword parameters, and
+    # both are recorded below as `keyword_only=False` — the plan cannot tell them apart. Since
+    # `_di.setup`/`_construct` bind every injection with `**kwargs`, a `Depends(...)` on a
+    # positional-only parameter (`def fx(db = Depends(pool), /)`) passes every static check here
+    # and then fails at construction with `TypeError: fx() got some positional-only arguments
+    # passed as keyword arguments: 'db'` (verified, for both a fixture and a test function). It is
+    # cheap to make static: `code.co_posonlyargcount` is right here, so `positional[:
+    # co_posonlyargcount]` carrying a `Dependency` default is a `DIError` at decoration time
+    # naming the `/`, which is the same class of "caught before anything runs" diagnostic
+    # `_reject_annotated_depends` above exists to give.
     for param, default in zip(positional[offset:], defaults, strict=True):
         if (injection := _injection(param, default, keyword_only=False)) is not None:
             injections.append(injection)
@@ -364,6 +374,19 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
     `Depends()` argument at `Depends()`'s own call site.
     """
     root_injections = plan_of(func)
+    # Review: the missing-injection check runs on the *test function only*. `visit` below never
+    # calls it for the fixtures it walks, so spec/04 §2's "Missing injection" row is unenforced
+    # across the entire transitive graph — the part the section's own opening sentence advertises
+    # ("velox validates the whole graph once, at startup" versus pytest discovering it "lazily,
+    # one failing test at a time"). Verified: `@velox.fixture() def needs_arg(conn): ...` used via
+    # `Depends(needs_arg)` collects cleanly with a one-step plan, then fails at run time with
+    # `TypeError: needs_arg() missing 1 required positional argument: 'conn'` reported as a setup
+    # `ERROR` on every dependent test — which is exactly the lazy, per-test failure mode the
+    # explicit-DI design claims to delete, and it is a `CollectionError`/exit-4 case rather than a
+    # test outcome. One `_check_missing_injections(source.func, source.plan)` at the top of
+    # `visit` (before the memo check, or after — a memoized fixture was already checked) fixes it;
+    # note `Fixture.__init__` would be an even earlier home, since it already calls `plan_of` and
+    # `_check_acyclic` at decoration time.
     _check_missing_injections(func, root_injections)
 
     steps: list[PlanStep] = []

@@ -181,6 +181,16 @@ def test_session_scope_fixture_is_shared_and_built_exactly_once_across_tests() -
     assert len(builds) == 1
 
 
+# Review: `module` scope — the other half of `run_suite`'s docstring claim that this store makes
+# "`module`/`session` scope fixtures actually shared across the tests that reach them rather than
+# rebuilt per test" — has no end-to-end test, and the claim is false for it. The obvious mirror of
+# the test above (`@velox.fixture(scope="module")`, two records, `assert len(builds) == 1`) fails:
+# the fixture is built twice and torn down twice, because each test's teardown drops the refcount
+# to 0 in a runner that never has two tests in flight. Whichever way that gets resolved (spec/04
+# §10 Q2), the behaviour deserves a test that states it out loud instead of a docstring asserting
+# the opposite. Also missing at this level: two tests in *different* modules must not share one
+# `module`-scope instance (the `module_path` component of `_di.key_for`, which nothing exercises —
+# every record built by `_record` here hardcodes `Path("mod.py")`).
 def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
     """`store.aclose()` after the loop, per spec/04 §3's "end of the run" — proven by observing
     the generator's teardown side effect only after `run_suite` has returned."""
@@ -250,6 +260,21 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
     assert "teardown boom" in result.failure
 
 
+# Review: the rewrite added three new `except BaseException` sites (`_run_one` around setup, call
+# and teardown) plus two `except (KeyboardInterrupt, SystemExit): raise` guards and a swallow in
+# `run_suite`, and not one of them is tested. The gaps, in descending order of how wrong the
+# current answer is:
+# - A fixture that raises `KeyboardInterrupt` after its `yield`. `_run_one`'s docstring promises
+#   immediate re-raise; the actual behaviour is `ERROR` for that test and the suite continuing,
+#   because `_di._release_all` has already wrapped it in a `BaseExceptionGroup`. `pytest.raises(
+#   KeyboardInterrupt): run_suite([...])` is the whole test and it is red today.
+# - The same for a setup-phase `KeyboardInterrupt`, and for `SystemExit` in either.
+# - A `KeyboardInterrupt` from the *call* phase leaving a `scope="session"` generator fixture
+#   untorn — `store.aclose()` is not in a `finally`. Assert the teardown side-effect list is
+#   still empty after the `pytest.raises`, which documents the leak until it's fixed.
+# - A session fixture whose teardown raises: assert `run_suite` returns, the message reaches
+#   stderr (`capsys`), and — the part that matters — `exit_code_for` on the returned results is
+#   still `0`, so the deliberate gap is pinned rather than assumed.
 def _result(outcome: Outcome) -> Result:
     return Result(id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None)
 

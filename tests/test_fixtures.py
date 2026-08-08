@@ -201,6 +201,17 @@ def test_plan_for_raises_on_a_missing_injection_naming_the_parameter() -> None:
         plan_for(test_func)
 
 
+# Review: every missing-injection case tested here is on the *test function*, which is also the
+# only place `plan_for` checks. The untested case is the one that reveals the gap: a **fixture**
+# with a required, non-injected parameter (`@velox.fixture() def needs_arg(conn): ...`, reached
+# via `Depends(needs_arg)`). `plan_for` accepts it and returns a one-step plan; the `TypeError`
+# surfaces at run time as a setup `ERROR`, per dependent test — the lazy failure mode spec/04 §2
+# opens by contrasting velox against. `with pytest.raises(DIError, match="conn")` is the test.
+# Also unexercised in `_check_missing_injections`, and worth pinning because the `co_varnames`
+# slicing is subtle enough to break silently under an edit: `*args`/`**kwargs` alone must be
+# accepted (they are — verified), `a` in `def t(a, *args)` must still be reported (it is), a
+# keyword-only parameter with no default must be reported, one *with* a default must not, and
+# `self` must be skipped only in positional position.
 def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan() -> None:
     async def test_func() -> None:
         pass
