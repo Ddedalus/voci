@@ -339,8 +339,7 @@ wheels = [
 ]
 
 [[package]]
-name = "velox"
-version = "0.1.0"
+name = "velox-test"
 source = { editable = "." }
 
 [package.optional-dependencies]

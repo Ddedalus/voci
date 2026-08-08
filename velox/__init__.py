@@ -35,8 +35,7 @@ from velox._marks import (
     timeout,
     xfail,
 )
-
-__version__ = "0.1.0"
+from velox._version import __version__
 
 # Grouped by purpose in the imports above; sorted here because that is what the linter wants.
 # DI: Depends, Fixture, Scope, fixture. Marks: isolated, parametrize, skip, skipif, solo, tag,

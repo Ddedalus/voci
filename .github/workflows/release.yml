@@ -1,0 +1,71 @@
+name: Release
+
+# Publish to PyPI when a GitHub Release is published. The version is derived from the release
+# tag by hatch-vcs (see pyproject.toml [tool.hatch.version]) — tag "v0.1.0" builds as "0.1.0".
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyrefly check
+      - run: uv run pytest
+
+  build:
+    name: Build package
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - run: uv build
+
+      - name: Verify built version matches release tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          wheel="$(ls dist/*.whl)"
+          built="$(basename "$wheel" | cut -d- -f2)"
+          if [ "$built" != "$tag" ]; then
+            echo "::error::Built version '$built' (from $wheel) does not match release tag 'v$tag'"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/velox-test/
+    permissions:
+      id-token: write  # required for PyPI trusted publishing (OIDC) — no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

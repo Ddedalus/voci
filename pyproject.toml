@@ -1,6 +1,6 @@
 [project]
-name = "velox"
-version = "0.1.0"
+name = "velox-test"
+dynamic = ["version"]
 description = "Fast, concurrent test runner for Python."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -23,8 +23,23 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version comes from the git tag (e.g. tag "v0.1.0" -> version "0.1.0"), written to
+# velox/_version.py at build time. `fallback-version` covers builds with no reachable tag yet
+# (fresh clone before the first release, or a shallow/tagless checkout).
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "velox/_version.py"
+
+# Distribution name ("velox-test") no longer matches the importable package directory
+# ("velox"), so hatchling's name-based auto-detection can't find it — point it there explicitly.
+[tool.hatch.build.targets.wheel]
+packages = ["velox"]
 
 [tool.ruff]
 line-length = 100
