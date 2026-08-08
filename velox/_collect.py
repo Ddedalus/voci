@@ -1,13 +1,20 @@
 """Collection: import test modules and build the flat list of test records (spec/03 §3-4).
 
 M0 scope only. `TestRecord` here is deliberately smaller than the full shape in spec/03 §1 — it
-carries just what M0's runner needs (`id`, `path`, `lineno`, `qualname`, `func`). `marks`, `plan`,
-and `exclusive` land in M1 alongside the DI graph and the scheduler that read them; growing this
-dataclass towards the spec shape is M1's job, not a thing to guess at now.
+carries just what M0's runner needs (`id`, `path`, `lineno`, `qualname`, `func`). The rest of
+`MarkSet`/`ResolutionPlan`/`exclusive` land in M1 alongside the DI graph and the scheduler that
+read them; growing this dataclass towards the spec shape is M1's job, not a thing to guess at
+now. Two exceptions, because leaving them unhandled is a *wrong answer* rather than a missing
+feature (I8): `@velox.skip`/`skipif` are already public API, so a marked test is read off the
+function object and excluded from `records` instead of silently running for real (see
+`Skipped`); and a parameter defaulted to `Depends(...)` is refused as a `CollectionError` instead
+of being called with the raw sentinel, which would otherwise report a fabricated `PASSED`.
 
-Import mechanics follow spec/03 §3 verbatim: importlib only, one position, path-derived module
-names under `velox_tests.*`, an exception during `exec_module` becomes a `CollectionError`
-attributed to that file rather than aborting the run.
+Import mechanics follow spec/03 §3: importlib only, one position, path-derived module names
+under `velox_tests.*`, an exception during `exec_module` becomes a `CollectionError` attributed
+to that file rather than aborting the run. The assertion-rewriting meta-path hook, when
+installed, is consulted explicitly (`_import_module`) — `spec_from_file_location` alone never
+gives it the chance spec/03 §3 step 2 describes.
 
 Only `async def test_*` functions are collected (spec/01 §2 — "Only async def tests are supported
 in MVP"). A sync `test_*` is silently left uncollected for now; a loud diagnostic for that case is
@@ -16,6 +23,7 @@ roadmap, not M0 (M0 has no reporter machinery to hang a warning off yet).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import inspect
 import re
@@ -25,7 +33,18 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["CollectionError", "CollectionResult", "TestRecord", "collect", "module_name_for"]
+from velox import _rewrite
+from velox._fixtures import plan_of
+from velox._marks import Marks, marks_of
+
+__all__ = [
+    "CollectionError",
+    "CollectionResult",
+    "Skipped",
+    "TestRecord",
+    "collect",
+    "module_name_for",
+]
 
 #: Everything under this prefix is a velox-imported test module (spec/03 §3 step 1). Never
 #: `sys.path`-relative — the whole point is that two `test_utils.py` in different directories
@@ -50,16 +69,34 @@ class TestRecord:
 
 @dataclass(frozen=True, slots=True)
 class CollectionError:
-    """An import failure attributed to one file (spec/03 §3 step 3)."""
+    """An import failure attributed to one file (spec/03 §3 step 3) — or, in M0's extension of
+    that idea, one test this milestone knows it cannot run correctly (an unsupported
+    `Depends(...)` parameter)."""
 
     path: Path
     message: str
 
 
 @dataclass(frozen=True, slots=True)
+class Skipped:
+    """A collected test excluded from `records` because a skip mark said so — contrast
+    `CollectionError`, which means something is *wrong*; this means the suite asked, correctly,
+    for the test not to run.
+
+    M0's `Outcome` enum has no `skipped` member (spec/05 §4's full enum is M1), so this can't be
+    a `TestResult`. Reporting it as its own list is the smallest change that stops
+    `@velox.skip`/`@velox.skipif` from being silently ignored and the test running for real.
+    """
+
+    id: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class CollectionResult:
     records: list[TestRecord]
     errors: list[CollectionError]
+    skipped: list[Skipped]
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -67,8 +104,11 @@ def module_name_for(path: Path, rootdir: Path) -> str:
 
     Path-derived so two `test_utils.py` files in different directories never collide — the
     entire content of pytest's `ImportPathMismatchError`, deleted rather than solved.
-    Non-identifier characters in path segments are escaped so the result is always a legal
-    dotted module name.
+    Non-identifier characters in path segments are escaped (`_escape_segment`) so the result is
+    always a legal dotted module name; a segment that needed escaping also gets a short digest
+    of its original text appended, because the escape alone is lossy (`api-v2` and `api_v2`
+    would otherwise both become `api_v2`) and would silently reopen the exact collision this
+    function exists to prevent.
     """
     path = Path(path).resolve()
     rootdir = Path(rootdir).resolve()
@@ -87,17 +127,45 @@ def module_name_for(path: Path, rootdir: Path) -> str:
 
 def _escape_segment(segment: str) -> str:
     """One dotted-name component: non-identifier characters replaced, leading digit guarded."""
-    # Review: the escape is lossy, so "never collide" isn't true — `api-v2/test_a.py` and
-    # `api_v2/test_a.py` both become `velox_tests.api_v2.test_a`. The second import then
-    # replaces the first in `sys.modules` (harmless today only because records capture the
-    # function objects eagerly), but the docstrings and
-    # `test_module_name_for_two_same_named_files_never_collide` claim a guarantee this doesn't
-    # give. Appending a short digest of the original relpath to a segment that had to be
-    # escaped restores it.
     escaped = _NON_IDENTIFIER_CHARS.sub("_", segment)
+    if escaped != segment:
+        # Escaping changed something, so it's lossy for this segment specifically — append a
+        # short digest of the *original* text to keep differently-spelled segments that collapse
+        # to the same escaped form apart. Segments that needed no escaping are left exactly
+        # alone (no digest), which is what keeps the common case's module names readable.
+        digest = hashlib.blake2b(segment.encode(), digest_size=3).hexdigest()
+        escaped = f"{escaped}_{digest}"
     if not escaped or escaped[0].isdigit():
         escaped = f"_{escaped}"
     return escaped
+
+
+def _display_path(path: Path, resolved_rootdir: Path) -> Path:
+    """`path`, relative to `rootdir` when possible.
+
+    spec/03 §1 specifies `TestRecord.path` "relative to rootdir", and ids built from an absolute
+    path are machine-specific — a `--deselect`/`-k`/JUnit key and I2's byte-identical-output goal
+    can't survive that. Falls back to the resolved absolute path for a file outside `rootdir` (an
+    explicit argument elsewhere on disk), the same case `module_name_for` falls back on.
+    """
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(resolved_rootdir)
+    except ValueError:
+        return resolved
+
+
+def _skip_reason(marks: Marks) -> str | None:
+    """The reason this test should not run, or `None`. `skip` always wins; among `skipifs`
+    (which legitimately stack), the first truthy condition's reason is used — spec/01 §4's "any
+    one truthy condition skips", not "the last one wins"."""
+    if marks.skip is not None:
+        return marks.skip.reason
+    for skipif in marks.skipifs:
+        condition = skipif.condition
+        if condition() if callable(condition) else condition:
+            return skipif.reason
+    return None
 
 
 def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
@@ -105,32 +173,39 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
 
     Per file, in the order given (spec/03 §3-4):
 
-    1. Compute the module name (`module_name_for`) and import via `importlib.util`:
-       `spec_from_file_location` → `module_from_spec` → insert into `sys.modules` →
-       `exec_module`. An exception here becomes a `CollectionError`; the file contributes zero
-       records and collection continues to the next file (spec/03 §3 step 3).
+    1. Compute the module name (`module_name_for`) and import (`_import_module`, which consults
+       the installed assertion-rewriting hook first). An exception here becomes a
+       `CollectionError`; the file contributes zero records and collection continues to the next
+       file (spec/03 §3 step 3).
     2. Within the imported module, find `async def test_*` functions *defined* in it — i.e.
        `getattr(obj, "__module__", None) == module.__name__`, so a `test_*` helper imported from
        elsewhere isn't collected twice (spec/03 §4 step 1).
     3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
        order (spec/03 §4 step 2).
-    4. Build one `TestRecord` per function, `id` as `"{path}::{qualname}"`.
+    4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
+       instead; a `Depends(...)`-defaulted parameter excludes it into `errors` instead (M0 has
+       no DI — running it as-is would silently bind the raw sentinel). Otherwise build one
+       `TestRecord`, `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`.
 
-    `files` is assumed already in deterministic order (`discover_files` gives you that); `index`
-    is assigned across the concatenation of all files' records, in that order (spec/03 §4).
+    `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
+    you both); `index` is assigned across the concatenation of all files' records, in that order
+    (spec/03 §4).
     """
     records: list[TestRecord] = []
     errors: list[CollectionError] = []
+    skipped: list[Skipped] = []
     index = 0
+    resolved_rootdir = Path(rootdir).resolve()
 
     for path in files:
+        display_path = _display_path(path, resolved_rootdir)
         module_name = module_name_for(path, rootdir)
         try:
             module = _import_module(path, module_name)
         except Exception:
             # Attributed to the file, not raised: one broken test module must not take the
             # rest of the suite down with it (spec/03 §3 step 3).
-            errors.append(CollectionError(path=path, message=traceback.format_exc()))
+            errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
             continue
 
         functions = [
@@ -138,24 +213,43 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
         ]
         functions.sort(key=lambda func: func.__code__.co_firstlineno)
 
-        # Review: marks are dropped, and `velox.skip`/`velox.skipif` are already *public*
-        # (`velox.__all__`). A `@velox.skip`-marked test therefore runs in M0 and can fail the
-        # build — that is a wrong answer, not a missing feature, and it's a different class of
-        # gap from "no DI yet". If M1 is the real home for `MarkSet`, M0 should still refuse to
-        # run (or at least name) a test carrying marks it can't honour, per I6/I8.
         for func in functions:
+            test_id = f"{display_path}::{func.__qualname__}"
+            try:
+                reason = _skip_reason(marks_of(func))
+                injections = () if reason is not None else plan_of(func)
+            except Exception:
+                # `plan_of` can raise (e.g. a stray `Depends(...)` inside `Annotated[...]`,
+                # spec/01 rule 3) — one test's malformed marks/plan must not abort the file's
+                # remaining tests any more than a broken import aborts the remaining files.
+                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+                continue
+
+            if reason is not None:
+                skipped.append(Skipped(id=test_id, reason=reason))
+                continue
+
+            if injections:
+                params = ", ".join(injection.param for injection in injections)
+                errors.append(
+                    CollectionError(
+                        path=display_path,
+                        message=(
+                            f"{test_id}: parameter(s) {params} default to Depends(...), but "
+                            "dependency injection is not implemented until M1 (spec/04). "
+                            "Running this test as written would bind the raw Depends() sentinel "
+                            "instead of a resolved value -- an I8 silent pass -- so collection "
+                            "refuses it instead."
+                        ),
+                    )
+                )
+                continue
+
             records.append(
                 TestRecord(
-                    # Review: `id` embeds the absolute path, so ids are machine-specific
-                    # (`/tmp/pytest-xxx/test_x.py::test_fail`). spec/03 §1 specifies
-                    # `path` "relative to rootdir" and ids of the form
-                    # `tests/api/test_users.py::test_create[admin]`; `collect` already takes
-                    # `rootdir`, so this is a `path.relative_to(rootdir)` away. It matters
-                    # beyond cosmetics: ids are the `--deselect`/`-k`/JUnit/collection-cache
-                    # key, and I2's byte-identical output can't hold with absolute paths in it.
-                    id=f"{path}::{func.__qualname__}",
+                    id=test_id,
                     index=index,
-                    path=path,
+                    path=display_path,
                     lineno=func.__code__.co_firstlineno,
                     qualname=func.__qualname__,
                     func=func,
@@ -163,45 +257,68 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
             )
             index += 1
 
-    return CollectionResult(records=records, errors=errors)
+    return CollectionResult(records=records, errors=errors, skipped=skipped)
 
 
 def _import_module(path: Path, module_name: str) -> object:
-    """`spec_from_file_location` → `module_from_spec` → `sys.modules` → `exec_module`.
+    """Import `path` under `module_name`, giving the installed rewrite hook first refusal.
+
+    `importlib.util.spec_from_file_location` alone — the M0-skeleton's original approach — never
+    consults `sys.meta_path`: only `import_module`/`__import__` run meta-path finders, so
+    `cli.main` installing `AssertionRewritingHook` had no effect on modules imported this way
+    (verified: a failing rewritten-looking assert produced a bare `AssertionError`, no
+    explanation, despite `assertions: rewrite` in the header). Fixed by asking the installed hook
+    directly first: `MetaPathFinder.find_spec(name, path, target)` takes `path` as the list of
+    *directories* to search for the name's last dotted component in — the same contract
+    `PathFinder` uses for a submodule import — so `[str(path.parent)]` reproduces that without
+    needing `sys.path` or a real `velox_tests` package to exist. When the hook applies (matches
+    `fnpats` — `test_*.py`/`*_test.py`, which is exactly what `discover_files` already filtered
+    by — or `conftest.py`, or `isinitpath`) it hands back a spec with itself as the loader, and
+    `exec_module` below runs the AST rewrite. When it doesn't (declines, or no hook installed —
+    `--assert=plain` or a failed cache probe), `find_spec` returns `None` and this falls back to
+    the plain `spec_from_file_location` path exactly as before.
+
+    Residual gap, not chased further here: `isinitpath` compares `os.path.abspath` (no symlink
+    resolution, matching the vendored shim's `absolutepath`) against paths `discover_files`
+    produced via `.resolve()` (which does resolve symlinks) — under a symlinked root the two
+    could disagree and `isinitpath` would miss. It doesn't matter for any file `discover_files`
+    finds on its own, since those already match `fnpats` independent of `isinitpath`; it would
+    only matter for an *explicit* file argument whose name doesn't match the test-file patterns,
+    reached through a symlinked path. Unifying the two path conventions touches `_rewrite.py`'s
+    own walk and its agreement with the vendored `absolutepath()`, which is more surgery than
+    this fix needs to take on.
 
     importlib-only, no `sys.path` insertion (spec/03 §3 step 2). Any exception during
     `exec_module` propagates to the caller, which turns it into a `CollectionError`; the
     half-initialized module is removed from `sys.modules` first so a later, unrelated import of
     the same dotted name can't observe it.
     """
-    # Review: this import path never consults `sys.meta_path`, so the assertion-rewriting hook
-    # `cli.main` now installs is never given a chance to intercept — no test module is ever
-    # rewritten. `spec_from_file_location` hands back a plain `SourceFileLoader`; only
-    # `import_module`/`__import__` run the meta-path finders. Verified end to end: a failing
-    # `assert x + 1 == 3 + 1` prints a bare `AssertionError` with no `assert 3 == 4`
-    # explanation, with `assertions: rewrite, cache ...` in the header. This defeats the
-    # headline feature of the commit and contradicts spec/03 §3 step 2 ("the assertion-rewriting
-    # meta-path finder intercepts at step 2"). Fix needs the hook consulted explicitly here
-    # (ask each `sys.meta_path` finder for a spec first, or call the hook's `find_spec`
-    # directly) — and note the two sides must agree on path form: `_rewrite._discover_python_
-    # files` uses `os.path.abspath` while `discover_files` uses `.resolve()`, so `isinitpath`
-    # would still miss under a symlinked root (macOS `/tmp` → `/private/tmp`, i.e. `tmp_path`).
-    spec = importlib.util.spec_from_file_location(module_name, path)
+    hook = _rewrite.installed_hook()
+    spec = hook.find_spec(module_name, [str(path.parent)]) if hook is not None else None
+    if spec is None:
+        spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot build an import spec for {path}")
+
     module = importlib.util.module_from_spec(spec)
-    # Review: successful imports are never removed from `sys.modules`, so every `main()` call
-    # in a process permanently accumulates `velox_tests.*` entries (I1 — `cli.main` goes out of
-    # its way to unwind the rewrite hook in a `finally` and then leaves this behind). It also
-    # pins every module-level object the suite created for the life of the process, which is a
-    # real memory cost on a 5000-test suite and makes back-to-back in-process runs non-
-    # independent. Whatever the answer, it should be decided here rather than by omission.
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(module_name, None)
         raise
+
+    # Nothing downstream looks this module up by name again — `TestRecord.func` holds the
+    # function object directly, and through `func.__globals__` a direct reference to the
+    # module's own `__dict__`, so popping it here doesn't break anything that runs later.
+    # Leaving it registered would mean every `main()` call in a process permanently grows
+    # `sys.modules` with another `velox_tests.*` entry (this repo's own suite calls `main()`
+    # many times over in-process) — real, unbounded-with-run-count memory, and it pins every
+    # module-level object the file created for the rest of the process. Trade-off, stated
+    # rather than hidden: a test that relies on its *own* module still being `sys.modules`-
+    # resident while it runs (pickling an instance defined in it, a dynamic re-import of
+    # `__name__`) will not find it there. Nothing in this codebase does that today.
+    sys.modules.pop(module_name, None)
     return module
 
 

@@ -26,29 +26,55 @@ def test_build_parser_prints_version(capsys: pytest.CaptureFixture[str]) -> None
     assert __version__ in capsys.readouterr().out
 
 
-# Review: this test re-imports and *executes* this repo's own `tests/` tree inside the running
-# pytest session, under `velox_tests.*` names that stay in `sys.modules` afterwards. Every
-# module-level side effect in those files (imports, hook installation in the assertion tests,
-# fixture module state) runs a second time, in an order pytest doesn't control, and the pollution
-# outlives the test. It is also cwd-dependent (`_default_test_roots` is relative) and its `== 1`
-# assertion silently re-encodes today's contents of `tests/` — adding one `async def test_*`
-# anywhere under `tests/` turns it red for reasons unrelated to the CLI. A `tmp_path` tree with
-# one deliberately-broken module tests the same "one collection error, zero records ⇒ 1" claim
-# hermetically.
-def test_main_with_no_paths_collects_this_repos_own_tests_dir() -> None:
+def test_main_with_one_broken_module_and_nothing_else_exits_one(tmp_path: Path) -> None:
     """`main` returns its status rather than raising `SystemExit` (that mechanism belongs to the
     `if __name__ == "__main__": sys.exit(main())` block), so a caller invoking it directly — like
     this test — must still see it.
 
-    With no `PATHS`, `main` walks this repo's own `tests/` (`_default_test_roots`). Every file
-    there is an ordinary pytest-style module — `def test_*`, not `async def test_*` — so M0
-    collects zero records from all of them. `tests/assertion/test_explanations.py` also becomes
-    a collection error: its `from .conftest import ...` needs package context that velox's
-    flat, path-derived import names deliberately don't provide (spec/03 §3's traded-away
-    `__init__.py`/`ImportPathMismatchError` machinery). One error, zero records: exit code 1
-    (spec/02 §4), not 5 — "no tests collected" would be a lie about that error's existence.
+    Hermetic version of "one collection error, zero records ⇒ exit 1" (spec/02 §4). An earlier
+    version of this test pointed `main([])` at this repo's own `tests/` dir instead: that
+    re-imported and *executed* every module under it a second time, under `velox_tests.*` names
+    that stayed in `sys.modules` afterwards (module-level side effects — hook installation in the
+    assertion tests, fixture state — running twice, in an order pytest doesn't control), was
+    cwd-dependent, and its `== 1` assertion silently re-encoded today's contents of `tests/`:
+    adding one `async def test_*` anywhere in this repo's suite would have turned it red for
+    reasons unrelated to the CLI.
     """
-    assert main([]) == 1
+    (tmp_path / "test_broken.py").write_text("raise RuntimeError('boom')\n")
+    assert main([str(tmp_path)]) == 1
+
+
+def test_main_all_passing_exits_zero(tmp_path: Path) -> None:
+    """The exit code every CI green build actually depends on — untested through `main` before
+    this (only `_run.exit_code_for` was tested in isolation, which never exercises the
+    discover -> collect -> run wiring that decides what it's called with)."""
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    assert main([str(tmp_path)]) == 0
+
+
+def test_main_empty_directory_exits_five(tmp_path: Path) -> None:
+    assert main([str(tmp_path)]) == 5
+
+
+def test_main_rejects_a_nonexistent_path_as_a_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A typo'd path and a genuinely empty suite must not look the same (I8) — both used to
+    silently walk to nothing and exit 5."""
+    missing = tmp_path / "does_not_exist"
+    status = main([str(missing)])
+    assert status == 4
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_main_rejects_a_test_id_argument_as_a_usage_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """spec/02 §1 documents `path.py::test_name` as supported invocation syntax; M0 doesn't
+    parse it yet and must say so rather than fail as a missing path."""
+    status = main(["tests/test_run.py::test_x"])
+    assert status == 4
+    assert "test ids" in capsys.readouterr().err
 
 
 def test_default_roots_prefer_tests_dir_over_cwd(
@@ -76,11 +102,6 @@ def test_rewrite_cache_with_plain_mode_is_a_usage_error(
     assert "--rewrite-cache" in capsys.readouterr().err
 
 
-# Review: the two exit codes M0 exists to prove are untested through `main`. Nothing here
-# covers "all tests passed ⇒ 0" (the only path any CI green build depends on) or "empty
-# directory ⇒ 5"; `test_run.py` tests `exit_code_for` in isolation, which does not exercise the
-# `main` → discover → collect → run wiring that decides what it is called with. Both are two
-# lines each with `tmp_path`.
 def test_main_runs_a_passing_and_a_failing_async_test(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -90,7 +111,9 @@ def test_main_runs_a_passing_and_a_failing_async_test(
         "    assert 1 + 1 == 2\n"
         "\n"
         "async def test_fail():\n"
-        "    assert 1 + 1 == 3\n"
+        "    x = 2\n"
+        "    y = 3\n"
+        "    assert x == y\n"
     )
 
     status = main([str(tmp_path)])
@@ -99,10 +122,29 @@ def test_main_runs_a_passing_and_a_failing_async_test(
     assert status == 1  # one failure present
     assert "test_pass PASSED" in out
     assert "test_fail FAILED" in out
-    # Review: this is the only end-to-end test of the commit's headline claim ("cli.py now
-    # actually installs the assertion-rewrite hook") and it cannot fail when rewriting is
-    # broken — a bare, un-rewritten `assert` raises `AssertionError` too. Rewriting is in fact
-    # not happening at all (see `_collect._import_module`), and this suite is green. Assert on
-    # the introspection instead: `"assert 2 == 3"` in `out`, which only a rewritten module
-    # produces.
-    assert "AssertionError" in out
+    # A bare, un-rewritten `assert` also raises `AssertionError` — asserting only that string
+    # would pass even if the rewrite hook were never actually consulted (as it in fact wasn't,
+    # for a while: `_collect._import_module` used to import via `spec_from_file_location`
+    # alone, which never consults `sys.meta_path`, silently defeating `cli.main`'s
+    # `_rewrite.install` call despite the `assertions: rewrite` header line). Assert on the
+    # introspection text instead — `"assert 2 == 3"` is only ever produced by the AST rewrite.
+    assert "assert 2 == 3" in out
+
+
+def test_main_reports_a_skipped_test_and_still_exits_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `@velox.skip`-marked test must neither run for real nor fail the build over being
+    skipped (spec/05 §4: `skipped` contributes `0` to the exit code, same as `passed`)."""
+    (tmp_path / "test_sample.py").write_text(
+        "import velox\n\n"
+        "@velox.skip('not ready')\n"
+        "async def test_skipped():\n"
+        "    raise AssertionError('must not run')\n"
+    )
+
+    status = main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_skipped SKIPPED (not ready)" in out

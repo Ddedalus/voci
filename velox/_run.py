@@ -51,6 +51,23 @@ def run_suite(records: list[TestRecord]) -> list[TestResult]:
     formatted traceback — nothing escapes to the caller (spec/05 §3's "call" phase, minus setup/
     teardown, which don't exist yet in M0).
 
+    `record.func()` is called with no arguments deliberately: `_collect.collect` refuses (as a
+    `CollectionError`) any test whose parameters default to `Depends(...)`, so every `TestRecord`
+    that reaches here is genuinely callable with zero arguments — there is no DI-shaped silent
+    pass left to worry about at this boundary.
+
+    Catches `BaseException`, not just `Exception` — the realistic case is `asyncio.CancelledError`
+    (a test whose own task gets cancelled re-raises it, and `runner.run` surfaces it too), and
+    letting that escape would abort every remaining test *and* discard every result already
+    collected, silently, with `main` never producing an exit code at all. M0 has no `interrupted`
+    outcome to give it (spec/05 §4's full enum is M1), so it's reported as `FAILED` with its
+    traceback — an imprecise label, but a named one, and nowhere near as costly as losing the
+    whole batch. `KeyboardInterrupt`/`SystemExit` are re-raised immediately rather than folded
+    into that: those mean "stop the process", not "this test misbehaved", and nothing else in
+    this codebase intercepts them either. Partial results are not salvaged across that specific
+    re-raise — the process is unwinding regardless, and `cli.main` has no return path left to
+    report them through by that point.
+
     Returns results in the same order as `records`, which is already logical order (spec/03 §1 —
     I2), so no sorting happens here.
     """
@@ -63,23 +80,11 @@ def run_suite(records: list[TestRecord]) -> list[TestResult]:
                 # `func` is typed as a plain `Callable[..., object]` (`TestRecord` never wraps
                 # it), but only `async def test_*` is ever collected (`_is_own_test_function`),
                 # so the call always produces a coroutine at runtime.
-                # Review: `record.func()` is called with no arguments, so a test written
-                # against the already-public DI surface (`db: DB = Depends(get_db)`) silently
-                # runs with the raw `Depends` marker as its value instead of erroring. Combined
-                # with marks being ignored at collection, M0 can report PASSED for a test that
-                # was never really executed as written — squarely an I8 "silent pass".
                 coro = cast("Coroutine[Any, Any, object]", record.func())
                 runner.run(coro)
-            # Review: `except Exception` lets a `BaseException` from the test abort the entire
-            # suite. `asyncio.CancelledError` is the realistic one — any test whose inner task
-            # gets cancelled re-raises it — and `runner.run` also surfaces `CancelledError`
-            # when the wrapping task is cancelled. Verified: a test raising `CancelledError`
-            # escapes `run_suite`, so every already-completed result is discarded, the
-            # remaining tests never run, and `main` returns no exit code at all. At minimum
-            # catch `BaseException` and re-raise `KeyboardInterrupt`/`SystemExit` after
-            # recording the partial results (`interrupted` is exactly spec/05 §4's case for
-            # this, even if the full enum is M1).
-            except Exception:
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:
                 failure = traceback.format_exc()
             duration = time.monotonic() - start
 
@@ -95,19 +100,26 @@ def run_suite(records: list[TestRecord]) -> list[TestResult]:
     return results
 
 
-def exit_code_for(results: list[TestResult], errors: list[CollectionError]) -> int:
+def exit_code_for(
+    results: list[TestResult], errors: list[CollectionError], skipped: int = 0
+) -> int:
     """The M0 subset of spec/02 §4's exit code table.
 
-    - `5` — nothing was collected at all (no records, no errors either — an empty selection).
+    - `5` — nothing was collected at all (no records, no errors, no skips either — an empty
+      selection). `skipped` defaults to `0` so callers that predate `_collect.Skipped` keep
+      their existing behavior unchanged.
     - `1` — at least one collection error, or at least one `FAILED` result.
-    - `0` — otherwise (every collected test passed).
+    - `0` — otherwise (every collected test passed, or was skipped — spec/05 §4's outcome table
+      gives `skipped` a `0` exit-code contribution, same as `passed`; a suite that is all skips
+      genuinely was collected and did nothing wrong, which is a different case from nothing
+      having been found at all).
 
     The rest of the table (`2` interrupted, `3` internal error, `4` usage error) needs machinery
     M0 doesn't have yet (Ctrl-C choreography, an internal-vs-suite-fault distinction for
     collection errors) and is out of scope here; `cli.main` still owns `4` for its own argument
     validation.
     """
-    if not results and not errors:
+    if not results and not errors and not skipped:
         return 5
     if errors or any(result.outcome is Outcome.FAILED for result in results):
         return 1

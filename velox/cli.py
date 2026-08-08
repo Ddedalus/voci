@@ -67,6 +67,22 @@ def _default_test_roots() -> list[Path]:
     return [Path()]
 
 
+def _invalid_path_argument(paths: list[str]) -> str | None:
+    """The first usage error in an explicit `PATHS` list, or `None` if they all look usable.
+
+    Two cases M0 must not swallow as "found nothing" (spec/02 §4, I8): a test id (`path.py::
+    test_name`), which spec/02 §1 documents as supported invocation syntax but M0 does not parse
+    yet; and a path that doesn't exist on disk at all. A path that exists but matches no test
+    files is left alone — that is a legitimate, if unusual, empty selection, not a usage error.
+    """
+    for raw in paths:
+        if "::" in raw:
+            return f"test ids are not implemented yet (M0): {raw!r}"
+        if not Path(raw).exists():
+            return f"path does not exist: {raw!r}"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -82,12 +98,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
-    # Review: `PATHS` are accepted without validation, and spec/02 §1's id form is silently
-    # mis-handled. `velox /typo` and `velox tests/test_run.py::test_x` both walk to nothing and
-    # exit 5 "no tests collected" (verified) — a typo and an empty suite are indistinguishable,
-    # and the id form (documented as supported invocation syntax) fails as a missing path
-    # rather than as "ids aren't in M0 yet". Exit 4 with the offending argument named is the
-    # spec/02 §4 answer; either way I8 says this must not resolve to a quiet count of zero.
+    # A typo'd path and a genuinely empty suite must not look the same (I8) — without this,
+    # both `velox /typo` and `velox tests/test_run.py::test_x` (the id form spec/02 §1
+    # documents, unimplemented in M0) would silently walk to nothing and exit 5 "no tests
+    # collected", indistinguishable from an honest empty selection. Exit 4 names the offending
+    # argument instead. This is deliberately narrower than full `PATHS` validation: a directory
+    # that exists but happens to contain no test files is still a legitimate (if unusual) 0-tests
+    # run, not a usage error — only "doesn't exist" and "looks like an id" are rejected here.
+    problem = _invalid_path_argument(args.paths)
+    if problem is not None:
+        print(f"velox: {problem}", file=sys.stderr)
+        return 4
+
     roots = [Path(p) for p in args.paths] if args.paths else _default_test_roots()
 
     # Resolved and probed up front so the cold-start guarantee (spec/07 §5) is visible before
@@ -105,11 +127,17 @@ def main(argv: list[str] | None = None) -> int:
     # Must be installed before any test module is imported below — a module already sitting in
     # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
     # above, so this call is handed the decision it made rather than re-probing the cache.
-    # Review: `install` walks the roots once (`_discover_python_files`, a full `os.walk` for
-    # every `.py`) and `discover_files` below walks them again — two complete traversals of
-    # the test tree per run, before a single test is imported. I7 budgets 50 ms
-    # from process start to first dispatch; on a large monorepo root this is the first thing
-    # that will blow it. The two walks want to be one, with `_initialpaths` fed from it.
+    #
+    # Not fixed here: `install` walks every `.py` under `roots` for its own `_initialpaths`
+    # (`_discover_python_files`) and `discover_files` below walks the same roots again for
+    # test files specifically — two full traversals per run, against I7's 50ms startup budget.
+    # They are not the same walk (one wants every `.py`, the other only `test_*.py`/`*_test.py`),
+    # so unifying them means changing `_rewrite.install`'s signature to accept a pre-discovered
+    # file list rather than discovering its own — real surgery in a module this pass wasn't
+    # scoped to restructure, and secondary to `_import_module` actually consulting the hook at
+    # all (the correctness bug, now fixed). Left as a known, named cost, worth revisiting once
+    # a shared "test tree walker" exists for `[tool.velox]` config to hang off of too.
+    hook_already_installed = _rewrite.installed_hook() is not None
     _rewrite.install(roots, setup=setup, warn=False)
     try:
         files = _discovery.discover_files(roots)
@@ -122,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
             if result.failure is not None:
                 print(result.failure)
 
+        for skipped in collected.skipped:
+            print(f"{skipped.id} SKIPPED ({skipped.reason})")
+
         for error in collected.errors:
             print(f"{error.path} COLLECTION ERROR")
             print(error.message)
@@ -130,10 +161,10 @@ def main(argv: list[str] | None = None) -> int:
         failed = len(results) - passed
         print(
             f"{len(results)} tests: {passed} passed, {failed} failed, "
-            f"{len(collected.errors)} collection error(s)"
+            f"{len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
 
-        return _run.exit_code_for(results, collected.errors)
+        return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
     finally:
         # `main` is called repeatedly in-process (this package's own test suite does exactly
         # that), and an embedding caller may too (I1) — leaving the hook on `sys.meta_path`
@@ -141,15 +172,16 @@ def main(argv: list[str] | None = None) -> int:
         # fire on every exit path from here, including an exception bubbling out of collection
         # or execution; nothing above is caught, so a real velox bug still surfaces as one.
         #
-        # Review: unconditional `uninstall()` tears down a hook `main` may not have installed.
-        # `_rewrite.install` is a documented no-op when a hook is already on `sys.meta_path`,
-        # so an embedder (or a nested/concurrent `main()`) that installed its own hook first
-        # has it removed here, along with `set_cache_root(None)` — the "don't leak global
-        # state" fix reaches into state that isn't ours. Uninstall only what this call
-        # installed (`install` returns the setup; `installed_hook()` before/after tells you
-        # whether it was yours) — and note that two `main()` calls on different threads race
-        # over the same module-global hook regardless.
-        _rewrite.uninstall()
+        # Only torn down if this call is the one that put it there: `_rewrite.install` is a
+        # documented no-op when a hook is already on `sys.meta_path`, so an embedder (or a
+        # nested `main()`) that installed its own hook first must keep it — unconditionally
+        # calling `uninstall()` would remove someone else's hook and `set_cache_root(None)`
+        # global state that isn't this call's to clear. Two `main()` calls racing on different
+        # threads over the same module-global hook is a real gap this doesn't close either, but
+        # it is the same gap `_rewrite.py`'s own module-global `_installed_setup` already has —
+        # not something introduced here, and not fixed here.
+        if not hook_already_installed:
+            _rewrite.uninstall()
 
 
 if __name__ == "__main__":

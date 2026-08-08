@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from velox._collect import CollectionError
 from velox._collect import TestRecord as Record  # `Test*` makes pytest try to collect it itself
 from velox._run import Outcome, exit_code_for, run_suite
@@ -28,6 +30,13 @@ async def _passes() -> None:
 
 async def _fails() -> None:
     raise AssertionError("nope")
+
+
+async def _cancels_itself() -> None:
+    task = asyncio.current_task()
+    assert task is not None
+    task.cancel()
+    await asyncio.sleep(10)
 
 
 def test_passing_test_produces_passed() -> None:
@@ -62,19 +71,52 @@ def test_run_suite_preserves_record_order() -> None:
     ]
 
 
-# Review: vacuous — a `time.monotonic()` delta is non-negative by construction, so this passes
-# even if `duration` were hard-coded to 0. Sleep for a known interval and assert the duration
-# brackets it, which is what "is timed" is meant to claim.
 def test_duration_is_timed() -> None:
-    (result,) = run_suite([_record(0, _passes, "test_passes")])
-    assert result.duration >= 0.0
+    """A bare `duration >= 0.0` would pass even with `duration` hard-coded to `0` — sleep a
+    known interval and assert the measured duration brackets it, which is what "is timed"
+    actually claims."""
+
+    async def _sleeps() -> None:
+        await asyncio.sleep(0.05)
+
+    (result,) = run_suite([_record(0, _sleeps, "test_sleeps")])
+    assert result.duration >= 0.05
 
 
-# Review: no test covers a test raising a `BaseException` (`asyncio.CancelledError` above all),
-# which is the one input that makes `run_suite` abandon the whole suite rather than report a
-# failure — see the review note on `_run.run_suite`'s `except Exception`. Also untested:
-# `run_suite([])` (empty selection still builds and closes a Runner) and a `func` that returns
-# a non-coroutine, which the `cast` in `run_suite` asserts can never happen.
+def test_cancelled_error_is_reported_as_failed_not_propagated() -> None:
+    """`asyncio.CancelledError` is a `BaseException`, not an `Exception` — a test whose own task
+    cancels itself (the realistic path there in M0, which drives no cancellation of its own)
+    must not abort every remaining test and discard every result already collected."""
+    records = [
+        _record(0, _passes, "test_before"),
+        _record(1, _cancels_itself, "test_cancels"),
+        _record(2, _passes, "test_after"),
+    ]
+
+    results = run_suite(records)
+
+    assert [result.outcome for result in results] == [
+        Outcome.PASSED,
+        Outcome.FAILED,
+        Outcome.PASSED,
+    ]
+    assert results[1].failure is not None
+    assert "CancelledError" in results[1].failure
+
+
+def test_keyboard_interrupt_propagates_instead_of_being_reported_as_a_failure() -> None:
+    """The one `BaseException` still meant to blow past this boundary: it means "stop the
+    process", not "this test misbehaved", so it must not be folded into a `FAILED` result."""
+
+    async def _raises_keyboard_interrupt() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, _raises_keyboard_interrupt, "test_interrupt")])
+
+
+def test_empty_selection_still_builds_and_closes_a_runner() -> None:
+    assert run_suite([]) == []
 
 
 def _result(outcome: Outcome) -> Result:
@@ -99,3 +141,14 @@ def test_exit_code_with_a_collection_error_and_no_records_is_one() -> None:
 
 def test_exit_code_nothing_collected_is_five() -> None:
     assert exit_code_for([], []) == 5
+
+
+def test_exit_code_all_skipped_is_zero_not_five() -> None:
+    """spec/05 §4: `skipped` contributes `0` to the exit code, same as `passed` — a suite that
+    is entirely skip-marked tests was genuinely collected and did nothing wrong, unlike an empty
+    selection (which is what `5` means)."""
+    assert exit_code_for([], [], skipped=3) == 0
+
+
+def test_exit_code_skipped_does_not_mask_a_real_failure() -> None:
+    assert exit_code_for([_result(Outcome.FAILED)], [], skipped=1) == 1

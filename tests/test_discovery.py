@@ -76,9 +76,49 @@ def test_nonexistent_root_yields_nothing(tmp_path: Path) -> None:
     assert discover_files([tmp_path / "does_not_exist"]) == []
 
 
-# Review: symlink-loop protection is the one genuinely tricky thing in this module — an
-# advertised feature (module docstring, spec/03 §2) with dedicated `(st_dev, st_ino)` code — and
-# it has no test. `(tmp_path/"a").symlink_to(tmp_path)` plus a `discover_files([tmp_path])` that
-# terminates is three lines; without it, deleting `visited` leaves this suite green and the
-# runner hanging. Also untested: duplicate/overlapping roots (which currently double-collect,
-# see the review note in `discover_files`) and an empty directory.
+def test_empty_directory_yields_nothing(tmp_path: Path) -> None:
+    assert discover_files([tmp_path]) == []
+
+
+def test_symlink_loop_terminates_instead_of_recursing_forever(tmp_path: Path) -> None:
+    """The one genuinely tricky thing in this module: `visited` (`(st_dev, st_ino)`) is what
+    stops a directory symlinked back into its own ancestry from recursing forever. Without it
+    this call simply never returns."""
+    _touch(tmp_path / "test_top.py")
+    loop = tmp_path / "loop"
+    try:
+        loop.symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("platform/filesystem doesn't support directory symlinks")
+
+    found = discover_files([tmp_path])
+
+    assert [path.name for path in found] == ["test_top.py"]
+
+
+def test_duplicate_roots_do_not_double_collect(tmp_path: Path) -> None:
+    _touch(tmp_path / "test_alpha.py")
+
+    found = discover_files([tmp_path, tmp_path])
+
+    assert [path.name for path in found] == ["test_alpha.py"]
+
+
+def test_overlapping_roots_do_not_double_collect(tmp_path: Path) -> None:
+    _touch(tmp_path / "sub" / "test_nested.py")
+
+    found = discover_files([tmp_path, tmp_path / "sub"])
+
+    assert [path.name for path in found] == ["test_nested.py"]
+
+
+def test_argument_order_does_not_change_the_result(tmp_path: Path) -> None:
+    """spec/03 §4's index is defined over the resolved test set, not argv order — `velox b a`
+    and `velox a b` must discover (and later collect/index) the same tests the same way."""
+    _touch(tmp_path / "a" / "test_a.py")
+    _touch(tmp_path / "b" / "test_b.py")
+
+    forward = discover_files([tmp_path / "a", tmp_path / "b"])
+    backward = discover_files([tmp_path / "b", tmp_path / "a"])
+
+    assert forward == backward
