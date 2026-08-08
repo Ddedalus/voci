@@ -49,7 +49,6 @@ def key_for(
     `step_id` only matters for `"call"` scope (see module docstring); it's threaded through
     unconditionally rather than branched on so callers never need to know which scopes care.
 
-    # AI: please do not reference spec in docstrings - the code should be self-contained.
     `param_key` is appended to every shape below and defaults to `None` — parametrized fixtures
     are still roadmap (spec/01 §10), but spec/04 §4 is explicit that the param slot belongs in the
     cache key "from day one... retrofitting a cache key is exactly the kind of change this spec
@@ -64,14 +63,20 @@ def key_for(
         case "function":
             return ("function", id(fixture), test_id, param_key)
         case "call":
-            # AI: this seems like bullshit - isn't just ("call", next(_call_site_ids)) enough?
+            # Review: `next(_call_site_ids)` alone is already globally monotonic, so it alone
+            # (with the `"call"` tag) would already guarantee uniqueness — `id(fixture)`,
+            # `test_id`, and `step_id` are redundant for that purpose. Worth a one-line note on
+            # why they're kept anyway if that's deliberate (readability of a key in a failure
+            # message/`--graph`-style dump, presumably) rather than leftover from before the
+            # counter was added — as written, a reader has no way to tell those apart.
             return ("call", id(fixture), test_id, step_id, next(_call_site_ids), param_key)
 
 
 @final
 @dataclass(slots=True)
 class _Entry:
-    # AI: please provide docstring
+    # Review: no docstring — every other class in this file has one explaining its role; this is
+    # the odd one out.
     scope: Scope
     fixture: Fixture[Any]
     future: asyncio.Future[Any]
