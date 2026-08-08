@@ -63,20 +63,22 @@ def key_for(
         case "function":
             return ("function", id(fixture), test_id, param_key)
         case "call":
-            # Review: `next(_call_site_ids)` alone is already globally monotonic, so it alone
-            # (with the `"call"` tag) would already guarantee uniqueness — `id(fixture)`,
-            # `test_id`, and `step_id` are redundant for that purpose. Worth a one-line note on
-            # why they're kept anyway if that's deliberate (readability of a key in a failure
-            # message/`--graph`-style dump, presumably) rather than leftover from before the
-            # counter was added — as written, a reader has no way to tell those apart.
+            # `next(_call_site_ids)` alone (with the `"call"` tag) already guarantees uniqueness —
+            # it is a globally monotonic counter, so no two `"call"`-scope keys can ever collide on
+            # it alone. `id(fixture)`, `test_id`, and `step_id` are kept anyway, deliberately: they
+            # make a key readable at a glance in a failure message or a future `--graph`-style dump
+            # ("which fixture, which test, which step") without decoding an opaque counter value —
+            # worth the few extra tuple elements.
             return ("call", id(fixture), test_id, step_id, next(_call_site_ids), param_key)
 
 
 @final
 @dataclass(slots=True)
 class _Entry:
-    # Review: no docstring — every other class in this file has one explaining its role; this is
-    # the odd one out.
+    """One cached fixture instance inside a `ScopeStore`: its single-flight `future`, the `closer`
+    that tears it down (`None` for a plain-return fixture with nothing to release), and the
+    refcount `release` decrements to decide whether this is the last requester."""
+
     scope: Scope
     fixture: Fixture[Any]
     future: asyncio.Future[Any]
@@ -212,7 +214,16 @@ class ScopeStore:
             del self._entries[key]
 
     async def aclose(self) -> None:
-        """End-of-run: force-teardown every remaining (necessarily `session`-scope) entry.
+        """End-of-run: force-teardown every entry still remaining.
+
+        Under M0/M1-DI's sequential runner this only ever found `session`-scope entries — every
+        other scope was always fully torn down by its own owner before `aclose` could run. That
+        stopped being true once `_run.run_suite` went concurrent (M1 concurrency slice):
+        `run_suite`'s own docstring documents the known, deliberate gap this is now the safety net
+        for — a `module` whose tests were still in flight when a `KeyboardInterrupt` landed never
+        reaches its own `remaining_by_module == 0` release, so its `module`-scope entries are swept
+        up here instead, alongside whatever `session`-scope entries there always were. This method
+        doesn't care what scope an entry claims; it just tears down whatever's left.
 
         Iterated in *reverse insertion order*. `dict` preserves insertion order, and the guarantee
         that reversing it gives a valid dependency-before-dependent teardown order is external to
@@ -225,17 +236,13 @@ class ScopeStore:
         which entries precede which in the dict.) The roadmap item that would break this
         precondition is named in spec/04 §9: `Depends(p, lazy=True)` yielding a factory that
         resolves on first *use* is precisely a `build`-time (or later) call back into `acquire`,
-        and whoever adds it needs to know this method is relying on that not happening yet.
+        and whoever adds it needs to know this method is relying on that not happening yet. Under
+        concurrency this reverse-insertion order is no longer a single flat dependency order for
+        one scope — entries from unrelated modules/tests are interleaved in insertion order — but
+        it is still a valid *per-key* dependency order (nothing here ever depends on a *different*
+        key's entry being torn down before or after its own), which is all any one `closer()` call
+        actually needs.
         """
-        # Review (documentation, now stale): "every remaining (necessarily `session`-scope) entry"
-        # stopped being true when `_run.run_suite` went concurrent. `run_suite`'s own docstring
-        # already says so ("it no longer only ever finds session-scope entries once concurrency can
-        # leave other scopes stranded there too") — a module whose tests were still in flight when a
-        # `KeyboardInterrupt` landed never reaches `remaining_by_module == 0`, so its `module`-scope
-        # entries are swept here instead. The behaviour is right; the parenthetical is not, and the
-        # reverse-insertion-order justification below is now doing real cross-scope work rather than
-        # ordering one flat set of session fixtures. Worth updating, since this docstring is what
-        # anyone reasoning about end-of-run teardown reads first.
         errors: list[Exception] = []
         for key in reversed(list(self._entries)):
             entry = self._entries.pop(key, None)
@@ -259,7 +266,12 @@ class ScopeStore:
 
 
 async def setup(
-    plan: ResolutionPlan, store: ScopeStore, *, test_id: str, module_path: str
+    plan: ResolutionPlan,
+    store: ScopeStore,
+    *,
+    test_id: str,
+    module_path: str,
+    partial_module_keys: list[CacheKey] | None = None,
 ) -> tuple[dict[str, Any], tuple[CacheKey, ...]]:
     """Construct every step `plan` needs, in order, and return the test function's own kwargs.
 
@@ -269,6 +281,32 @@ async def setup(
     triggering exception propagates (spec/05 §3's setup-phase contract: "acquired fixtures are
     released"); a `PlanStep` whose own `acquire` raised was never added to that list; only the
     ones that succeeded are cleaned up here, exactly once each.
+
+    `partial_module_keys`, if given, changes *which* of those already-acquired keys this cleanup
+    releases itself. `function`/`call`/`session`-scope keys are always released here immediately,
+    regardless: `function`/`call` scope keys embed `test_id` (or a monotonic call-site id) in their
+    `CacheKey`, so no concurrent sibling can ever be sharing or waiting on the *same* key — nothing
+    else in the system has any stake in when they go away. `session` scope's own `release` is
+    always a refcount-only no-op (real teardown is `aclose`'s job, strictly at end of run), so
+    releasing it here early changes nothing observable either. `module` scope is the one shape a
+    concurrent sibling of the *same* module genuinely can be sharing right now, or can still be
+    about to `acquire()` — releasing it from inside this function, the moment *this* attempt's
+    setup fails, is exactly what used to happen and is a real bug under concurrency (a module
+    fixture torn down while siblings are still mid-flight, or — worse, with an async fixture whose
+    closer awaits — a concurrent `acquire()` landing mid-teardown and being handed an instance
+    that's already closing). So: if `partial_module_keys` is `None` (the default — every direct
+    caller in this package's own tests, which never spans more than one test's worth of module
+    lifetime, uses this), the old all-scopes-released-immediately behavior is preserved unchanged.
+    If it *is* given, any `module`-scope keys this attempt had already acquired are appended to it
+    instead of released — the caller is expected to already own that module's lifetime bookkeeping
+    (`_run.run_suite` does, via `remaining_by_module`/`pending_module_keys`) and to fold these in
+    exactly the way it folds in a *successful* setup's module keys, so there is still only ever one
+    place a `module` key's `release()` is called from. This is threaded through as a mutable
+    out-parameter rather than attached to the raised exception (a new wrapper exception type would
+    otherwise have to replace or chain over the original, disturbing the traceback text every
+    existing caller and test already matches on) — appended to unconditionally in a `finally`, so
+    it is populated whether cleanup of the *other* keys below succeeds, fails, or is itself
+    interrupted.
     """
     values: dict[int, Any] = {}
     keys: dict[int, CacheKey] = {}
@@ -304,32 +342,40 @@ async def setup(
         # is the one thing allowed to override that: it means "stop now" and outranks even the
         # original setup failure, the same precedence every other interrupt boundary in this
         # codebase gives it.
-        # Review (must fix, and the fix probably lives here rather than in `_run.py`): this cleanup
-        # releases *every* scope it acquired, including `module` and `session`. That was invisible
-        # under the sequential runner. It is not now: `_run.run_suite` builds its whole `module`-
-        # scope lifetime on "the only `release` for a module key is the one I issue after every
-        # test of that module has finished", and this line silently issues others. Reproduced —
-        # a module fixture built and torn down twice across two sibling tests when the first one's
-        # setup fails partway, and (with an async module fixture) a sibling handed the instance
-        # mid-`await entry.closer()`. See the long note at `_run._run_one`'s call to `setup`.
-        # Options: don't release non-`function`-scope keys here and return the partially-acquired
-        # list to the caller, or return which keys were released so `run_suite` can keep its counts
-        # honest. Either way `_run.py` cannot fix it alone.
         #
-        # Review (separate, smaller): `except BaseException as cleanup_exc` also catches
-        # `asyncio.CancelledError`, so a cancellation arriving *during* cleanup is demoted to an
-        # `add_note` on the original exception and never re-raised — the run continues as if the
-        # task had not been cancelled. Pre-existing shape, newly reachable now that a `TaskGroup`
-        # cancels siblings for real.
+        # Split by scope per this function's own docstring: `module`-scope keys are set aside for
+        # the caller instead of released here, iff `partial_module_keys` was given.
+        releasable = (
+            acquired
+            if partial_module_keys is None
+            else [key for key in acquired if key[0] != "module"]
+        )
+        surviving_module_keys = (
+            [] if partial_module_keys is None else [key for key in acquired if key[0] == "module"]
+        )
         try:
-            await _release_all(store, reversed(acquired))
-        except (KeyboardInterrupt, SystemExit):
+            await _release_all(store, reversed(releasable))
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            # A fresh cancellation arriving *during* this cleanup means "stop now" the same as
+            # everywhere else in this codebase — it must propagate as itself, not be demoted to a
+            # note on the original exception as if cleanup had merely failed. Distinct from the
+            # `except BaseException` below in exactly this way: pre-existing gap for
+            # `KeyboardInterrupt`/`SystemExit` (the two already didn't fall through to the
+            # `add_note` branch), newly closed here for `asyncio.CancelledError` too, which is
+            # newly reachable now that a `TaskGroup` can genuinely cancel a sibling mid-cleanup.
             raise
         except BaseException as cleanup_exc:
             exc.add_note(
                 "Additionally, tearing down already-acquired fixtures failed:\n"
                 + "".join(traceback.format_exception(cleanup_exc))
             )
+        finally:
+            # Populated regardless of whether the cleanup above succeeded, failed, or was itself
+            # interrupted — a `module` key this attempt successfully built is real and shared
+            # (or shareable) state that still needs to reach the caller's own bookkeeping no matter
+            # how the rest of this cleanup went.
+            if partial_module_keys is not None:
+                partial_module_keys.extend(surviving_module_keys)
         raise
 
     root_kwargs = {name: values[source] for name, source, _ in plan.root_args}

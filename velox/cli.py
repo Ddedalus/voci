@@ -12,6 +12,7 @@ category this docstring already calls out.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -67,27 +68,22 @@ def build_parser() -> argparse.ArgumentParser:
     # Default is `None` (off) rather than some finite value — spec/05 §11 Q12 leaves "should the
     # default be finite" an explicit open question, and pytest itself has no default test timeout
     # either, so leaving this off keeps an existing suite's behavior unchanged until the user
-    # opts in.
-    # Review (should fix): `--concurrency` gets a hand-written positivity check in `main`;
-    # `--timeout` gets none, and the asymmetry is not benign. `asyncio.timeout(0)` and
-    # `asyncio.timeout(-5)` do not raise and do not mean "no limit" — `Timeout.__aenter__` calls
-    # `loop.call_at(when)` with a deadline already in the past, so the cancellation is delivered at
-    # the *first suspension point* inside the block and never at all if the block does not suspend.
-    # Verified through `run_suite`: with `timeout=0`, `async def test_quick(): pass` reports PASSED
-    # while `async def test_slow(): await asyncio.sleep(0)` reports TIMEOUT, in the same run. So
-    # `--timeout=0` is not "everything times out" — it is "everything that ever awaits times out",
-    # which makes a test's outcome depend on whether it happens to yield to the loop. Negative
-    # values behave identically and additionally produce the message "test exceeded the
-    # --timeout=-5.0s budget". `float` also accepts `nan` (never fires) and `inf` (never fires).
-    # Either reject `<= 0`/non-finite here with the same exit-4 style as `--concurrency`, or define
-    # `0` explicitly as "fail every test that suspends" — the current state is neither.
+    # opts in. `<= 0` and non-finite (`nan`/`inf`) values are rejected by hand in `main`, same
+    # exit-4 style as `--concurrency`: `asyncio.timeout(0)`/`asyncio.timeout(-5)` neither raise nor
+    # mean "no limit" — the deadline is already in the past the moment the context manager is
+    # entered, so cancellation is delivered at the test's *first suspension point* and never at all
+    # if it has none, making a `0`/negative "budget" mean "fail every test that happens to await
+    # something" rather than "fail everything" or "no limit" — neither of which is a real, useful
+    # mode, so it is rejected rather than given surprising defined behavior. `nan`/`inf` would each
+    # just silently never fire.
     parser.add_argument(
         "--timeout",
         type=float,
         default=None,
         metavar="SECONDS",
         help="Per-test setup+call budget, in seconds (spec/05 §2-4). A test that exceeds it is "
-        "reported as TIMEOUT rather than FAILED/ERROR. Default: no limit.",
+        "reported as TIMEOUT rather than FAILED/ERROR. Must be positive and finite. Default: no "
+        "limit.",
     )
     return parser
 
@@ -151,6 +147,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.concurrency < 1:
         print(
             f"velox: --concurrency must be a positive integer, got {args.concurrency}",
+            file=sys.stderr,
+        )
+        return 4
+
+    # Same shape as the `--concurrency` check above, for the same reason: reject rather than give
+    # `0`/negative/non-finite a surprising defined meaning (see `build_parser`'s comment on this
+    # flag). `run_suite` itself also raises `ValueError` for the same condition (defense in depth
+    # for direct callers), but again, too late here to produce a clean exit code on its own.
+    if args.timeout is not None and not (math.isfinite(args.timeout) and args.timeout > 0):
+        print(
+            f"velox: --timeout must be a positive, finite number of seconds, got {args.timeout}",
             file=sys.stderr,
         )
         return 4
@@ -223,16 +230,10 @@ def main(argv: list[str] | None = None) -> int:
         errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
         # Named explicitly, same reasoning as `passed`/`failed`/`errored`: `Outcome.TIMEOUT` is
         # its own outcome (see `_run.Outcome.TIMEOUT`'s docstring for why it isn't folded into
-        # `FAILED`/`ERROR`), so the summary line should say so too rather than let it fall into
-        # the `other` catch-all below.
-        # Review: the bucket itself is right — it is a straight count over `results`, `other` still
-        # means exactly what its comment says, and the five sum to `len(results)` by construction.
-        # The under-count is upstream, not here: `_run._run_one` can classify a test that genuinely
-        # exceeded its budget as FAILED instead of TIMEOUT (see the note on its `except
-        # TimeoutError` clause), so a suite can print "0 timed out" while a test was killed by
-        # `--timeout`. The exit code is unaffected (both map to 1), so this is a reporting fault
-        # only — but it is the one path where this line lies, and it is worth fixing where it
-        # originates rather than here.
+        # `FAILED`/`ERROR`, and for how `_run._run_one` now makes sure a genuinely-exceeded budget
+        # is reliably classified `TIMEOUT` rather than `FAILED`/`ERROR` even when the test's own
+        # code intercepts the cancellation), so the summary line should say so too rather than let
+        # it fall into the `other` catch-all below.
         timed_out = sum(1 for result in results if result.outcome is _run.Outcome.TIMEOUT)
         # `other` exists so this line can't silently stop adding up to `len(results)`: the four
         # named `sum()`s above are each independent counts, not `len(results) - the rest` the way

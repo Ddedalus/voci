@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import math
 import sys
 import time
 import traceback
@@ -56,7 +57,13 @@ class Outcome(enum.Enum):
     ERROR = "error"
     #: The setup+call envelope exceeded its `--timeout` budget (spec/05 §4). Deliberately its own
     #: outcome rather than a flavor of `FAILED`/`ERROR`: the remedy (raise the budget, or find the
-    #: blocking call) is different from either, and it's near-free to detect with `asyncio.timeout`.
+    #: blocking call) is different from either. Detected two ways (see `_run_one`'s docstring): the
+    #: exception `asyncio.timeout` itself raises, cross-checked against the `Timeout` object's own
+    #: `.expired()` state so a test that catches the injected `CancelledError` and substitutes (or
+    #: swallows) a different exception is still correctly reported `TIMEOUT`, not `FAILED`/`ERROR`/
+    #: `PASSED`. The one thing neither check can catch: a test body that never reaches an `await`
+    #: point at all cannot be preempted by any mechanism (spec/05 §2) — cooperative scheduling has
+    #: no way to interrupt code that never yields, so that specific case still runs to completion.
     TIMEOUT = "timeout"
 
 
@@ -82,10 +89,15 @@ async def _run_one(
     `run_suite` accumulates these across every test sharing one module and releases them together
     only once *every* test of that module has finished — see `run_suite`'s docstring for why that
     is what makes `scope="module"` fixtures actually shared under concurrent dispatch, and why it
-    is also what keeps that release from ever racing a concurrent `acquire()` on the same key.
-    `function`/`call`/`session`-scope keys are released here, per test, same as always; a
-    `session` key's `release` is always a harmless refcount-only decrement (real teardown is
-    `aclose`'s job), so leaving it in the "release now" bucket changes nothing observable.
+    is also what keeps that release from ever racing a concurrent `acquire()` on the same key. This
+    is true *regardless* of whether this test's own setup succeeded: `_di.setup` is called with
+    `partial_module_keys` (see below), so a `module`-scope key acquired partway through a setup
+    that then fails is folded into the returned tuple exactly the same as a fully successful
+    setup's module keys — there is no separate, out-of-band release path for it to leak through.
+    `function`/`call`/`session`-scope keys are released here (or, on a setup failure, inside
+    `_di.setup`'s own cleanup — see its docstring), per test, same as always; a `session` key's
+    `release` is always a harmless refcount-only decrement (real teardown is `aclose`'s job), so
+    releasing it early changes nothing observable.
 
     `timeout` (`None` means no limit) wraps `setup()` and the test's own `call` together in one
     `asyncio.timeout` budget, matching spec/05 §2's envelope sketch — teardown itself is *not*
@@ -95,14 +107,16 @@ async def _run_one(
 
     Aggregation rule (spec/05 §3-4's phase/outcome tables, made concrete):
 
-    - The whole setup+call envelope times out: outcome is `TIMEOUT`. Whatever `_di.setup` itself
-      had acquired before the deadline hit was already released by its own internal cleanup (see
-      its docstring) — `keys` never gets assigned in that case (see below) — so there is nothing
-      left for *this* function to tear down in that specific case. If the timeout instead lands
-      during `call` (setup already succeeded), teardown still runs for what setup acquired.
+    - The whole setup+call envelope times out: outcome is `TIMEOUT`, and it takes priority over
+      every other phase's failure (see `timed_out`'s two sources below) — the deadline is what
+      actually killed this test, whatever exception happened to surface on the way out.
+      `function`/`call`/`session`-scope keys `_di.setup` had acquired before the deadline hit are
+      already released by its own internal cleanup; any `module`-scope key it had acquired is
+      folded into this function's own returned tuple instead (see above) rather than released or
+      dropped. If the timeout instead lands during `call` (setup already succeeded), teardown still
+      runs for what setup acquired.
     - Setup raises (not a timeout): outcome is `ERROR`, using setup's traceback. The call phase
-      never runs; nothing is left to tear down (same reasoning as above — `_di.setup` cleans up
-      its own partial acquisitions before raising).
+      never runs.
     - Setup succeeds: the call phase always runs, and teardown *always* runs afterwards regardless
       of whether the call raised or timed out — a test must not leak its fixtures.
     - Teardown raising is what upgrades the outcome to `ERROR`, even over a passing call
@@ -127,7 +141,21 @@ async def _run_one(
        to propagate all the way out of the `async with asyncio.timeout(...)` block untouched. So
        both inner phase handlers re-raise `CancelledError` rather than folding it into
        `setup_failure`/`call_failure` there, and the outer `except TimeoutError` below is what
-       actually observes it.
+       actually observes it — augmented by a direct `.expired()` check on the `Timeout` object
+       after the block (see the local `deadline` variable), because `__aexit__` only *raises*
+       `TimeoutError` when the block exits *with* an exception it can still see: if a test's own
+       code catches the injected `CancelledError` and raises a *different* exception instead of
+       letting it propagate (or catches it and raises nothing at all), the inner phase handler
+       records that as an ordinary `setup_failure`/`call_failure` and the `async with` block exits
+       looking clean to `__aexit__`, so no `TimeoutError` is ever produced — CPython's own
+       `Timeout.__aexit__` still transitions its internal state from `EXPIRING` to `EXPIRED`
+       unconditionally in that case (only the exception-raising/-annotating half is gated on
+       `exc_type is not None`), so `.expired()` sees the deadline fired even when the exception
+       channel alone would have missed it entirely. This does not close every gap `asyncio.timeout`
+       has: a test body that never hits an `await` point at all cannot be preempted by *any*
+       mechanism (spec/05 §2's "blocking calls occupy a concurrency slot for their whole duration")
+       — that is a fundamental property of cooperative scheduling, not something either detection
+       path can fix.
     2. **Anything else** — the test cancelling its own task directly (`_cancels_itself`-style,
        predating concurrency: M0/M1's sequential runner already had to handle a test doing this,
        since nothing about a task cancelling itself ever required real concurrency to reach), or
@@ -135,12 +163,13 @@ async def _run_one(
        raised `KeyboardInterrupt`/`SystemExit`. Both reach the outer `except asyncio.CancelledError`
        below, once `asyncio.timeout` has already had its chance and declined (its `__aexit__`
        leaves a non-`TimeoutError` `CancelledError` completely alone when the deadline wasn't its
-       own). Folding *this* task's collateral cancellation into an ordinary `ERROR`/`FAILED`
-       outcome instead of re-raising is safe even in the sibling-interrupt case: the sibling's own
-       `KeyboardInterrupt`/`SystemExit` still propagates out of *its* task unimpeded (nothing here
-       ever catches those two) and still aborts `run_suite` correctly through its `except*` —
-       nothing depends on *this* task also re-raising a bare `CancelledError` for that to work, and
-       doing so would instead risk leaving this index's `results` slot never assigned.
+       own — and `.expired()` agrees, since `_on_timeout` never ran). Folding *this* task's
+       collateral cancellation into an ordinary `ERROR`/`FAILED` outcome instead of re-raising is
+       safe even in the sibling-interrupt case: the sibling's own `KeyboardInterrupt`/`SystemExit`
+       still propagates out of *its* task unimpeded (nothing here ever catches those two) and still
+       aborts `run_suite` correctly (see its docstring) — nothing depends on *this* task also
+       re-raising a bare `CancelledError` for that to work, and doing so would instead risk leaving
+       this index's `results` slot never assigned.
     """
     start = time.monotonic()
     setup_failure: str | None = None
@@ -152,39 +181,22 @@ async def _run_one(
     kwargs: dict[str, Any] = {}
     keys: tuple[_di.CacheKey, ...] = ()
     module_keys: tuple[_di.CacheKey, ...] = ()
+    partial_module_keys: list[_di.CacheKey] = []
 
+    # `asyncio.timeout(None)` is a documented no-op (no deadline scheduled), so entering it is
+    # unconditional rather than branching on whether `timeout` was passed. Kept as a named local
+    # (rather than only appearing in the `async with` below) so `.expired()` can be consulted after
+    # the block, per the docstring's `CancelledError` §1 paragraph.
+    deadline = asyncio.timeout(timeout)
     try:
-        # `asyncio.timeout(None)` is a documented no-op (no deadline scheduled), so this is
-        # unconditional rather than branching on whether `timeout` was passed.
-        async with asyncio.timeout(timeout):
+        async with deadline:
             try:
-                # Review (must fix): this call is where `run_suite`'s "all acquires happen-before
-                # the one release" invariant for `module` scope actually breaks. `_di.setup`'s own
-                # `except BaseException` cleanup calls `_release_all(store, reversed(acquired))`
-                # over *every* key it managed to acquire — including `module`-scope ones — and
-                # `run_suite` never sees that release, so it is not ordered after anything. Any
-                # partial setup failure (a later fixture raising, or this envelope's own timeout
-                # cancelling mid-setup) therefore drives a `module` key's refcount to zero and
-                # tears the instance down while sibling tests of the same module are still being
-                # dispatched. Verified end to end, two tests sharing `path`, `concurrency=2`,
-                # test_a = [module fixture, a fixture that raises], test_b = [a slow fixture,
-                # the same module fixture]: `builds == 2`, `torn_down == ["closed", "closed"]`,
-                # i.e. `scope="module"` silently degraded to per-test. The same shape with an
-                # `async` module fixture whose teardown awaits is worse and lands squarely in
-                # `ScopeStore.release`'s documented "narrow concurrent-teardown window": test_b's
-                # `acquire` finds the entry still present mid-`await entry.closer()` and is handed
-                # the *same* object that is being torn down — observed log "open / test_b sees
-                # closed=False / close / test_b end, closed=True", with test_b reported PASSED
-                # while its connection closed underneath it. So the docstring below ("`keys` never
-                # gets assigned in that case ... so there is nothing left for *this* function to
-                # tear down") describes the local bookkeeping correctly but draws the wrong global
-                # conclusion: setup's cleanup is not a private matter once `module` keys are
-                # involved, and `run_suite`'s claim that it cannot reopen that window is false.
-                # Fixing it means `_di.setup` reporting back which keys it released on the failure
-                # path (or not releasing non-`function` scopes itself at all and letting the
-                # caller that owns the module lifetime do it), not a change here alone.
                 kwargs, keys = await _di.setup(
-                    record.plan, store, test_id=record.id, module_path=str(record.path)
+                    record.plan,
+                    store,
+                    test_id=record.id,
+                    module_path=str(record.path),
+                    partial_module_keys=partial_module_keys,
                 )
                 setup_done = True
             except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
@@ -205,23 +217,6 @@ async def _run_one(
                     raise
                 except BaseException:
                     call_failure = traceback.format_exc()
-    # Review (should fix): the docstring's account of `asyncio.timeout.__aexit__` is right about
-    # the case it considers and silently wrong about the one it doesn't. Reading CPython 3.13's
-    # `Timeout.__aexit__`: it only raises `TimeoutError` when `self._state is _State.EXPIRING and
-    # self._task.uncancel() <= self._cancelling and exc_type is not None and issubclass(exc_type,
-    # CancelledError)`. The `exc_type is not None` conjunct is the gap — if the deadline fires but
-    # the block exits *normally*, no `TimeoutError` is produced and `timed_out` stays `False`.
-    # That is reachable through the two inner handlers above: a test body that catches the
-    # injected `CancelledError` and raises something else from a `finally`/`except` hands the
-    # inner `except BaseException` an ordinary exception, which it records as `call_failure` and
-    # swallows, so the `async with` exits cleanly. Verified: a test whose body is
-    # `try: await asyncio.sleep(10) / except BaseException: raise ValueError(...)` under
-    # `timeout=0.03` returns `FAILED` after 0.032s, not `TIMEOUT` — a test that genuinely blew its
-    # budget is reported as an ordinary assertion-style failure, which sends the reader looking
-    # for the wrong bug. The cheap fix is to consult the deadline directly rather than relying
-    # solely on the exception channel (keep a reference to the `Timeout` object and check
-    # `.expired()` after the block), which also covers the `uncancel() > _cancelling` case where
-    # a sibling-driven cancellation arrives at the same moment as the deadline.
     except TimeoutError:
         # Only reachable when `timeout` is not `None` — `asyncio.timeout(None)` never raises this.
         # By the time this is caught, `asyncio.timeout.__aexit__` has already converted *its own*
@@ -238,6 +233,16 @@ async def _run_one(
         else:
             setup_failure = cancelled_failure
 
+    if not timed_out and deadline.expired():
+        # The cross-check the docstring's `CancelledError` §1 paragraph describes: catches a
+        # timeout whose injected `CancelledError` never survived to reach either `except` clause
+        # above (or reached `except asyncio.CancelledError` above under ambiguous simultaneous
+        # sibling-cancellation) because user code intercepted it and substituted, or swallowed,
+        # something else. `setup_failure`/`call_failure` (if either got set on the way here) is
+        # folded into the `TIMEOUT` failure text below rather than discarded, so a substituted
+        # exception's own text is not lost even though it no longer decides the outcome.
+        timed_out = True
+
     # Gate on `setup_done`, not `setup_failure is None`: covers "setup raised outright" and "the
     # timeout fired (or setup was cancelled) before setup returned" identically (both leave
     # `setup_done` `False`), and is a no-op-safe no-op for the trivial empty-plan test too — see
@@ -252,30 +257,53 @@ async def _run_one(
             await _di.teardown(store, other_keys)
         except (KeyboardInterrupt, SystemExit):
             raise
-        # Review: this `except BaseException` catches `asyncio.CancelledError`, which makes the
-        # teardown phase the one place in this function that handles cancellation differently from
-        # the two phases above — and the docstring's long `CancelledError` section never says so.
-        # The two inner phase handlers list `asyncio.CancelledError` explicitly and re-raise it;
-        # this one folds it into `teardown_failure` and reports `ERROR`. Concretely: when a sibling
-        # raises `KeyboardInterrupt`, the `TaskGroup` cancels this task, and if the cancellation
-        # lands while an async fixture's closer is awaiting, this test is reported as a teardown
-        # `ERROR` rather than being recognised as collateral cancellation — a fabricated failure
-        # attributed to the user's fixture on the way out of a Ctrl-C. Worth either adding
-        # `asyncio.CancelledError` to the guard above (attributing it the way the outer handler
-        # does) or documenting the asymmetry as deliberate; right now the docstring reads as if
-        # all three phases behave alike.
+        except asyncio.CancelledError:
+            # Deliberately *not* re-raised, unlike the setup/call guards above — and that is not
+            # the same asymmetry it looks like. Those two re-raise so `asyncio.timeout`'s own
+            # `__aexit__` gets first refusal at converting *its own* cancellation into
+            # `TimeoutError`; the re-raise is then caught by *this function's own* outer
+            # `except asyncio.CancelledError` a few lines up, so it never actually escapes
+            # `_run_one` — the task itself still completes normally, still returns an ordinary
+            # `TestResult`. Teardown runs *outside* the `async with deadline:` block (teardown is
+            # deliberately not time-boxed this slice), so there is no `__aexit__` left to hand a
+            # re-raise to and no outer handler left inside this function to catch it again:
+            # re-raising here would let a bare `CancelledError` escape `_run_one` itself, which
+            # would break `run_suite`'s "every dispatched task unconditionally sets its own
+            # `results[index]`" invariant whenever the cancellation is self-inflicted (a fixture's
+            # own teardown cancelling its task — unlikely, but the same class of thing
+            # `_cancels_itself` already covers for the call phase) rather than sibling-driven,
+            # since nothing else would then also abort `run_suite` to explain the missing slot.
+            # So this is still recorded as an `ERROR`, same as any other teardown failure, but
+            # tagged distinctly from an ordinary fixture bug: a cancelled teardown (most often
+            # collateral from a sibling's `KeyboardInterrupt`/`SystemExit`, see `run_suite`'s
+            # docstring) may have left the fixture only partially torn down, which is genuinely
+            # error-shaped and must not be reported `PASSED`, but it is not necessarily a bug in
+            # the fixture itself.
+            teardown_failure = (
+                "teardown was cancelled (most likely collateral from a sibling's "
+                "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
+                f"down:\n\n{traceback.format_exc()}"
+            )
         except BaseException:
             teardown_failure = traceback.format_exc()
+    elif partial_module_keys:
+        # Setup failed (or timed out) partway through, but it had already acquired a `module`-scope
+        # key before that happened — `_di.setup` deliberately did not release it (see its
+        # docstring), so it is still live and still needs to reach `run_suite`'s module-lifetime
+        # accounting the same as a fully successful setup's module keys would.
+        module_keys = tuple(partial_module_keys)
 
     duration = time.monotonic() - start
 
     if timed_out:
         outcome = Outcome.TIMEOUT
         failure = f"test exceeded the --timeout={timeout}s budget"
-        if call_failure is not None:
-            # Rare but possible: the call raised *and* the timeout's own cancellation is what
-            # unwound it (e.g. the call caught and re-raised inside a `finally`). Keep both.
-            failure = f"{failure}\n\n{call_failure}"
+        # Whichever of these is set (never both — `call_failure` implies setup succeeded, which
+        # means `setup_failure` was never set) is the exception that actually surfaced while the
+        # deadline was expiring, kept for context even though the budget is the headline.
+        extra = call_failure if call_failure is not None else setup_failure
+        if extra is not None:
+            failure = f"{failure}\n\n{extra}"
     elif setup_failure is not None:
         outcome, failure = Outcome.ERROR, setup_failure
     elif teardown_failure is not None:
@@ -327,29 +355,57 @@ def run_suite(
     keys instead of releasing them, exactly so this function can hold them open), and only once a
     module's count reaches zero — meaning *every* test that could ever ask for that module's
     fixtures has already run its own `acquire()` during setup — are the accumulated keys released
-    together. That "all acquires happen-before the one release" ordering is also what keeps this
+    together. This "all acquires happen-before the one release" ordering is also what keeps this
     from reopening `_di.ScopeStore.release`'s documented narrow concurrent-teardown window (still
     real, still deferred, see its docstring): a `release()` for a given key never overlaps an
     `acquire()` for that *same* key here, because by construction nothing will ever `acquire()` it
-    again once the release fires. `session`-scope keys need no such choreography — `release()` is
+    again once the release fires — but that is only true because `_run_one` returns *every*
+    `module`-scope key it ever acquires here, success or failure alike, rather than some of them
+    being released by a second, out-of-band path. `_di.setup`'s own partial-failure cleanup would
+    otherwise be exactly such a path (it releases whatever it managed to acquire before failing) —
+    it is told not to, for `module` scope specifically, via the `partial_module_keys` parameter
+    `_run_one` passes it (see both docstrings); this function is the *only* caller that ever
+    releases a `module`-scope key. `session`-scope keys need no such choreography — `release()` is
     always a refcount-only no-op for them (real teardown is `aclose`'s job, strictly after every
-    task has finished), so they're released the instant each test's own teardown runs, same as
-    `function`/`call` scope.
+    task has finished), so they're released the instant each test's own teardown (or setup-failure
+    cleanup) runs, same as `function`/`call` scope. Also unlike the boundary-based code this
+    replaces, nothing here depends on `_collect.collect` emitting one module's records
+    contiguously — `remaining_by_module`'s count is taken over the whole list up front and
+    decremented from whichever task happens to finish, in whatever order that turns out to be. That
+    dependency was dropped rather than silently relied on: `collect` *does* still happen to produce
+    contiguous records today, so this is deliberate future-proofing (for a `--seed`/aging scheduler
+    that reorders `records` freely) rather than an accident nothing currently exercises.
 
     `KeyboardInterrupt`/`SystemExit`: `_run_one` re-raises both immediately out of any phase of any
-    test (its own docstring). A raise inside one `TaskGroup` child cancels every sibling task and,
-    once they've all unwound, `TaskGroup.__aexit__` raises an `ExceptionGroup`/`BaseExceptionGroup`
-    wrapping whatever propagated — `except*` below unwraps that back to the original
-    `KeyboardInterrupt`/`SystemExit` itself rather than letting a `BaseExceptionGroup` (an
-    unfamiliar, differently-shaped exception `cli.main` and every caller before this slice never
-    had to handle) become the thing that actually exits the process. `store.aclose()` still runs
-    in a `finally` unconditionally, same as before, so best-effort session-scope teardown happens
-    even on this path. Known, deliberate gap, same shape as the ones this codebase already
+    test (its own docstring). `asyncio.TaskGroup` special-cases exactly these two types itself —
+    `_on_task_done` records the first one it sees as `self._base_error`, and `_aexit` does a bare
+    `raise self._base_error` *before* it ever constructs an `ExceptionGroup`/`BaseExceptionGroup`
+    (verified against CPython 3.13's `asyncio.taskgroups`) — so `runner.run(run_all())` below raises
+    the original `KeyboardInterrupt`/`SystemExit` object directly; nothing here needs to catch and
+    unwrap anything. (The one shape that would *not* come out this way is a test raising a
+    `BaseExceptionGroup` that itself *contains* a `KeyboardInterrupt`/`SystemExit` — not a
+    `TaskGroup` base error, so it would land in a real group. `_run_one`'s own contract already
+    forecloses this: it never lets anything but a bare `KeyboardInterrupt`/`SystemExit` escape, so
+    a test raising a `BaseExceptionGroup` of its own is instead caught by `_run_one`'s ordinary
+    `except BaseException` and reported as an ordinary `FAILED`/`ERROR` result, same as any other
+    exception a test raises — it never reaches `run_all`'s `TaskGroup` at all.) `store.aclose()`
+    still runs in a `finally` unconditionally, same as before, so best-effort session-scope teardown
+    happens even on this path. Known, deliberate gap, same shape as the ones this codebase already
     documents elsewhere: a module whose tests were still in flight when the interrupt landed never
     reaches `remaining_by_module == 0` and its accumulated module-scope keys are simply not
     released here — `aclose()`'s own sweep (see its docstring) is the safety net, and it no longer
     only ever finds session-scope entries once concurrency can leave other scopes stranded there
     too; it doesn't care what scope an entry claims, it just tears down whatever's left.
+
+    `results[index]` vs `TestResult.index`: the slot a result is written to is this loop's own
+    `enumerate` position; the `index` a `TestResult` *reports* is `record.index`, assigned once by
+    `_collect.collect` across the whole concatenation of files. The two agree today only because
+    `records` is always the complete, unfiltered collection — there is no `-k`/`-m` selection
+    feature yet (spec/02) that would ever hand this function a *subset*. Once one exists, whoever
+    builds it needs to decide up front whether `TestResult.index` should keep meaning "stable
+    collection id" (in which case `results[i].index != i` becomes possible and expected) or whether
+    selection should renumber, and update this docstring's "returned order is always logical order"
+    claim to say which of the two it means.
 
     Full Ctrl-C/`--maxfail` cancellation choreography (an `interrupted` outcome, shielded
     time-boxed teardown grace, salvaging partial results) is spec/05 §6, not built this slice —
@@ -358,128 +414,62 @@ def run_suite(
     """
     if concurrency < 1:
         raise ValueError(f"concurrency must be >= 1, got {concurrency}")
+    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError(f"timeout must be a positive, finite number of seconds, got {timeout}")
 
     results: list[TestResult | None] = [None] * len(records)
     store = _di.ScopeStore()
 
-    # Review (must fix): the docstring's central claim about this mechanism — "all acquires
-    # happen-before the one release ... a `release()` for a given key never overlaps an
-    # `acquire()` for that *same* key here" — is false, and the counterexample is in `_run_one`
-    # (see the long note above its `_di.setup` call). The counting here is sound for the keys it
-    # actually owns; what it misses is that `_di.setup` performs its *own* releases on the
-    # partial-failure path, out of band, for keys this dict has already counted but never
-    # received. So `remaining_by_module` guarantees "the last release `run_suite` issues comes
-    # after every acquire", not "the last release *of that key* comes after every acquire", and
-    # only the second is strong enough to keep `ScopeStore.release`'s window shut. Reproduced:
-    # a module fixture built and torn down twice, and a sibling handed a mid-teardown instance.
-    #
-    # Review (good, worth stating): unlike the boundary-based code this replaces, nothing here
-    # depends on `_collect.collect` emitting a module's records contiguously — the count is taken
-    # over the whole list up front and decremented from whichever task happens to finish. That
-    # dependency was dropped rather than silently relied on, and it is the right call (it is what
-    # will let a future `--seed`/aging scheduler reorder `records` freely). It is worth saying so
-    # in the docstring, because `collect` *does* still produce contiguous records today, so a
-    # future edit could reintroduce the assumption without any test noticing.
     remaining_by_module: dict[Path, int] = {}
     for record in records:
         remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
     pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
 
     async def dispatch_one(index: int, record: TestRecord, semaphore: asyncio.Semaphore) -> None:
+        # The whole body lives inside `async with semaphore:` — including the module-scope flush
+        # below, not just `_run_one` — so the semaphore genuinely bounds "tests inside their
+        # setup/call/teardown envelope, including the last one's module-fixture teardown" the way
+        # this function's docstring claims, and so `concurrency=1` is a real exact-serial mode: the
+        # next test cannot even start setup until this one's slot (module teardown included) is
+        # released. The cost is that the *last* test to finish a module holds its slot a little
+        # longer while that module's fixtures tear down; that is the correct trade for what the
+        # semaphore is documented to bound.
         async with semaphore:
             result, module_keys = await _run_one(record, store, timeout=timeout)
-        results[index] = result
+            results[index] = result
 
-        if module_keys:
-            pending_module_keys.setdefault(record.path, []).extend(module_keys)
-        remaining_by_module[record.path] -= 1
-        if remaining_by_module[record.path] == 0:
-            keys = pending_module_keys.pop(record.path, None)
-            if keys:
-                # Review (should fix): this `await` is *outside* the `async with semaphore` block,
-                # so module-scope teardown is not admitted through the concurrency gate at all.
-                # Two consequences, neither documented. (1) `run_suite`'s docstring says
-                # `concurrency=1` "fully serializes and reproduces the old M0/M1-DI behavior" —
-                # it does not. Verified with two single-test modules at `concurrency=1`, where
-                # module A's fixture teardown awaits 0.05s and test B sleeps 0.02s: the observed
-                # log is "test_a, teardown-A start, test_b start, test_b end, teardown-A end".
-                # A user picking `--concurrency=1` specifically to debug an ordering problem still
-                # gets a fixture teardown running concurrently with the next test. (2) `--timeout`
-                # aside, the semaphore no longer bounds "tests inside their setup/call/teardown
-                # envelope" the way both the docstring and `_run_one`'s docstring claim: when many
-                # modules finish at once, arbitrarily many module teardowns can be in flight on top
-                # of `concurrency` running tests. Moving the release inside the `async with` (or
-                # taking the semaphore again around it) fixes both; if it is deliberate, the
-                # `concurrency=1` sentence needs to be narrowed to the call phase.
-                await _teardown_module_scope(store, keys, path=record.path)
+            if module_keys:
+                pending_module_keys.setdefault(record.path, []).extend(module_keys)
+            remaining_by_module[record.path] -= 1
+            if remaining_by_module[record.path] == 0:
+                keys = pending_module_keys.pop(record.path, None)
+                if keys:
+                    await _teardown_module_scope(store, keys, path=record.path)
 
     async def run_all() -> None:
         semaphore = asyncio.Semaphore(concurrency)
         async with asyncio.TaskGroup() as tg:
-            # Review (low, latent): the slot a result is written to comes from `enumerate` here,
-            # but the `index` a `TestResult` *reports* comes from `record.index`, assigned by
-            # `_collect.collect` across the whole concatenation of files. They agree today only
-            # because `records` is always the complete, unfiltered collection. The first selection
-            # feature that hands `run_suite` a subset (`-k`/`-m`, spec/02) makes
-            # `results[i].index != i` with nothing asserting either way — and `run_suite`'s own
-            # docstring calls the returned order "index order", which would then be true of the
-            # positions and false of the field. Worth deciding now which one `TestResult.index`
-            # means: position in this run, or stable collection id.
             for index, record in enumerate(records):
                 tg.create_task(dispatch_one(index, record, semaphore))
 
     with asyncio.Runner() as runner:
         try:
-            try:
-                runner.run(run_all())
-            # Review (documentation is wrong; code is inert but harmless): `run_suite`'s docstring
-            # says "`TaskGroup.__aexit__` raises an `ExceptionGroup`/`BaseExceptionGroup` wrapping
-            # whatever propagated — `except*` below unwraps that back to the original". That is not
-            # what `asyncio.TaskGroup` does. It special-cases exactly these two types:
-            # `_on_task_done` sets `self._base_error` for the first `KeyboardInterrupt`/`SystemExit`
-            # it sees, and `_aexit` does a bare `raise self._base_error` *before* it ever constructs
-            # the group. Verified directly against a raw `TaskGroup`: a child raising
-            # `KeyboardInterrupt` among sleeping siblings propagates a bare `KeyboardInterrupt`,
-            # `isinstance(..., BaseExceptionGroup)` is `False`. So `except*` here only ever matches
-            # because `except*` implicitly wraps a bare exception for the handler, and
-            # `_first_interrupt` then returns the very object that was already propagating — a round
-            # trip. Delete the whole `try`/`except*` and every current behaviour is unchanged (that
-            # is also why the new sibling test proves nothing; see the note on it in
-            # `tests/test_run.py`). Not a bug, but this is load-bearing-looking code whose
-            # justification does not describe the runtime, which is how the *next* person
-            # "simplifies" the wrong half. The one case that would genuinely need `_first_interrupt`
-            # is a test raising a `BaseExceptionGroup` that *contains* a `KeyboardInterrupt`: that
-            # is not a base error by `TaskGroup._is_base_error`, so it does land in a real group.
-            #
-            # Review (should fix, I8): `from None` sets `__suppress_context__`, so when two siblings
-            # interrupt at once the second is erased from the traceback. Verified: one test raising
-            # `KeyboardInterrupt` and another raising `SystemExit(7)` under `concurrency=2` yields a
-            # bare `KeyboardInterrupt`; the `SystemExit`, and with it the exit code 7 the user asked
-            # for, survives only on `__context__` with display suppressed. Sequential M0/M1 could
-            # not reach this at all. At minimum drop `from None` so the loser is still visible.
-            except* (KeyboardInterrupt, SystemExit) as eg:
-                raise _first_interrupt(eg) from None
+            runner.run(run_all())
         finally:
             _teardown_best_effort(runner, store.aclose(), what="session-scope fixtures")
-    # Safe: `run_all` only returns normally once every `dispatch_one` task has completed, and each
-    # one unconditionally sets `results[index]` as its first action after the semaphore block — an
-    # index surviving as `None` here would mean a task exited without doing that, which can only
-    # happen via the `except*` above, which re-raises instead of reaching this line.
-    #
-    # Review (conclusion holds, stated reason does not): I tried to break this and could not, so
-    # the `cast` is safe today — but "which can only happen via the `except*` above" is the wrong
-    # justification and would stop protecting anything under an edit. There are two other ways a
-    # task can exit without assigning its slot, and neither goes through that `except*`:
-    # (a) cancellation while parked on `semaphore.acquire()`, before `_run_one` is ever entered —
-    #     the `async with semaphore` raises and `results[index] = result` is skipped;
-    # (b) any non-`KeyboardInterrupt`/`SystemExit` exception escaping `dispatch_one`.
-    # Both are currently unreachable-or-harmless only because the `TaskGroup` re-raises in every
-    # case (a plain `Exception` becomes an `ExceptionGroup` that the `except*` deliberately does
-    # *not* catch, so it still propagates past this line). The real invariant is "any task that
-    # fails to set its slot also makes `run_all()` raise", which is a property of `TaskGroup`, not
-    # of the `except*`. Worth restating that way — and worth noting `_run_one`'s contract "never
-    # raises anything but `KeyboardInterrupt`/`SystemExit`" is what (b) rests on and is not
-    # asserted anywhere.
+    # Safe: every `dispatch_one` task unconditionally sets `results[index]` as its very first
+    # action once the semaphore admits it and `_run_one` returns — an index surviving as `None`
+    # here would mean some task exited `dispatch_one` without reaching that line, which can only
+    # happen if it raised. `_run_one`'s own contract is that it never raises anything but
+    # `KeyboardInterrupt`/`SystemExit` (every other exception, including `asyncio.CancelledError`
+    # from any source, is caught and folded into a `TestResult` — see its docstring); relied on
+    # here, not asserted anywhere. Given that contract, the only thing a `dispatch_one` task can
+    # raise is one of those two, or the `asyncio.CancelledError` `TaskGroup` throws into every
+    # *other* sibling once one of them does — and both cases make `runner.run(run_all())` above
+    # raise in turn (a bare `KeyboardInterrupt`/`SystemExit`, per `TaskGroup`'s own special-casing
+    # of exactly those two types — see this function's docstring), which exits `run_suite` entirely
+    # before this line is ever reached. So a `None` surviving to here would mean `_run_one`'s own
+    # contract was violated, not a gap in this function's exception handling.
     return cast(list[TestResult], results)
 
 
@@ -500,38 +490,6 @@ async def _teardown_module_scope(
     except BaseException:
         print(f"velox: error tearing down module-scope fixtures ({path}):", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
-
-
-def _first_interrupt(eg: BaseExceptionGroup[BaseException]) -> BaseException:
-    """The first `KeyboardInterrupt`/`SystemExit` found in `eg`, recursing into nested groups.
-
-    `except*` has already filtered `eg` down to only the branches that matched
-    `(KeyboardInterrupt, SystemExit)` (`run_suite`'s `except*` clause), so this always finds one —
-    the fallback `RuntimeError` only exists so a future refactor that changes what `except*` clause
-    calls this can't turn "no match" into a silent `IndexError`/`StopIteration` instead of a loud,
-    diagnosable failure (I8).
-    """
-    for exc in eg.exceptions:
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            return exc
-        if isinstance(exc, BaseExceptionGroup):
-            try:
-                return _first_interrupt(exc)
-            except RuntimeError:
-                continue
-    # Review (low): three things about this fallback. It is dead code twice over — `except*` filters
-    # the group to matching leaves, *and* (see the note at the call site) `TaskGroup` never hands a
-    # group containing an interrupt to this function in the first place. Its docstring's rationale
-    # ("so a future refactor ... can't turn 'no match' into a silent `IndexError`/`StopIteration`")
-    # is sound, but the implementation undercuts it on the point the brief cares about: raising a
-    # bare `RuntimeError` with no `from eg` discards the actual exceptions from the `__cause__`
-    # chain, which is exactly the swallowing I8 exists to prevent. `raise RuntimeError(...) from eg`
-    # costs nothing and keeps them. Third, and the reason this is more than cosmetic: this function
-    # is annotated `-> BaseException` but can *raise* instead of returning, and its only caller is
-    # `raise _first_interrupt(eg) from None` — a caller that reads as though a value always comes
-    # back. If it ever did fire, the `RuntimeError` would surface from inside an `except*` handler
-    # during a Ctrl-C, which is the least debuggable moment available.
-    raise RuntimeError("no KeyboardInterrupt/SystemExit found in an interrupt-only exception group")
 
 
 def _teardown_best_effort(

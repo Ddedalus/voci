@@ -415,11 +415,14 @@ def test_session_scope_teardown_failure_is_reported_to_stderr_and_does_not_fail_
 
 
 def test_concurrency_bounds_the_number_of_tests_in_flight_at_once() -> None:
-    """The semaphore genuinely bounds how many tests are inside their setup/call/teardown
-    envelope at once, not just how many `asyncio.Task`s exist -- proven by tracking the actual
-    concurrent-entry count from inside the test body itself and asserting its peak. `> 1` also
-    rules out the semaphore accidentally serializing everything (which `peak <= concurrency`
-    alone would not catch: a fully serial run also satisfies `peak <= 4`)."""
+    """The semaphore genuinely bounds how many tests are inside their call phase at once, not
+    just how many `asyncio.Task`s exist -- proven by tracking the actual concurrent-entry count
+    from inside the test body itself and asserting its peak. `> 1` also rules out the semaphore
+    accidentally serializing everything (which `peak <= concurrency` alone would not catch: a
+    fully serial run also satisfies `peak <= 4`). Every record here uses `_EMPTY_PLAN`, so this
+    exercises only the call phase -- `test_concurrency_bounds_module_scope_teardown_too` below is
+    the sibling that pins the same bound for module-scope teardown, the phase that used to escape
+    it entirely (it is awaited outside the semaphore) until that was fixed."""
     in_flight = 0
     peak = 0
 
@@ -436,18 +439,47 @@ def test_concurrency_bounds_the_number_of_tests_in_flight_at_once() -> None:
 
     assert [r.outcome for r in results] == [Outcome.PASSED] * 20
     assert peak <= 4
-    # Review: not flaky (checked — tasks 0..3 all reach `asyncio.sleep` without an intervening
-    # suspension, so `peak == 4` deterministically), but weaker than the docstring. `in_flight` is
-    # incremented from inside the test *body*, and every record here uses `_EMPTY_PLAN`, so there
-    # is no setup or teardown phase in this run at all: the assertion pins "at most 4 call phases
-    # overlap", not the claimed "inside their setup/call/teardown envelope". That distinction is
-    # exactly where the implementation is wrong — `dispatch_one` awaits `_teardown_module_scope`
-    # *outside* `async with semaphore`, so module-scope teardown is unbounded by `concurrency`
-    # (see the note there). The test that would catch it: `concurrency=2`, four single-test
-    # modules each with a `scope="module"` async fixture that records enter/exit around an
-    # `await asyncio.sleep(...)` in its teardown, asserting the peak count of *concurrently
-    # running teardowns* is <= 2. It is 4 today.
     assert peak > 1
+
+
+def test_concurrency_bounds_module_scope_teardown_too() -> None:
+    """The phase the test above cannot see: module-scope teardown now runs *inside*
+    `async with semaphore` (moved there specifically so the semaphore bounds the whole
+    setup/call/teardown envelope, not just the call phase), so it must be concurrency-bounded the
+    same way -- four independent single-test modules, each with an async `scope="module"` fixture
+    whose own teardown awaits, at `concurrency=2`, must never show more than 2 concurrently
+    in-flight teardowns."""
+    in_teardown = 0
+    peak_teardown = 0
+
+    def _make_module_fixture() -> velox.Fixture[None]:
+        @velox.fixture(scope="module")
+        async def per_module():
+            nonlocal in_teardown, peak_teardown
+            yield None
+            in_teardown += 1
+            peak_teardown = max(peak_teardown, in_teardown)
+            await asyncio.sleep(0.03)
+            in_teardown -= 1
+
+        return per_module
+
+    records = []
+    for i in range(4):
+        fixture = _make_module_fixture()
+
+        async def test_func(x: None = velox.Depends(fixture)) -> None:
+            pass
+
+        records.append(
+            _record(i, test_func, f"test_{i}", plan=plan_for(test_func), path=Path(f"mod_{i}.py"))
+        )
+
+    results = run_suite(records, concurrency=2)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 4
+    assert peak_teardown <= 2
+    assert peak_teardown > 1
 
 
 def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
@@ -455,7 +487,11 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
     time, in logical (`records`/index) order -- through the *same* concurrent machinery, not a
     separate code path. A shared event log pins both "one at a time" (no interleaved starts) and
     "in logical order" (not completion order, which a bug here could still accidentally get
-    right for reasons unrelated to admission order)."""
+    right for reasons unrelated to admission order). Every record here uses `_EMPTY_PLAN`, so this
+    only pins call-phase-to-call-phase serialization --
+    `test_concurrency_one_serializes_module_scope_teardown_before_the_next_test_starts` below is
+    the sibling that pins the same property across a module's fixture teardown, which used to be
+    able to overlap the next test's call phase regardless of `concurrency=1`."""
     events: list[str] = []
 
     def _make(i: int) -> Callable[[], object]:
@@ -468,15 +504,6 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
 
     records = [_record(i, _make(i), f"test_{i}") for i in range(4)]
 
-    # Review: every record here uses `_EMPTY_PLAN`, which is the only reason this passes. The
-    # docstring's claim is about `concurrency=1` as a whole, and for fixtures it is false: module-
-    # scope teardown is released outside the semaphore, so it overlaps the next test. Verified with
-    # two single-test modules at `concurrency=1`, module A holding a `scope="module"` async fixture
-    # whose teardown awaits 0.05s and test B sleeping 0.02s — the event log is `test_a`,
-    # `teardown-A start`, `test_b start`, `test_b end`, `teardown-A end`. Add that as a second case
-    # in this test (same shared-event-log shape, one module fixture) and it fails today; it is the
-    # assertion a user reaching for `--concurrency=1` to make a flaky ordering reproducible is
-    # actually relying on.
     results = run_suite(records, concurrency=1)
 
     assert [r.outcome for r in results] == [Outcome.PASSED] * 4
@@ -492,35 +519,74 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
     ]
 
 
+def test_concurrency_one_serializes_module_scope_teardown_before_the_next_test_starts() -> None:
+    """The precondition `test_concurrency_one_is_exactly_serial_in_logical_order` relies on
+    (`_EMPTY_PLAN`, so no fixtures) doesn't hold once a fixture is involved -- this pins the case
+    that test cannot see: at `concurrency=1`, a module's fixture teardown (an async fixture whose
+    teardown itself awaits, so it would visibly overlap the next test if it were not held inside
+    the semaphore) must fully finish before the *next* test's own body starts, not merely before
+    the next test's result is recorded."""
+    events: list[str] = []
+
+    @velox.fixture(scope="module")
+    async def per_module():
+        yield None
+        events.append("teardown-a start")
+        await asyncio.sleep(0.05)
+        events.append("teardown-a end")
+
+    async def test_a(x: None = velox.Depends(per_module)) -> None:
+        events.append("test-a")
+
+    async def test_b() -> None:
+        events.append("test-b start")
+        await asyncio.sleep(0.01)
+        events.append("test-b end")
+
+    records = [
+        _record(0, test_a, "test_a", plan=plan_for(test_a), path=Path("mod_a.py")),
+        _record(1, test_b, "test_b", path=Path("mod_b.py")),
+    ]
+
+    results = run_suite(records, concurrency=1)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 2
+    assert events == [
+        "test-a",
+        "teardown-a start",
+        "teardown-a end",
+        "test-b start",
+        "test-b end",
+    ]
+
+
 def test_results_are_in_logical_order_even_when_completion_order_is_scrambled() -> None:
     """Physical (completion) order is no longer the same as logical order under real concurrency
-    (`_run.py`'s own module docstring) -- the later-indexed, shorter-sleeping test finishes
-    first, but `results` must still come back index-ordered (I2)."""
+    (`_run.py`'s own module docstring) -- the later-indexed, shorter-sleeping test finishes first,
+    proven by recording completion order directly rather than only inferring it from the sleep
+    durations, but `results` must still come back index-ordered (I2). The `finished` assertion is
+    what tells this test apart from a purely sequential runner, which would produce the exact same
+    `results` order for a different reason (nothing ever overlapped to reorder in the first
+    place) -- without it, this test would pass unchanged even if a future change accidentally
+    serialized dispatch."""
+    finished: list[int] = []
 
-    def _sleeps(seconds: float) -> Callable[[], object]:
+    def _sleeps(index: int, seconds: float) -> Callable[[], object]:
         async def test_func() -> None:
             await asyncio.sleep(seconds)
+            finished.append(index)
 
         return test_func
 
     records = [
-        _record(0, _sleeps(0.06), "test_slowest"),
-        _record(1, _sleeps(0.03), "test_middle"),
-        _record(2, _sleeps(0.0), "test_fastest"),
+        _record(0, _sleeps(0, 0.06), "test_slowest"),
+        _record(1, _sleeps(1, 0.03), "test_middle"),
+        _record(2, _sleeps(2, 0.0), "test_fastest"),
     ]
 
     results = run_suite(records, concurrency=3)
 
-    # Review: this test would pass, unchanged, against a purely sequential runner — which makes it
-    # the clearest false-confidence case in the new batch. The docstring's premise ("the later-
-    # indexed, shorter-sleeping test finishes first") is never observed: nothing records completion
-    # order, so the assertions cannot distinguish "results were re-ordered back into index order"
-    # from "results were produced in index order because nothing overlapped". Fix by having each
-    # body append its own index to a shared `finished: list[int]` before returning, then asserting
-    # both `finished == [2, 1, 0]` (completion order really was scrambled — deterministic here,
-    # the sleeps are 0.06/0.03/0.0) and `[r.index for r in results] == [0, 1, 2]`. Only the pair
-    # tests I2. As a bonus the first assertion would fail loudly if a future change accidentally
-    # serialized dispatch, which is the regression this file otherwise has no detector for.
+    assert finished == [2, 1, 0]  # completion order really was scrambled, not just re-sorted
     assert [r.index for r in results] == [0, 1, 2]
     assert [r.id for r in results] == [r.id for r in records]
     assert [r.outcome for r in results] == [Outcome.PASSED] * 3
@@ -532,13 +598,21 @@ def test_run_suite_rejects_non_positive_concurrency() -> None:
             run_suite([_record(0, _passes, "test_passes")], concurrency=bad)
 
 
+def test_run_suite_rejects_non_positive_or_non_finite_timeout() -> None:
+    for bad in (0, -1, -0.5, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            run_suite([_record(0, _passes, "test_passes")], timeout=bad)
+
+
 def test_keyboard_interrupt_among_several_concurrent_siblings_propagates_cleanly() -> None:
     """The multi-sibling variant of
     `test_keyboard_interrupt_propagates_instead_of_being_reported_as_a_failure`: when one test
-    among several genuinely-concurrent siblings raises `KeyboardInterrupt`, `run_suite`'s
-    `except*` must unwrap the `TaskGroup`'s `BaseExceptionGroup` back to the bare
-    `KeyboardInterrupt` itself -- not let a `BaseExceptionGroup` (or the interrupt getting lost
-    entirely amid cancelled siblings) escape instead."""
+    among several genuinely-concurrent siblings raises `KeyboardInterrupt`, it must come out of
+    `run_suite` as a bare `KeyboardInterrupt`, not a `BaseExceptionGroup`. This pins
+    `asyncio.TaskGroup`'s own real behavior (`_aexit` re-raises `self._base_error` directly rather
+    than ever wrapping `KeyboardInterrupt`/`SystemExit` in a group -- see `run_suite`'s docstring)
+    as the thing this codebase actually relies on now that it no longer carries its own unwrapping
+    machinery for it."""
 
     async def _raises_keyboard_interrupt() -> None:
         raise KeyboardInterrupt
@@ -552,28 +626,55 @@ def test_keyboard_interrupt_among_several_concurrent_siblings_propagates_cleanly
         _record(2, _sleeps_long, "test_sibling_b"),
     ]
 
-    # Review: this passes for a reason unrelated to the code it names. `asyncio.TaskGroup` already
-    # special-cases `KeyboardInterrupt`/`SystemExit`: `_on_task_done` stores the first one as
-    # `_base_error` and `_aexit` does a bare `raise self._base_error` before it ever builds a group.
-    # Verified against a raw `TaskGroup` with no velox involved — a child raising
-    # `KeyboardInterrupt` among sleeping siblings propagates a bare `KeyboardInterrupt`, not a
-    # group. So `run_suite`'s `except*`/`_first_interrupt` unwrapping is a round trip, and deleting
-    # it entirely leaves this test green. The second assertion is also vacuous:
-    # `pytest.raises(KeyboardInterrupt)` would already have failed on a `BaseExceptionGroup`, since
-    # a group is not a `KeyboardInterrupt`. Two tests that *would* exercise something real: 1. Two
-    # siblings interrupting at once — `KeyboardInterrupt` in one, `SystemExit(7)` in another,
-    # `concurrency=2`. Today a bare `KeyboardInterrupt` comes out and the `SystemExit` (and its exit
-    # code) is reachable only via `__context__`, with display suppressed by `from None`. Sequential
-    # M0/M1 could not reach this case at all, so it is genuinely new surface and genuinely untested.
-    # Whatever the intended precedence is, assert it. 2. A test raising `BaseExceptionGroup("boom",
-    # [KeyboardInterrupt()])` — the one shape that is *not* a `TaskGroup` base error, so it really
-    # does arrive as a nested group and really does need `_first_interrupt`'s recursion. That branch
-    # has no coverage at all. Also missing here: an assertion that the siblings' results are
-    # discarded rather than half-written, which is the behaviour `run_suite`'s docstring promises on
-    # this path.
     with pytest.raises(KeyboardInterrupt) as exc_info:
         run_suite(records, concurrency=3)
     assert not isinstance(exc_info.value, BaseExceptionGroup)
+
+
+def test_two_siblings_interrupting_at_once_still_yields_a_bare_interrupt_not_a_group() -> None:
+    """New surface under concurrency, unreachable by the sequential M0/M1 runner: two different
+    siblings can genuinely raise `KeyboardInterrupt`/`SystemExit` at once. `TaskGroup._on_task_done`
+    keeps whichever one it observes first as `self._base_error` -- which one wins is a genuine race
+    this test cannot pin without flaking, so it only asserts the invariant that holds regardless of
+    which one does: a bare interrupt of one of the two raised types, never a
+    `BaseExceptionGroup`."""
+
+    async def _raises_keyboard_interrupt() -> None:
+        raise KeyboardInterrupt
+
+    async def _raises_system_exit() -> None:
+        raise SystemExit(7)
+
+    records = [
+        _record(0, _raises_keyboard_interrupt, "test_ki"),
+        _record(1, _raises_system_exit, "test_se"),
+    ]
+
+    with pytest.raises((KeyboardInterrupt, SystemExit)) as exc_info:
+        run_suite(records, concurrency=2)
+    assert not isinstance(exc_info.value, BaseExceptionGroup)
+
+
+def test_a_test_raising_its_own_group_containing_a_keyboard_interrupt_is_just_a_failure() -> None:
+    """The one shape that would *not* come out of a raw `asyncio.TaskGroup` as a bare interrupt (a
+    `BaseExceptionGroup` is not a `TaskGroup` "base error") never actually reaches `run_all`'s
+    `TaskGroup` at all: `_run_one`'s own `except BaseException` catches it first -- a
+    `BaseExceptionGroup` is not itself an instance of `KeyboardInterrupt`/`SystemExit`/
+    `CancelledError`, so it never matches the re-raise guards -- and reports it as an ordinary
+    `FAILED` result, same as any other exception a test body raises. Pins that this is the actual,
+    only reachable behavior, now that `run_suite` no longer carries dead machinery that once
+    suggested a nested-group nested case needed handling here."""
+
+    async def _raises_a_group_containing_a_keyboard_interrupt() -> None:
+        raise BaseExceptionGroup("boom", [KeyboardInterrupt()])
+
+    (result,) = run_suite(
+        [_record(0, _raises_a_group_containing_a_keyboard_interrupt, "test_group")]
+    )
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure is not None
+    assert "KeyboardInterrupt" in result.failure
 
 
 def test_module_scope_fixture_shared_and_torn_down_once_under_real_overlap() -> None:
@@ -612,23 +713,94 @@ def test_module_scope_fixture_shared_and_torn_down_once_under_real_overlap() -> 
     assert [r.outcome for r in results] == [Outcome.PASSED] * 5
     assert peak > 1  # genuinely overlapped, not an artifact of running one at a time
     assert len(builds) == 1
-    # Review: this is a good test of the happy path and it does force real overlap — but every one
-    # of the five tests succeeds, and success is the only case the new refcount design actually
-    # handles. The invariant it advertises ("built exactly once, torn down exactly once per
-    # module") breaks as soon as one sibling's setup fails, because `_di.setup`'s own cleanup
-    # releases module keys out of band (see the note at `_run._run_one`'s `_di.setup` call). The
-    # missing test, verified failing today:
-    #     path=Path("mod.py") for both; test_a takes [per_module, a fixture that raises
-    #     synchronously], test_b takes [an async fixture that sleeps 0.03s, per_module];
-    #     run_suite(..., concurrency=2)
-    # gives `len(builds) == 2` and `torn_down == ["closed", "closed"]`, i.e. `scope="module"`
-    # silently degraded to per-test while test_a is merely ERROR. A second, nastier variant with an
-    # async module fixture whose teardown awaits shows test_b being handed the *same* instance
-    # mid-teardown and PASSING with it closed underneath — that one belongs here too, because it is
-    # the concrete reachable form of `ScopeStore.release`'s documented window that `run_suite`'s
-    # docstring currently claims this design cannot reach. A third case worth one line: the same
-    # shape with `timeout=` small enough to cancel test_a mid-setup, since that reaches the
-    # identical `_di.setup` cleanup path by a different route.
+    assert torn_down == ["closed"]
+
+
+def test_module_scope_survives_a_sibling_setup_failure_under_concurrency() -> None:
+    """Regression test for the must-fix concurrency bug a review caught: `_di.setup`'s own
+    partial-failure cleanup used to release *every* scope it had acquired, `module` included, out
+    of band from `run_suite`'s own module-lifetime bookkeeping -- driving a shared module
+    fixture's refcount to zero (and tearing it down) the moment one sibling's setup failed, even
+    while another sibling of the same module was still mid-flight and still holding a live
+    reference to it. `test_a`'s setup acquires the module fixture successfully and then fails on
+    its second fixture; `test_b` (slower, so it is still mid-setup when `test_a` fails) shares the
+    same module fixture and passes. Under the bug this fixes, `len(builds) == 2` and
+    `torn_down == ["closed", "closed"]`; fixed, both stay at one."""
+    builds: list[int] = []
+    torn_down: list[str] = []
+
+    @velox.fixture(scope="module")
+    def per_module():
+        builds.append(1)
+        yield len(builds)
+        torn_down.append("closed")
+
+    @velox.fixture()
+    def broken():
+        raise RuntimeError("setup boom")
+
+    @velox.fixture()
+    async def slow():
+        await asyncio.sleep(0.03)
+        return "ok"
+
+    async def test_a(m: int = velox.Depends(per_module), b: int = velox.Depends(broken)) -> None:
+        raise AssertionError("must never run: setup already failed")
+
+    async def test_b(s: str = velox.Depends(slow), m: int = velox.Depends(per_module)) -> None:
+        assert m == 1
+
+    records = [
+        _record(0, test_a, "test_a", plan=plan_for(test_a), path=Path("mod.py")),
+        _record(1, test_b, "test_b", plan=plan_for(test_b), path=Path("mod.py")),
+    ]
+
+    results = run_suite(records, concurrency=2)
+
+    assert results[0].outcome is Outcome.ERROR
+    assert results[1].outcome is Outcome.PASSED
+    assert len(builds) == 1
+    assert torn_down == ["closed"]
+
+
+def test_module_scope_survives_a_sibling_timeout_mid_setup_under_concurrency() -> None:
+    """The `--timeout` variant of the test above: a deadline firing mid-setup reaches the
+    identical `_di.setup` cleanup path (via `asyncio.CancelledError`) as an ordinary fixture
+    failure does -- same regression, different trigger."""
+    builds: list[int] = []
+    torn_down: list[str] = []
+
+    @velox.fixture(scope="module")
+    def per_module():
+        builds.append(1)
+        yield len(builds)
+        torn_down.append("closed")
+
+    @velox.fixture()
+    async def hangs():
+        await asyncio.sleep(10)
+
+    @velox.fixture()
+    async def slow():
+        await asyncio.sleep(0.03)
+        return "ok"
+
+    async def test_a(m: int = velox.Depends(per_module), h: object = velox.Depends(hangs)) -> None:
+        raise AssertionError("must never run: setup timed out")
+
+    async def test_b(s: str = velox.Depends(slow), m: int = velox.Depends(per_module)) -> None:
+        assert m == 1
+
+    records = [
+        _record(0, test_a, "test_a", plan=plan_for(test_a), path=Path("mod.py")),
+        _record(1, test_b, "test_b", plan=plan_for(test_b), path=Path("mod.py")),
+    ]
+
+    results = run_suite(records, concurrency=2, timeout=0.05)
+
+    assert results[0].outcome is Outcome.TIMEOUT
+    assert results[1].outcome is Outcome.PASSED
+    assert len(builds) == 1
     assert torn_down == ["closed"]
 
 
@@ -637,23 +809,6 @@ def test_module_scope_fixture_shared_and_torn_down_once_under_real_overlap() -> 
 # ------------------------------------------------------------------------------------------
 
 
-# Review: three gaps in this section, in descending order of how much they'd have caught.
-# 1. No test for a timeout that the *body* absorbs. `asyncio.timeout.__aexit__` only converts to
-#    `TimeoutError` when the block exits with an exception; if the body catches the injected
-#    `CancelledError` and raises something else, `_run_one`'s inner `except BaseException` records
-#    it and the `async with` exits cleanly, so no `TimeoutError` is ever raised. Verified: body =
-#    `try: await asyncio.sleep(10) / except BaseException: raise ValueError("cleanup")` with
-#    `timeout=0.03` returns FAILED, not TIMEOUT. Every test below uses a body that lets the
-#    cancellation through, which is precisely the case that works.
-# 2. Nothing pins the property the session claims about ordering — that the timeout clock starts
-#    only after the semaphore is acquired, not at dispatch. It is true (verified: four tests each
-#    sleeping 0.05s at `concurrency=1, timeout=0.1` all PASS, where a queue-inclusive clock would
-#    time out tests 2-4), but it is a deliberate design choice with a real consequence, and one
-#    refactor moving `asyncio.timeout` above `async with semaphore` would silently invert it with
-#    no test objecting.
-# 3. No test for `timeout=0` or a negative timeout, which are accepted by both `run_suite` and the
-#    CLI and behave surprisingly: a test that never suspends PASSES under `timeout=0` while one
-#    that awaits anything TIMEOUTs (see the note in `cli.py`).
 def test_timeout_produces_timeout_outcome_with_a_failure_message() -> None:
     async def _hangs() -> None:
         await asyncio.sleep(10)
@@ -664,6 +819,46 @@ def test_timeout_produces_timeout_outcome_with_a_failure_message() -> None:
     assert result.failure is not None
     assert "timeout" in result.failure.lower()
     assert "0.05" in result.failure
+
+
+def test_timeout_survives_the_body_substituting_a_different_exception() -> None:
+    """Regression test for the must-fix detection gap a review caught: `asyncio.timeout`'s
+    `__aexit__` only *raises* `TimeoutError` when the block exits with an exception it can still
+    see -- if the test's own code catches the injected `CancelledError` and raises something else
+    instead of letting it propagate, the exception channel alone would report `FAILED`, not
+    `TIMEOUT`. `_run_one` cross-checks the `Timeout` object's own `.expired()` state to catch this
+    too (see its docstring)."""
+
+    async def _absorbs_the_cancellation() -> None:
+        try:
+            await asyncio.sleep(10)
+        except BaseException:
+            raise ValueError("cleanup did something else instead") from None
+
+    (result,) = run_suite([_record(0, _absorbs_the_cancellation, "test_absorbs")], timeout=0.03)
+
+    assert result.outcome is Outcome.TIMEOUT
+    assert result.failure is not None
+    assert "timeout" in result.failure.lower()
+    assert "cleanup did something else instead" in result.failure
+
+
+def test_timeout_clock_starts_after_the_semaphore_is_acquired_not_at_dispatch() -> None:
+    """Deliberate design choice, not pinned anywhere until now: each test's `--timeout` budget is
+    a fresh `asyncio.timeout` entered only once `_run_one` actually starts running (inside the
+    semaphore), not a shared deadline counted from when `run_suite` was first called. At
+    `concurrency=1`, four tests that each sleep 0.05s (0.2s of total queued time) but each carry a
+    0.1s *per-test* budget all pass -- a queue-inclusive clock would time out every test after the
+    first."""
+
+    async def _sleeps() -> None:
+        await asyncio.sleep(0.05)
+
+    records = [_record(i, _sleeps, f"test_{i}") for i in range(4)]
+
+    results = run_suite(records, concurrency=1, timeout=0.1)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 4
 
 
 def test_timeout_during_setup_produces_timeout_and_does_not_run_teardown() -> None:

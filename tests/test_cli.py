@@ -158,22 +158,28 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
 def test_bad_concurrency_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
     """M1 concurrency: `--concurrency` must be a positive integer -- `0`/negative is a usage
     error (exit 4), same style as the other checks in `main` (`_invalid_path_argument`, the
-    `--rewrite-cache`/`--assert=plain` combo)."""
-    # Review: only `0` is exercised, though `main`'s check is `< 1` and its message interpolates the
-    # value — `--concurrency=-4` costs one extra line via a loop and covers the other side. The
-    # gap that matters more is the neighbouring flag: there is no `--timeout` validation test here
-    # because there is no `--timeout` validation (see the note in `cli.py`). `main(["--timeout=0",
-    # tmp_path])` and `--timeout=-1` currently run the suite rather than reporting a usage error,
-    # and produce outcomes that depend on whether each test happens to suspend. Whichever way that
-    # is resolved, it wants a test in this file next to this one.
-    status = main(["--concurrency=0"])
-    assert status == 4
-    assert "--concurrency" in capsys.readouterr().err
+    `--rewrite-cache`/`--assert=plain` combo). Covers both sides of `main`'s `< 1` check, not just
+    `0` -- `--concurrency=-4` also pins that the message interpolates the actual value given."""
+    for bad in ("--concurrency=0", "--concurrency=-4"):
+        status = main([bad])
+        assert status == 4
+        assert "--concurrency" in capsys.readouterr().err
 
 
 def test_main_runs_end_to_end_with_a_custom_concurrency(tmp_path: Path) -> None:
     (tmp_path / "test_sample.py").write_text("async def test_ok():\n    pass\n")
     assert main([str(tmp_path), "--concurrency=2"]) == 0
+
+
+def test_bad_timeout_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """The `--timeout` sibling of `test_bad_concurrency_value_is_a_usage_error`: `0`/negative/
+    non-finite are all rejected the same way, per `build_parser`'s comment on this flag (a `0` or
+    negative "budget" would otherwise mean "fail every test that happens to suspend," not a
+    useful, well-defined mode)."""
+    for bad in ("--timeout=0", "--timeout=-1", "--timeout=nan", "--timeout=inf"):
+        status = main([bad])
+        assert status == 4
+        assert "--timeout" in capsys.readouterr().err
 
 
 def test_main_reports_a_timeout_as_its_own_outcome(
