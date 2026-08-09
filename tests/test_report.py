@@ -63,6 +63,15 @@ def _log_record(message: str, level: int = logging.INFO) -> logging.LogRecord:
 # ------------------------------------------------------------------------------------------
 
 
+# Review (test quality, missing case): nothing in this section covers `paths_by_id` disagreeing
+# with what `on_result` is actually fed, which is the one way this bookkeeping is currently wrong
+# in production. `Reporter(paths_by_id={id_a: p}, ...)` then `on_result` for two results sharing
+# `id_a` — reachable for real, since `_collect` builds ids from `func.__qualname__` and a
+# factory-generated test repeats it (see the note in `_report.Reporter.__post_init__`) — prints
+# `1 tests` / `PASS` for a file that had two tests and a failure, and silently swallows the second
+# result. Whatever the chosen fix is, the assertion belongs here. A second, cheaper case with the
+# same shape: a result whose id is absent from `paths_by_id` entirely, which today raises
+# `KeyError` out of the callback and (through `run_suite`) discards the whole run.
 def test_file_block_only_prints_once_every_test_of_that_file_has_reported() -> None:
     path = Path("tests/test_sample.py")
     paths_by_id = {
@@ -119,6 +128,18 @@ def test_blocks_print_in_completion_order_not_paths_by_id_insertion_order() -> N
     stream = io.StringIO()
     reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
 
+    # Review (test quality): one test per file is the weakness. With a single test per file,
+    # "flush when the file's last test reports" and "flush when the file's *first* test reports"
+    # and "emit in the order results arrive" are all the same behaviour, so this cannot see the
+    # property the block design actually rests on: that a file whose first test finished *earliest*
+    # still flushes *last*, because it is the completion of the file's final test that orders
+    # blocks, not the file's first sighting. That is the case where the jest model differs from
+    # xdist's per-test dribble, and it is untested. Three lines more: file_a with two tests,
+    # file_b with one, delivered `a::test_1`, `b::test_1`, `a::test_2` — correct output is b's
+    # block then a's, and an implementation keyed on first-arrival would print a's first. Worth
+    # having also because the reversed-insertion premise this test does check is satisfied by any
+    # implementation that prints during `on_result` at all.
+    #
     # file_b's only test finishes first.
     reporter.on_result(_result(f"{file_b}::test_1", 1))
     reporter.on_result(_result(f"{file_a}::test_1", 0))
@@ -146,6 +167,23 @@ def test_finish_orders_by_results_list_not_on_result_order() -> None:
     stream = io.StringIO()
     reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
 
+    # Review (test quality): these four lines are decorative — the test's name promises
+    # "orders by results list, *not* on_result order", but `finish` never reads any `on_result`
+    # state at all (it iterates the `results` argument; `_buffered_by_path` was already popped and
+    # is documented as write-only for this purpose), so there is no coupling for the reversal to
+    # break. Verified by deleting exactly this block and rerunning: 15 passed. As written the test
+    # establishes only "`finish` iterates its argument in order", which is true of the one-line
+    # implementation it is testing.
+    #
+    # To test the stated property you have to make completion order *visible* to `finish`, which
+    # today means going through `run_suite`: two tests in one file with descending sleeps and
+    # `concurrency=2`, asserting the failure-details section is in `index` order while a
+    # completion-order list collected from the same `on_result` callback is the reverse. That also
+    # covers the wiring — see the note in `_run.run_suite`'s `on_result` docstring, which nothing
+    # currently exercises. Failing that, at minimum assert what this test *can* see: that
+    # `finish([result1, result0], ...)` emits test_b before test_a, i.e. that the argument order
+    # is genuinely what decides, not the ids' natural sort.
+    #
     # Completion order is reversed relative to logical (index) order.
     reporter.on_result(result1)
     reporter.on_result(result0)
@@ -168,6 +206,29 @@ def test_finish_orders_by_results_list_not_on_result_order() -> None:
 # ------------------------------------------------------------------------------------------
 
 
+# Review (test quality — this is the gap that let the `_failure_reason` bug through): every case
+# in this section is fed a hand-written `failure` string, and `_TRACEBACK_FAILURE` above was
+# written to end in `AssertionError: assert 2 == 3`, i.e. to match the heuristic. No test in this
+# file has ever seen text `_run._run_one` actually produced. Four shapes it produces routinely all
+# return something useless, each reproduced by running `velox` on a scratch directory (details in
+# the note on `_report._failure_reason`):
+#
+#   assert total == 4, "expected four widgets"        -> "assert 3 == 4"   (message lost; the
+#                                                        rewriter's explanation follows the
+#                                                        exception line, under the *default* mode)
+#   async with asyncio.TaskGroup(): ...               -> "+------------------------------------"
+#   any fixture teardown raising                      -> "+------------------------------------"
+#                                                        (`_di._release_all` always raises a
+#                                                         BaseExceptionGroup, spec/04 §5)
+#   raise ValueError("line one\nline two")            -> "line two"
+#
+# The teardown one is the reason this is a coverage gap and not a nitpick: it is not an exotic
+# input, it is what *every* `Outcome.ERROR` from teardown looks like in this codebase. The fix for
+# the tests is the same either way — build the fixtures from real output. `traceback.format_exc()`
+# inside a small helper that actually raises (an `ExceptionGroup`, an exception with a note, an
+# exception with a multi-line message) costs a few lines and cannot drift from what `_run_one`
+# emits, and one end-to-end case in `test_cli.py` asserting the short-summary line for
+# `assert x == y, "msg"` would pin the shape users copy most.
 def test_short_summary_reason_for_failed_is_the_last_traceback_line() -> None:
     result = _result("f.py::test_fail", 0, outcome=Outcome.FAILED, failure=_TRACEBACK_FAILURE)
     assert _failure_reason(result) == "AssertionError: assert 2 == 3"
@@ -342,4 +403,16 @@ def test_wall_vs_sigma_line_guards_zero_wall_clock() -> None:
 
     out = stream.getvalue()
     assert "0.00s wall" in out
+    # Review (test quality): the second assertion is vacuous twice over. A `ZeroDivisionError`
+    # would have been *raised* out of `finish`, erroring the test before this line rather than
+    # failing it, so the string can never appear in `out` regardless of the implementation — and
+    # nothing here pins what the guard actually prints. Verified by replacing
+    # `concurrency = "n/a concurrency"` with `"999.9x concurrency"`: 15 passed. The contract worth
+    # asserting is `"n/a concurrency" in out` (a fabricated ratio must not be printed) plus a
+    # `wall_clock` that is small-but-nonzero taking the other branch, since the guard's stated
+    # justification is about empty suites and — see the note in `_report.finish` — an empty suite
+    # never actually reaches it (measured: `run_suite([])` takes ~1ms of `install`/`Runner`
+    # overhead, so `wall_clock > 0`). Also uncovered anywhere in this file: `finish([], ...)` with
+    # a zero-test run, which is the shape `velox` on an empty directory produces on every exit-5
+    # run.
     assert "ZeroDivisionError" not in out

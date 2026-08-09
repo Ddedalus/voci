@@ -372,6 +372,21 @@ def run_suite(
     itself are not caught here — same "a velox bug should surface as one" posture as everywhere
     else in this function — so a reporter callback that raises aborts the run.
 
+    Review (test gap, flagged here because it is the docstring making the claim): every property
+    this paragraph promises is untested. `grep -rn on_result tests/` matches only
+    `tests/test_report.py`, which drives `Reporter.on_result` by hand — nothing anywhere calls
+    `run_suite(..., on_result=...)`, so nothing pins "called once per test", "in real completion
+    order", "before `results[index]`", "with capture already folded on", or "an exception from it
+    is not swallowed". The two that matter most are cheap and belong in `tests/test_run.py` next
+    to the existing concurrency tests, using the same shared-list pattern they already use: three
+    records with descending sleeps at `concurrency=3`, appending to a `seen: list[int]`, asserting
+    `[r.index for r in seen] == [2, 1, 0]` while `[r.index for r in run_suite(...)] == [0, 1, 2]`
+    — the *pair* is what distinguishes "the callback observes completion order" from "the runner
+    happened to be serial", and it is the only assertion in the codebase that would catch a future
+    change accidentally moving the callback to a post-`gather` loop. Second: one failing test with
+    a `print` in its body, asserting the `TestResult` handed to `on_result` already carries
+    `captured_stdout` (today's ordering) rather than the pre-`dataclasses.replace` object.
+
     spec/09 additions, all additive to the concurrency machinery below (module docstring — none
     of it touches `_run_one`'s own carefully-documented phase/outcome logic):
 
@@ -597,6 +612,29 @@ def run_suite(
                 # paragraph), before the logical-order `results` slot below is written -- a
                 # streaming reporter must see this test as "done" no later than any code that
                 # waits on the full `results` list would.
+                # Review (good, verified): the placement is right on both edges, and both were
+                # worth checking. It fires *after* the module-scope flush above, so a module
+                # fixture's teardown output is already folded into `sink` and therefore into
+                # `captured_stdout` by the time a reporter sees the result (confirmed end to end:
+                # a `scope="module"` yield-fixture printing `MODULE-TEARDOWN` shows up in the
+                # module's last test's captured stdout, and that file's block prints after it). And
+                # it fires *before* `results[index]`, so no observer can ever see a filled slot for
+                # a test the callback has not been told about. Neither ordering is accidental and
+                # neither is stated in the docstring above as the reason for the position.
+                #
+                # Review (documentation): this line invalidates the closing comment at the bottom
+                # of `run_suite` ("the only thing a `dispatch_one` task can raise is one of those
+                # two, or the `asyncio.CancelledError` `TaskGroup` throws..."). An arbitrary
+                # exception from `on_result` is now a third source, and the enumeration is what
+                # justifies the `cast(list[TestResult], results)` there. The cast is still sound —
+                # the exception propagates out of the `TaskGroup` and exits `run_suite` before that
+                # line is reached — but the reasoning printed next to it no longer covers the code.
+                # Verified: a `Reporter` whose `paths_by_id` is missing one id makes `run_suite`
+                # raise `ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)`
+                # wrapping the `KeyError`, with every completed result discarded. That blast radius
+                # is a deliberate choice per the docstring's "a velox bug should surface as one",
+                # and it is the right one; it just deserves to be reachable from the comment that
+                # currently claims it cannot happen.
                 if on_result is not None:
                     on_result(result)
                 results[index] = result

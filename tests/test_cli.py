@@ -124,6 +124,16 @@ def test_main_runs_a_passing_and_a_failing_async_test(
     # per-file block (spec/10 §2) plus the failure-details/short-summary sections `finish` builds
     # (see `test_report.py` for the reporter's own dedicated coverage) -- both tests live in one
     # file, so the block is marked FAIL with a "(1 failed)" count rather than a per-test PASS line.
+    # Review (test quality): `"FAIL" in out` no longer means what the comment above says. "FAIL"
+    # is a substring of "FAILED", which the failure-details header and the short-summary line both
+    # print, so this assertion is satisfied even if no per-file block were emitted at all — the
+    # only thing actually pinning the block is `"(1 failed)"` on the next line. The old assertions
+    # this replaced (`"test_pass PASSED"`, `"test_fail FAILED"`) paired an id with an outcome; the
+    # new ones are three independent substrings that never have to appear together, and nothing
+    # here asserts the passing test is reported anywhere at all any more. Matching the block line
+    # as a line — e.g. `any(line.startswith("FAIL ") and "test_sample.py" in line for line in
+    # out.splitlines())` — restores what was lost, and would also have caught the `paths_by_id`
+    # under-count described in `cli.py` (which prints `PASS` for a file that failed).
     assert "FAIL" in out
     assert "(1 failed)" in out
     assert "::test_fail" in out
@@ -246,6 +256,26 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
 
     out = capsys.readouterr().out
     assert status == 1
+    # Review (test quality): this is the only end-to-end coverage the reporter has, and it is
+    # eleven unanchored `in out` substring checks — none of which asserts that any two of them are
+    # on the *same line*. `"PASS"`/`"test_a.py"` would both be satisfied by a run that printed a
+    # `PASS` block for test_b.py and mentioned test_a.py only in a traceback path; `"FAIL"` is a
+    # substring of the `FAILED` lines below it. The whole point of the block format is the
+    # association `<status> <path> <count> tests <duration>`, and nothing here pins it. Splitting
+    # `out` into lines once and asserting two block lines by prefix and content is three lines and
+    # would catch the real defects this slice has: the `paths_by_id` under-count (prints `PASS ...
+    # 1 tests` for a two-test file that failed) and the block-vs-summary contradiction it causes.
+    #
+    # Three properties this test's own docstring names but does not check, worth adding while it is
+    # the only integration coverage: (a) that there are exactly *two* block lines, i.e. blocks are
+    # per file and not per test — the regression this format exists to prevent; (b) that the
+    # wall-vs-Σ line is actually final, which it is not (`main` prints the skip list, collection-
+    # error tracebacks and its own `N tests: ...` summary after it — see the notes in `cli.py`);
+    # and (c) the short-summary *reason*, which is where `_failure_reason` is wrong for every
+    # non-trivial assert. `assert 1 == 2` was chosen here and it is precisely the one shape the
+    # heuristic gets right; `assert 1 == 2, "widget count"` gives `- assert 1 == 2` and drops the
+    # message, and that variant belongs in this test.
+    #
     # Per-file blocks: one PASS (2 tests), one FAIL (1 test, 1 failed).
     assert "PASS" in out
     assert "test_a.py" in out
