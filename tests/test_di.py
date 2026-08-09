@@ -15,11 +15,18 @@ import pytest
 import velox
 from velox import Depends
 from velox._di import ScopeStore, _construct, key_for, setup, teardown
-from velox._fixtures import Fixture, Scope, plan_for
+from velox._fixtures import BuiltinContext, Fixture, Scope, plan_for
 
 
 def run(coro):  # small helper: every test body is `run(scenario())`
     return asyncio.run(coro)
+
+
+#: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
+#: `BuiltinContext` it now also requires is never actually consulted by any of them — a fixed
+#: placeholder is as good as a per-test one here. `setup`/`teardown`'s own tests go through the
+#: real `test_id`/`module_path`-derived context instead, via `setup()` itself.
+_DUMMY_CTX = BuiltinContext(test_id="dummy::test", module_path="dummy.py")
 
 
 # ------------------------------------------------------------------------------------------
@@ -348,7 +355,7 @@ def test_sync_generator_yielding_twice_raises_naming_the_fixture() -> None:
         yield 2
 
     async def scenario() -> None:
-        value, closer = await _construct(bad, {})
+        value, closer = await _construct(bad, {}, _DUMMY_CTX)
         assert value == 1
         assert closer is not None
         with pytest.raises(RuntimeError, match="bad_sync_gen"):
@@ -364,7 +371,7 @@ def test_async_generator_yielding_twice_raises_naming_the_fixture() -> None:
         yield 2
 
     async def scenario() -> None:
-        value, closer = await _construct(bad, {})
+        value, closer = await _construct(bad, {}, _DUMMY_CTX)
         assert value == 1
         assert closer is not None
         with pytest.raises(RuntimeError, match="bad_async_gen"):
@@ -470,7 +477,7 @@ def test_generator_teardown_failure_is_the_users_exception_not_masked_by_gen_clo
         raise RuntimeError("teardown boom")
 
     async def scenario() -> None:
-        value, closer = await _construct(flaky, {})
+        value, closer = await _construct(flaky, {}, _DUMMY_CTX)
         assert value == 1
         assert closer is not None
         with pytest.raises(RuntimeError, match="teardown boom"):
@@ -494,7 +501,7 @@ def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
         return _resolve()
 
     async def scenario() -> None:
-        value, closer = await _construct(returns_awaitable, {})
+        value, closer = await _construct(returns_awaitable, {}, _DUMMY_CTX)
         assert value == "resolved"
         assert closer is None
 

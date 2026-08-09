@@ -21,11 +21,13 @@ key). Actual construction, caching, and teardown are `_di.py`'s job; this module
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
 
 __all__ = [
+    "BuiltinContext",
+    "BuiltinProvider",
     "DIError",
     "Depends",
     "Fixture",
@@ -33,10 +35,16 @@ __all__ = [
     "PlanStep",
     "ResolutionPlan",
     "Scope",
+    "builtin_fixture",
     "fixture",
     "plan_for",
     "plan_of",
 ]
+
+type Closer = Callable[[], Awaitable[None]]
+"""Mirrors `_di.Closer` — kept as a separate alias rather than imported, so this module (the
+declarative half, per the module docstring) never has to import `_di` (the dynamic half) at all.
+Both names must keep meaning the same thing; nothing enforces that beyond this comment."""
 
 type Scope = Literal["call", "function", "module", "session"]
 """How widely one constructed instance is shared.
@@ -178,6 +186,35 @@ def _injection(param: str, default: object, *, keyword_only: bool) -> Injection 
 
 
 @final
+@dataclass(frozen=True, slots=True)
+class BuiltinContext:
+    """The per-setup-call context a `BuiltinProvider` needs beyond its own injected `kwargs`
+    (spec/09, spec/01 §6) — everything `_di.setup` already has to hand from its own parameters.
+
+    Deliberately *not* the whole story: ambient, per-test-task facts a provider needs that don't
+    naturally flow through `_di.setup`'s signature (the current capture sink, the log-record
+    buffer, the concurrency-slot/"worker" index, marks/tags, the `--timeout` budget) are the
+    runtime's to supply some other way — a `ContextVar` set by `_run.py` around each test's
+    setup/call/teardown envelope is the natural fit, the same mechanism spec/09 §1/§3 already
+    specifies for capture attribution generally. This dataclass only carries what `_di.setup`
+    itself owns; extend it here if a provider ends up needing something `setup` already has as a
+    plain parameter rather than something ambient.
+    """
+
+    test_id: str
+    module_path: str
+
+
+type BuiltinProvider = Callable[
+    [Mapping[str, Any], BuiltinContext], Awaitable[tuple[Any, Closer | None]]
+]
+"""What a runtime-supplied (as opposed to user-written) fixture hands `_di._construct` instead of
+a call to `Fixture.func` — same `(value, closer)` shape `_construct` already produces for every
+other fixture kind, so nothing downstream of construction (caching, refcounting, teardown) needs
+to know the difference. See `builtin_fixture` below and `_builtins.py`'s module docstring."""
+
+
+@final
 class Fixture[T]:
     """A fixture: the callable, plus everything the scheduler needs to know statically.
 
@@ -186,7 +223,7 @@ class Fixture[T]:
     one) is roadmap; see spec/01 §10 for why it was deferred rather than shipped.
     """
 
-    __slots__ = ("_exclusive", "_func", "_name", "_plan", "_scope")
+    __slots__ = ("_exclusive", "_func", "_name", "_plan", "_provider", "_scope")
 
     def __init__(
         self,
@@ -195,12 +232,14 @@ class Fixture[T]:
         scope: Scope = "function",
         exclusive: Exclusive = False,
         name: str | None = None,
+        provider: BuiltinProvider | None = None,
     ) -> None:
         self._func = func
         self._scope: Scope = scope
         self._exclusive: Exclusive = exclusive
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
         self._plan = plan_of(func)
+        self._provider = provider
         # Every fixture's own body is checked for missing injections the moment it's built, not
         # only when some test's `plan_for` walk happens to reach it: a fixture can only ever be
         # called with the parameters `Depends(...)` supplies (there is no name-based lookup to
@@ -230,6 +269,13 @@ class Fixture[T]:
     @property
     def exclusive(self) -> Exclusive:
         return self._exclusive
+
+    @property
+    def provider(self) -> BuiltinProvider | None:
+        """`None` for every ordinary fixture. When set, `_di._construct` calls this instead of
+        `func` — see `builtin_fixture`. Not settable via `velox.fixture()`; only this package's
+        own `_builtins.py` ever constructs a provider-backed `Fixture`."""
+        return self._provider
 
     @property
     def plan(self) -> tuple[Injection, ...]:
@@ -320,6 +366,28 @@ def fixture(
         return Fixture(fn, scope=scope, exclusive=exclusive, name=name)
 
     return cast(FixtureDecorator, decorate)
+
+
+def builtin_fixture(
+    func: Callable[..., Any],
+    *,
+    provider: BuiltinProvider,
+    scope: Scope = "function",
+    name: str | None = None,
+) -> Fixture[Any]:
+    """Construct a `Fixture` whose value the velox runtime supplies directly, instead of by
+    calling `func` — `_builtins.py`'s module docstring: "there is nothing privileged about them
+    except that the runtime supplies the value instead of calling the function." `func` is kept
+    only so the fixture has a `__name__`/signature/return annotation to display and to typecheck
+    call sites against; `_di._construct` checks `.provider` before it would ever reach `func`, so
+    `func`'s own body is unreachable at run time (`_builtins.py` raises `NotImplementedError` in
+    every one, and that is intentional documentation, not a bug to fix).
+
+    Distinct from `fixture()` — not exposed as one of its parameters — so a user fixture can never
+    accidentally (or deliberately) become provider-backed; only this package's own `_builtins.py`
+    calls this.
+    """
+    return Fixture(func, scope=scope, name=name, provider=provider)
 
 
 # --------------------------------------------------------------------------------------------

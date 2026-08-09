@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, final
 
-from velox._fixtures import Fixture, PlanStep, ResolutionPlan, Scope
+from velox._fixtures import BuiltinContext, Fixture, PlanStep, ResolutionPlan, Scope
 
 __all__ = ["ScopeStore", "setup", "teardown"]
 
@@ -308,6 +308,11 @@ async def setup(
     it is populated whether cleanup of the *other* keys below succeeds, fails, or is itself
     interrupted.
     """
+    # One `BuiltinContext` per `setup()` call, not per step: every step of the same test's plan
+    # sees the same `test_id`/`module_path`, so there is nothing step-specific to recompute — see
+    # `BuiltinContext`'s own docstring for what it deliberately does *not* carry.
+    ctx = BuiltinContext(test_id=test_id, module_path=module_path)
+
     values: dict[int, Any] = {}
     keys: dict[int, CacheKey] = {}
     acquired: list[CacheKey] = []
@@ -327,7 +332,7 @@ async def setup(
                 # dump or error message would want to say "this came from `*, param=...`"), not
                 # because construction branches on it.
                 kwargs = {name: values[source] for name, source, _ in step.args}
-                return await _construct(step.fixture, kwargs)
+                return await _construct(step.fixture, kwargs, ctx)
 
             values[step.step_id] = await store.acquire(key, step.fixture.scope, step.fixture, build)
             keys[step.step_id] = key
@@ -415,13 +420,23 @@ async def _release_all(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
         raise BaseExceptionGroup("fixture teardown", errors)
 
 
-async def _construct(fixture: Fixture[Any], kwargs: Mapping[str, Any]) -> tuple[Any, Closer | None]:
-    """Call `fixture.func`, adapting whichever of the four supported shapes it is.
+async def _construct(
+    fixture: Fixture[Any], kwargs: Mapping[str, Any], ctx: BuiltinContext
+) -> tuple[Any, Closer | None]:
+    """Call `fixture.func`, adapting whichever of the four supported shapes it is — or, for a
+    provider-backed fixture (`velox._builtins`'s `tmp_path`/`capture`/`log_records`/`test_info`/
+    `tmp_path_factory`), call `fixture.provider` instead and never touch `func` at all (spec/09;
+    `_fixtures.builtin_fixture`'s docstring). Checked first and unconditionally: a provider-backed
+    fixture's `func` body is `raise NotImplementedError(...)` by design, so falling through to the
+    ordinary path below for one would always fail, not just take a slower route.
 
     Sync callables (plain functions and sync generators) run inline rather than in an executor —
     spec/04 §5's answer to "is blocking teardown special": no, it's a blocking call like any
     other, and the watchdog (spec/11, not built yet) is what will eventually name it.
     """
+    if fixture.provider is not None:
+        return await fixture.provider(kwargs, ctx)
+
     func = fixture.func
     if inspect.isasyncgenfunction(func):
         gen = func(**kwargs)

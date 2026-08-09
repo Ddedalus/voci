@@ -6,6 +6,7 @@ what the decorators build and what the plan reads off `__defaults__`.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 import pytest
@@ -140,11 +141,29 @@ def test_builtin_fixtures_are_fixtures() -> None:
 
 
 def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
-    """Every other stub in `_builtins` raises the moment it is called; `set_level` used to defer
-    that to `__enter__` because it was a `@contextmanager`, so `cm = log_records.set_level(...)`
-    would succeed and only `with cm:` would fail."""
-    with pytest.raises(NotImplementedError):
-        velox.LogRecords().set_level("DEBUG")
+    """`set_level` validates its `level`/`logger` arguments the moment it is called, not deferred
+    to `with ...:` — a `@contextlib.contextmanager`-based implementation would defer to
+    `__enter__` instead (the decorated function is a generator; nothing in its body runs before
+    the first `next()`, which `__enter__` triggers), so `cm = log_records.set_level("nonsense")`
+    would succeed and only `with cm:` would raise. This pins the eager behavior: the call itself
+    raises, before any `with` block exists to enter."""
+    records = velox.LogRecords([])
+
+    with pytest.raises(ValueError, match="unknown logging level"):
+        records.set_level("not-a-real-level")
+
+    with pytest.raises(TypeError, match="bool is not a valid logging level"):
+        records.set_level(True)
+
+    with pytest.raises(TypeError, match="expected str or None"):
+        records.set_level("DEBUG", logger=123)  # type: ignore[arg-type]
+
+    # The happy path really is a context manager, entered only afterwards, and it restores the
+    # root logger's previous level rather than leaving DEBUG in place.
+    previous = logging.getLogger().level
+    with records.set_level("DEBUG"):
+        assert logging.getLogger().level == logging.DEBUG
+    assert logging.getLogger().level == previous
 
 
 def test_approx_compares_both_ways() -> None:

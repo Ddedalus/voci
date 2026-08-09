@@ -59,6 +59,16 @@ select = [
     "RUF", # ruff-specific
 ]
 
+# `Depends(...)` sitting in a parameter default (spec/01 §3's whole wiring syntax) is exactly the
+# call-in-default-argument shape B008 exists to flag in general, but it's the intended spelling
+# here, same as FastAPI's own `Depends()` it's modeled on. Whitelisted by qualified name so
+# `velox.Depends(...)` and `Depends(...)` (after `from velox import Depends`) both pass; spec/01
+# §10 names the one shape this can't cover -- a method call like `fixture.with_()`, which has no
+# fixed qualified name to whitelist, is why that API was deferred rather than shipped needing
+# every call site to disable the rule by hand.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["velox.Depends", "Depends"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["velox"]
 # The `fastapi/` reference submodule at the repo root otherwise makes isort read the installed

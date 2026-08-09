@@ -7,6 +7,12 @@ M0 (spec/00 §8): discover, import, run, print pass/fail, correct exit code. No 
 M1 concurrency slice (spec/05 §1-4): `--concurrency` and `--timeout` are now real, wired straight
 through to `_run.run_suite`, alongside `--assert`/`--rewrite-cache` in the "does real work"
 category this docstring already calls out.
+
+M1 capture slice (spec/09): `-s`/`--capture=no` and `--basetemp` join that same category. Printing
+captured output is deliberately minimal here — a failing test's stdout/stderr/log records below
+its traceback, and an "unattributed output" section if the session sink caught anything — the full
+jest-style reporter (per-file blocks, live footer, `--durations`, JUnit) is spec/10, not this
+milestone.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import math
 import sys
 from pathlib import Path
 
-from velox import __version__, _collect, _discovery, _rewrite, _run
+from velox import __version__, _capture, _collect, _discovery, _rewrite, _run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +90,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-test setup+call budget, in seconds (spec/05 §2-4). A test that exceeds it is "
         "reported as TIMEOUT rather than FAILED/ERROR. Must be positive and finite. Default: no "
         "limit.",
+    )
+    # Capture is implemented (spec/09 §1): stdout/stderr are routed through a per-test Sink by
+    # default, shown only for failing tests. `-s`/`--capture=no` disables that routing's
+    # buffering in favor of a live pass-through, prefixed per line with the test id so concurrent
+    # output stays readable (spec/09 §1) — unlike pytest's `-s`, this does *not* force serial: the
+    # per-line prefix is what keeps interleaved output attributable, so `--concurrency` keeps
+    # working alongside it. `--capture=no` is the long form pytest scripts already spell; `-s` is
+    # the shorthand both tools share.
+    parser.add_argument(
+        "--capture",
+        choices=("no",),
+        default=None,
+        metavar="no",
+        help="Set to 'no' (or pass -s) to pass captured stdout/stderr straight through to the "
+        "real stream live, prefixed with the test id per line. Default: captured, and shown "
+        "only for failing tests.",
+    )
+    parser.add_argument(
+        "-s",
+        dest="capture_s",
+        action="store_true",
+        help="Shorthand for --capture=no.",
+    )
+    # tmp_path/tmp_path_factory are implemented (spec/09 §5): a fresh, numbered session root by
+    # default (retention: velox._capture.DEFAULT_BASETEMP_RETENTION previous roots kept), or this
+    # override.
+    parser.add_argument(
+        "--basetemp",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Override where tmp_path/tmp_path_factory allocate. WARNING: this directory is "
+        "cleared (removed and recreated) at the start of every run that uses it -- do not point "
+        "it at anything you did not create for this purpose. Default: a fresh numbered "
+        f"directory under the platform temp dir, keeping the last "
+        f"{_capture.DEFAULT_BASETEMP_RETENTION} previous runs.",
     )
     return parser
 
@@ -206,8 +248,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         files = _discovery.discover_files(roots)
         collected = _collect.collect(files, rootdir=rootdir)
+        capture_passthrough = args.capture == "no" or args.capture_s
+        # Populated by `run_suite` iff non-`None` (spec/09 §9 "MVP" mentions this section
+        # explicitly) — see `_capture.py`'s module docstring for exactly what can land here under
+        # this runtime (a genuinely detached background thread; end-of-run session-scope
+        # teardown output). Empty in the overwhelming common case.
+        unattributed: list[str] = []
         results = _run.run_suite(
-            collected.records, concurrency=args.concurrency, timeout=args.timeout
+            collected.records,
+            concurrency=args.concurrency,
+            timeout=args.timeout,
+            capture_passthrough=capture_passthrough,
+            basetemp=args.basetemp,
+            unattributed_output=unattributed,
         )
 
         # `Outcome.value` ("passed"/"failed"/"error") upper-cased rather than a three-way
@@ -217,6 +270,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{result.id} {result.outcome.value.upper()} ({result.duration:.3f}s)")
             if result.failure is not None:
                 print(result.failure)
+            # spec/09 §6: captured output is only ever non-empty on `TestResult` for a failing
+            # outcome (`run_suite`'s own `dispatch_one` drops it for `PASSED` before this point),
+            # so no `result.outcome is not PASSED` guard is needed here beyond "is there anything
+            # to print" — this is deliberately minimal (three flat sections, no truncation-aware
+            # layout, no per-file grouping) since the real reporter is spec/10, out of scope here.
+            if result.captured_stdout:
+                print("--- captured stdout ---")
+                print(result.captured_stdout)
+            if result.captured_stderr:
+                print("--- captured stderr ---")
+                print(result.captured_stderr)
+            if result.log_records:
+                print("--- captured log records ---")
+                for record in result.log_records:
+                    print(f"{record.levelname} {record.name}: {record.getMessage()}")
+
+        if unattributed:
+            print(
+                "--- unattributed output (produced outside any test's context; spec/09 §9 Q4) ---"
+            )
+            for section in unattributed:
+                print(section)
 
         for skipped in collected.skipped:
             print(f"{skipped.id} SKIPPED ({skipped.reason})")
