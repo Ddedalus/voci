@@ -348,14 +348,88 @@ def test_main_cli_concurrency_overrides_config(
 def test_main_rejects_a_bad_config_concurrency_value_as_a_usage_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Named by its actual source (the `pyproject.toml` `[tool.velox]` set it in), not
+    `--concurrency` -- the user never touched that flag, and a message pointing at it would send
+    them looking in the wrong place."""
     (tmp_path / "pyproject.toml").write_text("[tool.velox]\nconcurrency = 0\n")
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     monkeypatch.chdir(tmp_path)
 
     status = main([])
 
+    err = capsys.readouterr().err
     assert status == 4
-    assert "--concurrency" in capsys.readouterr().err
+    assert "--concurrency" not in err
+    assert str(tmp_path / "pyproject.toml") in err
+    assert "concurrency" in err
+
+
+def test_main_rejects_a_bad_config_timeout_value_as_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntimeout = -1\n")
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    err = capsys.readouterr().err
+    assert status == 4
+    assert "--timeout" not in err
+    assert str(tmp_path / "pyproject.toml") in err
+
+
+def test_main_config_test_file_patterns_empty_list_means_no_files_not_the_built_in_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`test_file_patterns = []` is a real, if unusual, config -- same reasoning (and same
+    regression) as `test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default`."""
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntest_file_patterns = []\n")
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    raise AssertionError\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 5  # no tests collected, not "1 failed"
+
+
+def test_main_nonexistent_config_testpath_entry_is_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A typo'd `[tool.velox] testpaths` entry must get the same I8 treatment as a typo'd CLI
+    path (`test_main_rejects_a_nonexistent_path_as_a_usage_error`) -- not a silent "0 tests"."""
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntestpaths = ['tset']\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_it.py").write_text("async def test_it():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    err = capsys.readouterr().err
+    assert status == 4
+    assert "tset" in err
+
+
+def test_main_env_is_restored_even_when_rewrite_install_fails_after_it_is_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: `env_backup`'s restore used to sit in a `finally` that `_rewrite.install`
+    could bypass entirely (by raising before that `try` was ever entered), leaking `[tool.velox]
+    env` into the process. The mutation now happens *inside* the same `try` the restore guards,
+    so even an exception from `_rewrite.install` itself must still be undone."""
+    monkeypatch.delenv("VELOX_CONFIG_INSTALL_FAILS", raising=False)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.velox]\nenv = { VELOX_CONFIG_INSTALL_FAILS = 'leaked' }\n"
+    )
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "velox._rewrite.install",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated install failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated install failure"):
+        main([])
+
+    assert "VELOX_CONFIG_INSTALL_FAILS" not in os.environ
 
 
 def test_main_rejects_an_invalid_tool_velox_table_as_a_usage_error(

@@ -45,35 +45,43 @@ That's all five named components. What's left is closing the **gate**, not the c
 
 ## Remaining work
 
-The M1 gate ("velox runs its own suite") is not yet demonstrated. Two of the example suites
-under `examples/` — which are the actual "real suite" dogfood targets (spec/00 §7 intro: "a runner
-good enough to run velox's own test suite and one real FastAPI service suite") — currently fail to
-collect under `uv run velox`, and neither is wired into CI. Root-caused below; each is a real,
-scoped gap, not flakiness.
+The M1 gate ("velox runs its own suite") is not yet demonstrated on `main`. The two items below
+that root-caused why the example suites under `examples/` — the actual "real suite" dogfood
+targets (spec/00 §7 intro: "a runner good enough to run velox's own test suite and one real
+FastAPI service suite") — failed to collect are both done now (rootdir import convention still
+pending merge into `main`, see its entry above); what's left is the dogfood pass itself.
 
-- [ ] **Rootdir import convention** — resolve Outstanding Decision #1 (spec/00 §11) and implement
-  it. `_collect.py` currently does *no* `sys.path` insertion by design (`_collect.py:295`), so any
-  test module that imports a sibling — `examples/02-async-library/tests/test_cache.py: from
-  relay.cache import FakeClock`, or `tests/assertion/test_explanations.py: from .conftest import
-  callequal` — fails to collect with `ModuleNotFoundError`. This is the actual root cause of both
-  failures reproduced below, and it blocks essentially every non-trivial suite (shared
-  `tests/fixtures.py`, the package under test itself), so it's the highest-priority item here.
-  Needs: a written resolution (spec/00 §11 point 1 already has the user's steer — "prepend the
-  rootdir to sys.path once at startup" — someone needs to turn that into an implementation and a
-  spec/03 update), then the `_collect.py` change, then tests.
-  - Repro: `cd examples/02-async-library && uv run --with-editable ../.. velox .` →
-    `ModuleNotFoundError: No module named 'relay'`.
-  - Repro: `uv run velox tests/` → `tests/assertion/test_explanations.py` fails collection on
-    `from .conftest import callequal, callop` (`ModuleNotFoundError: No module named
-    'velox_tests'`).
+- [x] **Rootdir import convention** — resolves Outstanding Decision #1 (spec/00 §11): `cli.main`
+  now prepends `rootdir` to `sys.path[0]` exactly once, before the first test module import,
+  removed again on the way out (same "repeated in-process `main()` calls must not leak" shape as
+  the config-loader's `env_backup`). Makes plain absolute imports rooted at `rootdir` resolve via
+  PEP 420 namespace-package lookup (`from tests.fixtures import api_client`, `from relay.cache
+  import FakeClock`) without an `__init__.py` anywhere; deliberately does *not* make relative
+  imports between test modules work (`from .conftest import x` — those resolve against the
+  synthetic `velox_tests.*` package name, unsupported by design). Spec updated:
+  [00](../spec/00-overview.md) §11, [02](../spec/02-cli-and-config.md) §5,
+  [03](../spec/03-discovery-and-collection.md) §3. — `331c477` on branch
+  `rootdir-import-convention`, built and verified in an isolated worktree against this plan's
+  `6674f2d` specifically to avoid the concurrent config-loader review pass also in flight on
+  `main`'s working tree at the time; **not yet merged into `main`** as of this writing, so `main`
+  itself doesn't have it yet even though this box is checked. Verified against
+  `examples/02-async-library`: the `ModuleNotFoundError: No module named 'relay'` collection
+  failure is gone (surfacing 4 unrelated pre-existing bugs in that example, out of scope here —
+  the "dogfood the examples" item below).
 
-- [ ] **`[tool.velox]` config loader** — `cli.py:144` notes "velox has no `[tool.velox]` loader
-  yet — nothing in this package reads `pyproject.toml`". `examples/01-fastapi-crud/pyproject.toml`
-  already carries `testpaths`, `concurrency`, `timeout`, and `env` under `[tool.velox]`
-  (spec/02 §3) expecting it to be honored; right now it's silently ignored. This blocks the
-  FastAPI example from getting its `ENVIRONMENT`/`SIGNUP_BONUS_CENTS` env vars set at all, on top
-  of the import problem above. Scope this to the keys the shipped examples actually use rather
-  than the full spec/02 §3 surface — the rest can stay roadmap.
+- [x] **`[tool.velox]` config loader** — `_config.resolve` (upward search for the `pyproject.toml`
+  declaring `[tool.velox]`, stopping at the git root) plus `cli.main` merging it against the CLI
+  at `CLI > [tool.velox] > built-in default`. Recognizes `testpaths`, `concurrency`, `timeout`,
+  `test_file_patterns`, `ignore`, `env` — the keys the shipped examples actually use;
+  `watchdog_threshold` deliberately deferred (no consumer before M2). Does *not* unblock the
+  FastAPI/async-library examples end to end by itself — that still needs the rootdir-import-
+  convention item above (they now get their `concurrency`/`timeout`/`env` applied, but still fail
+  to *collect* on `from relay... import`/`from tests.fixtures import ...`). — `6674f2d`, review
+  (8-angle `/code-review high`, run twice after a mid-review interruption) found and fixed: a
+  `test_file_patterns = []`/`ignore = []`-style truthiness bug, an `os.environ` mutation that
+  could leak on a `_rewrite.install` exception, unvalidated `testpaths` entries silently producing
+  "0 tests" instead of a usage error, and config-sourced bad values being misattributed to
+  `--concurrency`/`--timeout` in error messages
 
 - [ ] **Dogfood the example suites, in CI** — once the two items above land, get
   `examples/01-fastapi-crud` (needs its own `uv sync` — it depends on `fastapi`/`sqlalchemy`, not

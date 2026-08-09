@@ -127,7 +127,16 @@ def _search_start(explicit_paths: Sequence[Path]) -> Path:
     for raw in explicit_paths:
         resolved = raw.resolve()
         dirs.append(resolved if resolved.is_dir() else resolved.parent)
-    return Path(os.path.commonpath(dirs))
+    try:
+        return Path(os.path.commonpath(dirs))
+    except ValueError as exc:
+        # `commonpath` raises when its inputs don't share a root at all (mixed drives on
+        # Windows; on the Linux/macOS targets spec/00 §2 actually commits to, every `.resolve()`d
+        # path shares `/`, so this is unreachable there) -- a `ConfigError` gives `cli.main` a
+        # clean exit-4 usage error instead of an unhandled traceback (I6).
+        raise ConfigError(
+            f"can't find a common directory for {[str(p) for p in explicit_paths]}: {exc}"
+        ) from exc
 
 
 def _read_tool_velox_table(pyproject_path: Path) -> dict[str, object] | None:
@@ -164,28 +173,43 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
             f"(known keys: {', '.join(sorted(_KNOWN_KEYS))})"
         )
 
-    concurrency = table.get("concurrency")
-    if concurrency is not None and (
-        isinstance(concurrency, bool) or not isinstance(concurrency, int)
-    ):
-        raise ConfigError(f"{source}: 'concurrency' must be an integer, got {concurrency!r}")
-
-    timeout = table.get("timeout")
-    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int | float)):
-        raise ConfigError(f"{source}: 'timeout' must be a number, got {timeout!r}")
-
     return Config(
         rootdir=rootdir,
         source=source,
         testpaths=_str_list(table.get("testpaths"), key="testpaths", source=source),
-        concurrency=concurrency,
-        timeout=float(timeout) if timeout is not None else None,
+        concurrency=_concurrency(table.get("concurrency"), source=source),
+        timeout=_timeout(table.get("timeout"), source=source),
         test_file_patterns=_str_list(
             table.get("test_file_patterns"), key="test_file_patterns", source=source
         ),
         ignore=_str_list(table.get("ignore"), key="ignore", source=source),
         env=_str_dict(table.get("env"), key="env", source=source),
     )
+
+
+def _concurrency(value: object, *, source: Path) -> int | None:
+    """`[tool.velox] concurrency` must be a plain `int`. `bool` is rejected explicitly even
+    though it's an `int` subclass: TOML's `true`/`false` silently becoming `1` would be a
+    surprising coercion, not a real value the user wrote (`test_concurrency_must_be_a_plain_
+    integer` pins this alongside the ordinary wrong-type cases).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{source}: 'concurrency' must be an integer, got {value!r}")
+    return value
+
+
+def _timeout(value: object, *, source: Path) -> float | None:
+    """`[tool.velox] timeout` must be an `int` or `float` -- same `bool` exclusion as
+    `_concurrency`, for the same reason (`test_timeout_rejects_a_bool`). Always returned as
+    `float`, matching `Config.timeout`'s own type regardless of which numeric form was written.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ConfigError(f"{source}: 'timeout' must be a number, got {value!r}")
+    return float(value)
 
 
 def _str_list(value: object, *, key: str, source: Path) -> tuple[str, ...] | None:

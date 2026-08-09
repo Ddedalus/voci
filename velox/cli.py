@@ -33,6 +33,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import overload
 
 from velox import __version__, _capture, _collect, _config, _discovery, _report, _rewrite, _run
 
@@ -232,6 +233,30 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     return None
 
 
+@overload
+def _resolve_layered[T](cli_value: T | None, config_value: T | None, default: T) -> T: ...
+@overload
+def _resolve_layered[T](
+    cli_value: T | None, config_value: T | None, default: None = None
+) -> T | None: ...
+def _resolve_layered(cli_value, config_value, default=None):
+    """CLI > `[tool.velox]` > built-in default (spec/02 §3), spelled out once so every merged
+    option applies the same three-tier rule instead of a hand-rolled variant per flag that could
+    quietly diverge (e.g. one call site forgetting the final default fallback).
+
+    Overloaded, not just annotated `-> T | None`, purely so a non-`None` `default` (as
+    `effective_concurrency` passes) lets the type checker narrow the result to `T` instead of
+    `T | None` -- `effective_timeout`, which omits `default`, correctly keeps the `T | None` it
+    actually needs (spec/05 §11 Q12: no timeout is a real, meaningful value here, not an unset
+    marker).
+    """
+    if cli_value is not None:
+        return cli_value
+    if config_value is not None:
+        return config_value
+    return default
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -279,30 +304,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"velox: {exc}", file=sys.stderr)
         return 4
 
-    # CLI > [tool.velox] > built-in default (spec/02 §3), in that order. `args.concurrency`/
-    # `args.timeout` are `None` exactly when the flag wasn't given (see `build_parser`'s comments
-    # on both) — that, not `is None` on `config.concurrency`, is what "the user didn't ask for a
-    # specific value on the command line" actually means here.
-    effective_concurrency = args.concurrency if args.concurrency is not None else config.concurrency
-    if effective_concurrency is None:
-        effective_concurrency = _run.DEFAULT_CONCURRENCY
-    effective_timeout = args.timeout if args.timeout is not None else config.timeout
+    # CLI > [tool.velox] > built-in default (spec/02 §3), in that order, via one shared helper —
+    # `args.concurrency`/`args.timeout` are `None` exactly when the flag wasn't given (see
+    # `build_parser`'s comments on both), so this is the same three-tier resolution for both
+    # rather than two hand-spelled variants that could quietly drift apart (e.g. one gaining the
+    # built-in-default fallback the other forgets).
+    effective_concurrency = _resolve_layered(
+        args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
+    )
+    effective_timeout = _resolve_layered(args.timeout, config.timeout)
 
     # Same two checks the raw `args.concurrency`/`args.timeout` used to get, just moved to run
     # against the merged value — a bad number is exactly as much a usage error coming from
     # `[tool.velox]` as from the command line, and `run_suite`'s own `ValueError` (defense in
-    # depth for direct callers) is too late here to produce a clean exit code either way.
+    # depth for direct callers) is too late here to produce a clean exit code either way. Named by
+    # its actual source (the CLI flag, or the config file that set it) rather than always saying
+    # `--concurrency`/`--timeout` — a bad `[tool.velox] concurrency` shouldn't point the user at a
+    # flag they never touched.
     if effective_concurrency < 1:
+        source = (
+            "--concurrency" if args.concurrency is not None else f"{config.source} 'concurrency'"
+        )
         print(
-            f"velox: --concurrency must be a positive integer, got {effective_concurrency}",
+            f"velox: {source} must be a positive integer, got {effective_concurrency}",
             file=sys.stderr,
         )
         return 4
     if effective_timeout is not None and not (
         math.isfinite(effective_timeout) and effective_timeout > 0
     ):
+        source = "--timeout" if args.timeout is not None else f"{config.source} 'timeout'"
         print(
-            f"velox: --timeout must be a positive, finite number of seconds, got "
+            f"velox: {source} must be a positive, finite number of seconds, got "
             f"{effective_timeout}",
             file=sys.stderr,
         )
@@ -319,6 +352,17 @@ def main(argv: list[str] | None = None) -> int:
         roots = [Path(p) for p in args.paths]
     elif config.testpaths is not None:
         roots = [config.rootdir / p for p in config.testpaths]
+        # Mirrors `_invalid_path_argument`'s I8 reasoning for CLI paths: a typo'd `testpaths`
+        # entry must not silently look like an honest empty selection either. Unlike CLI paths,
+        # nothing upstream of this point has ever checked `config.testpaths` against the
+        # filesystem, so it's done here, right before these roots are actually used.
+        for root, raw in zip(roots, config.testpaths, strict=True):
+            if not root.exists():
+                print(
+                    f"velox: {config.source}: testpaths entry does not exist: {raw!r}",
+                    file=sys.stderr,
+                )
+                return 4
     else:
         roots = _default_test_roots(config.rootdir)
 
@@ -334,53 +378,67 @@ def main(argv: list[str] | None = None) -> int:
 
     rootdir = config.rootdir
 
-    # spec/02 §5: "`env` from config is applied before the first test module import" — nothing
-    # above this line imports a test module yet (that's `_rewrite.install`/`discover_files`/
-    # `_collect.collect`, right below), so this is late enough to still qualify while being early
-    # enough to skip entirely on every usage-error `return 4` above: those never touch the
-    # environment at all now, rather than mutating it and then bailing out. Unconditional
-    # overwrite of each named key: there is no CLI flag for an individual `env` entry to take
-    # precedence over, so `[tool.velox] env` is the only source and always wins for the keys it
-    # names. `env_backup` (not `monkeypatch` — this is production code, not a test) is what makes
-    # this safe to call repeatedly in-process (this package's own test suite does exactly that,
-    # same reason the `finally` block below tears down the rewrite hook): every key `env` touches
-    # is restored to its pre-call value (or removed, if it didn't exist before) in that same
-    # `finally`, so one `main()` call's config can never leak into the next one's environment, or
-    # into an embedding process that called `main()` for a side effect other than exiting.
+    # `env_backup`/the matching restore loop in this `try`'s `finally` (not `monkeypatch` — this
+    # is production code, not a test) are what make this safe to call repeatedly in-process (this
+    # package's own test suite does exactly that): every key `env` touches is restored to its
+    # pre-call value (or removed, if it didn't exist before) on the way out, so one `main()`
+    # call's config can never leak into the next one's environment, or into an embedding process
+    # that called `main()` for a side effect other than exiting. Unconditional overwrite of each
+    # named key: there is no CLI flag for an individual `env` entry to take precedence over, so
+    # `[tool.velox] env` is the only source and always wins for the keys it names.
+    #
+    # Deliberately the *first* thing inside this `try`, ahead of `_rewrite.install` and
+    # everything else it guards: spec/02 §5 only requires `env` to land before the first test
+    # module import, but putting the mutation itself inside the same `try`/`finally` that
+    # restores it (rather than just before it, as an earlier version of this code did) means the
+    # restore now fires even if `_rewrite.install` itself raises, not only for exceptions raised
+    # after it succeeds.
     env_backup = {key: os.environ.get(key) for key in config.env}
     os.environ.update(config.env)
 
-    # Must be installed before any test module is imported below — a module already sitting in
-    # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
-    # above, so this call is handed the decision it made rather than re-probing the cache.
-    #
-    # Not fixed here: `install` walks every `.py` under `roots` for its own `_initialpaths`
-    # (`_discover_python_files`) and `discover_files` below walks the same roots again for
-    # test files specifically — two full traversals per run, against I7's 50ms startup budget.
-    # They are not the same walk (one wants every `.py`, the other only `test_*.py`/`*_test.py`),
-    # so unifying them means changing `_rewrite.install`'s signature to accept a pre-discovered
-    # file list rather than discovering its own — real surgery in a module this pass wasn't
-    # scoped to restructure, and secondary to `_import_module` actually consulting the hook at
-    # all (the correctness bug, now fixed). Left as a known, named cost, worth revisiting once
-    # a shared "test tree walker" exists for `[tool.velox]` config to hang off of too.
-    hook_already_installed = _rewrite.installed_hook() is not None
-    _rewrite.install(roots, setup=setup, warn=False)
+    # Set here, not just inside the `try` below: if `_rewrite.installed_hook()` itself somehow
+    # raised before reassigning this, the `finally`'s `if not hook_already_installed:` would
+    # otherwise hit an unbound name instead of the original exception. `False` is also the safer
+    # fallback value for that case -- it makes `finally` attempt an `uninstall()`, not skip one.
+    hook_already_installed = False
     try:
+        # Must be installed before any test module is imported below — a module already sitting
+        # in `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
+        # above, so this call is handed the decision it made rather than re-probing the cache.
+        #
+        # Not fixed here: `install` walks every `.py` under `roots` for its own `_initialpaths`
+        # (`_discover_python_files`) and `discover_files` below walks the same roots again for
+        # test files specifically — two full traversals per run, against I7's 50ms startup
+        # budget. They are not the same walk (one wants every `.py`, the other only
+        # `test_*.py`/`*_test.py`), so unifying them means changing `_rewrite.install`'s
+        # signature to accept a pre-discovered file list rather than discovering its own — real
+        # surgery in a module this pass wasn't scoped to restructure, and secondary to
+        # `_import_module` actually consulting the hook at all (the correctness bug, now fixed).
+        # Left as a known, named cost, worth revisiting once a shared "test tree walker" exists
+        # for `[tool.velox]` config to hang off of too.
+        hook_already_installed = _rewrite.installed_hook() is not None
+        _rewrite.install(roots, setup=setup, warn=False)
         # `config.test_file_patterns`/`config.ignore` replace `discover_files`'s own defaults
         # outright when set, matching spec/02 §3's example table (`ignore = [...]` there spells
         # out the exact built-in default set, not an addition to it) — a user who wants "the
         # defaults plus one more" repeats the defaults themselves, the same convention this
         # module's own `--capture`/`--assert` choices don't need but a list-valued config key
-        # does.
-        if config.ignore is not None:
-            ignore_dirs = frozenset(config.ignore)
-        else:
-            ignore_dirs = _discovery.DEFAULT_IGNORE_DIRS
-        files = _discovery.discover_files(
-            roots,
-            patterns=config.test_file_patterns or _discovery.DEFAULT_TEST_FILE_PATTERNS,
-            ignore_dirs=ignore_dirs,
+        # does. `is not None`, not truthiness, for both: `test_file_patterns = []`/`ignore = []`
+        # are real, if unusual, things to write and mean "none" -- the same reasoning
+        # `config.testpaths`'s own resolution above already spells out, and the same mistake
+        # (`x or DEFAULT`, which silently swaps back to the default for an explicit `[]`) it warns
+        # against.
+        patterns = (
+            config.test_file_patterns
+            if config.test_file_patterns is not None
+            else _discovery.DEFAULT_TEST_FILE_PATTERNS
         )
+        ignore_dirs = (
+            frozenset(config.ignore)
+            if config.ignore is not None
+            else _discovery.DEFAULT_IGNORE_DIRS
+        )
+        files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
         collected = _collect.collect(files, rootdir=rootdir)
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by `run_suite` iff non-`None` (spec/09 §9 "MVP" mentions this section
