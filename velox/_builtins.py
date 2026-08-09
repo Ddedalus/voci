@@ -145,6 +145,13 @@ class _LevelOverride(AbstractContextManager[None]):
     exists to avoid — see `tests/test_public_api.py`'s
     `test_log_records_set_level_raises_at_call_time_not_at_enter`. Validation itself happens in
     `set_level` before this object is even constructed; this class only does the save/restore.
+
+    The "previous" level is snapshotted in `__enter__`, not in `__init__` — `set_level(...)`
+    returns this object without entering it, so holding it and entering later (or not at all) is a
+    supported shape, and snapshotting eagerly at construction time would pair the restore with
+    whatever the level happened to be at `set_level(...)`-call time rather than at the moment this
+    block actually took over, silently restoring a stale value if anything changed the logger's
+    level in between.
     """
 
     __slots__ = ("_level", "_logger", "_previous")
@@ -152,24 +159,14 @@ class _LevelOverride(AbstractContextManager[None]):
     def __init__(self, logger: logging.Logger, level: int) -> None:
         self._logger = logger
         self._level = level
-        # Review (low): the "previous" level is snapshotted at `set_level(...)` *call* time, not at
-        # `__enter__` time. For the overwhelmingly common `with records.set_level(...):` spelling
-        # those are the same instant, but `set_level` deliberately returns an
-        # `AbstractContextManager` rather than entering anything, so holding the object and
-        # entering it later is a supported shape -- and then `__exit__` restores a stale value.
-        # Verified: logger at WARNING, `cm = lr.set_level(DEBUG)`, `lg.setLevel(ERROR)`, `with cm:
-        # pass` -> level is WARNING afterwards, not ERROR. Reading `logger.level` in `__enter__`
-        # instead makes save/restore properly paired and costs nothing; the eager *validation*
-        # this class's docstring is about happens in `set_level` before construction either way,
-        # so it is unaffected. (Restore-on-exception is correct as written -- `__exit__` runs for
-        # a raising body and for a cancelled `await` inside the block; I checked, and the level
-        # does not leak past a failing test.)
-        self._previous = logger.level
+        self._previous: int | None = None
 
     def __enter__(self) -> None:
+        self._previous = self._logger.level
         self._logger.setLevel(self._level)
 
     def __exit__(self, *exc_info: object) -> None:
+        assert self._previous is not None, "__exit__ without a matching __enter__"
         self._logger.setLevel(self._previous)
 
 
@@ -184,7 +181,7 @@ class LogRecords:
 
     __slots__ = ("_records",)
 
-    def __init__(self, records: list[logging.LogRecord]) -> None:
+    def __init__(self, records: Sequence[logging.LogRecord]) -> None:
         self._records = records
 
     @property
@@ -208,30 +205,21 @@ class LogRecords:
         see `_resolve_level` and `_LevelOverride`'s docstrings for why that ordering is load-
         bearing, not incidental.
 
-        spec/09 §2's documented hazard, unchanged by this implementation: logger levels are
-        process-global, so raising one under concurrency affects every other test's logger of the
-        same name for the duration of this block — benign for "this record is present"
-        assertions, hazardous for "no records were emitted" ones. A strict mode that escalates
-        `set_level` to run solo is roadmap (spec/09 §8), not built this session.
+        spec/09 §2's documented hazard, stated precisely: logger levels are process-global, so
+        this call under concurrency can affect what a *concurrent sibling* captures for a logger
+        of the same name, in whichever direction this call moves it. Raising the level (the common
+        case — "let me see DEBUG for a bit") can make a sibling that had *lowered* it capture more
+        than that sibling expected, which is at worst benign for a "this record is present"
+        assertion and only hazardous for a "no records were emitted" one. But lowering the level
+        (`set_level(logging.CRITICAL, ...)` to silence a noisy dependency — an equally ordinary use
+        of this API) can just as easily make a concurrent sibling's own `set_level(DEBUG, ...)`
+        block capture *nothing at all* for a record it definitely logged — verified: a sibling's
+        `set_level(CRITICAL)` overlapping this block silently drops this block's own DEBUG record,
+        so a "this record is present" assertion is exactly what breaks in that direction. Both
+        directions are hazardous for "this record is present"; only the raising direction is even
+        benign for "no records were emitted". A strict mode that escalates `set_level` to run solo
+        is roadmap (spec/09 §8), not built this session.
         """
-        # Review (should fix, documentation): the hazard described just above -- inherited from
-        # spec/09 §2 verbatim -- states the wrong direction, and the direction is the whole point.
-        # "The effect is only that other tests may capture *more* records, which is benign for
-        # assertions of the form 'this record is present' and hazardous for 'no records were
-        # emitted'" is true only when every concurrent caller *raises* the level. A caller that
-        # *lowers* one (`set_level(logging.CRITICAL)` to silence a noisy dependency -- a perfectly
-        # ordinary use of this API) makes a concurrent sibling capture *fewer* records than it
-        # asked for, which breaks precisely the "this record is present" assertion the docstring
-        # calls benign. Verified through real `run_suite` dispatch with forced interleaving
-        # (`asyncio.Event` checkpoints, so both tests are provably inside their blocks at once):
-        # test_a does `with records.set_level(DEBUG, logger=L): ...; logging.getLogger(L).debug(
-        # "A-debug")`, test_b does `with records.set_level(CRITICAL, logger=L):` around a
-        # checkpoint that a A's log lands inside. Result: `test_a` captured `()` -- its own DEBUG
-        # record silently dropped inside its own `set_level(DEBUG)` block -- and the run reported
-        # `['FAILED', 'PASSED']`. Nothing here is *wrong* (process-global levels are the
-        # constraint, and the roadmap's solo-escalation is the real fix); the docstring just
-        # promises a one-sided failure mode where the failure is two-sided, and a user reading
-        # this will write exactly the assertion it tells them is safe.
         resolved = _resolve_level(level)
         if logger is not None and not isinstance(logger, str):
             raise TypeError(f"set_level(logger={logger!r}): expected str or None")

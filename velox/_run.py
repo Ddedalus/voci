@@ -472,213 +472,210 @@ def run_suite(
 
     results: list[TestResult | None] = [None] * len(records)
     store = _di.ScopeStore()
-    worker_slots = _capture.WorkerSlots(concurrency)
-    # Review (should fix): `install()` mutates process-global state (`sys.stdout`, `sys.stderr`,
-    # the root logging handler) but is called ~100 lines above this function's `try:`, so nothing
-    # between here and there is covered by the `finally` that calls `uninstall()`. If `install()`
-    # itself raises partway -- which it can, `_resolve_basetemp_root` is fallible and runs after
-    # the streams are already swapped (see the note there) -- the process is left with orphaned
-    # `Router`s and no way to remove them. Even ignoring that, `ContextPropagatingExecutor()` and
-    # `asyncio.Runner()` are both constructed after this line and before the `try`. Moving
-    # `install()` to be the first statement inside the existing `try:` (or giving it its own
-    # immediately-following `try/finally`) costs nothing and makes the I1 claim in the docstring
-    # actually hold.
+
+    # `install()` is the first thing this function does that can fail *and* the first thing that
+    # mutates process-global state — deliberately in that order, and deliberately the very next
+    # statement after the argument validation above: `install()` itself resolves its one fallible
+    # step (`basetemp_root`) before touching `sys.stdout`/`sys.stderr`/the log handler (see its own
+    # docstring), so a failure here leaves nothing installed and there is nothing yet for a
+    # `finally` to need to undo. Everything from here down that touches capture state at all lives
+    # inside the `try` immediately below, whose `finally` calls `_capture.uninstall()`
+    # unconditionally — including `WorkerSlots`/`ContextPropagatingExecutor`/`asyncio.Runner`
+    # construction, none of which are meaningfully fallible today, but which cost nothing to cover
+    # anyway rather than leave implicitly relying on that never changing (I1: "no state survives a
+    # `run_suite` call that raises" should hold structurally, not by accident of what happens not
+    # to raise this session).
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
-
-    remaining_by_module: dict[Path, int] = {}
-    for record in records:
-        remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
-    pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
-
-    async def dispatch_one(index: int, record: TestRecord, semaphore: asyncio.Semaphore) -> None:
-        # The whole body lives inside `async with semaphore:` — including the module-scope flush
-        # below, not just `_run_one` — so the semaphore genuinely bounds "tests inside their
-        # setup/call/teardown envelope, including the last one's module-fixture teardown" the way
-        # this function's docstring claims, and so `concurrency=1` is a real exact-serial mode: the
-        # next test cannot even start setup until this one's slot (module teardown included) is
-        # released. The cost is that the *last* test to finish a module holds its slot a little
-        # longer while that module's fixtures tear down; that is the correct trade for what the
-        # semaphore is documented to bound.
-        async with semaphore:
-            # spec/09's whole attribution mechanism, in three lines: a fresh `Sink` for this one
-            # test, a `TestContext` bundling it with this test's tags/effective-timeout/worker
-            # slot, and `.set()` to publish it for the duration of `_run_one` below. `_run_one`
-            # itself never sees any of this — it doesn't import `_capture` and doesn't need to;
-            # every builtin-fixture provider and the installed `Router`/log handler read
-            # `current_test_context` for themselves (see their own docstrings), so wrapping the
-            # `_run_one` call is sufficient to attribute *everything* that call does, transitively,
-            # to this test — including output from fixtures it constructs.
-            slot = worker_slots.acquire()
-            sink = _capture.Sink(label=record.id)
-            test_context = _capture.TestContext(
-                sink=sink, tags=marks_of(record.func).tags, timeout=timeout, worker=slot
-            )
-            token = _capture.current_test_context.set(test_context)
-            try:
-                result, module_keys = await _run_one(record, store, timeout=timeout)
-            finally:
-                # Reset before releasing the slot, not after: a reset is a context-local no-op
-                # (see `TestContext`'s docstring — nothing else could ever have observed this
-                # task's value regardless of order), but releasing the slot first would let a
-                # *newly* `acquire()`-ing sibling briefly reuse the same worker index while this
-                # task's own `TestContext` is technically still live in its own, about-to-be-
-                # discarded context — harmless either way, but resetting first is the more
-                # obviously-correct order to read.
-                _capture.current_test_context.reset(token)
-                worker_slots.release(slot)
-            # Review (documentation): the comment above the `set()` says wrapping the `_run_one`
-            # call attributes "*everything* that call does, transitively, to this test", and this
-            # function's docstring plus `_capture.TestContext`'s both say the context is set
-            # "around that test's entire setup/call/teardown envelope". `_teardown_module_scope`
-            # below is part of that envelope for the last test of a module, and it runs after this
-            # `reset` -- so a module-scope fixture's teardown output is *not* attributed to any
-            # test. Verified: a module-scope async-generator fixture printing on both sides of its
-            # `yield`, with one failing test -- the setup print lands in `result.captured_stdout`,
-            # the teardown print lands in `unattributed_output` instead. It costs nothing to fix
-            # (the teardown already runs inside this test's semaphore slot; moving the `reset`
-            # after the module flush attributes it to the module's last test, which is the only
-            # test that could sensibly own it), and it would also stop a broken module fixture's
-            # diagnostic output from being reported several screens away from the tests it broke.
-
-            # spec/09 §6: captured output is only worth keeping for a failing result — folded on
-            # here, via `dataclasses.replace` rather than a `TestResult` constructor parameter
-            # `_run_one` would have to grow, which is exactly the "additive, don't restructure
-            # `_run_one`" boundary this module's own docstring draws. For `PASSED`, `sink` (and
-            # its buffers) simply becomes unreferenced once this function returns — nothing further
-            # to drop.
-            if result.outcome in _FAILING_OUTCOMES:
-                result = dataclasses.replace(
-                    result,
-                    captured_stdout=sink.out,
-                    captured_stderr=sink.err,
-                    log_records=tuple(sink.log_records),
-                )
-            results[index] = result
-
-            if module_keys:
-                pending_module_keys.setdefault(record.path, []).extend(module_keys)
-            remaining_by_module[record.path] -= 1
-            if remaining_by_module[record.path] == 0:
-                keys = pending_module_keys.pop(record.path, None)
-                if keys:
-                    await _teardown_module_scope(
-                        store, keys, path=record.path, real_stderr=capture_setup.real_stderr
-                    )
-
-    # Constructed synchronously, outside the loop — `concurrent.futures.ThreadPoolExecutor.
-    # __init__` needs no running loop, and creating it here (rather than inside `run_all`) is
-    # what lets the `finally` below shut it down *directly*, without going through the loop at
-    # all (see that comment for why that matters).
-    executor = _capture.ContextPropagatingExecutor()
-
-    async def run_all() -> None:
-        # spec/09 §3: installed once, for the whole run. `set_default_executor` itself needs a
-        # running loop (hence called from in here, not from `run_suite`'s own sync body), but the
-        # executor object it installs was already constructed above.
-        asyncio.get_running_loop().set_default_executor(executor)
-        semaphore = asyncio.Semaphore(concurrency)
-        async with asyncio.TaskGroup() as tg:
-            for index, record in enumerate(records):
-                tg.create_task(dispatch_one(index, record, semaphore))
-
-    # Not `with asyncio.Runner() as runner:` — `runner.close()` is called explicitly below, inside
-    # its own narrow guard, for a reason worth stating up front: `Runner.close()` (what the `with`
-    # form would call automatically) does its own automatic `loop.run_until_complete(loop.
-    # shutdown_default_executor(...))`, and — verified against CPython 3.13's
-    # `asyncio.runners`/`asyncio.base_events` — that call can raise `RuntimeError: Event loop
-    # stopped before Future completed.` whenever a *custom* default executor was ever installed
-    # (via `set_default_executor`, exactly what `run_all` does above) *and* the loop's most recent
-    # `run_until_complete` propagated an uncaught `KeyboardInterrupt`/`SystemExit` rather than
-    # returning normally. This reproduces even after this function's own `executor.shutdown(...)`
-    # below has already run and even after explicitly resetting the loop's default executor to
-    # `None` first — it is the loop's own internal bookkeeping tripping over itself following an
-    # exception-driven exit, not a real leak (the executor's actual worker threads are already
-    # stopped by `executor.shutdown(...)` regardless of whether `Runner.close()`'s own redundant
-    # attempt afterward succeeds or raises) and not something either this module or the stdlib
-    # documents a clean way to avoid triggering in the first place. Swallowed narrowly, at the one
-    # call site that can raise it, rather than worked around by never installing a custom executor
-    # at all — spec/09 §3's context-propagating executor is the actual feature.
-    runner = asyncio.Runner()
     try:
-        try:
-            runner.run(run_all())
-        finally:
-            _teardown_best_effort(
-                runner,
-                store.aclose(),
-                what="session-scope fixtures",
-                real_stderr=capture_setup.real_stderr,
-            )
-            # `wait=False`: matches the "stop now, some things leak" trade-off this codebase
-            # already accepts at every other interrupt boundary (`_di.py`'s `aclose`/`setup`
-            # docstrings) — blocking here to join worker threads would turn a Ctrl-C into a hang
-            # if one of them is stuck. `cancel_futures=True` drops whatever was still queued
-            # (nothing dispatched here ever *needs* to finish once the run is over — every use of
-            # this executor is `await`ed by the test that submitted it before its own envelope
-            # ends). Threads already running finish on their own time, unobserved; harmless, since
-            # each `run_suite` call gets its own fresh `executor` instance rather than sharing one
-            # across calls (I1).
-            executor.shutdown(wait=False, cancel_futures=True)
-    finally:
-        # Everything below must run whether `runner.run(run_all())` returned normally, raised a
-        # real `KeyboardInterrupt`/`SystemExit`, or anything else — same "no state survives one
-        # `run_suite` call" contract (I1) `_capture.install`/`.uninstall` are documented to keep.
-        #
-        # See this function's own comment above `runner = asyncio.Runner()` for exactly which call
-        # inside `close()` this guards and why it's safe to swallow unconditionally here: by this
-        # point this function's own cleanup (`store.aclose()`, `executor.shutdown(...)` just above)
-        # has already done everything a caller could observe the *effects* of; nothing past this
-        # point in `run_suite` depends on `close()` itself having fully succeeded, and the
-        # exception this guards against is not new information about a real failure — see the
-        # comment above for the verification. Anything raised from `runner.run(run_all())` itself
-        # (a real `KeyboardInterrupt`/`SystemExit`, or an internal `_run_one` contract violation)
-        # already had its own chance to propagate from the `try` above and is unaffected by this
-        # guard, which only ever sees exceptions `close()` itself raises.
-        # Review (must fix): the documented quirk is real -- I reproduced it -- but the guard is
-        # scoped to the *rarest* of the interrupt cases, and on the common ones `close()` raises
-        # something this does not suppress, which then skips the two statements below it in this
-        # same `finally`. Instrumented `asyncio.Runner.close` around the real `run_suite`:
-        #   all tests pass ..................... close() returned normally
-        #   test uses the default executor ..... close() returned normally
-        #   ONE test, raises KeyboardInterrupt . close() raised RuntimeError('Event loop stopped
-        #                                        before Future completed.')      <-- the guarded one
-        #   KI + two slow siblings ............. close() raised KeyboardInterrupt
-        #   KI after executor use, + sibling ... close() raised KeyboardInterrupt
-        #   SystemExit(7) + a slow sibling ..... close() raised SystemExit(7)
-        # The mechanism for the bottom three: `close()` calls `_cancel_all_tasks(loop)`, which
-        # `run_until_complete(gather(...))`s the still-pending sibling tasks; the pending `run_all`
-        # task resumes into `TaskGroup._aexit`'s `raise self._base_error`, and `Task.__step`
-        # re-raises `KeyboardInterrupt`/`SystemExit` bare rather than storing them, so the
-        # interrupt escapes `close()` itself. It never reaches `shutdown_default_executor`, which
-        # is why the `RuntimeError` only appears when there are no siblings left to cancel.
-        # The consequence is the bug: that escaping interrupt propagates out of this `finally`
-        # block, so `unattributed_output.extend(...)` and -- far more importantly --
-        # `_capture.uninstall()` below **never run**. Verified end to end with one interrupting
-        # test and two sleeping siblings at `concurrency=4`:
-        #     run_suite raised KeyboardInterrupt
-        #     _capture.installed() is None?  False
-        #     sys.stdout restored?           False   (type Router)
-        #     root log handlers 0 -> 1
-        # and the next `print()` in that process disappeared. For the CLI that means Ctrl-C during
-        # a real (multi-test) run leaves `sys.stderr` a `Router` too, so even the interpreter's own
-        # `KeyboardInterrupt` traceback is swallowed and the user gets a silent exit. That directly
-        # falsifies this function's own docstring ("torn down in a `finally` so nothing survives a
-        # `run_suite` call that raises (I1)") on exactly the path it names, and it is the same
-        # class of leak as the partial-`install()` one flagged in `_capture.install`.
-        # Fix: put the restore work in its own `finally` that cannot be skipped by `close()` --
-        # e.g. wrap `runner.close()` in an inner `try/finally`, or move the `uninstall()` pair
-        # above it, since nothing about reading the session sink or restoring the streams depends
-        # on the loop being closed. Suppressing `RuntimeError` here is fine and stays fine (I
-        # checked the other `RuntimeError` sources inside `close()`: `shutdown_asyncgens` and
-        # `_cancel_all_tasks` both route task exceptions to `loop.call_exception_handler` rather
-        # than raising, so this really is narrow); the problem is only what it *doesn't* catch.
-        with contextlib.suppress(RuntimeError):
-            runner.close()
+        worker_slots = _capture.WorkerSlots(concurrency)
 
+        remaining_by_module: dict[Path, int] = {}
+        for record in records:
+            remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
+        pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
+
+        async def dispatch_one(
+            index: int, record: TestRecord, semaphore: asyncio.Semaphore
+        ) -> None:
+            # The whole body lives inside `async with semaphore:` — including the module-scope
+            # flush below, not just `_run_one` — so the semaphore genuinely bounds "tests inside
+            # their setup/call/teardown envelope, including the last one's module-fixture
+            # teardown" the way this function's docstring claims, and so `concurrency=1` is a real
+            # exact-serial mode: the next test cannot even start setup until this one's slot
+            # (module teardown included) is released. The cost is that the *last* test to finish a
+            # module holds its slot a little longer while that module's fixtures tear down; that
+            # is the correct trade for what the semaphore is documented to bound.
+            async with semaphore:
+                # spec/09's whole attribution mechanism, in three lines: a fresh `Sink` for this
+                # one test, a `TestContext` bundling it with this test's tags/effective-timeout/
+                # worker slot, and `.set()` to publish it for the duration of everything below —
+                # not just `_run_one`, but this test's own module-scope-fixture flush too, if it
+                # turns out to be the module's last test (see the `finally` below for why that's
+                # deliberate). `_run_one` itself never sees any of this — it doesn't import
+                # `_capture` and doesn't need to; every builtin-fixture provider and the installed
+                # `Router`/log handler read `current_test_context` for themselves (see their own
+                # docstrings), so wrapping the call is sufficient to attribute *everything* it
+                # does, transitively, to this test — including output from fixtures it constructs.
+                slot = worker_slots.acquire()
+                sink = _capture.Sink(label=record.id)
+                test_context = _capture.TestContext(
+                    sink=sink, tags=marks_of(record.func).tags, timeout=timeout, worker=slot
+                )
+                token = _capture.current_test_context.set(test_context)
+                try:
+                    try:
+                        result, module_keys = await _run_one(record, store, timeout=timeout)
+                    finally:
+                        # Released here, not after the module-scope flush below: nothing reads
+                        # `TestInfo.worker` (or anything else keyed off this slot) during a
+                        # fixture's own teardown, so there is no reason to hold the lane open for
+                        # it — only `current_test_context` itself (kept live a little longer, see
+                        # the outer `finally`) needs to still be set there, for attribution.
+                        worker_slots.release(slot)
+
+                    if module_keys:
+                        pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                    remaining_by_module[record.path] -= 1
+                    if remaining_by_module[record.path] == 0:
+                        keys = pending_module_keys.pop(record.path, None)
+                        if keys:
+                            # Deliberately still inside this test's `current_test_context`: this
+                            # test is the module's last, so a module-scope fixture's own teardown
+                            # print (spec/09 §1) is attributed to it rather than running after
+                            # `reset()` and landing nowhere any report or the unattributed-output
+                            # section would ever show it — the module docstring's session-sink
+                            # list explains exactly what this closes and what it deliberately
+                            # doesn't (an orphaned background task is a different, unfixable-here
+                            # gap).
+                            await _teardown_module_scope(
+                                store,
+                                keys,
+                                path=record.path,
+                                real_stderr=capture_setup.real_stderr,
+                            )
+                finally:
+                    # Reset only now that nothing else this test's envelope owns — including, for
+                    # the module's last test, that module's own fixture teardown — could still
+                    # write into `sink`. A reset is itself a context-local no-op regardless of
+                    # timing (see `TestContext`'s docstring: nothing else could ever have observed
+                    # this task's value), so the only thing this ordering actually controls is how
+                    # much of this test's own envelope `sink` ends up having seen by the time it's
+                    # read below.
+                    _capture.current_test_context.reset(token)
+
+                # spec/09 §6: captured output is only worth keeping for a failing result — folded
+                # on here, via `dataclasses.replace` rather than a `TestResult` constructor
+                # parameter `_run_one` would have to grow, which is exactly the "additive, don't
+                # restructure `_run_one`" boundary this module's own docstring draws. For
+                # `PASSED`, `sink` (and its buffers) simply becomes unreferenced once this
+                # function returns — nothing further to drop. Read only now, after the
+                # module-scope flush above has had its chance to write into `sink` too — reading
+                # it any earlier would silently miss that output even though it landed in the
+                # right `Sink`, which is its own, subtler way of losing it.
+                if result.outcome in _FAILING_OUTCOMES:
+                    result = dataclasses.replace(
+                        result,
+                        captured_stdout=sink.out,
+                        captured_stderr=sink.err,
+                        log_records=tuple(sink.log_records),
+                    )
+                results[index] = result
+
+        # Constructed synchronously, outside the loop — `concurrent.futures.ThreadPoolExecutor.
+        # __init__` needs no running loop, and creating it here (rather than inside `run_all`) is
+        # what lets the `finally` below shut it down *directly*, without going through the loop at
+        # all (see that comment for why that matters).
+        executor = _capture.ContextPropagatingExecutor()
+
+        async def run_all() -> None:
+            # spec/09 §3: installed once, for the whole run. `set_default_executor` itself needs a
+            # running loop (hence called from in here, not from `run_suite`'s own sync body), but
+            # the executor object it installs was already constructed above.
+            asyncio.get_running_loop().set_default_executor(executor)
+            semaphore = asyncio.Semaphore(concurrency)
+            async with asyncio.TaskGroup() as tg:
+                for index, record in enumerate(records):
+                    tg.create_task(dispatch_one(index, record, semaphore))
+
+        # Not `with asyncio.Runner() as runner:` — `Runner.close()`'s own automatic
+        # `loop.run_until_complete(loop.shutdown_default_executor(...))` can raise `RuntimeError:
+        # Event loop stopped before Future completed.` — verified against CPython 3.13's
+        # `asyncio.runners`/`asyncio.base_events` — whenever a *custom* default executor was ever
+        # installed (via `set_default_executor`, exactly what `run_all` does above) *and* the
+        # loop's most recent `run_until_complete` propagated an uncaught `KeyboardInterrupt`/
+        # `SystemExit` rather than returning normally. This reproduces even after this function's
+        # own `executor.shutdown(...)` below has already run — it is the loop's own internal
+        # bookkeeping tripping over itself following an exception-driven exit, not a real leak
+        # (the executor's actual worker threads are already stopped by `executor.shutdown(...)`
+        # regardless of whether `close()`'s own redundant attempt afterward succeeds or raises).
+        # `runner.close()` is called explicitly below, inside `contextlib.suppress(RuntimeError)`,
+        # rather than worked around by never installing a custom executor at all — spec/09 §3's
+        # context-propagating executor is the actual feature.
+        runner = asyncio.Runner()
+        try:
+            try:
+                runner.run(run_all())
+            finally:
+                _teardown_best_effort(
+                    runner,
+                    store.aclose(),
+                    what="session-scope fixtures",
+                    real_stderr=capture_setup.real_stderr,
+                )
+                # `wait=False`: matches the "stop now, some things leak" trade-off this codebase
+                # already accepts at every other interrupt boundary (`_di.py`'s `aclose`/`setup`
+                # docstrings) — blocking here to join worker threads would turn a Ctrl-C into a
+                # hang if one of them is stuck. `cancel_futures=True` drops whatever was still
+                # queued (nothing dispatched here ever *needs* to finish once the run is over —
+                # every use of this executor is `await`ed by the test that submitted it before its
+                # own envelope ends). Threads already running finish on their own time,
+                # unobserved; harmless, since each `run_suite` call gets its own fresh `executor`
+                # instance rather than sharing one across calls (I1).
+                executor.shutdown(wait=False, cancel_futures=True)
+        finally:
+            # A separate `finally`, layered *outside* the one above rather than folded into it —
+            # this is deliberate, not merely stylistic: `runner.close()` needs the loop to have
+            # already run `store.aclose()`/`executor.shutdown()` to completion (both did, in the
+            # `finally` above, regardless of how `runner.run(run_all())` exited), and keeping it in
+            # its own boundary is what was verified to actually avoid a subtle interaction where
+            # `store.aclose()`'s own `runner.run(...)` call could otherwise be left with an
+            # abandoned, never-awaited task under this exact interrupt shape (reproduced via two
+            # siblings that each raise a different bare interrupt with none left pending to
+            # cancel) — folding `runner.close()` into the same `finally` as the teardown calls
+            # above changed that outcome even though the two are logically sequential either way,
+            # which is itself worth flagging as a sharp edge in how CPython's asyncio internals
+            # interact with a loop that already saw one uncaught interrupt, not a mechanism this
+            # module fully explains.
+            #
+            # `close()` can itself raise `KeyboardInterrupt`/`SystemExit` (not just the documented
+            # `RuntimeError`) whenever sibling tasks were still pending when the interrupt landed:
+            # `close()` calls `_cancel_all_tasks(loop)` before it ever reaches
+            # `shutdown_default_executor`, and cancelling a still-pending `run_all` task resumes it
+            # into `TaskGroup._aexit`'s `raise self._base_error`, which `Task.__step` re-raises
+            # bare rather than routing through any exception-storing machinery — so the interrupt
+            # escapes `close()` itself without ever reaching the `RuntimeError`-raising code this
+            # `suppress` guards (verified: with no siblings left to cancel, `close()` raises the
+            # documented `RuntimeError`; with siblings pending, it raises the interrupt instead).
+            # Letting that propagate is correct — same "stop now" precedence every interrupt
+            # boundary in this codebase gives it — and it is still safe to let it propagate *from
+            # here*: the outer `try` below is what actually guarantees `_capture.uninstall()` still
+            # runs regardless of what leaves this `finally`, so nothing further needs to
+            # special-case `close()` specifically.
+            with contextlib.suppress(RuntimeError):
+                runner.close()
+    finally:
+        # Guaranteed to run whether the `try` above completed normally, raised a real
+        # `KeyboardInterrupt`/`SystemExit` (from a test, or re-raised by `runner.close()` per the
+        # comment above), or raised for some other reason entirely (a `WorkerSlots`/
+        # `ContextPropagatingExecutor`/`asyncio.Runner` construction failure, say) — this is what
+        # makes the "no state survives a `run_suite` call that raises" (I1) claim actually hold
+        # structurally, rather than by accident of what happens not to raise this session: every
+        # statement between `install()` succeeding and here lives inside this one `try`.
+        #
         # Read before `uninstall()` clears the module-global `_capture._installed` — the `Sink`
         # object itself is unaffected either way (we're holding our own reference via
         # `capture_setup`), but reading it first keeps this in the same order as everything else
-        # in this `finally`: undo what `install()` did, last.
+        # here: undo what `install()` did, last.
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         _capture.uninstall()

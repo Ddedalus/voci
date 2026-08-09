@@ -47,6 +47,23 @@ a future scheduler might:
   session sink — a real test id to (potentially wrongly) blame beats none, and nothing about this
   mechanism forecloses a future dedicated session-setup phase changing that without touching
   `Router`/`Sink` at all.
+- A **`module`-scope fixture's own teardown**, for the module's *last* test specifically, is
+  attributed to that test too: `dispatch_one` keeps `current_test_context` set through the
+  module-scope-fixture flush it runs once that test's own `remaining_by_module` count reaches
+  zero, precisely so this doesn't turn into a fourth, undocumented case. A module fixture's
+  teardown print is therefore visible in that one test's `captured_stdout` (if it fails) — the
+  most useful place for it, since that's the test whose run actually triggered the flush.
+- **Not covered at all, and silently lost rather than merely misattributed**: output from a task a
+  test `create_task()`s and never `await`s. The child task's `asyncio.Task` copies this test's
+  `TestContext` at creation (spec/09 §3's "context inherited at task creation"), so it keeps
+  writing into that test's `Sink` for as long as it runs — including after the parent test has
+  already finished and `dispatch_one` has moved on. If the test passed, its `Sink` is simply never
+  read again; the orphan's output reaches neither `TestResult.captured_stdout` nor
+  `unattributed_output` — there is no third place for it to go once its own `Sink` stops being
+  referenced by anything. Not fixable inside this module: the real fix is spec/05 §2's per-test
+  `TaskGroup` (a test's own background tasks becoming part of its envelope, cancelled or awaited
+  before the test is considered finished), explicitly deferred — see `_run.py`'s own module
+  docstring.
 
 Fill list, against spec/09:
 
@@ -77,6 +94,8 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -85,25 +104,6 @@ from typing import Any, Literal, TextIO, cast, final
 
 from velox import _builtins
 from velox._fixtures import BuiltinContext
-
-# Review (documentation): the module docstring's "what lands in the session sink under *this*
-# runtime, precisely" list is missing two cases, one of which is neither exotic nor rare.
-# 1. A **`module`-scope fixture's teardown**. `_run.dispatch_one` calls
-#    `current_test_context.reset(token)` in the `finally` around `_run_one` and only *then*
-#    awaits `_teardown_module_scope`, so a module fixture's own `print()` on the way out is
-#    unattributed. Verified end to end: one module-scope async-generator fixture printing
-#    `MODULE-FIXTURE-SETUP-OUTPUT` before its `yield` and `MODULE-FIXTURE-TEARDOWN-OUTPUT`
-#    after, with one failing test -- setup output is in `result.captured_stdout` (True),
-#    teardown output is not (False), and it lands in `unattributed_output` instead (True).
-#    That also falsifies this docstring's own headline ("set once per test ... around that
-#    test's entire setup/call/teardown envelope") and the identical claim in `TestContext`'s
-#    docstring and in `run_suite`'s: module-scope teardown *is* the teardown phase for the last
-#    test of a module, and is demonstrably outside the envelope. Either widen the `reset` to
-#    cover `_teardown_module_scope` (it already runs inside that test's semaphore slot, so
-#    attributing it to the module's last test costs nothing) or add the bullet and soften the
-#    three "entire envelope" claims.
-# 2. Output from a task the test spawned and never awaited does *not* land here either -- it
-#    goes into the finished test's own `Sink`, which is dropped. See the note on `Sink`.
 
 __all__ = [
     "DEFAULT_BASETEMP_RETENTION",
@@ -134,38 +134,53 @@ __all__ = [
 #: knob this session (explicitly not required for MVP, spec/09 §7) — a module constant stands in
 #: for it, applied per stream (stdout and stderr are capped independently, so a chatty stderr
 #: logger can't starve stdout's own budget or vice versa).
+#:
+#: Measured in **characters** (`len(str)`), not bytes, despite the "MiB" name — `_CappedBuffer`
+#: below counts `len(s)` throughout, and CPython's compact-string representation stores 1, 2, or 4
+#: bytes per character depending on the widest code point actually present, so a buffer full of
+#: astral-plane text (emoji, some CJK extensions) can cost up to 4x this figure in real memory.
+#: The cap still bounds memory per test (I5's actual requirement, "bounded", not "bounded at
+#: exactly this number") — real byte-accurate accounting would mean encoding every write to
+#: measure it, which is real overhead on what can be a hot path (every `print`/log call in every
+#: test); not worth it for a soft memory cap where "characters, documented as such" is an honest
+#: and cheap enough approximation.
 DEFAULT_CAPTURE_LIMIT = 4 * 1024 * 1024
-# Review (low): "4 MiB/test" is 4 Mi *characters*, not 4 MiB of memory -- everything below
-# measures `len(str)`. CPython's compact-str representation is 1, 2 or 4 bytes per character
-# depending on the widest code point in the string, so a full buffer of astral-plane text costs
-# 4x the documented figure: measured `sys.getsizeof("\U0001f600" * DEFAULT_CAPTURE_LIMIT)` ==
-# 16.0 MiB, per stream, per test, times `concurrency`. The cap still bounds memory (I5's actual
-# requirement), just not at the number written here; either say "characters" or budget in bytes.
 
 
 @final
 class _CappedBuffer:
     """One capped text stream: the first half of the budget kept as a permanent head, the last
-    half as a rolling tail, with the middle dropped and replaced by a marker once the budget is
-    exceeded (spec/09 §1: "switches to head+tail truncation with a marker... so a runaway print
-    in a loop cannot OOM the run").
+    half as a rolling tail, with the middle dropped and replaced by a marker once something has
+    actually been dropped (spec/09 §1: "switches to head+tail truncation with a marker... so a
+    runaway print in a loop cannot OOM the run").
 
     Deliberately not "keep everything, truncate only at render time": that would defeat the whole
     point (I5 — bounded memory, not bounded *display*) since the point is to cap what's ever held
     in memory for one test, not just what's shown. The head is kept because the start of a
     runaway dump is usually the most useful part (the first assertion or the first few log
     lines); the tail is kept because it's usually where a loop's failure actually happened.
+
+    Guarded by its own `threading.Lock`: this module also installs `ContextPropagatingExecutor`
+    specifically so a test's `loop.run_in_executor(None, fn)` can write into this same buffer from
+    a worker OS thread while the test's own task can still be writing to it from the loop thread
+    (spec/09 §3) — the "one `asyncio.Task` at a time" argument that makes the rest of this module
+    lock-free (module docstring) does not hold for *this* class, precisely because it is the one
+    reachable from both sides of that executor boundary. The lock is cheap (held only across the
+    handful of list/int operations in `write`, never across an `await`) and turns what would
+    otherwise be a genuine — if GIL-narrow today — read-modify-write race on `_head_size`/
+    `_omitted`/the head and tail lists into a real guarantee, not just one that happens to hold
+    under the current interpreter.
     """
 
     __slots__ = (
         "_head",
         "_head_limit",
         "_head_size",
+        "_lock",
         "_omitted",
         "_tail",
         "_tail_limit",
         "_tail_size",
-        "_truncated",
     )
 
     def __init__(self, limit: int = DEFAULT_CAPTURE_LIMIT) -> None:
@@ -176,75 +191,67 @@ class _CappedBuffer:
         self._tail: list[str] = []
         self._tail_size = 0
         self._omitted = 0
-        self._truncated = False
+        self._lock = threading.Lock()
 
     def write(self, s: str) -> None:
         if not s:
             return
-        if not self._truncated:
-            room = self._head_limit - self._head_size
-            if len(s) <= room:
-                self._head.append(s)
-                self._head_size += len(s)
-                return
-            if room > 0:
+        with self._lock:
+            if self._head_size < self._head_limit:
+                room = self._head_limit - self._head_size
+                if len(s) <= room:
+                    self._head.append(s)
+                    self._head_size += len(s)
+                    return
                 self._head.append(s[:room])
                 self._head_size += room
                 s = s[room:]
-            # Review (must fix): `_truncated` is latched here, i.e. as soon as more than
-            # `limit // 2` characters have been written -- not when `limit` is exceeded. For any
-            # total between `limit // 2 + 1` and `limit` inclusive, *nothing is ever dropped*
-            # (the overflow all fits in the tail budget), yet `getvalue()` unconditionally splices
-            # `"\n... [0 bytes omitted, capture limit exceeded] ...\n"` into the middle of output
-            # that was retained in full. So a test that prints 2 MiB + 1 char under the 4 MiB
-            # default gets a false "capture limit exceeded" banner wedged into its stdout, and the
-            # banner lands mid-line, corrupting whatever the reporter (or a user grepping the
-            # failure block) reads next. Verified, `_CappedBuffer(100)`, one write of N chars:
-            #   N= 50  marker=False  kept= 50/ 50  lost=0
-            #   N= 51  marker=True   kept= 51/ 51  lost=0   <-- marker, nothing omitted
-            #   N=100  marker=True   kept=100/100  lost=0   <-- marker, nothing omitted
-            #   N=101  marker=True   kept=100/101  lost=1   <-- first genuine truncation
-            # The fix is to keep the latch but make `getvalue` emit the marker only when
-            # `self._omitted > 0` (the head/tail split itself is fine and can stay eager) -- the
-            # two concepts, "I have started splitting head from tail" and "I have actually thrown
-            # something away", are conflated into one flag today. The existing tests can't see
-            # this: `test_sink_truncates_with_head_and_tail_once_over_the_cap` jumps straight from
-            # 40 to 5040 characters and `test_sink_keeps_everything_under_the_cap_verbatim` writes
-            # 11 against a limit of 1000, so nothing probes `limit // 2 < n <= limit`.
-            self._truncated = True
-            if not s:
+                if not s:
+                    return
+
+            # Tail path. One `write()` call is not bounded in size (a single `print` of a huge
+            # repr is exactly the runaway case this class exists to survive), so a chunk that
+            # alone is at least the whole tail budget is handled directly — keep only *its own*
+            # last `_tail_limit` characters and drop everything queued before it in one step —
+            # rather than appending it whole and relying on the general pop-from-the-left loop
+            # below, which pops one *list element* at a time and would otherwise discard this
+            # entire oversized chunk (dropping the tail budget to empty) instead of keeping the
+            # trailing slice of it that actually belongs there.
+            if self._tail_limit > 0 and len(s) >= self._tail_limit:
+                self._omitted += self._tail_size + (len(s) - self._tail_limit)
+                self._tail = [s[-self._tail_limit :]]
+                self._tail_size = self._tail_limit
                 return
 
-        # Tail path. One `write()` call is not bounded in size (a single `print` of a huge repr
-        # is exactly the runaway case this class exists to survive), so a chunk that alone is at
-        # least the whole tail budget is handled directly — keep only *its own* last
-        # `_tail_limit` characters and drop everything queued before it in one step — rather than
-        # appending it whole and relying on the general pop-from-the-left loop below, which pops
-        # one *list element* at a time and would otherwise discard this entire oversized chunk
-        # (dropping the tail budget to empty) instead of keeping the trailing slice of it that
-        # actually belongs there.
-        if self._tail_limit > 0 and len(s) >= self._tail_limit:
-            self._omitted += self._tail_size + (len(s) - self._tail_limit)
-            self._tail = [s[-self._tail_limit :]]
-            self._tail_size = self._tail_limit
-            return
-
-        self._tail.append(s)
-        self._tail_size += len(s)
-        while self._tail_size > self._tail_limit and self._tail:
-            dropped = self._tail.pop(0)
-            self._tail_size -= len(dropped)
-            self._omitted += len(dropped)
+            self._tail.append(s)
+            self._tail_size += len(s)
+            while self._tail_size > self._tail_limit and self._tail:
+                dropped = self._tail.pop(0)
+                self._tail_size -= len(dropped)
+                self._omitted += len(dropped)
 
     def getvalue(self) -> str:
-        if not self._truncated:
-            return "".join(self._head)
-        # Review (low): "bytes" is wrong -- `_omitted` accumulates `len(str)`, i.e. characters.
-        # Verified: `_CappedBuffer(100)` given 200 astral-plane emoji (200 characters, 800 UTF-8
-        # bytes) reports "100 bytes omitted" when 100 *characters* / 400 bytes were dropped. Same
-        # word, same conflation as `DEFAULT_CAPTURE_LIMIT` above; say "characters".
-        marker = f"\n... [{self._omitted} bytes omitted, capture limit exceeded] ...\n"
-        return "".join(self._head) + marker + "".join(self._tail)
+        # The marker means "something was actually dropped" (`_omitted > 0`), not "the head
+        # budget was ever exceeded" — those are different conditions. Reaching the tail path in
+        # `write` above (head full, so the head/tail split has started) does not by itself imply
+        # anything was lost: for any total between `_head_limit + 1` and `limit` inclusive, the
+        # overflow fits entirely within the tail budget and nothing is ever dropped. Splicing the
+        # marker in whenever the split merely *started* (as an earlier version of this method
+        # did, keyed off a single `_truncated` flag set the moment the head filled) produces a
+        # false "capture limit exceeded, 0 characters omitted" banner wedged into output that was
+        # retained in full — worse than merely misleading, since the banner lands mid-stream and
+        # corrupts whatever a reporter or a user grepping the failure block reads next.
+        with self._lock:
+            head, tail, omitted = "".join(self._head), "".join(self._tail), self._omitted
+        if omitted <= 0:
+            return head + tail
+        marker = f"\n... [{omitted} characters omitted, capture limit exceeded] ...\n"
+        return head + marker + tail
+
+
+#: `Sink.log_records`' own bound — independent of `DEFAULT_CAPTURE_LIMIT`, since it counts
+#: records, not characters (spec/09 §2's structured `LogRecord`s aren't a text budget at all).
+DEFAULT_LOG_RECORD_LIMIT = 2000
 
 
 @final
@@ -252,8 +259,19 @@ class Sink:
     """Everything captured for one test, or for the session (spec/09 §1): stdout, stderr, and the
     structured `LogRecord`s emitted while it was the active sink (spec/09 §2). One instance per
     test, created fresh in `_run.run_suite`'s `dispatch_one` and referenced only through
-    `current_test_context` — never shared, never mutated from more than one task at a time by
-    construction (see module docstring), so nothing here needs its own lock.
+    `current_test_context`.
+
+    Not lock-free the way the rest of this module is (module docstring's "race-free by
+    construction" is about `current_test_context` attribution, not about this class's own
+    internals): `current_test_context` does guarantee only one *task* writes here at a time, but
+    `ContextPropagatingExecutor` below exists specifically so a test's `loop.run_in_executor(None,
+    fn)` can also reach this same `Sink` from a worker *thread* while the test's own task is still
+    writing to it from the loop thread (spec/09 §3). `_CappedBuffer` (below) takes its own lock for
+    exactly that reason; `log_records` is a thread-safe `deque`. What is *not* independently
+    guarded is the `_out_at_line_start`/`_err_at_line_start` pair `Router` mutates for `-s`'s
+    per-line prefixing — a cross-thread race there could misplace a prefix under concurrent `-s` +
+    executor-thread output, a narrower and lower-consequence gap (cosmetic, not data loss or
+    corruption) than the ones the two guards above close, and left undefended this session.
 
     `label` is the test id (or `"<unattributed>"` for the session sink) — used only for `-s`'s
     per-line prefixing and for a future reporter's section headers; it plays no role in
@@ -269,39 +287,31 @@ class Sink:
         "log_records",
     )
 
-    # Review (low, latent): the docstring above says this is "never shared, never mutated from
-    # more than one task at a time by construction ... so nothing here needs its own lock". The
-    # "by construction" argument is the single-threaded-event-loop one, and it is exactly the
-    # argument `ContextPropagatingExecutor` below is built to break: that class exists so that
-    # `loop.run_in_executor(None, fn)` runs `fn` in a *worker thread* under a copy of the test's
-    # context, which means `fn`'s `print()` reaches this same `Sink` from a second OS thread while
-    # the test's own task can still be writing to it from the loop thread. `_CappedBuffer.write`'s
-    # `self._head_size += len(s)` is a non-atomic read-modify-write, as is `_omitted +=` and the
-    # `_out_at_line_start` round trip `Router.write` does under `-s`; a lost update there silently
-    # lets the head grow past `_head_limit`. Inert in practice today (the GIL makes the window
-    # tiny and the consequence is a slightly-wrong byte count, not corruption), but the docstring
-    # asserts a property the design deliberately does not have, and on a free-threaded build it
-    # stops being theoretical. Either qualify the claim or give `Sink` a `threading.Lock`.
     def __init__(self, label: str, *, limit: int = DEFAULT_CAPTURE_LIMIT) -> None:
         self.label = label
         self._out = _CappedBuffer(limit)
         self._err = _CappedBuffer(limit)
-        # Review (should fix): this list has no cap of any kind, so the OOM `_CappedBuffer` exists
-        # to prevent is still wide open through the logging door. `_CappedBuffer`'s own docstring
-        # states the goal as "so a runaway `print` in a loop cannot OOM the run" -- a runaway
-        # `logger.info` in a loop still can, and it is the more likely of the two in a real suite.
-        # Worse than plain text growth: a retained `LogRecord` pins `record.args` alive, so the
-        # buffer holds strong references to arbitrary user objects (ORM rows, response bodies) for
-        # as long as the test's `Sink` lives. Verified: `Sink("t", limit=64)` with 20000 records
-        # appended -> `len(sink.out) == 0` (text correctly capped) but `len(sink.log_records) ==
-        # 20000`, and `sink.log_records[0].args[0] is payload` -> True, i.e. the original object,
-        # not a formatted copy. spec/09 §1's cap is written about text only, so this is a spec gap
-        # as much as a code one, but I5 ("bounded memory") is stated over the run, not over stdout.
-        # A cap here is awkward precisely *because* the records are structured (dropping the middle
-        # of a record list is meaningful in a way dropping the middle of a char stream is not), so
-        # this probably wants a deliberate decision -- ring buffer, or a count cap with a synthetic
-        # "N records dropped" record -- rather than being left implicit.
-        self.log_records: list[logging.LogRecord] = []
+        # A bounded `deque`, not a plain `list`: the OOM `_CappedBuffer` exists to prevent for
+        # text is just as reachable through a runaway `logger.info(...)` in a loop — arguably more
+        # so, since that's the more common shape a real suite's noise takes. `deque(maxlen=...)`
+        # silently drops the *oldest* record once full, trading "no visible marker" for "near-zero
+        # extra code" — deliberately simpler than `_CappedBuffer`'s head+tail-plus-marker shape:
+        # unlike a capped text stream, dropping is not obviously more informative in one particular
+        # place in a record list than another, so there is no clearly-right "which half do I keep"
+        # answer to justify the extra machinery a marker record would need. `deque.append` is also
+        # documented thread-safe, which matters here for the same reason `_CappedBuffer` now takes
+        # its own lock: `_RoutingHandler.emit` can run on a `ContextPropagatingExecutor` worker
+        # thread. Each retained `LogRecord` still pins its own `.args` alive for as long as it sits
+        # in the deque — deliberately not stripped or reformatted here: `LogRecord` objects are
+        # shared with every other handler on the same logger's propagation chain (this handler is
+        # rarely the only one attached), so mutating `record.args`/`record.msg` in place to save
+        # memory would be a `_RoutingHandler` (or its own caller's) side effect leaking into
+        # whatever other handler happens to run after it — worse than the memory cost it would
+        # save. The bound itself is what actually addresses the OOM concern the cap exists for;
+        # unbounded *retention time* for individual objects logged by reference is accepted as the
+        # cost of `log_records` staying genuinely structured (spec/09 §2's "structured
+        # `LogRecord`s... not just formatted text"), same trade `caplog` itself makes.
+        self.log_records: deque[logging.LogRecord] = deque(maxlen=DEFAULT_LOG_RECORD_LIMIT)
         self._out_at_line_start = True
         self._err_at_line_start = True
 
@@ -341,13 +351,27 @@ class TestContext:
 
     Set once per test by `_run.run_suite`'s `dispatch_one`, via
     `current_test_context.set(...)`/`.reset(token)` wrapped around that test's whole
-    setup/call/teardown envelope. This is a `ContextVar.set` inside one `asyncio.Task`, not a
-    module-global mutation (I1): every task gets its own independent copy of the context at
-    creation (`asyncio.Task.__init__` calls `contextvars.copy_context()`), so `.set()` here can
-    only ever be observed by `await`-reachable code in *this* test's own task tree, and
-    `.reset(token)` in `dispatch_one`'s `finally` leaves nothing behind once the test finishes —
-    there is no window where a later, unrelated task could see a stale value, because there is
-    nothing shared for it to see.
+    setup/call/teardown envelope (including, for the module's last test, that module's own
+    fixture teardown — see the module docstring's session-sink list). This is a `ContextVar.set`
+    inside one `asyncio.Task`, not a module-global mutation (I1): every task gets its own
+    independent copy of the context at creation (`asyncio.Task.__init__` calls
+    `contextvars.copy_context()`), so `.set()` here can only ever be observed by `await`-reachable
+    code in *this* test's own task tree.
+
+    That last clause is also this docstring's one honest caveat: "this test's own task tree" is
+    not the same set as "code that runs before `.reset(token)` fires". A task the test spawns via
+    `create_task(...)` and never `await`s copies this `ContextVar` at *creation* time and keeps its
+    own reference to this exact `TestContext` for as long as it runs — `.reset()` in the parent
+    task cannot reach a child task's already-copied context, the same way setting a variable in a
+    calling function can't retroactively change what a thread already holding a copy of it sees.
+    Cross-*test* isolation is unaffected by this (no other test's `Sink` can ever receive that
+    orphan's output — only *this* test's own, already-finished one can), but the orphan's writes
+    are still real: if this test's `Sink` is never read again (the `PASSED` case, where captured
+    output is dropped immediately per spec/09 §6), that output is silently lost, not merely
+    delayed or misattributed. Not fixable inside this module — the real fix is spec/05 §2's
+    per-test `TaskGroup` (a test's own background tasks becoming part of its envelope, cancelled or
+    awaited before the test is considered finished), explicitly deferred, see `_run.py`'s own
+    module docstring.
     """
 
     sink: Sink
@@ -359,26 +383,6 @@ class TestContext:
 current_test_context: ContextVar[TestContext | None] = ContextVar(
     "velox_current_test_context", default=None
 )
-# Review (should fix): `TestContext`'s docstring claims `.reset(token)` "leaves nothing behind
-# once the test finishes -- there is no window where a later, unrelated task could see a stale
-# value, because there is nothing shared for it to see". The first half of that is what makes
-# cross-test isolation airtight and it is correct (I could not construct any leak *into another
-# test's* `Sink`); the second half is not. A task the test spawned and did not await copied this
-# ContextVar at creation, so it keeps seeing the finished test's `TestContext` for as long as it
-# lives -- `.reset()` in the parent cannot reach a child context. The value is stale, and the
-# consequence is silent data loss rather than misattribution: the orphan writes into a `Sink`
-# nobody will ever read again. Verified with two concurrently dispatched tests -- test 0 spawns
-# `create_task(bg())` that sleeps 20ms then prints and returns immediately (PASSED, so its `Sink`
-# is dropped); test 1 sleeps 100ms then fails, so its capture *is* retained:
-#     'LATE-OUTPUT-FROM-AN-ORPHANED-TASK' in results[1].captured_stdout -> False
-#     'LATE-OUTPUT-FROM-AN-ORPHANED-TASK' in unattributed_output       -> False
-# i.e. the output exists, is written through the installed `Router`, and reaches neither the
-# report nor the unattributed section. spec/09 §3's table says a spawned task is attributed
-# ("Yes -- context inherited at task creation"), which is true right up until its own test
-# finishes; the table has no row for "after". Not fixable inside this module (the real answer is
-# spec/05 §2's per-test `TaskGroup`, explicitly deferred in `_run.py`'s module docstring), but
-# the docstring should stop claiming the window does not exist, and the module docstring's
-# session-sink list should say where such output actually goes: nowhere.
 
 
 def _echo(real: TextIO, label: str, text: str, at_line_start: bool) -> bool:
@@ -418,10 +422,15 @@ class Router:
     right now and hand the bytes to it (module docstring).
 
     A small duck-typed stream, not a real `io.TextIOBase` subclass — `write`/`flush`/`writelines`/
-    `isatty`/`encoding` cover what stdlib `print`/`logging`/most libraries actually call. Code
-    that reaches for `sys.stdout.buffer` (binary-mode access) will not find one; that gap is the
-    same one fd-level `--isolated` capture is roadmapped to close (spec/09 §8), not something this
-    MVP's ContextVar-routed `Router` can offer without becoming a real fd proxy.
+    `isatty`/`encoding`/`fileno` cover what stdlib `print`/`logging`/most libraries actually call.
+    `fileno()` delegates straight to the real stream (writes that reach it bypass capture entirely
+    and are unattributed by construction — no `Sink` in the world can see bytes written directly to
+    an fd — but that is already true of any direct fd write, spec/09 §3's last table row, and
+    plenty of ordinary code calls `fileno()` merely to check `os.isatty(...)` or pass it to
+    `subprocess.run(stdout=...)`, so declining to answer would break more than it protects). Code
+    that reaches for `sys.stdout.buffer` (binary-mode access) will still not find one; unlike
+    `fileno()`, there is no small delegating answer for that one without this becoming a real fd
+    proxy — that gap is the one fd-level `--isolated` capture is roadmapped to close (spec/09 §8).
     """
 
     __slots__ = ("_passthrough", "_real", "_session_sink", "_which")
@@ -463,16 +472,11 @@ class Router:
         if self._passthrough:
             self._real.flush()
 
-    # Review (low): the docstring names `sys.stdout.buffer` as the one known gap, but `fileno()`
-    # is missing too and is the more commonly reached of the two -- `subprocess.run(...,
-    # stdout=sys.stdout)`, `os.isatty(sys.stdout.fileno())`, `faulthandler.enable()` and most
-    # terminal-detection helpers call it. Verified under `velox`: a test printing
-    # `hasattr(sys.stdout, "fileno")` reports `False`. Unlike `buffer`, `fileno` has a defensible
-    # answer here (delegate to `self._real.fileno()`) -- writes through it bypass capture, but
-    # that is already true of any direct fd write and is exactly what spec/09 §3's last table row
-    # documents. At minimum add it to the docstring's gap list next to `buffer`.
     def isatty(self) -> bool:
         return False
+
+    def fileno(self) -> int:
+        return self._real.fileno()
 
     @property
     def encoding(self) -> str:
@@ -550,24 +554,14 @@ class WorkerSlots:
     synchronization beyond that. `acquire()` raising `IndexError` on an empty pool would mean more
     than `concurrency` tests were simultaneously inside the semaphore's guarded section at once —
     a `run_suite` invariant violation, not a condition this class defends against defensively.
+    This genuinely holds rather than merely looking like it does: see the comment at the
+    `acquire()` call site in `_run.dispatch_one` for the exact call-site invariant (no `await`, and
+    nothing that can raise, between admission and the `try`/`finally` that releases) this class's
+    own correctness leans on without being able to enforce it itself.
     """
 
     __slots__ = ("_free",)
 
-    # Review (good, worth stating): I went looking for the two failure modes this class invites --
-    # two live tests handed the same slot, and a cancelled test leaking its slot until the pool
-    # starves below `concurrency` -- and neither is reachable, for a reason worth writing down
-    # because it is a property of the *call site*, not of this class. In `_run.dispatch_one` there
-    # is no `await` anywhere between `async with semaphore:` admitting the task, `acquire()`, and
-    # the `try:` whose `finally` calls `release()`; likewise none between the `finally`'s `reset`
-    # and `release`. asyncio only delivers cancellation at a suspension point, so there is no
-    # window in which a task can be killed holding an unreleased slot, and the semaphore caps
-    # holders at `concurrency`, so `pop()` from an empty list is genuinely unreachable rather than
-    # merely unlikely. Both properties break the moment anyone adds an `await` (or anything that
-    # can raise) between those lines -- `marks_of(record.func)` in the `TestContext` construction
-    # is already inside the unguarded region and would leak a slot if it ever raised. A one-line
-    # comment at the `acquire()` call site saying "nothing between here and the `try` may await or
-    # raise" would keep the invariant from being refactored away silently.
     def __init__(self, concurrency: int) -> None:
         self._free: list[int] = list(range(concurrency))
 
@@ -603,6 +597,23 @@ def _basetemp_default_root() -> Path:
     return Path(tempfile.gettempdir()) / f"velox-of-{_current_user()}"
 
 
+#: Dropped into every basetemp root this module creates (the numbered default *and* an explicit
+#: `--basetemp` override) and checked before ever `rmtree`-ing one — the second half of the
+#: belt-and-braces guard spec/09 §5's "documented 'this directory is cleared' warning" needs
+#: (`cli.py`'s `_invalid_basetemp_argument` is the first half, rejecting the cwd/home/root/an
+#: empty path outright before this module is ever reached). A help-text warning is not a guard
+#: against an irreversible recursive delete; requiring this marker to already be present is what
+#: makes the destructive path opt-in to directories velox itself made, rather than to whatever a
+#: `--basetemp` typo happened to point at. Not a security boundary (trivially spoofable by anyone
+#: who can write to the target directory) — just a guard against the ordinary mistake, the same
+#: spirit as `_allocate_session_root`'s own name-pattern check on what it's willing to sweep.
+BASETEMP_MARKER_NAME = ".velox-basetemp"
+
+
+def _mark_as_basetemp(root: Path) -> None:
+    (root / BASETEMP_MARKER_NAME).write_text("")
+
+
 def _allocate_session_root(parent: Path, *, retention: int) -> Path:
     """One fresh, numbered `velox-<n>` directory under `parent`, applying the retention policy.
 
@@ -626,6 +637,7 @@ def _allocate_session_root(parent: Path, *, retention: int) -> Path:
     next_n = existing[-1][0] + 1 if existing else 0
     root = parent / f"velox-{next_n}"
     root.mkdir()
+    _mark_as_basetemp(root)
 
     keep = {path for _, path in existing[-retention:]} if retention > 0 else set()
     for _, path in existing:
@@ -636,35 +648,30 @@ def _allocate_session_root(parent: Path, *, retention: int) -> Path:
 
 def _resolve_basetemp_root(explicit: Path | None, *, retention: int) -> Path:
     """`--basetemp DIR` (cleared and recreated — the documented warning, spec/09 §5) if given,
-    else a fresh numbered root under the platform temp dir with the retention policy applied."""
+    else a fresh numbered root under the platform temp dir with the retention policy applied.
+
+    `explicit` is assumed to have already passed `cli.py`'s own path-shaped validation
+    (`_invalid_basetemp_argument` — not the cwd, not an ancestor of it, not empty/`.`/`..`, not
+    the home directory or the filesystem root) — that check is what stops the catastrophic
+    mistakes (`--basetemp=`, `--basetemp=$HOME`); this function's own `BASETEMP_MARKER_NAME` check
+    below is the second, independent layer, for direct callers of `install()`/this function that
+    skip `cli.main` entirely (this package's own tests, an embedder) and for the case `cli.py`
+    cannot rule out by shape alone: an existing directory that merely *looks* fine but was never
+    actually a velox basetemp.
+    """
     if explicit is not None:
         root = Path(explicit).expanduser()
-        # Review (must fix): an unguarded `rmtree` of a fully unvalidated, user-supplied path.
-        # `--basetemp` is plumbed straight from `argparse` (`type=Path`, no validation in
-        # `cli.main`, unlike its neighbours `--concurrency` and `--timeout` which both get
-        # hand-rolled checks) to this line. `argparse` turns an empty value into `Path("")`, and
-        # `Path("") == PosixPath(".")`, so **`velox --basetemp= tests` deletes the working
-        # directory**. Verified in a sandbox:
-        #     before: ['precious_source.py', 'subdir', 'tests']
-        #     $ velox --basetemp= tests
-        #     OSError: [Errno 22] Invalid argument: PosixPath('.')   # rmdir('.') at the very end
-        #     after:  []
-        # -- every file gone, including the test directory being run, and then it crashed while
-        # removing `.` itself, which (via the `install()` bug above) also left stdout orphaned so
-        # the traceback the user needed was swallowed. `--basetemp=.`, `--basetemp=$HOME` and
-        # `--basetemp=$PWD` are the same one-keystroke mistake with the same result.
-        # spec/09 §5 asks for a "documented 'this directory is cleared' warning", and the
-        # `--basetemp` help text does carry one, but a help string is not a guard for an
-        # irreversible recursive delete. Minimum viable guard, in `cli.main` alongside the other
-        # `4`-exit-code checks: reject an empty/`.`/`..` path, reject the cwd and any ancestor of
-        # it, and reject an existing non-empty directory that does not look like a previous velox
-        # basetemp (no marker file). Belt-and-braces here too: drop a `.velox-basetemp` marker on
-        # creation and refuse to `rmtree` a directory that exists without one -- that makes the
-        # destructive path opt-in to directories velox itself made, which is what the retention
-        # sweep in `_allocate_session_root` already effectively relies on.
         if root.exists():
+            if not (root / BASETEMP_MARKER_NAME).is_file():
+                raise ValueError(
+                    f"--basetemp {root} already exists and does not look like a previous velox "
+                    f"basetemp (no {BASETEMP_MARKER_NAME!r} marker file) -- refusing to delete "
+                    f"it. Point --basetemp at a fresh path, or remove the directory yourself "
+                    f"first if you're sure it's safe to clear."
+                )
             shutil.rmtree(root)
         root.mkdir(parents=True)
+        _mark_as_basetemp(root)
         return root
     return _allocate_session_root(_basetemp_default_root(), retention=retention)
 
@@ -677,41 +684,31 @@ _MAX_COMPONENT_LEN = 120
 
 
 def sanitize_test_id(test_id: str) -> str:
-    """`test_id`, made safe as a single path component, injectively enough that two distinct ids
-    needing escaping never collide (spec/09 §5).
+    """`test_id`, made safe as a single path component, injectively (modulo an actual blake2b
+    collision) regardless of whether escaping was needed (spec/09 §5).
 
-    Same technique as `_collect._escape_segment` (deliberately — same problem, same fix): replace
-    unsafe characters, and if that changed anything, append a short digest of the *original*
-    string. The digest is what makes this injective rather than merely safe — `a/b` and `a b` both
-    escape to `a_b`, but the appended digests differ because they're computed over the un-escaped
-    originals, so the two never collide on disk. A test id long enough to still exceed a
-    filesystem's component-length limit even after escaping (a heavily parametrized id with many
-    long values) is truncated with a digest suffix for the same reason: the truncation itself is
-    lossy, so the digest is what keeps two long ids that happen to share a truncated prefix apart.
+    Same starting point as `_collect._escape_segment` (deliberately — same problem, same fix):
+    replace unsafe characters, then append a short digest of the *original* string. Unlike
+    `_escape_segment`, the digest is appended *unconditionally*, not only when escaping changed
+    something — an earlier version of this function did the latter, and it doesn't work: an id
+    that happens to need no escaping can still collide with a *different* id's escaped-and-hashed
+    output (`sanitize_test_id("a/b")` used to equal the literal string `"a_b_82badf67"`, so an
+    already-safe id spelled exactly that way would have collided with `"a/b"`'s sanitized form).
+    Appending the digest to every output, computed over the true original in every case, closes
+    that: two different inputs can now only collide on a genuine hash collision, not on one
+    happening to spell out the other's escaped form. The cost is cosmetic — even an already-safe
+    basename like `TmpPathFactory.mktemp("data")` now gets an ugly hash suffix — which is a small
+    price for a `tmp_path`/`mktemp` collision being cryptographically implausible instead of a
+    one-line reproducer away.
+
+    A test id long enough to still exceed a filesystem's component-length limit even after
+    escaping and hashing (a heavily parametrized id with many long values) is truncated with a
+    fresh digest suffix for the same reason: the truncation itself is lossy, so a digest computed
+    over the untruncated original is what keeps two long ids sharing a truncated prefix apart.
     """
-    # Review (low, latent): not injective, and the counterexample is one line. The digest is
-    # appended *only* when escaping changed something, so any id that is already safe is returned
-    # verbatim -- including one that happens to look like another id's escaped form. Verified:
-    #     sanitize_test_id("a/b")           == "a_b_82badf67"
-    #     sanitize_test_id("a_b_82badf67")  == "a_b_82badf67"   # already safe, returned as-is
-    # Two distinct inputs, one output. The docstring's careful phrasing ("two distinct ids
-    # *needing escaping* never collide") is technically true, but the sentence right after it
-    # ("the digest is what makes this injective") and spec/09 §5 ("injective enough to avoid
-    # collisions between distinct ids") both claim more than the code delivers. Latent for
-    # `tmp_path` itself, since every real test id contains `::` and so always needs escaping --
-    # but *not* latent for `TmpPathFactory.mktemp(basename)` in `_builtins.py`, which routes
-    # arbitrary user basenames through this same function and where an already-safe basename is
-    # the normal case: `mktemp("a/b")` and `mktemp("a_b_82badf67")` both target `a_b_82badf67`.
-    # `numbered=True` masks it (they share the counter and get different suffixes), so what
-    # actually surfaces is `numbered=False`, as a `FileExistsError` from `mkdir(exist_ok=False)`
-    # blaming the wrong caller. Appending the digest unconditionally makes it genuinely injective
-    # (at the cost of uglier directory names) -- or keep the conditional digest and note in the
-    # docstring that the guarantee is scoped to the always-escaped test-id domain, and give
-    # `mktemp` its own sanitizer.
     escaped = _UNSAFE_ID_CHARS.sub("_", test_id)
-    if escaped != test_id:
-        digest = hashlib.blake2b(test_id.encode(), digest_size=4).hexdigest()
-        escaped = f"{escaped}_{digest}"
+    digest = hashlib.blake2b(test_id.encode(), digest_size=4).hexdigest()
+    escaped = f"{escaped}_{digest}"
     if len(escaped) > _MAX_COMPONENT_LEN:
         digest = hashlib.blake2b(test_id.encode(), digest_size=8).hexdigest()
         keep = _MAX_COMPONENT_LEN - len(digest) - 1
@@ -753,28 +750,47 @@ def install(
     retention: int = DEFAULT_BASETEMP_RETENTION,
 ) -> CaptureSetup:
     """Replace `sys.stdout`/`sys.stderr` with `Router`s and add the root logging handler, for the
-    duration of one `run_suite` call. Idempotent: a second `install()` before the matching
-    `uninstall()` is a no-op returning the first call's setup, exactly like `_rewrite.install` —
-    without that guard, a nested or re-entrant `run_suite` would stack a second `Router` on top of
-    the first, and `uninstall()` would only ever unwind the outermost one, leaving `sys.stdout`
-    permanently wrapped after the *inner* call's own `uninstall()` runs.
+    duration of one `run_suite` call.
+
+    Idempotent, like `_rewrite.install`: calling this again before the matching `uninstall()`
+    does not stack a second `Router` on top of the first (which would leave `sys.stdout`
+    permanently wrapped after only the *inner* call's `uninstall()` ran) — it returns the live
+    setup instead. A mismatched `passthrough`/`basetemp` on that second call raises rather than
+    being silently discarded (I6): the live setup already committed to a `passthrough` mode and a
+    `basetemp_root` neither can be changed out from under whatever already depends on them (a
+    `tmp_path` a test already has a handle to, output already echoed or not), so a caller asking
+    for something different is a real conflict, not a harmless no-op to swallow quietly. Asking
+    for the *same* thing twice — or leaving an argument at its default, meaning "no opinion" — is
+    fine and returns the existing setup, same as before.
+
+    Every fallible step (right now, just resolving `basetemp_root`) runs *before* any process-
+    global state is touched: `sys.stdout`/`sys.stderr` are swapped and the root log handler is
+    added only once nothing left to do can still raise, so a failure here — an ordinary
+    `--basetemp` typo, most likely — leaves the process exactly as it was, with nothing for
+    `uninstall()` to need to undo. This is what actually makes "mirrors `_rewrite.py`'s idempotent
+    install/uninstall pattern" (module docstring) true: `_rewrite.install` earns that claim the
+    same way, doing all of its own fallible work (`plan(...)`, the cache probe) before its own
+    first global mutation (`sys.meta_path.insert(0, hook)`).
     """
     global _installed
-    # Review: the docstring justifies this guard with "a nested or re-entrant `run_suite`", but
-    # that scenario cannot occur -- `run_suite` drives an `asyncio.Runner`, and calling it from
-    # inside a running test raises `RuntimeError: Runner.run() cannot be called from a running
-    # event loop` before capture is ever reached (verified: the outer test just reports FAILED).
-    # So the guard is defending a case the architecture already forecloses, while the case it
-    # *does* silently change is unmentioned: a second `install()` returns the first call's setup
-    # and **discards its `passthrough` and `basetemp` arguments without a word**.
-    # `test_install_is_idempotent_and_uninstall_restores_the_real_streams` pins exactly that
-    # (`second = install(basetemp=tmp_path / "two")  # ignored`), so it is intended -- but "the
-    # caller asked for a different basetemp and got someone else's" is the kind of silent
-    # degrade I6 argues against elsewhere in this file (cf. `_require_test_context`'s loud
-    # `RuntimeError`). Worth either raising when the arguments disagree with the live setup, or
-    # rewriting the docstring's rationale to the real one.
     if _installed is not None:
+        requested_basetemp = None if basetemp is None else Path(basetemp).expanduser()
+        mismatched = passthrough != _installed.passthrough or (
+            requested_basetemp is not None and requested_basetemp != _installed.basetemp_root
+        )
+        if mismatched:
+            raise RuntimeError(
+                f"velox._capture.install() was already called with passthrough="
+                f"{_installed.passthrough!r}, basetemp_root={_installed.basetemp_root!r} -- "
+                f"this call asked for passthrough={passthrough!r}"
+                + (f", basetemp={requested_basetemp!r}" if requested_basetemp is not None else "")
+                + ". Call uninstall() first if you actually want to change either."
+            )
         return _installed
+
+    # The one fallible step, resolved first and before any global state is touched — see this
+    # function's own docstring for why the ordering here is load-bearing, not incidental.
+    basetemp_root = _resolve_basetemp_root(basetemp, retention=retention)
 
     session_sink = Sink(label="<unattributed>")
     real_stdout, real_stderr = cast(TextIO, sys.stdout), cast(TextIO, sys.stderr)
@@ -785,31 +801,6 @@ def install(
 
     log_handler = _RoutingHandler(session_sink)
     logging.getLogger().addHandler(log_handler)
-
-    # Review (must fix): this is the one fallible step in `install()`, and it runs *after*
-    # `sys.stdout`/`sys.stderr` have already been replaced and the root log handler already added,
-    # but *before* `_installed` is assigned. If it raises, the process is left permanently broken:
-    # the `Router`s stay on `sys.stdout`/`sys.stderr` forever, the root handler stays attached
-    # forever, and `uninstall()` can never undo either because `_installed` is still `None` and it
-    # returns immediately. `_run.run_suite` cannot save it either -- it calls `install()` on the
-    # line *before* its own `try:`, so its `finally` never runs. Verified with the most ordinary
-    # typo imaginable, `--basetemp` naming an existing *file*:
-    #     run_suite([], basetemp=<a regular file>)
-    #     -> NotADirectoryError: [Errno 20] Not a directory
-    #     sys.stdout is the real stream?  False     (type: Router)
-    #     root logger handlers: 0 -> 1
-    #     _capture.installed() is None?   True
-    #     after uninstall(), stdout real? False
-    # and every subsequent `print()` in that process vanished into an orphaned `Sink`.
-    # This is also precisely where the "mirrors `_rewrite.py`'s idempotent install/uninstall
-    # pattern" claim in the module docstring stops being true. `_rewrite.install` does all of its
-    # fallible work first (`plan(...)`, the cache probe, the `plain`-mode early return) and only
-    # then touches global state -- `sys.meta_path.insert(0, hook)` is the last mutation before
-    # `_installed_setup = setup`, so a failure leaves nothing installed. Reordering to match
-    # (resolve `basetemp_root` first, then swap the streams, then add the handler, then record
-    # `_installed`) fixes this with no new machinery; failing that, `install()` needs its own
-    # try/except that unwinds the partial install before re-raising.
-    basetemp_root = _resolve_basetemp_root(basetemp, retention=retention)
 
     setup = CaptureSetup(
         session_sink=session_sink,
