@@ -124,10 +124,19 @@ reported as a **collection error** attributed to that file, and the rest of the 
 - **Writes:** `VELOX_TEST_ID` is *not* set — pytest's `PYTEST_CURRENT_TEST` is meaningless with N
   tests in flight. The concurrent replacement is the watchdog's in-flight file
   ([11](11-runtime-safety.md)). `env` from config is applied before the first test module import.
-- **Does not touch `sys.path`.** Import is importlib-only with path-derived module names (R§3);
-  this single decision deletes `Package`, `ImportPathMismatchError`, and the `__init__.py`
-  requirement. Users needing their package importable install it (`uv pip install -e .`), which is
-  already the norm.
+- **Touches `sys.path` exactly once**: `rootdir` (spec/02 §3) is prepended to `sys.path[0]` at
+  startup, before the first test module import, and removed again when the run ends — one
+  predictable insertion, not pytest's per-conftest-directory games (spec/00 §11 "Fixture import
+  path"). Collection's own import mechanism is unaffected: modules still import under path-derived
+  `velox_tests.*` names via importlib, not `rootdir`-relative dotted names (R§3), so `Package`,
+  `ImportPathMismatchError`, and the `__init__.py` requirement stay deleted. What the insertion
+  buys is plain **absolute** imports rooted at `rootdir` inside test code — `from tests.fixtures
+  import api_client`, `from relay.cache import FakeClock` — resolving via ordinary PEP 420
+  namespace-package lookup, no `__init__.py` needed. It does not make *relative* imports between
+  test modules work (spec/00 §11): those resolve against the synthetic `velox_tests.*` package
+  name, which has no real directory backing it, and are unsupported by design. Code under test
+  that isn't on `rootdir`'s own tree still needs installing (`uv pip install -e .`) or otherwise
+  putting on the path — the insertion only ever adds `rootdir` itself.
 
 ## 6. Startup sequence and budget
 

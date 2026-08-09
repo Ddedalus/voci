@@ -57,14 +57,25 @@ are sorted by name so the walk itself is deterministic before any sorting pass.
    reported like a failed test (with a full traceback), the file contributes zero tests, and the run
    continues. Exit code `1`, or `2` under `--strict-collect`.
 
-This deletes, versus pytest: `Package` collection, `sys.path` insertion (`prepend`/`append`/
-`importlib` modes), namespace-package configuration, `consider_namespace_packages`, and
-`ImportPathMismatchError` — pytest's worst legacy tax.
+This deletes, versus pytest: `Package` collection, per-file/per-conftest `sys.path` insertion
+(`prepend`/`append`/`importlib` modes), namespace-package configuration,
+`consider_namespace_packages`, and `ImportPathMismatchError` — pytest's worst legacy tax. What
+survives, from spec/02 §5 (spec/00 §11 "Fixture import path"): **one** `sys.path` insertion of
+`rootdir` itself, done once by the CLI at startup, before this import step ever runs — not a
+per-file or per-directory decision, and orthogonal to the module-naming scheme above.
 
-**Consequence to document:** the code under test must be importable on its own (installed, or on
-`PYTHONPATH`). For `uv`/`pip install -e .` projects this is already true. For the "flat script
-directory with no package" layout it is not, and the error message must say exactly that with the
-fix.
+**Consequence to document:** the code under test must be importable on its own (installed, on
+`PYTHONPATH`, or reachable via the `rootdir` insertion above) — for `uv`/`pip install -e .`
+projects, or anything living under `rootdir`, this is already true. For a package that lives
+outside `rootdir`'s own tree it is not, and the error message must say exactly that with the fix.
+
+**Second consequence:** because every test module imports under the synthetic `velox_tests.*`
+name (step 1), *relative* imports between test modules (`from .conftest import x`,
+`from ..fixtures import y`) can never resolve — their parent package (`velox_tests`,
+`velox_tests.<dir>`, …) has no directory backing it, and the `rootdir` insertion doesn't change
+that. Sharing code between test modules must use an **absolute** import rooted at `rootdir`
+instead (`from tests.assertion.conftest import x`), which the insertion above does make work.
+Relative imports in test code are unsupported, full stop — not a gap to close later.
 
 ## 4. Building records
 
