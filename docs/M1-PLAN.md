@@ -40,50 +40,42 @@ covered by the 408-test suite (`just test`), not aspirational.
   `tmp_path_factory`, `--basetemp` (spec/09). — `e7037ff`, review `5088f8b`/`7530b5e`
 - [x] **Reporter** — jest-style per-file tty blocks, failure details and short summary in logical
   order, non-tty mode, wall-vs-Σ final line (spec/10). — `f5a689c`, review `4c581c0`/`9b045f6`
-
-That's all five named components. What's left is closing the **gate**, not the component list.
-
-## Remaining work
-
-The M1 gate ("velox runs its own suite") is not yet demonstrated on `main`. The two items below
-that root-caused why the example suites under `examples/` — the actual "real suite" dogfood
-targets (spec/00 §7 intro: "a runner good enough to run velox's own test suite and one real
-FastAPI service suite") — failed to collect are both done now (rootdir import convention still
-pending merge into `main`, see its entry above); what's left is the dogfood pass itself.
-
+- [x] **`[tool.velox]` config loader** — `_config.resolve` (upward search for the `pyproject.toml`
+  declaring `[tool.velox]`, stopping at the git root) plus `cli.main` merging it against the CLI
+  at `CLI > [tool.velox] > built-in default`. Recognizes `testpaths`, `concurrency`, `timeout`,
+  `test_file_patterns`, `ignore`, `env` — the keys the shipped examples actually use;
+  `watchdog_threshold` deliberately deferred (no consumer before M2). — `6674f2d`, review
+  (8-angle `/code-review high`, run twice after a mid-review interruption) found and fixed: a
+  `test_file_patterns = []`/`ignore = []`-style truthiness bug, an `os.environ` mutation that
+  could leak on a `_rewrite.install` exception, unvalidated `testpaths` entries silently producing
+  "0 tests" instead of a usage error, and config-sourced bad values being misattributed to
+  `--concurrency`/`--timeout` in error messages — fixed in `864ab6e`.
 - [x] **Rootdir import convention** — resolves Outstanding Decision #1 (spec/00 §11): `cli.main`
-  now prepends `rootdir` to `sys.path[0]` exactly once, before the first test module import,
-  removed again on the way out (same "repeated in-process `main()` calls must not leak" shape as
-  the config-loader's `env_backup`). Makes plain absolute imports rooted at `rootdir` resolve via
+  prepends `rootdir` to `sys.path[0]` exactly once, before the first test module import, removed
+  again on the way out (same "repeated in-process `main()` calls must not leak" shape as the
+  config-loader's `env_backup`). Makes plain absolute imports rooted at `rootdir` resolve via
   PEP 420 namespace-package lookup (`from tests.fixtures import api_client`, `from relay.cache
   import FakeClock`) without an `__init__.py` anywhere; deliberately does *not* make relative
   imports between test modules work (`from .conftest import x` — those resolve against the
   synthetic `velox_tests.*` package name, unsupported by design). Spec updated:
   [00](../spec/00-overview.md) §11, [02](../spec/02-cli-and-config.md) §5,
-  [03](../spec/03-discovery-and-collection.md) §3. — `331c477` on branch
-  `rootdir-import-convention`, built and verified in an isolated worktree against this plan's
-  `6674f2d` specifically to avoid the concurrent config-loader review pass also in flight on
-  `main`'s working tree at the time; **not yet merged into `main`** as of this writing, so `main`
-  itself doesn't have it yet even though this box is checked. Verified against
+  [03](../spec/03-discovery-and-collection.md) §3. Built on a separate branch
+  (`rootdir-import-convention`, `331c477`) concurrently with the config-loader review pass above,
+  merged into `main` at `c380eb6` (one manual conflict in `cli.py` where both branches touched the
+  same region — resolved by keeping the config-loader's env-leak-fix structure and slotting the
+  `sys.path` insertion in beside it on the same reasoning). Verified against
   `examples/02-async-library`: the `ModuleNotFoundError: No module named 'relay'` collection
   failure is gone (surfacing 4 unrelated pre-existing bugs in that example, out of scope here —
   the "dogfood the examples" item below).
 
-- [x] **`[tool.velox]` config loader** — `_config.resolve` (upward search for the `pyproject.toml`
-  declaring `[tool.velox]`, stopping at the git root) plus `cli.main` merging it against the CLI
-  at `CLI > [tool.velox] > built-in default`. Recognizes `testpaths`, `concurrency`, `timeout`,
-  `test_file_patterns`, `ignore`, `env` — the keys the shipped examples actually use;
-  `watchdog_threshold` deliberately deferred (no consumer before M2). Does *not* unblock the
-  FastAPI/async-library examples end to end by itself — that still needs the rootdir-import-
-  convention item above (they now get their `concurrency`/`timeout`/`env` applied, but still fail
-  to *collect* on `from relay... import`/`from tests.fixtures import ...`). — `6674f2d`, review
-  (8-angle `/code-review high`, run twice after a mid-review interruption) found and fixed: a
-  `test_file_patterns = []`/`ignore = []`-style truthiness bug, an `os.environ` mutation that
-  could leak on a `_rewrite.install` exception, unvalidated `testpaths` entries silently producing
-  "0 tests" instead of a usage error, and config-sourced bad values being misattributed to
-  `--concurrency`/`--timeout` in error messages
+Both config-loader and rootdir-import-convention were needed before the example suites could even
+*collect* — config-loader alone got their `concurrency`/`timeout`/`env` applied but not their
+imports resolving; rootdir-import-convention alone would have had no config-driven `testpaths`/
+`env` to run with. Together, that's every named M1 component plus what blocked the gate.
 
-- [ ] **Dogfood the example suites, in CI** — once the two items above land, get
+## Remaining work
+
+- [ ] **Dogfood the example suites, in CI** — get
   `examples/01-fastapi-crud` (needs its own `uv sync` — it depends on `fastapi`/`sqlalchemy`, not
   present in the root env) and `examples/02-async-library` (stdlib-only, no separate env needed)
   actually green under `uv run velox`, fix whatever real bugs that surfaces, and add both as a CI
