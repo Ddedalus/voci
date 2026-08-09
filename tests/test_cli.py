@@ -120,8 +120,13 @@ def test_main_runs_a_passing_and_a_failing_async_test(
 
     out = capsys.readouterr().out
     assert status == 1  # one failure present
-    assert "test_pass PASSED" in out
-    assert "test_fail FAILED" in out
+    # M1 reporter slice: the flat "id OUTCOME" dump is gone, replaced by `_report.Reporter`'s
+    # per-file block (spec/10 §2) plus the failure-details/short-summary sections `finish` builds
+    # (see `test_report.py` for the reporter's own dedicated coverage) -- both tests live in one
+    # file, so the block is marked FAIL with a "(1 failed)" count rather than a per-test PASS line.
+    assert "FAIL" in out
+    assert "(1 failed)" in out
+    assert "::test_fail" in out
     # A bare, un-rewritten `assert` also raises `AssertionError` — asserting only that string
     # would pass even if the rewrite hook were never actually consulted (as it in fact wasn't,
     # for a while: `_collect._import_module` used to import via `spec_from_file_location`
@@ -150,7 +155,11 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
 
     out = capsys.readouterr().out
     assert status == 1
-    assert "test_needs_it ERROR" in out
+    # M1 reporter slice: see the equivalent comment on
+    # `test_main_runs_a_passing_and_a_failing_async_test` -- the failure-details section prints
+    # "ERROR <id>", not "<id> ERROR".
+    assert "ERROR" in out
+    assert "::test_needs_it" in out
     assert "setup boom" in out
     assert "1 errored" in out
 
@@ -195,7 +204,10 @@ def test_main_reports_a_timeout_as_its_own_outcome(
 
     out = capsys.readouterr().out
     assert status == 1
-    assert "test_hangs TIMEOUT" in out
+    # M1 reporter slice: see the equivalent comment on
+    # `test_main_runs_a_passing_and_a_failing_async_test`.
+    assert "TIMEOUT" in out
+    assert "::test_hangs" in out
     assert "1 timed out" in out
 
 
@@ -216,3 +228,35 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
     out = capsys.readouterr().out
     assert status == 0
     assert "test_skipped SKIPPED (not ready)" in out
+
+
+def test_main_prints_jest_style_per_file_blocks_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M1 reporter slice (spec/10 §2), end to end through `main`: two files, one all-passing and
+    one with a failure, produce two per-file scrollback blocks plus a failure-details/short-summary
+    section and the wall-vs-Σ final line -- not the old flat "id OUTCOME" dump (see
+    `tests/test_report.py` for the reporter's own unit coverage of every piece exercised here)."""
+    (tmp_path / "test_a.py").write_text(
+        "async def test_one():\n    pass\n\nasync def test_two():\n    pass\n"
+    )
+    (tmp_path / "test_b.py").write_text("async def test_broken():\n    assert 1 == 2\n")
+
+    status = main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    # Per-file blocks: one PASS (2 tests), one FAIL (1 test, 1 failed).
+    assert "PASS" in out
+    assert "test_a.py" in out
+    assert "FAIL" in out
+    assert "test_b.py" in out
+    assert "(1 failed)" in out
+    # Failure details + short test summary, in logical order.
+    assert "--- short test summary ---" in out
+    assert "FAILED" in out
+    assert "::test_broken" in out
+    assert "assert 1 == 2" in out
+    # Wall-vs-Σ final line (spec/10 §2's proof-of-value metric).
+    assert "tests ·" in out
+    assert "wall (Σ" in out

@@ -8,11 +8,14 @@ M1 concurrency slice (spec/05 §1-4): `--concurrency` and `--timeout` are now re
 through to `_run.run_suite`, alongside `--assert`/`--rewrite-cache` in the "does real work"
 category this docstring already calls out.
 
-M1 capture slice (spec/09): `-s`/`--capture=no` and `--basetemp` join that same category. Printing
-captured output is deliberately minimal here — a failing test's stdout/stderr/log records below
-its traceback, and an "unattributed output" section if the session sink caught anything — the full
-jest-style reporter (per-file blocks, live footer, `--durations`, JUnit) is spec/10, not this
-milestone.
+M1 capture slice (spec/09): `-s`/`--capture=no` and `--basetemp` join that same category.
+
+M1 reporter slice (spec/10 §2): the flat per-test dump this module used to print itself is gone,
+replaced by `_report.Reporter` — jest-style per-file scrollback blocks (flushed as each file
+finishes), failure details and the short test summary in logical order, and the wall-vs-Σ
+concurrency line. Still not this milestone (spec/00 §7's MVP table, *Deferred* column): the live
+footer, `--durations`, JUnit XML, `--report-json`, GH annotations, `--stream-failures`, and any
+ANSI/`rich` color — see `_report.py`'s own module docstring for the specifics.
 """
 
 from __future__ import annotations
@@ -20,9 +23,10 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 from pathlib import Path
 
-from velox import __version__, _capture, _collect, _discovery, _rewrite, _run
+from velox import __version__, _capture, _collect, _discovery, _report, _rewrite, _run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -304,8 +308,27 @@ def main(argv: list[str] | None = None) -> int:
         # Populated by `run_suite` iff non-`None` (spec/09 §9 "MVP" mentions this section
         # explicitly) — see `_capture.py`'s module docstring for exactly what can land here under
         # this runtime (a genuinely detached background thread; end-of-run session-scope
-        # teardown output). Empty in the overwhelming common case.
+        # teardown output). Empty in the overwhelming common case. Rendered by `reporter.finish`
+        # below, not printed here directly — see `_report.py`'s module docstring for why that
+        # move keeps every "what got printed and in what order" decision in one place.
         unattributed: list[str] = []
+
+        # `paths_by_id` is what lets `Reporter` group `TestResult`s (which carry no path of their
+        # own, spec/10's `_report.py` docstring) back into per-file blocks — built from
+        # `collected.records` before `run_suite` runs, since that's the only place both a test's
+        # id and its file are known together.
+        paths_by_id = {record.id: record.path for record in collected.records}
+        reporter = _report.Reporter(
+            paths_by_id=paths_by_id,
+            capture_passthrough=capture_passthrough,
+            stream=sys.stdout,
+        )
+
+        # Wall clock around the whole `run_suite` call, not derived from summing per-test
+        # durations afterwards — `reporter.finish`'s wall-vs-Σ line (spec/10 §2) is exactly the
+        # comparison between this real elapsed time and that sum, so the two must be measured
+        # independently for the ratio to mean anything.
+        wall_start = time.monotonic()
         results = _run.run_suite(
             collected.records,
             concurrency=args.concurrency,
@@ -313,46 +336,11 @@ def main(argv: list[str] | None = None) -> int:
             capture_passthrough=capture_passthrough,
             basetemp=args.basetemp,
             unattributed_output=unattributed,
+            on_result=reporter.on_result,
         )
+        wall_clock = time.monotonic() - wall_start
 
-        # `Outcome.value` ("passed"/"failed"/"error") upper-cased rather than a three-way
-        # if/elif: adding a further outcome (skipped/xfailed/... , spec/05 §4) later must not
-        # require touching this line again to keep printing it correctly.
-        for result in results:
-            print(f"{result.id} {result.outcome.value.upper()} ({result.duration:.3f}s)")
-            if result.failure is not None:
-                print(result.failure)
-            # spec/09 §6: captured output is only ever non-empty on `TestResult` for a failing
-            # outcome (`run_suite`'s own `dispatch_one` drops it for `PASSED` before this point),
-            # so no `result.outcome is not PASSED` guard is needed here beyond "is there anything
-            # to print" — this is deliberately minimal (three flat sections, no truncation-aware
-            # layout, no per-file grouping) since the real reporter is spec/10, out of scope here.
-            #
-            # stdout/stderr specifically are skipped under `-s`/`--capture=no`: `Router.write`
-            # still buffers into the `Sink` even in passthrough mode (so `capture`/`log_records`
-            # fixtures keep working and this section still has something to show when the run
-            # *isn't* passthrough), but passthrough's whole point is that this exact text was
-            # already echoed live, per line, as it was written — printing it again here would
-            # double it for every failing test, defeating the flag someone reaches for specifically
-            # to *reduce* noise. Log records were never echoed live (`-s` only ever affected
-            # stdout/stderr, spec/09 §1), so that section is unaffected either way.
-            if not capture_passthrough and result.captured_stdout:
-                print("--- captured stdout ---")
-                print(result.captured_stdout)
-            if not capture_passthrough and result.captured_stderr:
-                print("--- captured stderr ---")
-                print(result.captured_stderr)
-            if result.log_records:
-                print("--- captured log records ---")
-                for record in result.log_records:
-                    print(f"{record.levelname} {record.name}: {record.getMessage()}")
-
-        if unattributed:
-            print(
-                "--- unattributed output (produced outside any test's context; spec/09 §9 Q4) ---"
-            )
-            for section in unattributed:
-                print(section)
+        reporter.finish(results, wall_clock=wall_clock, unattributed_output=unattributed)
 
         for skipped in collected.skipped:
             print(f"{skipped.id} SKIPPED ({skipped.reason})")

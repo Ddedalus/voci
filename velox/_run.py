@@ -35,7 +35,7 @@ import logging
 import math
 import time
 import traceback
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -355,8 +355,22 @@ def run_suite(
     capture_passthrough: bool = False,
     basetemp: Path | None = None,
     unattributed_output: list[str] | None = None,
+    on_result: Callable[[TestResult], None] | None = None,
 ) -> list[TestResult]:
     """Run every record concurrently on one `asyncio.Runner`, semaphore-bounded (spec/05 §1).
+
+    `on_result` (spec/10 slice): if given, called once per test, synchronously from inside
+    `dispatch_one`, immediately after a test's final `TestResult` is built (captured
+    output already folded on for a failing outcome) and immediately before it is written into
+    `results[index]`. This is the *only* way to observe results in real completion order —
+    `results`, both this parameter's callback order and the returned list, differ in one crucial
+    way: the callback fires as each test actually finishes (physical/completion order, spec/10 §2's
+    "ordering between blocks is by completion"), while the returned list is always indexed by
+    `index`, i.e. logical order (I2), regardless of when each slot was actually filled. A jest-style
+    reporter wires this in to flush a file's scrollback block the moment that file's last test
+    finishes, without waiting for the whole suite to complete. Exceptions raised by `on_result`
+    itself are not caught here — same "a velox bug should surface as one" posture as everywhere
+    else in this function — so a reporter callback that raises aborts the run.
 
     spec/09 additions, all additive to the concurrency machinery below (module docstring — none
     of it touches `_run_one`'s own carefully-documented phase/outcome logic):
@@ -579,6 +593,12 @@ def run_suite(
                         captured_stderr=sink.err,
                         log_records=tuple(sink.log_records),
                     )
+                # Fired in real completion order (see this function's own docstring's `on_result`
+                # paragraph), before the logical-order `results` slot below is written -- a
+                # streaming reporter must see this test as "done" no later than any code that
+                # waits on the full `results` list would.
+                if on_result is not None:
+                    on_result(result)
                 results[index] = result
 
         # Constructed synchronously, outside the loop — `concurrent.futures.ThreadPoolExecutor.
