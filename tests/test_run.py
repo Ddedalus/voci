@@ -316,6 +316,111 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
 
 
 # ------------------------------------------------------------------------------------------
+# TestResult.failure_summary (spec/10 reporter slice): a short, exception-object-based summary
+# captured directly at each of `_run_one`'s catch sites (`_summarize_exception`), not parsed back
+# out of `failure`'s rendered traceback text. This is the fix for a real reporter bug -- see
+# `_report._failure_reason`'s docstring -- so these cover the shapes that bug actually hit, not
+# just the trivial one a text heuristic happened to get right.
+# ------------------------------------------------------------------------------------------
+
+
+def test_failure_summary_for_a_failed_call_is_exception_type_and_message() -> None:
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary == "AssertionError: nope"
+
+
+def test_failure_summary_for_a_setup_error_is_exception_type_and_message() -> None:
+    @velox.fixture()
+    def broken() -> int:
+        raise RuntimeError("setup boom")
+
+    async def test_func(x: int = velox.Depends(broken)) -> None:
+        raise AssertionError("must never run: setup already failed")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure_summary == "RuntimeError: setup boom"
+
+
+def test_failure_summary_for_a_teardown_error_is_the_exception_groups_own_summary() -> None:
+    """The regression case: `_di._release_all` raises an `ExceptionGroup`/`BaseExceptionGroup` on
+    every teardown failure by design (spec/04 §5), whose *rendered traceback* ends in a
+    box-drawing closing rule -- exactly the text the old "last non-blank line of `failure`"
+    heuristic in `_report._failure_reason` used to return for every teardown-raising fixture (not
+    an edge case: every `Outcome.ERROR` from teardown looked like this). Reading the exception
+    object directly instead produces the group's own sensible one-line summary."""
+
+    @velox.fixture()
+    def flaky_teardown():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+        assert x == 1
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure_summary is not None
+    assert result.failure_summary.startswith("ExceptionGroup:")
+    assert "fixture teardown" in result.failure_summary
+    assert "+--" not in result.failure_summary  # the old heuristic's box-drawing rule
+
+
+def test_failure_summary_for_call_and_teardown_both_failing_leads_with_the_call() -> None:
+    """Call-first policy (see `TestResult.failure_summary`'s own docstring): when both phases
+    failed, the call's summary is almost always the more actionable one for whoever reads the
+    short summary line -- a real assertion or bug in the test -- while teardown's is used only
+    when the call itself passed and teardown is the sole failure."""
+
+    @velox.fixture()
+    def flaky_teardown():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+        raise AssertionError("call boom")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure_summary == "AssertionError: call boom"
+
+
+def test_failure_summary_for_timeout_is_the_budget_message() -> None:
+    async def _hangs() -> None:
+        await asyncio.sleep(10)
+
+    (result,) = run_suite([_record(0, _hangs, "test_hangs")], timeout=0.05)
+
+    assert result.outcome is Outcome.TIMEOUT
+    assert result.failure_summary == "test exceeded the --timeout=0.05s budget"
+
+
+def test_failure_summary_takes_only_the_first_line_of_a_multiline_exception_message() -> None:
+    """Mirrors the shape the vendored assertion rewriter produces for `assert x == y, "message"`
+    under the default `--assert=rewrite` (the user's own message first, the rewriter's own
+    explanation appended on a second line -- `_vendor/assertion/rewrite.py`'s `visit_Assert`)
+    without going through the rewriter itself; `tests/test_cli.py` has the real rewritten-assert
+    case end to end."""
+
+    async def _raises() -> None:
+        raise AssertionError("expected four widgets\n>assert 3 == 4")
+
+    (result,) = run_suite([_record(0, _raises, "test_multiline")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary == "AssertionError: expected four widgets"
+
+
+def test_passing_test_has_no_failure_summary() -> None:
+    (result,) = run_suite([_record(0, _passes, "test_passes")])
+    assert result.failure_summary is None
+
+
+# ------------------------------------------------------------------------------------------
 # KeyboardInterrupt/SystemExit from every phase, including from inside a fixture's teardown —
 # the `except (KeyboardInterrupt, SystemExit): raise` guards `_run_one` carries around setup,
 # call, and teardown; and `run_suite`'s own best-effort session-scope teardown in `finally`.
@@ -590,6 +695,65 @@ def test_results_are_in_logical_order_even_when_completion_order_is_scrambled() 
     assert [r.index for r in results] == [0, 1, 2]
     assert [r.id for r in results] == [r.id for r in records]
     assert [r.outcome for r in results] == [Outcome.PASSED] * 3
+
+
+# ------------------------------------------------------------------------------------------
+# `on_result` (spec/10 reporter slice): before this, nothing outside `test_report.py`'s by-hand
+# `Reporter.on_result` calls ever exercised `run_suite`'s actual `on_result` parameter -- so none
+# of the properties its docstring claims ("called once per test, in real completion order, before
+# `results[index]`, with capture already folded on") were pinned at the wiring level at all.
+# ------------------------------------------------------------------------------------------
+
+
+def test_on_result_fires_in_completion_order_while_results_stays_logical() -> None:
+    """Same sleep-descending shape as
+    `test_results_are_in_logical_order_even_when_completion_order_is_scrambled` above, but
+    completion order is read from `on_result` itself rather than a side channel inside the test
+    bodies. The *pair* of assertions (callback order vs. `results` order) is what distinguishes
+    "the callback observes real completion order" from "the runner happened to be serial" -- and
+    it is the only assertion in the codebase that would catch a future change accidentally moving
+    the callback to a post-`gather` loop."""
+
+    def _sleeps(seconds: float) -> Callable[[], object]:
+        async def test_func() -> None:
+            await asyncio.sleep(seconds)
+
+        return test_func
+
+    records = [
+        _record(0, _sleeps(0.06), "test_slowest"),
+        _record(1, _sleeps(0.03), "test_middle"),
+        _record(2, _sleeps(0.0), "test_fastest"),
+    ]
+    completion_order: list[int] = []
+
+    results = run_suite(
+        records, concurrency=3, on_result=lambda result: completion_order.append(result.index)
+    )
+
+    assert completion_order == [2, 1, 0]  # fastest-to-slowest: real completion order
+    assert [r.index for r in results] == [0, 1, 2]  # logical order regardless
+
+
+def test_on_result_sees_captured_output_already_folded_on() -> None:
+    """`run_suite`'s own docstring: `on_result` fires with captured output "already folded on for
+    a failing outcome" -- i.e. after `dispatch_one`'s `dataclasses.replace`, not the
+    pre-`replace` object, which would still have an empty `captured_stdout` regardless of what
+    the test printed."""
+
+    async def _prints_then_fails() -> None:
+        print("captured-before-callback")
+        raise AssertionError("boom")
+
+    seen: list[Result] = []
+
+    run_suite(
+        [_record(0, _prints_then_fails, "test_prints_then_fails")],
+        on_result=lambda result: seen.append(result),
+    )
+
+    assert len(seen) == 1
+    assert "captured-before-callback" in seen[0].captured_stdout
 
 
 def test_run_suite_rejects_non_positive_concurrency() -> None:
@@ -909,7 +1073,9 @@ def test_timeout_during_call_still_runs_teardown_for_what_setup_acquired() -> No
 
 
 def _result(outcome: Outcome) -> Result:
-    return Result(id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None)
+    return Result(
+        id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None, failure_summary=None
+    )
 
 
 def _error(name: str = "mod.py") -> CollectionError:

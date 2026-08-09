@@ -90,6 +90,23 @@ class TestResult:
     #: alone, or both concatenated when the call phase *also* failed before teardown ran (see
     #: `_run_one`).
     failure: str | None
+    #: A short, one-line `"ExceptionType: message"` summary of whichever exception ultimately
+    #: decided `outcome` — captured directly from the exception object at each phase's catch site
+    #: in `_run_one` (`_summarize_exception`), not parsed back out of `failure`'s traceback text.
+    #: This exists because `failure`'s rendering does not put "the reason" in a fixed, parseable
+    #: position: a rewritten assert's own explanation is appended *after* the exception line (so
+    #: the traceback's last line is not the user's own message), and `_di._release_all` always
+    #: raises an `ExceptionGroup`/`BaseExceptionGroup` on teardown failure (spec/04 §5), whose
+    #: rendered traceback ends in a box-drawing separator, not a message — both shapes defeated an
+    #: earlier "last non-blank line of `failure`" text heuristic the reporter used before this
+    #: field existed (see `_report._failure_reason`'s git history). `None` iff `outcome` is
+    #: `PASSED`. Follows the same aggregation rule as `failure`, with one addition: for the
+    #: concatenated call+teardown `ERROR` case (`failure`'s own note above), this reports the
+    #: *call*'s summary, not teardown's — a failing call is almost always the more actionable
+    #: exception for whoever reads the short summary (a real assertion or bug in the test itself),
+    #: while teardown's summary is used only when the call phase passed and teardown is the sole
+    #: failure. `TIMEOUT` reuses its own synthesized budget message verbatim (already one line).
+    failure_summary: str | None
     #: This test's captured stdout/stderr and structured log records (spec/09 §6), attached by
     #: `run_suite`'s `dispatch_one` — never by `_run_one` itself, which knows nothing about
     #: capture at all (module docstring's "keep this additive"). Left at these empty defaults for
@@ -101,6 +118,40 @@ class TestResult:
     captured_stdout: str = ""
     captured_stderr: str = ""
     log_records: tuple[logging.LogRecord, ...] = ()
+
+
+def _summarize_exception(exc: BaseException) -> str:
+    """`f"{ExceptionType}: {first line of str(exc)}"` — `TestResult.failure_summary`'s one line,
+    read directly off the exception object rather than parsed back out of its rendered traceback.
+
+    Two things fall out of "read the object, not its rendering" for free, which is the whole reason
+    this exists instead of a smarter text heuristic over `traceback.format_exc()` (see
+    `failure_summary`'s own docstring for the bug this replaced):
+
+    - `add_note(...)` text (`_di.setup`'s partial-failure cleanup adds one routinely) never leaks
+      in — notes are a separate `exc.__notes__` list that only `traceback.TracebackException`
+      rendering appends after the exception line; `str(exc)` was never touched by `add_note` at
+      all, so there is nothing here to accidentally pick up.
+    - An `ExceptionGroup`/`BaseExceptionGroup` (`_di._release_all` raises one unconditionally on
+      any teardown failure, spec/04 §5) summarizes itself sensibly: `str(group)` is its own
+      `f"{message} ({n} sub-exception{s})"`, e.g. `"fixture teardown (1 sub-exception)"` — nothing
+      like the box-drawing closing rule a rendered group traceback ends with, which is exactly the
+      string the old heuristic returned for *every* teardown-raising fixture.
+
+    Only the first line of `str(exc)` is kept, not the whole thing — the vendored assertion
+    rewriter puts a user's own `assert x == y, "message"` message *first* and its own explanation
+    on a second line joined by `"\\n>assert "` (`_vendor/assertion/rewrite.py`'s `visit_Assert`),
+    so `str(exc)` for a rewritten assert-with-message is itself two lines; taking only the first
+    recovers exactly the user's message — pytest's own short-summary line for the identical input
+    is `AssertionError: <message>`, dropping the explanation the same way — rather than
+    reproducing the old bug's opposite failure mode of showing only the explanation. A bare
+    `raise ValueError("a\\nb")` is truncated the same way, for the same "keep this a *short*,
+    one-line summary" reason — `failure`'s full traceback text is still where the untruncated
+    message lives.
+    """
+    message = str(exc)
+    first_line = message.splitlines()[0] if message else ""
+    return f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
 
 
 async def _run_one(
@@ -196,9 +247,13 @@ async def _run_one(
     """
     start = time.monotonic()
     setup_failure: str | None = None
+    setup_summary: str | None = None
     call_failure: str | None = None
+    call_summary: str | None = None
     teardown_failure: str | None = None
+    teardown_summary: str | None = None
     cancelled_failure: str | None = None
+    cancelled_summary: str | None = None
     timed_out = False
     setup_done = False
     kwargs: dict[str, Any] = {}
@@ -224,8 +279,9 @@ async def _run_one(
                 setup_done = True
             except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                 raise
-            except BaseException:
+            except BaseException as exc:
                 setup_failure = traceback.format_exc()
+                setup_summary = _summarize_exception(exc)
 
             if setup_failure is None:
                 try:
@@ -238,23 +294,27 @@ async def _run_one(
                     await coro
                 except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                     raise
-                except BaseException:
+                except BaseException as exc:
                     call_failure = traceback.format_exc()
+                    call_summary = _summarize_exception(exc)
     except TimeoutError:
         # Only reachable when `timeout` is not `None` — `asyncio.timeout(None)` never raises this.
         # By the time this is caught, `asyncio.timeout.__aexit__` has already converted *its own*
         # cancellation into `TimeoutError`; a `CancelledError` from anywhere else was re-raised,
         # unconverted, by the guards above and is caught separately below, not here.
         timed_out = True
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         # See the docstring's `CancelledError` paragraph. `setup_done` is what decides whether this
         # reads as a setup or a call failure — the same distinction the two inner handlers would
         # have recorded themselves had they been allowed to catch it directly.
         cancelled_failure = traceback.format_exc()
+        cancelled_summary = _summarize_exception(exc)
         if setup_done:
             call_failure = cancelled_failure
+            call_summary = cancelled_summary
         else:
             setup_failure = cancelled_failure
+            setup_summary = cancelled_summary
 
     if not timed_out and deadline.expired():
         # The cross-check the docstring's `CancelledError` §1 paragraph describes: catches a
@@ -307,8 +367,17 @@ async def _run_one(
                 "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
                 f"down:\n\n{traceback.format_exc()}"
             )
-        except BaseException:
+            # Kept in the same `"ExceptionType: message"` shape `_summarize_exception` produces,
+            # for consistency, even though this one is hand-written rather than read off an
+            # exception object — there is no single exception here to summarize (the collateral
+            # cancellation *is* the story, not any one sub-exception), and the full explanation
+            # above already carries the "may not have been fully torn down" caveat.
+            teardown_summary = (
+                "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
+            )
+        except BaseException as exc:
             teardown_failure = traceback.format_exc()
+            teardown_summary = _summarize_exception(exc)
     elif partial_module_keys:
         # Setup failed (or timed out) partway through, but it had already acquired a `module`-scope
         # key before that happened — `_di.setup` deliberately did not release it (see its
@@ -321,6 +390,11 @@ async def _run_one(
     if timed_out:
         outcome = Outcome.TIMEOUT
         failure = f"test exceeded the --timeout={timeout}s budget"
+        # The summary is the budget message alone, verbatim — already one line, and the headline
+        # regardless of what (if anything) the substituted/swallowed exception below turns out to
+        # be (`failure_summary`'s own docstring: "TIMEOUT reuses its own synthesized budget message
+        # verbatim").
+        summary = failure
         # Whichever of these is set (never both — `call_failure` implies setup succeeded, which
         # means `setup_failure` was never set) is the exception that actually surfaced while the
         # deadline was expiring, kept for context even though the budget is the headline.
@@ -328,7 +402,7 @@ async def _run_one(
         if extra is not None:
             failure = f"{failure}\n\n{extra}"
     elif setup_failure is not None:
-        outcome, failure = Outcome.ERROR, setup_failure
+        outcome, failure, summary = Outcome.ERROR, setup_failure, setup_summary
     elif teardown_failure is not None:
         outcome = Outcome.ERROR
         failure = (
@@ -336,13 +410,22 @@ async def _run_one(
             if call_failure is not None
             else teardown_failure
         )
+        # Call-first, mirroring `failure`'s own text ordering just above (call shown first,
+        # teardown appended as a parenthetical): see `failure_summary`'s docstring for why the
+        # call's summary leads when both phases failed.
+        summary = call_summary if call_failure is not None else teardown_summary
     elif call_failure is not None:
-        outcome, failure = Outcome.FAILED, call_failure
+        outcome, failure, summary = Outcome.FAILED, call_failure, call_summary
     else:
-        outcome, failure = Outcome.PASSED, None
+        outcome, failure, summary = Outcome.PASSED, None, None
 
     result = TestResult(
-        id=record.id, index=record.index, outcome=outcome, duration=duration, failure=failure
+        id=record.id,
+        index=record.index,
+        outcome=outcome,
+        duration=duration,
+        failure=failure,
+        failure_summary=summary,
     )
     return result, module_keys
 
@@ -370,22 +453,11 @@ def run_suite(
     reporter wires this in to flush a file's scrollback block the moment that file's last test
     finishes, without waiting for the whole suite to complete. Exceptions raised by `on_result`
     itself are not caught here — same "a velox bug should surface as one" posture as everywhere
-    else in this function — so a reporter callback that raises aborts the run.
-
-    Review (test gap, flagged here because it is the docstring making the claim): every property
-    this paragraph promises is untested. `grep -rn on_result tests/` matches only
-    `tests/test_report.py`, which drives `Reporter.on_result` by hand — nothing anywhere calls
-    `run_suite(..., on_result=...)`, so nothing pins "called once per test", "in real completion
-    order", "before `results[index]`", "with capture already folded on", or "an exception from it
-    is not swallowed". The two that matter most are cheap and belong in `tests/test_run.py` next
-    to the existing concurrency tests, using the same shared-list pattern they already use: three
-    records with descending sleeps at `concurrency=3`, appending to a `seen: list[int]`, asserting
-    `[r.index for r in seen] == [2, 1, 0]` while `[r.index for r in run_suite(...)] == [0, 1, 2]`
-    — the *pair* is what distinguishes "the callback observes completion order" from "the runner
-    happened to be serial", and it is the only assertion in the codebase that would catch a future
-    change accidentally moving the callback to a post-`gather` loop. Second: one failing test with
-    a `print` in its body, asserting the `TestResult` handed to `on_result` already carries
-    `captured_stdout` (today's ordering) rather than the pre-`dataclasses.replace` object.
+    else in this function — so a reporter callback that raises aborts the run. Covered end to end
+    by `tests/test_run.py`'s `test_on_result_fires_in_completion_order_while_results_stays_logical`
+    (the callback-order-vs-return-order pair — the only assertion that would catch a future change
+    accidentally moving the callback to a post-`gather` loop) and
+    `test_on_result_sees_captured_output_already_folded_on`.
 
     spec/09 additions, all additive to the concurrency machinery below (module docstring — none
     of it touches `_run_one`'s own carefully-documented phase/outcome logic):
@@ -611,30 +683,23 @@ def run_suite(
                 # Fired in real completion order (see this function's own docstring's `on_result`
                 # paragraph), before the logical-order `results` slot below is written -- a
                 # streaming reporter must see this test as "done" no later than any code that
-                # waits on the full `results` list would.
-                # Review (good, verified): the placement is right on both edges, and both were
-                # worth checking. It fires *after* the module-scope flush above, so a module
-                # fixture's teardown output is already folded into `sink` and therefore into
-                # `captured_stdout` by the time a reporter sees the result (confirmed end to end:
-                # a `scope="module"` yield-fixture printing `MODULE-TEARDOWN` shows up in the
-                # module's last test's captured stdout, and that file's block prints after it). And
-                # it fires *before* `results[index]`, so no observer can ever see a filled slot for
-                # a test the callback has not been told about. Neither ordering is accidental and
-                # neither is stated in the docstring above as the reason for the position.
+                # waits on the full `results` list would. Both edges of this placement are
+                # deliberate, not just the one the docstring calls out: it fires *after* the
+                # module-scope flush above, so a module fixture's teardown output is already folded
+                # into `sink` and therefore into `captured_stdout` by the time a reporter sees the
+                # result (confirmed end to end: a `scope="module"` yield-fixture printing
+                # `MODULE-TEARDOWN` shows up in the module's last test's captured stdout, and that
+                # file's block prints after it); and it fires *before* `results[index]`, so no
+                # observer can ever see a filled slot for a test the callback has not been told
+                # about yet.
                 #
-                # Review (documentation): this line invalidates the closing comment at the bottom
-                # of `run_suite` ("the only thing a `dispatch_one` task can raise is one of those
-                # two, or the `asyncio.CancelledError` `TaskGroup` throws..."). An arbitrary
-                # exception from `on_result` is now a third source, and the enumeration is what
-                # justifies the `cast(list[TestResult], results)` there. The cast is still sound —
-                # the exception propagates out of the `TaskGroup` and exits `run_suite` before that
-                # line is reached — but the reasoning printed next to it no longer covers the code.
-                # Verified: a `Reporter` whose `paths_by_id` is missing one id makes `run_suite`
-                # raise `ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)`
-                # wrapping the `KeyError`, with every completed result discarded. That blast radius
-                # is a deliberate choice per the docstring's "a velox bug should surface as one",
-                # and it is the right one; it just deserves to be reachable from the comment that
-                # currently claims it cannot happen.
+                # This is also the third source the closing comment at the bottom of `run_suite`
+                # needs to count: an arbitrary exception from `on_result` propagates out of this
+                # task exactly like a bug in `_run_one` would (see the docstring's own "a reporter
+                # callback that raises aborts the run"), so `results` can be abandoned with a `None`
+                # slot for a reason that is not `_run_one` misbehaving — the bottom comment's
+                # "the only thing a `dispatch_one` task can raise is one of those two" enumeration
+                # is only sound once `on_result(result)` itself is included alongside them.
                 if on_result is not None:
                     on_result(result)
                 results[index] = result
@@ -743,13 +808,16 @@ def run_suite(
     # happen if it raised. `_run_one`'s own contract is that it never raises anything but
     # `KeyboardInterrupt`/`SystemExit` (every other exception, including `asyncio.CancelledError`
     # from any source, is caught and folded into a `TestResult` — see its docstring); relied on
-    # here, not asserted anywhere. Given that contract, the only thing a `dispatch_one` task can
-    # raise is one of those two, or the `asyncio.CancelledError` `TaskGroup` throws into every
-    # *other* sibling once one of them does — and both cases make `runner.run(run_all())` above
-    # raise in turn (a bare `KeyboardInterrupt`/`SystemExit`, per `TaskGroup`'s own special-casing
-    # of exactly those two types — see this function's docstring), which exits `run_suite` entirely
-    # before this line is ever reached. So a `None` surviving to here would mean `_run_one`'s own
-    # contract was violated, not a gap in this function's exception handling.
+    # here, not asserted anywhere. Given that contract, a `dispatch_one` task can only raise one of
+    # three things: those same two bare interrupts, an arbitrary exception from `on_result` itself
+    # (see its call site's own comment — a reporter callback that raises is deliberately not
+    # caught), or the `asyncio.CancelledError` `TaskGroup` throws into every *other* sibling once
+    # one of them does — and all three make `runner.run(run_all())` above raise in turn (either the
+    # bare interrupt/`on_result` exception directly, or, per `TaskGroup`'s own special-casing of
+    # `KeyboardInterrupt`/`SystemExit` — see this function's docstring — the original interrupt
+    # object), which exits `run_suite` entirely before this line is ever reached. So a `None`
+    # surviving to here would mean `_run_one`'s own contract was violated, not a gap in this
+    # function's exception handling.
     return cast(list[TestResult], results)
 
 

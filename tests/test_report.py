@@ -3,7 +3,14 @@
 Exercises `Reporter` directly against hand-built `TestResult`s and a `StringIO` stream, rather
 than going through `main`/`run_suite` end to end — the same "unit-test the piece in isolation,
 cover the wiring separately" split `tests/test_run.py` already uses for `_run_one`/`run_suite`
-(see its own `_record` helper, mirrored here by `_result`).
+(see its own `_record` helper, mirrored here by `_test_record`).
+
+`Reporter`'s own short-summary "reason" is now a direct read of `TestResult.failure_summary`
+(`_run._summarize_exception`'s output), not a text heuristic over `TestResult.failure` — so the
+"does this actually recover the right reason from a real traceback" coverage that used to live here
+now lives in `tests/test_run.py`, next to the code that builds `failure_summary` in the first
+place (`test_failure_summary_...`); what's left worth unit-testing here is just that `Reporter`
+reads the field faithfully, which is what the tests in the "short-summary reason" section below do.
 """
 
 from __future__ import annotations
@@ -12,9 +19,37 @@ import io
 import logging
 from pathlib import Path
 
-from velox._report import Reporter, _failure_reason
+import pytest
+from velox._collect import TestRecord as Record  # `Test*` makes pytest try to collect it itself
+from velox._fixtures import ResolutionPlan
+from velox._report import Reporter, _elide_middle, _failure_reason
 from velox._run import Outcome
 from velox._run import TestResult as Result
+
+_EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
+
+
+async def _noop() -> None:
+    pass
+
+
+def _test_record(id: str, path: Path, index: int = 0) -> Record:
+    """A minimal, real `TestRecord` for feeding `Reporter`'s constructor. `Reporter` only ever
+    reads `.id`/`.path` off each record, but it takes real `TestRecord`s now, not a lossy
+    `{id: path}` dict (this session's fix for the duplicate-id undercount bug — see
+    `Reporter.__post_init__`'s own docstring), so tests need to build them rather than a bare
+    mapping. The rest of the fields are filler `test_run.py`'s own `_record` helper already
+    establishes the pattern for."""
+    return Record(
+        id=id,
+        index=index,
+        path=path,
+        lineno=1,
+        qualname=id.rsplit("::", 1)[-1],
+        func=_noop,
+        plan=_EMPTY_PLAN,
+    )
+
 
 _TRACEBACK_FAILURE = (
     "Traceback (most recent call last):\n"
@@ -36,6 +71,7 @@ def _result(
     outcome: Outcome = Outcome.PASSED,
     duration: float = 0.0,
     failure: str | None = None,
+    failure_summary: str | None = None,
     captured_stdout: str = "",
     captured_stderr: str = "",
     log_records: tuple[logging.LogRecord, ...] = (),
@@ -46,6 +82,7 @@ def _result(
         outcome=outcome,
         duration=duration,
         failure=failure,
+        failure_summary=failure_summary,
         captured_stdout=captured_stdout,
         captured_stderr=captured_stderr,
         log_records=log_records,
@@ -58,28 +95,24 @@ def _log_record(message: str, level: int = logging.INFO) -> logging.LogRecord:
     )
 
 
+class _FakeTTYStream(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 # ------------------------------------------------------------------------------------------
 # Per-file scrollback blocks (on_result)
 # ------------------------------------------------------------------------------------------
 
 
-# Review (test quality, missing case): nothing in this section covers `paths_by_id` disagreeing
-# with what `on_result` is actually fed, which is the one way this bookkeeping is currently wrong
-# in production. `Reporter(paths_by_id={id_a: p}, ...)` then `on_result` for two results sharing
-# `id_a` — reachable for real, since `_collect` builds ids from `func.__qualname__` and a
-# factory-generated test repeats it (see the note in `_report.Reporter.__post_init__`) — prints
-# `1 tests` / `PASS` for a file that had two tests and a failure, and silently swallows the second
-# result. Whatever the chosen fix is, the assertion belongs here. A second, cheaper case with the
-# same shape: a result whose id is absent from `paths_by_id` entirely, which today raises
-# `KeyError` out of the callback and (through `run_suite`) discards the whole run.
 def test_file_block_only_prints_once_every_test_of_that_file_has_reported() -> None:
     path = Path("tests/test_sample.py")
-    paths_by_id = {
-        f"{path}::test_a": path,
-        f"{path}::test_b": path,
-    }
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.on_result(_result(f"{path}::test_a", 0, duration=0.1))
     assert stream.getvalue() == ""  # not yet -- test_b hasn't reported
@@ -91,19 +124,19 @@ def test_file_block_only_prints_once_every_test_of_that_file_has_reported() -> N
     assert str(path) in out
     assert "2 tests" in out
     # Summed, not spanned (concurrent dispatch has no single attributable wall-clock span for
-    # "the file" -- spec/10 §2 / `on_result`'s own docstring).
-    assert "0.30s" in out
+    # "the file" -- spec/10 §2 / `on_result`'s own docstring), and labeled Σ as such.
+    assert "Σ 0.30s" in out
 
 
 def test_file_block_reports_fail_and_failed_count_when_any_test_failed() -> None:
     path = Path("tests/test_sample.py")
-    paths_by_id = {
-        f"{path}::test_a": path,
-        f"{path}::test_b": path,
-        f"{path}::test_c": path,
-    }
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+        _test_record(f"{path}::test_c", path, index=2),
+    ]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.on_result(_result(f"{path}::test_a", 0))
     reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.FAILED, failure="boom"))
@@ -116,34 +149,70 @@ def test_file_block_reports_fail_and_failed_count_when_any_test_failed() -> None
     assert "(2 failed)" in out
 
 
-def test_blocks_print_in_completion_order_not_paths_by_id_insertion_order() -> None:
+def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
+    """Regression for the must-fix bug: `Reporter` used to seed its per-file counts from an
+    `{id: path}` dict built by `cli.py`, which silently collapsed two records sharing an id into
+    one entry -- reachable with a completely ordinary suite, since a factory-generated test repeats
+    its `func.__qualname__` (hence its id, `f"{path}::{qualname}"`) for every instance it produces.
+    Undercounting used to make the file's block flush one test early, with the wrong verdict, and
+    silently drop the remaining result from the scrollback entirely."""
+    path = Path("tests/test_dup.py")
+    shared_id = f"{path}::test_generated"
+    records = [
+        _test_record(shared_id, path, index=0),
+        _test_record(shared_id, path, index=1),
+    ]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.on_result(_result(shared_id, 0, outcome=Outcome.FAILED, failure="boom"))
+    assert stream.getvalue() == ""  # only one of the two records has reported in
+
+    reporter.on_result(_result(shared_id, 1))
+    out = stream.getvalue()
+    assert "2 tests" in out
+    assert "FAIL" in out
+    assert "(1 failed)" in out
+
+
+def test_on_result_for_an_id_outside_records_raises_key_error() -> None:
+    """Documents the invariant `on_result`'s own docstring states rather than silently relies on:
+    a result whose id was never in the `records` `Reporter` was constructed with is a caller bug
+    (the caller must hand `Reporter` the same list it dispatches to `run_suite`), and it surfaces
+    loudly as a `KeyError` -- which, since `run_suite` never catches what `on_result` raises,
+    aborts the whole run rather than silently dropping one result. Unreachable from `cli.main` as
+    wired (see `Reporter`'s own docstring), but real for a caller that gets the invariant wrong."""
+    reporter = Reporter(records=[], capture_passthrough=False, stream=io.StringIO())
+    with pytest.raises(KeyError):
+        reporter.on_result(_result("nope.py::test_x", 0))
+
+
+def test_blocks_flush_on_a_files_last_test_not_its_first() -> None:
+    """A single test per file can't tell "flush on last test" apart from "flush on first" or
+    "flush in arrival order" -- all three coincide when there is only one test to see. `file_a` has
+    two tests, `file_b` has one; `file_a`'s first test finishes earliest, `file_b`'s only test next,
+    and `file_a`'s second (and last) test finishes last. Correct output is `file_b`'s block, then
+    `file_a`'s -- an implementation that flushed on a file's first-seen test instead would print
+    `file_a` first, the moment its first result arrives."""
     file_a = Path("tests/test_a.py")
     file_b = Path("tests/test_b.py")
-    # `paths_by_id` inserted file_a first -- if block order followed insertion order rather than
-    # completion order, file_a's block would print first regardless of what finishes when.
-    paths_by_id = {
-        f"{file_a}::test_1": file_a,
-        f"{file_b}::test_1": file_b,
-    }
+    records = [
+        _test_record(f"{file_a}::test_1", file_a, index=0),
+        _test_record(f"{file_a}::test_2", file_a, index=1),
+        _test_record(f"{file_b}::test_1", file_b, index=2),
+    ]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
-    # Review (test quality): one test per file is the weakness. With a single test per file,
-    # "flush when the file's last test reports" and "flush when the file's *first* test reports"
-    # and "emit in the order results arrive" are all the same behaviour, so this cannot see the
-    # property the block design actually rests on: that a file whose first test finished *earliest*
-    # still flushes *last*, because it is the completion of the file's final test that orders
-    # blocks, not the file's first sighting. That is the case where the jest model differs from
-    # xdist's per-test dribble, and it is untested. Three lines more: file_a with two tests,
-    # file_b with one, delivered `a::test_1`, `b::test_1`, `a::test_2` — correct output is b's
-    # block then a's, and an implementation keyed on first-arrival would print a's first. Worth
-    # having also because the reversed-insertion premise this test does check is satisfied by any
-    # implementation that prints during `on_result` at all.
-    #
-    # file_b's only test finishes first.
-    reporter.on_result(_result(f"{file_b}::test_1", 1))
     reporter.on_result(_result(f"{file_a}::test_1", 0))
+    assert stream.getvalue() == ""  # file_a still has test_2 outstanding
 
+    reporter.on_result(_result(f"{file_b}::test_1", 2))
+    lines = [line for line in stream.getvalue().splitlines() if line]
+    assert len(lines) == 1
+    assert str(file_b) in lines[0]  # file_b flushed even though file_a was seen first
+
+    reporter.on_result(_result(f"{file_a}::test_2", 1))
     lines = [line for line in stream.getvalue().splitlines() if line]
     assert len(lines) == 2
     assert str(file_b) in lines[0]
@@ -155,102 +224,59 @@ def test_blocks_print_in_completion_order_not_paths_by_id_insertion_order() -> N
 # ------------------------------------------------------------------------------------------
 
 
-def test_finish_orders_by_results_list_not_on_result_order() -> None:
+def test_finish_orders_by_the_results_argument_not_ids_natural_sort() -> None:
+    """`finish` must order by `results`'s own position, not by re-deriving an order from the data
+    (an id sort, an outcome grouping, ...) -- ids are chosen here so that alphabetical order is the
+    *opposite* of the intended (index) order, so a `finish` that accidentally sorted by id instead
+    of trusting its argument would fail this even though it would pass a naively-chosen id pair."""
     path = Path("tests/test_sample.py")
-    result0 = _result(
-        f"{path}::test_a", 0, outcome=Outcome.FAILED, failure="AssertionError: a broke"
-    )
-    result1 = _result(
-        f"{path}::test_b", 1, outcome=Outcome.FAILED, failure="AssertionError: b broke"
-    )
-    paths_by_id = {result0.id: path, result1.id: path}
+    result0 = _result(f"{path}::test_z", 0, outcome=Outcome.FAILED, failure="AssertionError: a")
+    result1 = _result(f"{path}::test_a", 1, outcome=Outcome.FAILED, failure="AssertionError: b")
+    records = [_test_record(result0.id, path, index=0), _test_record(result1.id, path, index=1)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id=paths_by_id, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
-    # Review (test quality): these four lines are decorative — the test's name promises
-    # "orders by results list, *not* on_result order", but `finish` never reads any `on_result`
-    # state at all (it iterates the `results` argument; `_buffered_by_path` was already popped and
-    # is documented as write-only for this purpose), so there is no coupling for the reversal to
-    # break. Verified by deleting exactly this block and rerunning: 15 passed. As written the test
-    # establishes only "`finish` iterates its argument in order", which is true of the one-line
-    # implementation it is testing.
-    #
-    # To test the stated property you have to make completion order *visible* to `finish`, which
-    # today means going through `run_suite`: two tests in one file with descending sleeps and
-    # `concurrency=2`, asserting the failure-details section is in `index` order while a
-    # completion-order list collected from the same `on_result` callback is the reverse. That also
-    # covers the wiring — see the note in `_run.run_suite`'s `on_result` docstring, which nothing
-    # currently exercises. Failing that, at minimum assert what this test *can* see: that
-    # `finish([result1, result0], ...)` emits test_b before test_a, i.e. that the argument order
-    # is genuinely what decides, not the ids' natural sort.
-    #
-    # Completion order is reversed relative to logical (index) order.
-    reporter.on_result(result1)
-    reporter.on_result(result0)
-    stream.truncate(0)
-    stream.seek(0)
-
-    # `results` (the caller's authoritative, logical-order list) is [result0, result1].
+    # `results` (the caller's authoritative, logical-order list) puts test_z before test_a --
+    # opposite of what an id sort would produce.
     reporter.finish([result0, result1], wall_clock=1.0)
 
     out = stream.getvalue()
-    assert out.index("test_a") < out.index("test_b")
-    # And it holds for both sections, not just whichever comes first.
+    assert out.index("test_z") < out.index("test_a")
+    first_summary_z = out.index("test_z", out.index("--- short test summary ---"))
     first_summary_a = out.index("test_a", out.index("--- short test summary ---"))
-    first_summary_b = out.index("test_b", out.index("--- short test summary ---"))
-    assert first_summary_a < first_summary_b
+    assert first_summary_z < first_summary_a
 
 
 # ------------------------------------------------------------------------------------------
-# Short-summary "reason" extraction
+# Short-summary "reason" extraction -- a direct field read (see module docstring for why the
+# "does this recover the right reason from real traceback text" coverage lives in test_run.py now)
 # ------------------------------------------------------------------------------------------
 
 
-# Review (test quality — this is the gap that let the `_failure_reason` bug through): every case
-# in this section is fed a hand-written `failure` string, and `_TRACEBACK_FAILURE` above was
-# written to end in `AssertionError: assert 2 == 3`, i.e. to match the heuristic. No test in this
-# file has ever seen text `_run._run_one` actually produced. Four shapes it produces routinely all
-# return something useless, each reproduced by running `velox` on a scratch directory (details in
-# the note on `_report._failure_reason`):
-#
-#   assert total == 4, "expected four widgets"        -> "assert 3 == 4"   (message lost; the
-#                                                        rewriter's explanation follows the
-#                                                        exception line, under the *default* mode)
-#   async with asyncio.TaskGroup(): ...               -> "+------------------------------------"
-#   any fixture teardown raising                      -> "+------------------------------------"
-#                                                        (`_di._release_all` always raises a
-#                                                         BaseExceptionGroup, spec/04 §5)
-#   raise ValueError("line one\nline two")            -> "line two"
-#
-# The teardown one is the reason this is a coverage gap and not a nitpick: it is not an exotic
-# input, it is what *every* `Outcome.ERROR` from teardown looks like in this codebase. The fix for
-# the tests is the same either way — build the fixtures from real output. `traceback.format_exc()`
-# inside a small helper that actually raises (an `ExceptionGroup`, an exception with a note, an
-# exception with a multi-line message) costs a few lines and cannot drift from what `_run_one`
-# emits, and one end-to-end case in `test_cli.py` asserting the short-summary line for
-# `assert x == y, "msg"` would pin the shape users copy most.
-def test_short_summary_reason_for_failed_is_the_last_traceback_line() -> None:
-    result = _result("f.py::test_fail", 0, outcome=Outcome.FAILED, failure=_TRACEBACK_FAILURE)
-    assert _failure_reason(result) == "AssertionError: assert 2 == 3"
-
-
-def test_short_summary_reason_for_timeout_is_the_first_line() -> None:
+def test_short_summary_reason_reads_the_failure_summary_field_verbatim() -> None:
     result = _result(
-        "f.py::test_hangs", 0, outcome=Outcome.TIMEOUT, failure=_TIMEOUT_FAILURE_WITH_TRACEBACK
+        "f.py::test_fail", 0, outcome=Outcome.FAILED, failure_summary="AssertionError: boom"
     )
-    assert _failure_reason(result) == _TIMEOUT_FAILURE
+    assert _failure_reason(result) == "AssertionError: boom"
 
 
-def test_short_summary_reason_for_bare_timeout_with_no_traceback() -> None:
-    result = _result("f.py::test_hangs", 0, outcome=Outcome.TIMEOUT, failure=_TIMEOUT_FAILURE)
-    assert _failure_reason(result) == _TIMEOUT_FAILURE
+def test_short_summary_reason_is_empty_string_when_failure_summary_is_none() -> None:
+    result = _result("f.py::test_fail", 0, outcome=Outcome.FAILED, failure_summary=None)
+    assert _failure_reason(result) == ""
 
 
-def test_finish_short_summary_lines_match_pytest_kept_verbatim_shape() -> None:
+def test_finish_short_summary_line_matches_pytest_kept_verbatim_shape() -> None:
     path = Path("f.py")
-    result = _result(f"{path}::test_fail", 0, outcome=Outcome.FAILED, failure=_TRACEBACK_FAILURE)
+    result = _result(
+        f"{path}::test_fail",
+        0,
+        outcome=Outcome.FAILED,
+        failure=_TRACEBACK_FAILURE,
+        failure_summary="AssertionError: assert 2 == 3",
+    )
+    records = [_test_record(result.id, path)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={result.id: path}, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -265,9 +291,11 @@ def test_finish_short_summary_line_for_timeout() -> None:
         0,
         outcome=Outcome.TIMEOUT,
         failure=_TIMEOUT_FAILURE_WITH_TRACEBACK,
+        failure_summary=_TIMEOUT_FAILURE,
     )
+    records = [_test_record(result.id, path)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={result.id: path}, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -290,8 +318,9 @@ def test_captured_stdout_stderr_shown_when_not_passthrough() -> None:
         captured_stdout="hello from stdout",
         captured_stderr="hello from stderr",
     )
+    records = [_test_record(result.id, path)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={result.id: path}, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -312,8 +341,9 @@ def test_captured_stdout_stderr_not_duplicated_under_passthrough() -> None:
         captured_stdout="hello from stdout",
         captured_stderr="hello from stderr",
     )
+    records = [_test_record(result.id, path)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={result.id: path}, capture_passthrough=True, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=True, stream=stream)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -330,15 +360,34 @@ def test_log_records_always_shown_regardless_of_passthrough() -> None:
     result = _result(
         f"{path}::test_fail", 0, outcome=Outcome.FAILED, failure="boom", log_records=(record,)
     )
+    records = [_test_record(result.id, path)]
     for passthrough in (True, False):
         stream = io.StringIO()
-        reporter = Reporter(
-            paths_by_id={result.id: path}, capture_passthrough=passthrough, stream=stream
-        )
+        reporter = Reporter(records=records, capture_passthrough=passthrough, stream=stream)
         reporter.finish([result], wall_clock=1.0)
         out = stream.getvalue()
         assert "--- captured log records ---" in out
         assert "something happened" in out
+
+
+def test_failure_text_trailing_newline_does_not_leave_a_stray_blank_line() -> None:
+    """`result.failure` is `traceback.format_exc()` text, which already ends in `"\\n"` -- a bare
+    `print` would add a second, so the section spacing after it would depend on what `format_exc`
+    happened to end with rather than being a property of this method's own layout."""
+    path = Path("f.py")
+    result = _result(
+        f"{path}::test_fail", 0, outcome=Outcome.FAILED, failure="boom\n", log_records=()
+    )
+    records = [_test_record(result.id, path)]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    lines = stream.getvalue().splitlines()
+    # "boom" immediately followed by "--- short test summary ---" -- no blank line between them.
+    boom_index = lines.index("boom")
+    assert lines[boom_index + 1] == "--- short test summary ---"
 
 
 # ------------------------------------------------------------------------------------------
@@ -348,18 +397,18 @@ def test_log_records_always_shown_regardless_of_passthrough() -> None:
 
 def test_unattributed_output_section_appears_only_when_non_empty() -> None:
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={}, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=[], capture_passthrough=False, stream=stream)
 
     reporter.finish([], wall_clock=1.0, unattributed_output=None)
     assert "unattributed" not in stream.getvalue()
 
     stream2 = io.StringIO()
-    reporter2 = Reporter(paths_by_id={}, capture_passthrough=False, stream=stream2)
+    reporter2 = Reporter(records=[], capture_passthrough=False, stream=stream2)
     reporter2.finish([], wall_clock=1.0, unattributed_output=[])
     assert "unattributed" not in stream2.getvalue()
 
     stream3 = io.StringIO()
-    reporter3 = Reporter(paths_by_id={}, capture_passthrough=False, stream=stream3)
+    reporter3 = Reporter(records=[], capture_passthrough=False, stream=stream3)
     reporter3.finish([], wall_clock=1.0, unattributed_output=["stray output from a thread"])
     out3 = stream3.getvalue()
     assert "unattributed" in out3
@@ -377,10 +426,9 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
         _result(f"{path}::test_a", 0, duration=1.0),
         _result(f"{path}::test_b", 1, duration=3.0),
     ]
+    records = [_test_record(r.id, path, index=i) for i, r in enumerate(results)]
     stream = io.StringIO()
-    reporter = Reporter(
-        paths_by_id={r.id: path for r in results}, capture_passthrough=False, stream=stream
-    )
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     # Σ = 1.0 + 3.0 = 4.0; wall_clock = 2.0 -> ratio = 2.0x.
     reporter.finish(results, wall_clock=2.0)
@@ -393,26 +441,92 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
     assert "2.0x concurrency" in out
 
 
-def test_wall_vs_sigma_line_guards_zero_wall_clock() -> None:
+def test_finish_with_zero_tests() -> None:
+    """The shape `velox` on an empty directory (or any run with nothing collected) produces --
+    `finish([], ...)` was uncovered anywhere in this file before."""
+    stream = io.StringIO()
+    reporter = Reporter(records=[], capture_passthrough=False, stream=stream)
+
+    reporter.finish([], wall_clock=0.001)
+
+    out = stream.getvalue()
+    assert "0 tests" in out
+    assert "0 failed" in out
+
+
+def test_wall_vs_sigma_line_guards_non_positive_wall_clock() -> None:
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=1.0)]
+    records = [_test_record(results[0].id, path)]
     stream = io.StringIO()
-    reporter = Reporter(paths_by_id={results[0].id: path}, capture_passthrough=False, stream=stream)
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
 
     reporter.finish(results, wall_clock=0.0)
 
     out = stream.getvalue()
     assert "0.00s wall" in out
-    # Review (test quality): the second assertion is vacuous twice over. A `ZeroDivisionError`
-    # would have been *raised* out of `finish`, erroring the test before this line rather than
-    # failing it, so the string can never appear in `out` regardless of the implementation — and
-    # nothing here pins what the guard actually prints. Verified by replacing
-    # `concurrency = "n/a concurrency"` with `"999.9x concurrency"`: 15 passed. The contract worth
-    # asserting is `"n/a concurrency" in out` (a fabricated ratio must not be printed) plus a
-    # `wall_clock` that is small-but-nonzero taking the other branch, since the guard's stated
-    # justification is about empty suites and — see the note in `_report.finish` — an empty suite
-    # never actually reaches it (measured: `run_suite([])` takes ~1ms of `install`/`Runner`
-    # overhead, so `wall_clock > 0`). Also uncovered anywhere in this file: `finish([], ...)` with
-    # a zero-test run, which is the shape `velox` on an empty directory produces on every exit-5
-    # run.
-    assert "ZeroDivisionError" not in out
+    # The guarded branch's actual output, pinned directly -- not just "doesn't raise"
+    # (`ZeroDivisionError` would have propagated out of `finish` and errored the test before this
+    # line, so asserting its absence from `out` was never a real check of the guard).
+    assert "n/a concurrency" in out
+
+
+def test_wall_vs_sigma_line_takes_the_real_ratio_for_a_small_nonzero_wall_clock() -> None:
+    """The guard's justification (`finish`'s own docstring) is that a real run -- even an empty or
+    very fast one -- still doesn't land on the `n/a` branch in practice; pin that a small-but-
+    positive `wall_clock` really does take the other branch, not merely that zero doesn't crash."""
+    path = Path("f.py")
+    results = [_result(f"{path}::test_a", 0, duration=0.001)]
+    records = [_test_record(results[0].id, path)]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.finish(results, wall_clock=0.001)
+
+    out = stream.getvalue()
+    assert "n/a concurrency" not in out
+    assert "concurrency" in out
+
+
+# ------------------------------------------------------------------------------------------
+# Path column elision (long paths)
+# ------------------------------------------------------------------------------------------
+
+
+def test_elide_middle_leaves_short_text_alone() -> None:
+    assert _elide_middle("short.py", 32) == "short.py"
+
+
+def test_elide_middle_keeps_both_ends_of_long_text() -> None:
+    long_path = "tests/very/deeply/nested/package/test_billing_reconciliation.py"
+    elided = _elide_middle(long_path, 32)
+    assert len(elided) == 32
+    assert elided.startswith("tests/very")
+    assert elided.endswith(".py")
+    assert "..." in elided
+
+
+def test_file_block_path_column_is_elided_for_a_long_path() -> None:
+    long_path = Path("tests/very/deeply/nested/package/test_billing_reconciliation.py")
+    records = [_test_record(f"{long_path}::test_a", long_path)]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.on_result(_result(records[0].id, 0))
+
+    out = stream.getvalue()
+    assert "..." in out
+    assert str(long_path) not in out
+
+
+# ------------------------------------------------------------------------------------------
+# is_tty
+# ------------------------------------------------------------------------------------------
+
+
+def test_is_tty_reflects_the_streams_own_isatty() -> None:
+    """Nothing branches on `is_tty` yet (module docstring's "no color" cut), but the value itself
+    should still be right: resolved once at construction via `stream.isatty()`, or `False` for a
+    stream with no such method at all (the class docstring's `getattr` fallback)."""
+    assert Reporter(records=[], capture_passthrough=False, stream=io.StringIO()).is_tty is False
+    assert Reporter(records=[], capture_passthrough=False, stream=_FakeTTYStream()).is_tty is True

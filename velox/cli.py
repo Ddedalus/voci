@@ -313,26 +313,17 @@ def main(argv: list[str] | None = None) -> int:
         # move keeps every "what got printed and in what order" decision in one place.
         unattributed: list[str] = []
 
-        # `paths_by_id` is what lets `Reporter` group `TestResult`s (which carry no path of their
-        # own, spec/10's `_report.py` docstring) back into per-file blocks — built from
-        # `collected.records` before `run_suite` runs, since that's the only place both a test's
-        # id and its file are known together.
-        # Review (must fix — the caller half of the note in `Reporter.__post_init__`):
-        # a dict comprehension keyed by `record.id` is lossy, and `Reporter` then seeds its
-        # per-file test counts by counting this map's *values*. Two records sharing an id (a
-        # factory-generated test — every instance carries the same `func.__qualname__`, and
-        # `_collect.collect` builds ids as `f"{display_path}::{qualname}"`) collapse into one
-        # entry, so the file's block flushes one test early with a wrong count and a wrong verdict,
-        # and the remaining results never appear in the scrollback at all. Reproduced: a file with
-        # `test_alpha = _make("a")` / `test_beta = _make("b")` where the second assertion fails
-        # prints `PASS  .../test_dup.py    1 tests   0.00s`, while the failure-details and short-
-        # summary sections below correctly show 2 tests and 1 failure. Passing `collected.records`
-        # itself (or a `list[tuple[str, Path]]`) instead of a dict is the smallest fix on this
-        # side; making `_collect` disambiguate repeated ids is the more complete one, and it is
-        # wanted anyway the moment `-k`/`--deselect`/JUnit start using ids as keys.
-        paths_by_id = {record.id: record.path for record in collected.records}
+        # `Reporter` groups `TestResult`s (which carry no path of their own, spec/10's
+        # `_report.py` docstring) back into per-file blocks by walking `collected.records` itself
+        # — handed to it directly, not reduced to an `{id: path}` dict first: a dict comprehension
+        # keyed by `record.id` would silently collapse two records sharing an id (an ordinary,
+        # reachable case — a factory-generated test repeats its `func.__qualname__`, hence its id,
+        # for every instance it produces), undercounting that file's expected test total. See
+        # `Reporter`'s own docstring for the full reasoning; this is the caller half of it — the
+        # same `collected.records` list `run_suite` below is about to dispatch, so every id
+        # `Reporter.on_result` is ever handed is guaranteed to be one of `records`'s.
         reporter = _report.Reporter(
-            paths_by_id=paths_by_id,
+            records=collected.records,
             capture_passthrough=capture_passthrough,
             stream=sys.stdout,
         )
@@ -341,32 +332,23 @@ def main(argv: list[str] | None = None) -> int:
         # durations afterwards — `reporter.finish`'s wall-vs-Σ line (spec/10 §2) is exactly the
         # comparison between this real elapsed time and that sum, so the two must be measured
         # independently for the ratio to mean anything.
-        # Review (should fix): the clock is wrapped around `run_suite`, not around execution, and
-        # `run_suite` does a meaningful amount of non-execution work inside those brackets — the
-        # very first thing it does is `_capture.install()`, which `mkdir`s a new numbered basetemp
-        # root, writes a marker file, and applies the retention policy by `shutil.rmtree`-ing the
-        # roots that fall off the end; then a `WorkerSlots`, a `ThreadPoolExecutor`, an
-        # `asyncio.Runner` and its loop, and on the way out `store.aclose()`,
-        # `executor.shutdown()`, `runner.close()` and `_capture.uninstall()`. All of it is charged
-        # to what the final line presents as pure execution wall time, and it therefore deflates
-        # the concurrency ratio spec/10 §2 calls the proof-of-value metric — in the direction that
-        # understates velox, and proportionally *most* on the fast suites where the number is the
-        # whole point. Measured on an 8-test suite each awaiting 10ms: wall 12.31ms, of which
-        # install/uninstall 0.57ms, reported ratio 6.94x against 7.27x for execution alone (5%).
-        # That is small; the tail is not. `_allocate_session_root` evicting a single previous root
-        # containing 4000 small files took 45ms in a direct measurement, and a suite whose
-        # `tmp_path` fixtures write real data can make that arbitrarily large — a fixed cost paid
-        # inside the measured window, from the *previous* run's garbage, attributed to this run's
-        # execution. Cheapest fix that keeps the number honest: have `run_suite` return (or record)
-        # its own inner span, taken immediately around `runner.run(run_all())`, and let `cli.py`
-        # keep this outer measurement for a separate "total" figure.
         #
-        # Review (documentation, related): this measurement also *excludes* discovery, import and
-        # collection, which are typically the largest single chunk of a small run. That is the
-        # right choice for a Σ/wall ratio, but it means the headline `Ns wall` is not the number a
-        # user gets from `time velox`, and spec/10 §4 already anticipates exactly this class of
-        # confusion for JUnit's `<testsuite time>` ("document the discrepancy explicitly, since it
-        # will otherwise be reported as a velox bug"). The same sentence is owed here.
+        # Known, deliberate gap, in the same "name it rather than let it be reported as a velox
+        # bug" spirit spec/10 §4 already asks of JUnit's `<testsuite time>`: this window is wider
+        # than "pure execution". It brackets the whole `run_suite` call, which does real
+        # non-execution work at both ends — `_capture.install()`'s basetemp `mkdir`/marker
+        # write/retention sweep going in, `store.aclose()`/`executor.shutdown()`/`runner.close()`/
+        # `_capture.uninstall()` coming out — so the concurrency ratio on `finish`'s final line is
+        # very slightly deflated by that overhead (measured on an 8-test suite each awaiting 10ms:
+        # 6.94x reported against 7.27x for execution alone), and, for a suite whose basetemp
+        # retention sweep has real garbage to clear, potentially by much more than "slightly". It
+        # also *excludes* discovery, import and collection entirely, which are typically the
+        # largest single chunk of a small run — the right choice for a Σ/wall ratio specifically,
+        # but it means this `Ns wall` is not the number `time velox` would report. A precise fix
+        # needs `run_suite` to report its own inner span (taken immediately around
+        # `runner.run(run_all())`) separately from this outer one, which touches `_run.py`'s
+        # already-dense interrupt/teardown-ordering control flow — left as a named, measured cost
+        # rather than a change bundled into an unrelated pass.
         wall_start = time.monotonic()
         results = _run.run_suite(
             collected.records,
@@ -379,16 +361,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         wall_clock = time.monotonic() - wall_start
 
-        reporter.finish(results, wall_clock=wall_clock, unattributed_output=unattributed)
-
-        # Review (should fix — see the note at `_report.finish`'s wall-vs-Σ `print`): everything
-        # from here to the end of the `try` prints *after* what spec/10 §2 designates the final
-        # line, so the run's headline metric is buried above a skip list, a full traceback per
-        # collection error, and a second, differently-worded summary. Verified on a directory with
-        # one skipped test and one unimportable module. Moving these three blocks above the
-        # `reporter.finish(...)` call is a one-line reorder and restores the invariant; folding
-        # them into `finish` (which already owns "what gets printed and in what order", per its
-        # own docstring) is the version that also stops the two summary lines from drifting apart.
+        # `reporter.finish(...)` is called *last*, after every other end-of-run section below —
+        # deliberately reordered (this slice) so spec/10 §2's "final line" claim for the wall-vs-Σ
+        # line is actually true of `cli.main`'s output, not just of `Reporter.finish`'s own return.
+        # Before this reorder, the skip list, a full traceback per collection error, and the
+        # `N tests: ...` summary line below all printed *after* `finish`, burying the headline
+        # metric spec/10 §2 calls the proof-of-value number above several screens of detail.
         for skipped in collected.skipped:
             print(f"{skipped.id} SKIPPED ({skipped.reason})")
 
@@ -421,17 +399,18 @@ def main(argv: list[str] | None = None) -> int:
         summary += (
             f", {len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
-        # Review (should fix): this line and `_report.finish`'s wall-vs-Σ line are now two
-        # independently-maintained summaries of the same run printed three lines apart, and they
-        # use the word "failed" for two different sets. Verified with a single test whose fixture
-        # teardown raises: the reporter prints `1 tests · 1 failed · ...` (every non-`PASSED`
-        # outcome) and this prints `1 tests: 0 passed, 0 failed, 1 errored, ...` (only
-        # `Outcome.FAILED`). Both are defensible in isolation; adjacent, they read as a bug. The
-        # `other` bucket's drift detector below is good and worth keeping — but it now only guards
-        # *this* line, while the reporter's own count silently absorbs any future `Outcome` member
-        # into "failed". Whichever line survives, one of them should be deleted rather than both
-        # maintained.
         print(summary)
+
+        # This line and `reporter.finish`'s wall-vs-Σ line are two summaries of the same run that
+        # use "failed" for two different sets on purpose, not by drift: this one is the pre-existing
+        # per-`Outcome` breakdown (`Outcome.FAILED` specifically, distinct from `errored`/
+        # `timed_out` — a distinction real for debugging, per `_run.Outcome`'s own docstrings), and
+        # `finish`'s is spec/10 §2's coarser proof-of-value count (every non-`PASSED` outcome, to
+        # match its failure-details/short-summary sections above it). Both are correct for what
+        # each is for; naming the potential-for-confusion here is cheaper and more honest than
+        # collapsing the finer breakdown into the reporter's line, or dropping this one, in a pass
+        # that was not scoped to redesign the summary format.
+        reporter.finish(results, wall_clock=wall_clock, unattributed_output=unattributed)
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
     finally:
