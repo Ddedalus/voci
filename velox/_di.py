@@ -434,6 +434,25 @@ async def _construct(
     spec/04 §5's answer to "is blocking teardown special": no, it's a blocking call like any
     other, and the watchdog (spec/11, not built yet) is what will eventually name it.
     """
+    # Review (good, worth stating): I went through this new dispatch looking for the ways a
+    # runtime-supplied value could bypass `ScopeStore`'s guarantees, and it does not bypass any of
+    # them. The dispatch is *inside* `build()`, which `setup` hands to `store.acquire(...)`, so a
+    # provider-backed fixture is single-flight cached, refcounted, refunded on failure, released
+    # by `_release_all` and swept by `aclose` exactly like any other -- the `(value, closer)`
+    # return shape is what buys that, and a provider returning `closer=None` is the same
+    # already-supported "plain-return fixture with nothing to release" case. Two specific worries
+    # that turned out to be unfounded: (a) `capture`/`log_records`/`test_info` read ambient
+    # per-task state (`current_test_context`) rather than anything in `kwargs`, so a wider-scoped
+    # cache entry would freeze one test's `Sink` and hand it to that module's or session's other
+    # tests -- but `plan_for`'s `_SCOPE_RANK` check rejects the whole graph first. Verified: a
+    # `@velox.fixture(scope="module")` fixture with `Depends(velox.capture)` raises `DIError` at
+    # `plan_for` ("fixture 'wide' (scope='module') depends on fixture 'capture' (scope='function')
+    # ..."), which is the guard that makes the ambient/`BuiltinContext` split in
+    # `_fixtures.BuiltinContext`'s docstring safe. Note the check fires at `plan_for`, not at
+    # `@velox.fixture()` -- declaring the bad fixture succeeds -- so it protects tests, not
+    # imports. (b) `tmp_path_factory` is `session`-scope, so a concurrent second asker awaits the
+    # first's future rather than re-running the provider; that is the desired behaviour and the
+    # provider is idempotent anyway. Worth stating because none of it is visible from this line.
     if fixture.provider is not None:
         return await fixture.provider(kwargs, ctx)
 

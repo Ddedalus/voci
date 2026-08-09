@@ -64,6 +64,17 @@ def test_sink_keeps_everything_under_the_cap_verbatim() -> None:
 def test_sink_truncates_with_head_and_tail_once_over_the_cap() -> None:
     """spec/09 §1: once the cap is exceeded, the buffer switches to head+tail truncation with a
     marker rather than either silently dropping new writes or growing unboundedly (I5)."""
+    # Review: the two writes here jump from 40 characters to 5040 against a limit of 100, so this
+    # test never observes the interval where the implementation is actually wrong. `_CappedBuffer`
+    # latches `_truncated` when the *head* budget (`limit // 2`) is exceeded, not when `limit` is,
+    # so for any total in `51..100` it emits the "capture limit exceeded" marker having omitted
+    # nothing -- see the note in `_capture._CappedBuffer.write`. Measured, `_CappedBuffer(100)`,
+    # one write of N: N=50 no marker; N=51 marker with 0 lost; N=100 marker with 0 lost; N=101 the
+    # first genuine loss. The companion test above (`..._under_the_cap_verbatim`) writes 11
+    # characters against a limit of 1000, so it does not cover the interval either. A table-driven
+    # case over N in `(limit // 2, limit // 2 + 1, limit, limit + 1)` asserting
+    # `("omitted" in out) == (kept < N)` would pin the real contract -- "the marker appears iff
+    # something was dropped" -- and fails today at N=51 and N=100.
     sink = _capture.Sink("t", limit=100)
     sink.write_out("A" * 40)  # fits entirely in the head
     sink.write_out("Z" * 5000)  # blows the cap wide open
@@ -238,6 +249,20 @@ def test_run_suite_dispatches_two_concurrent_tests_without_cross_contaminating_c
         _record(1, test_b, "test_beta", plan=plan_for(test_b)),
     ]
 
+    # Review: this passes unchanged against a purely sequential runner, which makes its docstring
+    # ("through the real `run_suite` dispatch path end to end") stronger than what it proves. Each
+    # body only ever inspects *its own* `cap.out` (`count(...) == 15`, `other not in ...`), and
+    # both assertions hold trivially if `test_alpha` runs to completion before `test_beta` starts
+    # -- nothing observes that the two were ever in flight at the same time, so a regression that
+    # serialized dispatch, or one that gave every test the session sink while tests happened not
+    # to overlap, would leave this green. `test_capture_isolates_concurrent_tests_stdout` above
+    # has the same gap for the same reason. The cheap fix is the checkpoint pattern
+    # `tests/test_run.py`'s concurrency tests already use and that this file's own module
+    # docstring points at: a shared `asyncio.Event` (or an `order: list[str]` both bodies append
+    # to) forcing each test to block until the other has written at least once, then asserting the
+    # interleaving really happened -- `assert order[:4] == ["alpha", "beta", "alpha", "beta"]` or
+    # similar -- *in addition* to the isolation assertions. Only the pair distinguishes "isolated
+    # under real overlap" from "never overlapped".
     results = run_suite(records, concurrency=2)
 
     assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED], [
@@ -332,6 +357,16 @@ def test_log_records_are_isolated_between_concurrent_tests() -> None:
         test_func.__name__ = f"test_{label}"
         return test_func
 
+    # Review: same shape as the stdout version above -- both bodies assert only about their own
+    # `records`, so a sequential runner satisfies `len(records.records) == 10` and the `other not
+    # in m` check just as well, and nothing here observes that the two tests overlapped. Worth
+    # noting a second, sharper gap this file has no coverage for at all: `set_level` under real
+    # interleaving is *not* isolated, and cannot be, because logger levels are process-global. A
+    # forced-interleaving test (both tests inside their own `set_level` block at once, sibling
+    # lowering the same logger the other raised) shows a test's own `set_level(DEBUG)` block
+    # capturing nothing -- see the note on `LogRecords.set_level` in `_builtins.py`. Whatever
+    # the intended contract is there, it deserves a test in this section that states it, rather
+    # than only the single-test happy path `..._set_level_expands_visibility` covers today.
     test_a = make("alpha", "beta")
     test_b = make("beta", "alpha")
     results = run_suite(
@@ -417,6 +452,19 @@ def test_test_info_worker_stays_within_concurrency_bound_under_real_dispatch() -
     assert all(r.outcome is Outcome.PASSED for r in results), [r.failure for r in results]
     assert len(seen) == 12
     assert all(0 <= w < concurrency for w in seen)
+    # Review: the property that matters for `WorkerSlots` is not "every index is in range" (that
+    # is guaranteed by `list(range(concurrency))` and would survive `acquire` returning a constant
+    # `0`) but "no two tests hold the same index at the same time" -- which is what a reporter's
+    # per-lane layout, the stated reason this exists, actually relies on. As written this test
+    # passes against an implementation where `acquire()` is `return 0` and `release()` is a no-op,
+    # save for the `len(set(seen)) > 1` line below, which a two-element round-robin would also
+    # satisfy. The direct version costs three lines: keep a `live: dict[int, str]` in the test
+    # body, assert `info.worker not in live` on entry, insert, `await asyncio.sleep(0.01)`, then
+    # pop -- with `concurrency=4` and 12 tests that genuinely exercises reuse across the free
+    # list. (I did check the implementation by hand and it is correct: there is no `await` in
+    # `dispatch_one` between the semaphore admitting the task and the `try:` whose `finally`
+    # releases the slot, so neither double-issue nor a cancellation leak is reachable. The point
+    # is that this test is not what establishes that.)
     # 12 tests, only 4 slots, each sleeping: more than one distinct slot index must actually have
     # been handed out, or this would only be proving the trivial "0 is in range" case.
     assert len(set(seen)) > 1
@@ -441,6 +489,16 @@ def test_test_info_reports_tags_and_the_suite_wide_timeout() -> None:
 def test_sanitize_test_id_is_injective_for_ids_that_collide_after_escaping() -> None:
     """`a/b` and `a b` both escape to `a_b` -- the digest suffix is what keeps them apart, per
     spec/09 §5's own "hash-suffix anything that needed escaping"."""
+    # Review: this covers the escaped-vs-escaped pair, which is the case the implementation
+    # handles, and misses the escaped-vs-already-safe pair, which is the case it does not.
+    # `sanitize_test_id` appends the digest only when escaping changed something, so an id that is
+    # already safe comes back verbatim -- and an escaped id's *output* is itself a valid, already-
+    # safe id. Verified: `sanitize_test_id("a/b") == sanitize_test_id("a_b_82badf67") ==
+    # "a_b_82badf67"`. Worth adding here as a second case, especially because
+    # `TmpPathFactory.mktemp(basename)` routes arbitrary user basenames through this same
+    # function, where already-safe inputs are the norm rather than the exception (see the note in
+    # `_capture.sanitize_test_id`). Also untested: the `_MAX_COMPONENT_LEN` truncation branch,
+    # which is the other half of the docstring's injectivity claim and has no coverage at all.
     a = _capture.sanitize_test_id("tests/test_x.py::test_foo[a/b]")
     b = _capture.sanitize_test_id("tests/test_x.py::test_foo[a b]")
     assert a != b
@@ -536,6 +594,20 @@ def test_basetemp_retention_keeps_only_the_last_few_previous_roots(tmp_path: Pat
 
 
 def test_install_is_idempotent_and_uninstall_restores_the_real_streams(tmp_path: Path) -> None:
+    # Review: this covers the happy path and the double-`uninstall()` path, but not the one that
+    # is actually broken -- `install()` raising *after* it has already swapped `sys.stdout`/
+    # `sys.stderr` and added the root handler, but before it assigns `_installed`. The reachable
+    # trigger is an ordinary `--basetemp` typo: `_capture.install(basetemp=<an existing regular
+    # file>)` raises `NotADirectoryError` from `shutil.rmtree`, and afterwards `sys.stdout` is
+    # still a `Router`, the root logger still has the handler, `installed()` is still `None`, and
+    # `uninstall()` is a permanent no-op. A test asserting `pytest.raises(OSError)` around that
+    # call followed by the same `sys.stdout is real_out` / handler-count assertions this test
+    # already makes would pin the contract the module docstring claims ("`uninstall()` always
+    # restores exactly what was there before ... no state survives past one `run_suite` call").
+    # Worth a sibling case for the `run_suite`-level version too: a `KeyboardInterrupt` from one
+    # test with siblings still pending currently exits `run_suite` without ever reaching
+    # `uninstall()` (see the note at `_run.py`'s `runner.close()`), which no test in either file
+    # would notice -- `tests/test_run.py`'s interrupt tests only assert on the exception type.
     real_out, real_err = sys.stdout, sys.stderr
     assert _capture.installed() is None
     try:

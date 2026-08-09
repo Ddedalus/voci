@@ -86,6 +86,25 @@ from typing import Any, Literal, TextIO, cast, final
 from velox import _builtins
 from velox._fixtures import BuiltinContext
 
+# Review (documentation): the module docstring's "what lands in the session sink under *this*
+# runtime, precisely" list is missing two cases, one of which is neither exotic nor rare.
+# 1. A **`module`-scope fixture's teardown**. `_run.dispatch_one` calls
+#    `current_test_context.reset(token)` in the `finally` around `_run_one` and only *then*
+#    awaits `_teardown_module_scope`, so a module fixture's own `print()` on the way out is
+#    unattributed. Verified end to end: one module-scope async-generator fixture printing
+#    `MODULE-FIXTURE-SETUP-OUTPUT` before its `yield` and `MODULE-FIXTURE-TEARDOWN-OUTPUT`
+#    after, with one failing test -- setup output is in `result.captured_stdout` (True),
+#    teardown output is not (False), and it lands in `unattributed_output` instead (True).
+#    That also falsifies this docstring's own headline ("set once per test ... around that
+#    test's entire setup/call/teardown envelope") and the identical claim in `TestContext`'s
+#    docstring and in `run_suite`'s: module-scope teardown *is* the teardown phase for the last
+#    test of a module, and is demonstrably outside the envelope. Either widen the `reset` to
+#    cover `_teardown_module_scope` (it already runs inside that test's semaphore slot, so
+#    attributing it to the module's last test costs nothing) or add the bullet and soften the
+#    three "entire envelope" claims.
+# 2. Output from a task the test spawned and never awaited does *not* land here either -- it
+#    goes into the finished test's own `Sink`, which is dropped. See the note on `Sink`.
+
 __all__ = [
     "DEFAULT_BASETEMP_RETENTION",
     "DEFAULT_CAPTURE_LIMIT",
@@ -116,6 +135,12 @@ __all__ = [
 #: for it, applied per stream (stdout and stderr are capped independently, so a chatty stderr
 #: logger can't starve stdout's own budget or vice versa).
 DEFAULT_CAPTURE_LIMIT = 4 * 1024 * 1024
+# Review (low): "4 MiB/test" is 4 Mi *characters*, not 4 MiB of memory -- everything below
+# measures `len(str)`. CPython's compact-str representation is 1, 2 or 4 bytes per character
+# depending on the widest code point in the string, so a full buffer of astral-plane text costs
+# 4x the documented figure: measured `sys.getsizeof("\U0001f600" * DEFAULT_CAPTURE_LIMIT)` ==
+# 16.0 MiB, per stream, per test, times `concurrency`. The cap still bounds memory (I5's actual
+# requirement), just not at the number written here; either say "characters" or budget in bytes.
 
 
 @final
@@ -166,6 +191,26 @@ class _CappedBuffer:
                 self._head.append(s[:room])
                 self._head_size += room
                 s = s[room:]
+            # Review (must fix): `_truncated` is latched here, i.e. as soon as more than
+            # `limit // 2` characters have been written -- not when `limit` is exceeded. For any
+            # total between `limit // 2 + 1` and `limit` inclusive, *nothing is ever dropped*
+            # (the overflow all fits in the tail budget), yet `getvalue()` unconditionally splices
+            # `"\n... [0 bytes omitted, capture limit exceeded] ...\n"` into the middle of output
+            # that was retained in full. So a test that prints 2 MiB + 1 char under the 4 MiB
+            # default gets a false "capture limit exceeded" banner wedged into its stdout, and the
+            # banner lands mid-line, corrupting whatever the reporter (or a user grepping the
+            # failure block) reads next. Verified, `_CappedBuffer(100)`, one write of N chars:
+            #   N= 50  marker=False  kept= 50/ 50  lost=0
+            #   N= 51  marker=True   kept= 51/ 51  lost=0   <-- marker, nothing omitted
+            #   N=100  marker=True   kept=100/100  lost=0   <-- marker, nothing omitted
+            #   N=101  marker=True   kept=100/101  lost=1   <-- first genuine truncation
+            # The fix is to keep the latch but make `getvalue` emit the marker only when
+            # `self._omitted > 0` (the head/tail split itself is fine and can stay eager) -- the
+            # two concepts, "I have started splitting head from tail" and "I have actually thrown
+            # something away", are conflated into one flag today. The existing tests can't see
+            # this: `test_sink_truncates_with_head_and_tail_once_over_the_cap` jumps straight from
+            # 40 to 5040 characters and `test_sink_keeps_everything_under_the_cap_verbatim` writes
+            # 11 against a limit of 1000, so nothing probes `limit // 2 < n <= limit`.
             self._truncated = True
             if not s:
                 return
@@ -194,6 +239,10 @@ class _CappedBuffer:
     def getvalue(self) -> str:
         if not self._truncated:
             return "".join(self._head)
+        # Review (low): "bytes" is wrong -- `_omitted` accumulates `len(str)`, i.e. characters.
+        # Verified: `_CappedBuffer(100)` given 200 astral-plane emoji (200 characters, 800 UTF-8
+        # bytes) reports "100 bytes omitted" when 100 *characters* / 400 bytes were dropped. Same
+        # word, same conflation as `DEFAULT_CAPTURE_LIMIT` above; say "characters".
         marker = f"\n... [{self._omitted} bytes omitted, capture limit exceeded] ...\n"
         return "".join(self._head) + marker + "".join(self._tail)
 
@@ -220,10 +269,38 @@ class Sink:
         "log_records",
     )
 
+    # Review (low, latent): the docstring above says this is "never shared, never mutated from
+    # more than one task at a time by construction ... so nothing here needs its own lock". The
+    # "by construction" argument is the single-threaded-event-loop one, and it is exactly the
+    # argument `ContextPropagatingExecutor` below is built to break: that class exists so that
+    # `loop.run_in_executor(None, fn)` runs `fn` in a *worker thread* under a copy of the test's
+    # context, which means `fn`'s `print()` reaches this same `Sink` from a second OS thread while
+    # the test's own task can still be writing to it from the loop thread. `_CappedBuffer.write`'s
+    # `self._head_size += len(s)` is a non-atomic read-modify-write, as is `_omitted +=` and the
+    # `_out_at_line_start` round trip `Router.write` does under `-s`; a lost update there silently
+    # lets the head grow past `_head_limit`. Inert in practice today (the GIL makes the window
+    # tiny and the consequence is a slightly-wrong byte count, not corruption), but the docstring
+    # asserts a property the design deliberately does not have, and on a free-threaded build it
+    # stops being theoretical. Either qualify the claim or give `Sink` a `threading.Lock`.
     def __init__(self, label: str, *, limit: int = DEFAULT_CAPTURE_LIMIT) -> None:
         self.label = label
         self._out = _CappedBuffer(limit)
         self._err = _CappedBuffer(limit)
+        # Review (should fix): this list has no cap of any kind, so the OOM `_CappedBuffer` exists
+        # to prevent is still wide open through the logging door. `_CappedBuffer`'s own docstring
+        # states the goal as "so a runaway `print` in a loop cannot OOM the run" -- a runaway
+        # `logger.info` in a loop still can, and it is the more likely of the two in a real suite.
+        # Worse than plain text growth: a retained `LogRecord` pins `record.args` alive, so the
+        # buffer holds strong references to arbitrary user objects (ORM rows, response bodies) for
+        # as long as the test's `Sink` lives. Verified: `Sink("t", limit=64)` with 20000 records
+        # appended -> `len(sink.out) == 0` (text correctly capped) but `len(sink.log_records) ==
+        # 20000`, and `sink.log_records[0].args[0] is payload` -> True, i.e. the original object,
+        # not a formatted copy. spec/09 §1's cap is written about text only, so this is a spec gap
+        # as much as a code one, but I5 ("bounded memory") is stated over the run, not over stdout.
+        # A cap here is awkward precisely *because* the records are structured (dropping the middle
+        # of a record list is meaningful in a way dropping the middle of a char stream is not), so
+        # this probably wants a deliberate decision -- ring buffer, or a count cap with a synthetic
+        # "N records dropped" record -- rather than being left implicit.
         self.log_records: list[logging.LogRecord] = []
         self._out_at_line_start = True
         self._err_at_line_start = True
@@ -282,6 +359,26 @@ class TestContext:
 current_test_context: ContextVar[TestContext | None] = ContextVar(
     "velox_current_test_context", default=None
 )
+# Review (should fix): `TestContext`'s docstring claims `.reset(token)` "leaves nothing behind
+# once the test finishes -- there is no window where a later, unrelated task could see a stale
+# value, because there is nothing shared for it to see". The first half of that is what makes
+# cross-test isolation airtight and it is correct (I could not construct any leak *into another
+# test's* `Sink`); the second half is not. A task the test spawned and did not await copied this
+# ContextVar at creation, so it keeps seeing the finished test's `TestContext` for as long as it
+# lives -- `.reset()` in the parent cannot reach a child context. The value is stale, and the
+# consequence is silent data loss rather than misattribution: the orphan writes into a `Sink`
+# nobody will ever read again. Verified with two concurrently dispatched tests -- test 0 spawns
+# `create_task(bg())` that sleeps 20ms then prints and returns immediately (PASSED, so its `Sink`
+# is dropped); test 1 sleeps 100ms then fails, so its capture *is* retained:
+#     'LATE-OUTPUT-FROM-AN-ORPHANED-TASK' in results[1].captured_stdout -> False
+#     'LATE-OUTPUT-FROM-AN-ORPHANED-TASK' in unattributed_output       -> False
+# i.e. the output exists, is written through the installed `Router`, and reaches neither the
+# report nor the unattributed section. spec/09 §3's table says a spawned task is attributed
+# ("Yes -- context inherited at task creation"), which is true right up until its own test
+# finishes; the table has no row for "after". Not fixable inside this module (the real answer is
+# spec/05 §2's per-test `TaskGroup`, explicitly deferred in `_run.py`'s module docstring), but
+# the docstring should stop claiming the window does not exist, and the module docstring's
+# session-sink list should say where such output actually goes: nowhere.
 
 
 def _echo(real: TextIO, label: str, text: str, at_line_start: bool) -> bool:
@@ -366,6 +463,14 @@ class Router:
         if self._passthrough:
             self._real.flush()
 
+    # Review (low): the docstring names `sys.stdout.buffer` as the one known gap, but `fileno()`
+    # is missing too and is the more commonly reached of the two -- `subprocess.run(...,
+    # stdout=sys.stdout)`, `os.isatty(sys.stdout.fileno())`, `faulthandler.enable()` and most
+    # terminal-detection helpers call it. Verified under `velox`: a test printing
+    # `hasattr(sys.stdout, "fileno")` reports `False`. Unlike `buffer`, `fileno` has a defensible
+    # answer here (delegate to `self._real.fileno()`) -- writes through it bypass capture, but
+    # that is already true of any direct fd write and is exactly what spec/09 §3's last table row
+    # documents. At minimum add it to the docstring's gap list next to `buffer`.
     def isatty(self) -> bool:
         return False
 
@@ -449,6 +554,20 @@ class WorkerSlots:
 
     __slots__ = ("_free",)
 
+    # Review (good, worth stating): I went looking for the two failure modes this class invites --
+    # two live tests handed the same slot, and a cancelled test leaking its slot until the pool
+    # starves below `concurrency` -- and neither is reachable, for a reason worth writing down
+    # because it is a property of the *call site*, not of this class. In `_run.dispatch_one` there
+    # is no `await` anywhere between `async with semaphore:` admitting the task, `acquire()`, and
+    # the `try:` whose `finally` calls `release()`; likewise none between the `finally`'s `reset`
+    # and `release`. asyncio only delivers cancellation at a suspension point, so there is no
+    # window in which a task can be killed holding an unreleased slot, and the semaphore caps
+    # holders at `concurrency`, so `pop()` from an empty list is genuinely unreachable rather than
+    # merely unlikely. Both properties break the moment anyone adds an `await` (or anything that
+    # can raise) between those lines -- `marks_of(record.func)` in the `TestContext` construction
+    # is already inside the unguarded region and would leak a slot if it ever raised. A one-line
+    # comment at the `acquire()` call site saying "nothing between here and the `try` may await or
+    # raise" would keep the invariant from being refactored away silently.
     def __init__(self, concurrency: int) -> None:
         self._free: list[int] = list(range(concurrency))
 
@@ -520,6 +639,29 @@ def _resolve_basetemp_root(explicit: Path | None, *, retention: int) -> Path:
     else a fresh numbered root under the platform temp dir with the retention policy applied."""
     if explicit is not None:
         root = Path(explicit).expanduser()
+        # Review (must fix): an unguarded `rmtree` of a fully unvalidated, user-supplied path.
+        # `--basetemp` is plumbed straight from `argparse` (`type=Path`, no validation in
+        # `cli.main`, unlike its neighbours `--concurrency` and `--timeout` which both get
+        # hand-rolled checks) to this line. `argparse` turns an empty value into `Path("")`, and
+        # `Path("") == PosixPath(".")`, so **`velox --basetemp= tests` deletes the working
+        # directory**. Verified in a sandbox:
+        #     before: ['precious_source.py', 'subdir', 'tests']
+        #     $ velox --basetemp= tests
+        #     OSError: [Errno 22] Invalid argument: PosixPath('.')   # rmdir('.') at the very end
+        #     after:  []
+        # -- every file gone, including the test directory being run, and then it crashed while
+        # removing `.` itself, which (via the `install()` bug above) also left stdout orphaned so
+        # the traceback the user needed was swallowed. `--basetemp=.`, `--basetemp=$HOME` and
+        # `--basetemp=$PWD` are the same one-keystroke mistake with the same result.
+        # spec/09 §5 asks for a "documented 'this directory is cleared' warning", and the
+        # `--basetemp` help text does carry one, but a help string is not a guard for an
+        # irreversible recursive delete. Minimum viable guard, in `cli.main` alongside the other
+        # `4`-exit-code checks: reject an empty/`.`/`..` path, reject the cwd and any ancestor of
+        # it, and reject an existing non-empty directory that does not look like a previous velox
+        # basetemp (no marker file). Belt-and-braces here too: drop a `.velox-basetemp` marker on
+        # creation and refuse to `rmtree` a directory that exists without one -- that makes the
+        # destructive path opt-in to directories velox itself made, which is what the retention
+        # sweep in `_allocate_session_root` already effectively relies on.
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(parents=True)
@@ -547,6 +689,25 @@ def sanitize_test_id(test_id: str) -> str:
     long values) is truncated with a digest suffix for the same reason: the truncation itself is
     lossy, so the digest is what keeps two long ids that happen to share a truncated prefix apart.
     """
+    # Review (low, latent): not injective, and the counterexample is one line. The digest is
+    # appended *only* when escaping changed something, so any id that is already safe is returned
+    # verbatim -- including one that happens to look like another id's escaped form. Verified:
+    #     sanitize_test_id("a/b")           == "a_b_82badf67"
+    #     sanitize_test_id("a_b_82badf67")  == "a_b_82badf67"   # already safe, returned as-is
+    # Two distinct inputs, one output. The docstring's careful phrasing ("two distinct ids
+    # *needing escaping* never collide") is technically true, but the sentence right after it
+    # ("the digest is what makes this injective") and spec/09 §5 ("injective enough to avoid
+    # collisions between distinct ids") both claim more than the code delivers. Latent for
+    # `tmp_path` itself, since every real test id contains `::` and so always needs escaping --
+    # but *not* latent for `TmpPathFactory.mktemp(basename)` in `_builtins.py`, which routes
+    # arbitrary user basenames through this same function and where an already-safe basename is
+    # the normal case: `mktemp("a/b")` and `mktemp("a_b_82badf67")` both target `a_b_82badf67`.
+    # `numbered=True` masks it (they share the counter and get different suffixes), so what
+    # actually surfaces is `numbered=False`, as a `FileExistsError` from `mkdir(exist_ok=False)`
+    # blaming the wrong caller. Appending the digest unconditionally makes it genuinely injective
+    # (at the cost of uglier directory names) -- or keep the conditional digest and note in the
+    # docstring that the guarantee is scoped to the always-escaped test-id domain, and give
+    # `mktemp` its own sanitizer.
     escaped = _UNSAFE_ID_CHARS.sub("_", test_id)
     if escaped != test_id:
         digest = hashlib.blake2b(test_id.encode(), digest_size=4).hexdigest()
@@ -599,6 +760,19 @@ def install(
     permanently wrapped after the *inner* call's own `uninstall()` runs.
     """
     global _installed
+    # Review: the docstring justifies this guard with "a nested or re-entrant `run_suite`", but
+    # that scenario cannot occur -- `run_suite` drives an `asyncio.Runner`, and calling it from
+    # inside a running test raises `RuntimeError: Runner.run() cannot be called from a running
+    # event loop` before capture is ever reached (verified: the outer test just reports FAILED).
+    # So the guard is defending a case the architecture already forecloses, while the case it
+    # *does* silently change is unmentioned: a second `install()` returns the first call's setup
+    # and **discards its `passthrough` and `basetemp` arguments without a word**.
+    # `test_install_is_idempotent_and_uninstall_restores_the_real_streams` pins exactly that
+    # (`second = install(basetemp=tmp_path / "two")  # ignored`), so it is intended -- but "the
+    # caller asked for a different basetemp and got someone else's" is the kind of silent
+    # degrade I6 argues against elsewhere in this file (cf. `_require_test_context`'s loud
+    # `RuntimeError`). Worth either raising when the arguments disagree with the live setup, or
+    # rewriting the docstring's rationale to the real one.
     if _installed is not None:
         return _installed
 
@@ -612,6 +786,29 @@ def install(
     log_handler = _RoutingHandler(session_sink)
     logging.getLogger().addHandler(log_handler)
 
+    # Review (must fix): this is the one fallible step in `install()`, and it runs *after*
+    # `sys.stdout`/`sys.stderr` have already been replaced and the root log handler already added,
+    # but *before* `_installed` is assigned. If it raises, the process is left permanently broken:
+    # the `Router`s stay on `sys.stdout`/`sys.stderr` forever, the root handler stays attached
+    # forever, and `uninstall()` can never undo either because `_installed` is still `None` and it
+    # returns immediately. `_run.run_suite` cannot save it either -- it calls `install()` on the
+    # line *before* its own `try:`, so its `finally` never runs. Verified with the most ordinary
+    # typo imaginable, `--basetemp` naming an existing *file*:
+    #     run_suite([], basetemp=<a regular file>)
+    #     -> NotADirectoryError: [Errno 20] Not a directory
+    #     sys.stdout is the real stream?  False     (type: Router)
+    #     root logger handlers: 0 -> 1
+    #     _capture.installed() is None?   True
+    #     after uninstall(), stdout real? False
+    # and every subsequent `print()` in that process vanished into an orphaned `Sink`.
+    # This is also precisely where the "mirrors `_rewrite.py`'s idempotent install/uninstall
+    # pattern" claim in the module docstring stops being true. `_rewrite.install` does all of its
+    # fallible work first (`plan(...)`, the cache probe, the `plain`-mode early return) and only
+    # then touches global state -- `sys.meta_path.insert(0, hook)` is the last mutation before
+    # `_installed_setup = setup`, so a failure leaves nothing installed. Reordering to match
+    # (resolve `basetemp_root` first, then swap the streams, then add the handler, then record
+    # `_installed`) fixes this with no new machinery; failing that, `install()` needs its own
+    # try/except that unwinds the partial install before re-raising.
     basetemp_root = _resolve_basetemp_root(basetemp, retention=retention)
 
     setup = CaptureSetup(

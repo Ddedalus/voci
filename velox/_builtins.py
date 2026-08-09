@@ -152,6 +152,18 @@ class _LevelOverride(AbstractContextManager[None]):
     def __init__(self, logger: logging.Logger, level: int) -> None:
         self._logger = logger
         self._level = level
+        # Review (low): the "previous" level is snapshotted at `set_level(...)` *call* time, not at
+        # `__enter__` time. For the overwhelmingly common `with records.set_level(...):` spelling
+        # those are the same instant, but `set_level` deliberately returns an
+        # `AbstractContextManager` rather than entering anything, so holding the object and
+        # entering it later is a supported shape -- and then `__exit__` restores a stale value.
+        # Verified: logger at WARNING, `cm = lr.set_level(DEBUG)`, `lg.setLevel(ERROR)`, `with cm:
+        # pass` -> level is WARNING afterwards, not ERROR. Reading `logger.level` in `__enter__`
+        # instead makes save/restore properly paired and costs nothing; the eager *validation*
+        # this class's docstring is about happens in `set_level` before construction either way,
+        # so it is unaffected. (Restore-on-exception is correct as written -- `__exit__` runs for
+        # a raising body and for a cancelled `await` inside the block; I checked, and the level
+        # does not leak past a failing test.)
         self._previous = logger.level
 
     def __enter__(self) -> None:
@@ -202,6 +214,24 @@ class LogRecords:
         assertions, hazardous for "no records were emitted" ones. A strict mode that escalates
         `set_level` to run solo is roadmap (spec/09 §8), not built this session.
         """
+        # Review (should fix, documentation): the hazard described just above -- inherited from
+        # spec/09 §2 verbatim -- states the wrong direction, and the direction is the whole point.
+        # "The effect is only that other tests may capture *more* records, which is benign for
+        # assertions of the form 'this record is present' and hazardous for 'no records were
+        # emitted'" is true only when every concurrent caller *raises* the level. A caller that
+        # *lowers* one (`set_level(logging.CRITICAL)` to silence a noisy dependency -- a perfectly
+        # ordinary use of this API) makes a concurrent sibling capture *fewer* records than it
+        # asked for, which breaks precisely the "this record is present" assertion the docstring
+        # calls benign. Verified through real `run_suite` dispatch with forced interleaving
+        # (`asyncio.Event` checkpoints, so both tests are provably inside their blocks at once):
+        # test_a does `with records.set_level(DEBUG, logger=L): ...; logging.getLogger(L).debug(
+        # "A-debug")`, test_b does `with records.set_level(CRITICAL, logger=L):` around a
+        # checkpoint that a A's log lands inside. Result: `test_a` captured `()` -- its own DEBUG
+        # record silently dropped inside its own `set_level(DEBUG)` block -- and the run reported
+        # `['FAILED', 'PASSED']`. Nothing here is *wrong* (process-global levels are the
+        # constraint, and the roadmap's solo-escalation is the real fix); the docstring just
+        # promises a one-sided failure mode where the failure is two-sided, and a user reading
+        # this will write exactly the assertion it tells them is safe.
         resolved = _resolve_level(level)
         if logger is not None and not isinstance(logger, str):
             raise TypeError(f"set_level(logger={logger!r}): expected str or None")

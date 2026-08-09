@@ -164,6 +164,15 @@ def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
     with records.set_level("DEBUG"):
         assert logging.getLogger().level == logging.DEBUG
     assert logging.getLogger().level == previous
+    # Review: the restore is only exercised on the *normal* exit path, and the case that matters
+    # for a test runner is the abnormal one -- a raised level must not leak past a test whose body
+    # raised. `_LevelOverride.__exit__` does handle it (I confirmed by hand: it ignores `exc_info`
+    # entirely, so a raising body still restores, as does a `CancelledError` thrown in by a
+    # `--timeout`), but nothing pins it. Three lines: `with pytest.raises(RuntimeError), records.
+    # set_level("DEBUG"): raise RuntimeError("boom")` followed by the same `== previous`
+    # assertion. Worth having because a future rewrite to `@contextlib.contextmanager` -- exactly
+    # what this test's docstring exists to prevent -- would silently reintroduce the leak if the
+    # `yield` were not wrapped in `try/finally`, and this test as written would still pass.
 
 
 def test_approx_compares_both_ways() -> None:

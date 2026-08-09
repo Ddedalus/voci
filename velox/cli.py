@@ -116,6 +116,22 @@ def build_parser() -> argparse.ArgumentParser:
     # tmp_path/tmp_path_factory are implemented (spec/09 §5): a fresh, numbered session root by
     # default (retention: velox._capture.DEFAULT_BASETEMP_RETENTION previous roots kept), or this
     # override.
+    # Review (must fix): `--basetemp` is the only "does real work" flag in this parser with no
+    # validation at all, and it is the one whose failure mode is irreversible. `--concurrency` and
+    # `--timeout` both get hand-rolled checks in `main` with exit code `4`; this goes straight to
+    # `_capture._resolve_basetemp_root`, which does `shutil.rmtree(root)` on whatever it is given.
+    # `argparse` maps an empty value to `Path("")`, which *is* `PosixPath(".")`, so
+    # `velox --basetemp= tests` recursively deletes the working directory -- verified in a
+    # sandbox, `['precious_source.py', 'subdir', 'tests']` -> `[]`, then an `OSError` from trying
+    # to `rmdir('.')`. `--basetemp=.`, `--basetemp=$PWD` and `--basetemp=$HOME` are the same
+    # mistake. The `WARNING:` in the help text below is exactly the "documented warning" spec/09
+    # §5 asks for, and it is not sufficient for an unrecoverable recursive delete driven by a
+    # single mistyped character. Wanted here, in the same style as the two checks already in
+    # `main`: reject an empty/`.`/`..` path, reject the cwd and any ancestor of it, and reject an
+    # existing non-empty directory that velox did not create (see the marker-file suggestion in
+    # `_capture._resolve_basetemp_root`). `tests/test_cli.py` has a validation test per flag for
+    # the other two; this one needs the same, and `test_basetemp_override_is_cleared_before_use`
+    # currently pins the destructive behaviour without pinning any guard on it.
     parser.add_argument(
         "--basetemp",
         type=Path,
@@ -249,6 +265,24 @@ def main(argv: list[str] | None = None) -> int:
         files = _discovery.discover_files(roots)
         collected = _collect.collect(files, rootdir=rootdir)
         capture_passthrough = args.capture == "no" or args.capture_s
+        # Review (should fix): `--capture=no` does not turn capture off -- it turns *echoing* on.
+        # `_capture.Router.write` writes to the `Sink` unconditionally and only then additionally
+        # echoes to the real stream, so under `-s` a failing test's output is buffered (full
+        # memory cost, `DEFAULT_CAPTURE_LIMIT` and all) *and* printed twice. Verified against a
+        # two-test project, `velox -s tests`:
+        #     [tests/test_demo.py::test_fails_with_output] hello-from-the-test   <-- live echo
+        #     tests/test_demo.py::test_fails_with_output FAILED (0.000s)
+        #     ...
+        #     --- captured stdout ---
+        #     hello-from-the-test                                                <-- again
+        # spec/09 §1 words this as "passes writes straight through to the real stream", i.e.
+        # instead of buffering, and pytest's `-s` (which the help text below explicitly claims
+        # parity with, "the long form pytest scripts already spell") genuinely disables capture,
+        # so `result.captured_stdout` is empty there. Two independent fixes, either is fine:
+        # have `Router.write` skip the `Sink` when `passthrough` is set, or keep buffering and
+        # suppress the `--- captured stdout ---`/`--- captured stderr ---` sections below when
+        # `capture_passthrough` is true. Doing neither means the flag people reach for to *reduce*
+        # noise measurably increases it.
         # Populated by `run_suite` iff non-`None` (spec/09 §9 "MVP" mentions this section
         # explicitly) — see `_capture.py`'s module docstring for exactly what can land here under
         # this runtime (a genuinely detached background thread; end-of-run session-scope
