@@ -6,6 +6,7 @@ this just proves the package imports and the entrypoint is wired up.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -245,6 +246,152 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
     out = capsys.readouterr().out
     assert status == 0
     assert "test_skipped SKIPPED (not ready)" in out
+
+
+def test_main_prints_no_config_when_none_is_found(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+
+    assert main([str(tmp_path)]) == 0
+    assert "config: none" in capsys.readouterr().out
+
+
+def test_main_applies_tool_velox_env_before_the_first_test_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec/02 §5: "`env` from config is applied before the first test module import" -- a test
+    module reading `os.environ` at import time (not just inside a test body) must already see it."""
+    monkeypatch.delenv("VELOX_CONFIG_SMOKE", raising=False)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.velox]\nenv = { VELOX_CONFIG_SMOKE = 'from-config' }\n"
+    )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_env.py").write_text(
+        "import os\n"
+        "assert os.environ['VELOX_CONFIG_SMOKE'] == 'from-config'  # import time\n\n"
+        "async def test_sees_it():\n"
+        "    assert os.environ['VELOX_CONFIG_SMOKE'] == 'from-config'\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 0
+
+
+def test_main_restores_tool_velox_env_after_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main` is called repeatedly in-process (this package's own test suite does exactly that) --
+    `[tool.velox] env` must not leak from one call into the next, or into whatever called `main`
+    for a side effect other than exiting. Covers both a key that already existed (restored to its
+    old value) and one that didn't (removed again)."""
+    monkeypatch.setenv("VELOX_CONFIG_PREEXISTING", "original")
+    monkeypatch.delenv("VELOX_CONFIG_NEW", raising=False)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.velox]\n"
+        "env = { VELOX_CONFIG_PREEXISTING = 'overridden', VELOX_CONFIG_NEW = 'added' }\n"
+    )
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 0
+
+    assert os.environ["VELOX_CONFIG_PREEXISTING"] == "original"
+    assert "VELOX_CONFIG_NEW" not in os.environ
+
+
+def test_main_config_testpaths_is_used_when_no_paths_are_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntestpaths = ['suite']\n")
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir()
+    (suite_dir / "test_it.py").write_text("async def test_it():\n    pass\n")
+    # A `tests/` dir also exists, empty -- proves `testpaths` wins over the built-in default,
+    # not just that `suite/` happens to be found some other way.
+    (tmp_path / "tests").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    assert status == 0
+
+
+def test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`testpaths = []` is a real, if unusual, config -- it must not be treated the same as
+    "unset" and silently fall back to `_default_test_roots` (a `tests/` dir that also exists
+    here, which would otherwise mask the bug by finding a real test anyway)."""
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntestpaths = []\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_it.py").write_text("async def test_it():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 5  # no tests collected, not "1 passed"
+
+
+def test_main_cli_concurrency_overrides_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`[tool.velox] concurrency = 0` would be a usage error if it were ever consulted -- passing
+    `--concurrency=2` on the command line must win instead of the merge falling through to the
+    bad config value (spec/02 §3: CLI > `[tool.velox]`)."""
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\nconcurrency = 0\n")
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--concurrency=2"]) == 0
+
+
+def test_main_rejects_a_bad_config_concurrency_value_as_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\nconcurrency = 0\n")
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    assert status == 4
+    assert "--concurrency" in capsys.readouterr().err
+
+
+def test_main_rejects_an_invalid_tool_velox_table_as_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.velox]\nnot_a_real_key = 1\n")
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    assert status == 4
+    assert "not_a_real_key" in capsys.readouterr().err
+
+
+def test_main_config_test_file_patterns_and_ignore_are_honored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.velox]\ntest_file_patterns = ['check_*.py']\nignore = ['skip_me']\n"
+    )
+    (tmp_path / "check_one.py").write_text("async def test_one():\n    pass\n")
+    # Would normally match the built-in `test_*.py` pattern -- must be ignored now that
+    # `test_file_patterns` no longer includes it.
+    (tmp_path / "test_two.py").write_text("async def test_two():\n    raise AssertionError\n")
+    skip_dir = tmp_path / "skip_me"
+    skip_dir.mkdir()
+    (skip_dir / "check_three.py").write_text("async def test_three():\n    raise AssertionError\n")
+    monkeypatch.chdir(tmp_path)
+
+    status = main([])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "check_one.py" in out
+    assert "test_two.py" not in out
+    assert "check_three.py" not in out
 
 
 def test_main_prints_jest_style_per_file_blocks_end_to_end(

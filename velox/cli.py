@@ -16,17 +16,25 @@ finishes), failure details and the short test summary in logical order, and the 
 concurrency line. Still not this milestone (spec/00 §7's MVP table, *Deferred* column): the live
 footer, `--durations`, JUnit XML, `--report-json`, GH annotations, `--stream-failures`, and any
 ANSI/`rich` color — see `_report.py`'s own module docstring for the specifics.
+
+M1 config-loader slice (spec/02 §3): `_config.resolve` finds `[tool.velox]` in `pyproject.toml`
+(rootdir search, upward, stopping at the git root) and `main` merges it against the CLI at
+`CLI > [tool.velox] > built-in default` for `concurrency`/`timeout`/`testpaths`, applies `env`
+before the first test module import, and passes `test_file_patterns`/`ignore` through to
+`_discovery.discover_files`. Only the six keys `_config.py`'s own module docstring names — not
+`-k`/`-m`/`--seed`/`--serial`/the `VELOX_*` environment tier, all still later milestones.
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 import time
 from pathlib import Path
 
-from velox import __version__, _capture, _collect, _discovery, _report, _rewrite, _run
+from velox import __version__, _capture, _collect, _config, _discovery, _report, _rewrite, _run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,13 +74,20 @@ def build_parser() -> argparse.ArgumentParser:
     # own (its own usage-error exit code, 2); "positive" is checked by hand in `main`, same
     # pattern as `_invalid_path_argument`/the `--rewrite-cache`+`--assert=plain` check just above,
     # so it can report exit code 4 with a velox-styled message instead of argparse's generic one.
+    #
+    # `default=None`, not `_run.DEFAULT_CONCURRENCY`: M1's `[tool.velox]` loader (spec/02 §3) can
+    # also set `concurrency`, and CLI > config > built-in default (spec/02 §3) only works if
+    # `main` can tell "the user typed --concurrency" apart from "argparse filled in a default" —
+    # which a non-`None` default would erase. `main` folds `None` back to `DEFAULT_CONCURRENCY`
+    # once it knows there's no config value either; see its concurrency-resolution comment.
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=_run.DEFAULT_CONCURRENCY,
+        default=None,
         metavar="N",
         help=f"Maximum number of tests running at once (spec/05 §1). Must be a positive "
-        f"integer; 1 means exactly serial. Default: {_run.DEFAULT_CONCURRENCY}.",
+        f"integer; 1 means exactly serial. Default: {_run.DEFAULT_CONCURRENCY}, or "
+        f"[tool.velox] concurrency if set.",
     )
     # Also implemented (spec/05 §2-4): wraps each test's setup+call in `asyncio.timeout`.
     # Default is `None` (off) rather than some finite value — spec/05 §11 Q12 leaves "should the
@@ -85,7 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
     # if it has none, making a `0`/negative "budget" mean "fail every test that happens to await
     # something" rather than "fail everything" or "no limit" — neither of which is a real, useful
     # mode, so it is rejected rather than given surprising defined behavior. `nan`/`inf` would each
-    # just silently never fire.
+    # just silently never fire. `None` already doubles as "unset" here (same trick as
+    # `--concurrency` above), so `[tool.velox] timeout` slots in the same way: `main` only reaches
+    # for it when the CLI flag was never given at all.
     parser.add_argument(
         "--timeout",
         type=float,
@@ -93,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Per-test setup+call budget, in seconds (spec/05 §2-4). A test that exceeds it is "
         "reported as TIMEOUT rather than FAILED/ERROR. Must be positive and finite. Default: no "
-        "limit.",
+        "limit, or [tool.velox] timeout if set.",
     )
     # Capture is implemented (spec/09 §1): stdout/stderr are routed through a per-test Sink by
     # default, shown only for failing tests. `-s`/`--capture=no` disables that routing's
@@ -138,22 +155,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _default_test_roots() -> list[Path]:
-    """Where velox looks when the user passes no paths.
+def _default_test_roots(rootdir: Path | None = None) -> list[Path]:
+    """Where velox looks when the user passes no paths and `[tool.velox] testpaths` isn't set.
 
-    spec/02 §1: the default is the configured `testpaths`, else the rootdir. velox has no
-    `[tool.velox]` loader yet — nothing in this package reads `pyproject.toml` — so this is only
-    the built-in-default tier of that chain: `./tests` if it exists, the current directory
-    otherwise. A `[tool.velox]` loader, once it exists, slots in ahead of this rather than
-    replacing it. Never the unfiltered cwd on its own: that is what made
-    `_discover_python_files`'s missing pruning reachable without the user asking for it — a bare
-    `velox` at this repo's own root used to walk 2345 files, 780 of them under
-    `.venv/.../site-packages`.
+    spec/02 §1: the default is the configured `testpaths`, else the rootdir. This is only the
+    last, built-in-default tier of that chain — `main` tries `args.paths` and
+    `_config.Config.testpaths` first (spec/02 §3) and falls back to this only when neither is
+    set. `rootdir/tests` if it exists, `rootdir` itself otherwise; `rootdir` defaults to `cwd()`
+    for callers (and the pre-`[tool.velox]` tests) that don't have one to hand. Never the
+    unfiltered cwd on its own: that is what made `_discover_python_files`'s missing pruning
+    reachable without the user asking for it — a bare `velox` at this repo's own root used to walk
+    2345 files, 780 of them under `.venv/.../site-packages`.
     """
-    tests_dir = Path("tests")
+    # `Path()` (`.`), not `Path.cwd()`, when no `rootdir` is given: this must stay relative so
+    # existing callers (this package's own tests, run with `cwd` already set to the directory
+    # under test) see exactly the same `Path("tests")`/`Path()` results as before this parameter
+    # existed — `Path.cwd()` would silently turn those into absolute paths instead.
+    base = rootdir if rootdir is not None else Path()
+    tests_dir = base / "tests"
     if tests_dir.is_dir():
         return [tests_dir]
-    return [Path()]
+    return [base]
 
 
 def _invalid_path_argument(paths: list[str]) -> str | None:
@@ -225,31 +247,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
-    # `type=int` above already rejects non-numeric input (argparse's own exit code 2); this is
-    # the "positive" half, checked by hand so a bad value gets the same velox-styled exit-4 usage
-    # error as every other check in this function rather than argparse's differently-shaped one.
-    # `run_suite` itself also raises `ValueError` for `concurrency < 1` (defense in depth for
-    # callers that skip `main`, e.g. tests calling it directly), but by the time that would fire
-    # here it's too late to produce a clean exit code — this check is what actually stops a bad
-    # `--concurrency` from ever reaching it.
-    if args.concurrency < 1:
-        print(
-            f"velox: --concurrency must be a positive integer, got {args.concurrency}",
-            file=sys.stderr,
-        )
-        return 4
-
-    # Same shape as the `--concurrency` check above, for the same reason: reject rather than give
-    # `0`/negative/non-finite a surprising defined meaning (see `build_parser`'s comment on this
-    # flag). `run_suite` itself also raises `ValueError` for the same condition (defense in depth
-    # for direct callers), but again, too late here to produce a clean exit code on its own.
-    if args.timeout is not None and not (math.isfinite(args.timeout) and args.timeout > 0):
-        print(
-            f"velox: --timeout must be a positive, finite number of seconds, got {args.timeout}",
-            file=sys.stderr,
-        )
-        return 4
-
     # `--basetemp` is the one "does real work" flag whose failure mode is irreversible
     # (`_capture.install` eventually `shutil.rmtree`s it) — see `_invalid_basetemp_argument`'s own
     # docstring for exactly what this rejects and why the check lives here rather than only in
@@ -272,19 +269,86 @@ def main(argv: list[str] | None = None) -> int:
         print(f"velox: {problem}", file=sys.stderr)
         return 4
 
-    roots = [Path(p) for p in args.paths] if args.paths else _default_test_roots()
+    # spec/02 §3: `[tool.velox]`-anchored upward search, stopping at the git root — see
+    # `_config.resolve`'s own docstring for exactly where it starts and stops. A malformed
+    # `pyproject.toml`/`[tool.velox]` table is always a usage error (I6: never silently fall back
+    # to defaults over a config the user wrote but velox can't honor).
+    try:
+        config = _config.resolve([Path(p) for p in args.paths])
+    except _config.ConfigError as exc:
+        print(f"velox: {exc}", file=sys.stderr)
+        return 4
+
+    # CLI > [tool.velox] > built-in default (spec/02 §3), in that order. `args.concurrency`/
+    # `args.timeout` are `None` exactly when the flag wasn't given (see `build_parser`'s comments
+    # on both) — that, not `is None` on `config.concurrency`, is what "the user didn't ask for a
+    # specific value on the command line" actually means here.
+    effective_concurrency = args.concurrency if args.concurrency is not None else config.concurrency
+    if effective_concurrency is None:
+        effective_concurrency = _run.DEFAULT_CONCURRENCY
+    effective_timeout = args.timeout if args.timeout is not None else config.timeout
+
+    # Same two checks the raw `args.concurrency`/`args.timeout` used to get, just moved to run
+    # against the merged value — a bad number is exactly as much a usage error coming from
+    # `[tool.velox]` as from the command line, and `run_suite`'s own `ValueError` (defense in
+    # depth for direct callers) is too late here to produce a clean exit code either way.
+    if effective_concurrency < 1:
+        print(
+            f"velox: --concurrency must be a positive integer, got {effective_concurrency}",
+            file=sys.stderr,
+        )
+        return 4
+    if effective_timeout is not None and not (
+        math.isfinite(effective_timeout) and effective_timeout > 0
+    ):
+        print(
+            f"velox: --timeout must be a positive, finite number of seconds, got "
+            f"{effective_timeout}",
+            file=sys.stderr,
+        )
+        return 4
+
+    # spec/02 §1: `PATHS` > configured `testpaths` > the rootdir. `config.testpaths` entries are
+    # written relative to wherever `[tool.velox]` was declared, so they're resolved against
+    # `config.rootdir` here, not `cwd()` — the same reason `_default_test_roots` below takes
+    # `config.rootdir` rather than defaulting to `cwd()` itself.
+    # `is not None`, not truthiness: `testpaths = []` is a real, if unusual, thing to write and
+    # means "nothing" -- collapsing it into "unset" would silently run the built-in default
+    # instead of the empty selection the user's config actually asked for.
+    if args.paths:
+        roots = [Path(p) for p in args.paths]
+    elif config.testpaths is not None:
+        roots = [config.rootdir / p for p in config.testpaths]
+    else:
+        roots = _default_test_roots(config.rootdir)
 
     # Resolved and probed up front so the cold-start guarantee (spec/07 §5) is visible before
     # a run commits to it — a benchmark that silently fell back to `plain` is a corrupted
     # benchmark. `plan` warns on stderr; the header line goes to stdout with the report.
     setup = _rewrite.plan(roots, mode=args.assert_mode, cache_dir=args.rewrite_cache)
     print(setup.header_line())
+    # Same transparency `plan`'s own header line gives the assertion-rewrite decision — a run
+    # silently picking up config the user forgot was there (or forgot to write) is exactly the
+    # kind of surprise I6 exists to name instead of hide.
+    print(f"config: {config.source}" if config.source is not None else "config: none")
 
-    # rootdir: spec/02 §3's `[tool.velox]`-anchored upward search (stopping at the git root)
-    # doesn't exist yet — there is no config loader in this package at all. `cwd` is the honest
-    # placeholder until that lands, matching the same not-yet-built admission
-    # `_default_test_roots` already makes about `testpaths`.
-    rootdir = Path.cwd()
+    rootdir = config.rootdir
+
+    # spec/02 §5: "`env` from config is applied before the first test module import" — nothing
+    # above this line imports a test module yet (that's `_rewrite.install`/`discover_files`/
+    # `_collect.collect`, right below), so this is late enough to still qualify while being early
+    # enough to skip entirely on every usage-error `return 4` above: those never touch the
+    # environment at all now, rather than mutating it and then bailing out. Unconditional
+    # overwrite of each named key: there is no CLI flag for an individual `env` entry to take
+    # precedence over, so `[tool.velox] env` is the only source and always wins for the keys it
+    # names. `env_backup` (not `monkeypatch` — this is production code, not a test) is what makes
+    # this safe to call repeatedly in-process (this package's own test suite does exactly that,
+    # same reason the `finally` block below tears down the rewrite hook): every key `env` touches
+    # is restored to its pre-call value (or removed, if it didn't exist before) in that same
+    # `finally`, so one `main()` call's config can never leak into the next one's environment, or
+    # into an embedding process that called `main()` for a side effect other than exiting.
+    env_backup = {key: os.environ.get(key) for key in config.env}
+    os.environ.update(config.env)
 
     # Must be installed before any test module is imported below — a module already sitting in
     # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
@@ -302,7 +366,21 @@ def main(argv: list[str] | None = None) -> int:
     hook_already_installed = _rewrite.installed_hook() is not None
     _rewrite.install(roots, setup=setup, warn=False)
     try:
-        files = _discovery.discover_files(roots)
+        # `config.test_file_patterns`/`config.ignore` replace `discover_files`'s own defaults
+        # outright when set, matching spec/02 §3's example table (`ignore = [...]` there spells
+        # out the exact built-in default set, not an addition to it) — a user who wants "the
+        # defaults plus one more" repeats the defaults themselves, the same convention this
+        # module's own `--capture`/`--assert` choices don't need but a list-valued config key
+        # does.
+        if config.ignore is not None:
+            ignore_dirs = frozenset(config.ignore)
+        else:
+            ignore_dirs = _discovery.DEFAULT_IGNORE_DIRS
+        files = _discovery.discover_files(
+            roots,
+            patterns=config.test_file_patterns or _discovery.DEFAULT_TEST_FILE_PATTERNS,
+            ignore_dirs=ignore_dirs,
+        )
         collected = _collect.collect(files, rootdir=rootdir)
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by `run_suite` iff non-`None` (spec/09 §9 "MVP" mentions this section
@@ -352,8 +430,8 @@ def main(argv: list[str] | None = None) -> int:
         wall_start = time.monotonic()
         results = _run.run_suite(
             collected.records,
-            concurrency=args.concurrency,
-            timeout=args.timeout,
+            concurrency=effective_concurrency,
+            timeout=effective_timeout,
             capture_passthrough=capture_passthrough,
             basetemp=args.basetemp,
             unattributed_output=unattributed,
@@ -430,6 +508,14 @@ def main(argv: list[str] | None = None) -> int:
         # not something introduced here, and not fixed here.
         if not hook_already_installed:
             _rewrite.uninstall()
+        # Symmetric with `env_backup`'s own comment above: restores exactly the keys this call
+        # touched, to exactly what they were before it touched them (or removes them, if they
+        # didn't exist), regardless of how this `try` exits.
+        for key, prev_value in env_backup.items():
+            if prev_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev_value
 
 
 if __name__ == "__main__":
