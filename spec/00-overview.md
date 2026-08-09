@@ -182,13 +182,43 @@ targets to hit.
 
 ## 11. Outstanding decisions
 
-Four things the examples surfaced. The second is **resolved**; it stays here with its resolution
-because the reasoning is load-bearing for the reference stack.
+Four things the examples surfaced. The second and first are **resolved**; they stay here with
+their resolutions because the reasoning is load-bearing for the reference stack.
 
-### Fixture import path
+### Fixture import path — RESOLVED (2026-08-09)
 1. Nothing in the spec makes tests/fixtures.py importable. This is the real one. spec/02 §5 says velox never touches sys.path; spec/03 imports test modules under generated velox_tests.* names. Neither makes the test tree a package, so from tests.fixtures import api_client — the only way to share a fixture, since there's no conftest — cannot resolve. The examples assume velox prepends the rootdir to sys.path once at startup: one predictable insertion, not pytest's per-conftest-directory games. Whatever the answer, it needs writing down, because it's load-bearing for the no-conftest decision.
 
 A: Editing sys.path is trivial. What matters is that we need a convention that will work with all the mainstream tooling: ruff, pyright/pyrefly, VSCode language server etc. There is no use of imports that show in red in the IDE or require intricate configuration for every new dev tool.
+
+The resolution takes the steer literally and stops there: `cli.main` prepends `rootdir` (the same
+`rootdir` `_config.resolve` already computes, spec/02 §3) to `sys.path[0]` exactly once, at the
+same point `[tool.velox] env` is applied — before the first test module import, restored in a
+`finally` so repeated in-process `main()` calls (this repo's own suite does that) never accumulate
+duplicate entries. Nothing else changes: `_collect.py` keeps importing every test file under its
+unique, synthetic `velox_tests.<relpath>` name via `importlib.util.spec_from_file_location`
+(spec/03 §3), unmodified. That one insertion is enough because every import the examples actually
+need is a plain **absolute** import rooted at `rootdir` — `from relay.cache import FakeClock`
+(`examples/02-async-library`), `from tests.fixtures import api_client` and `from app.db import
+get_session` (`examples/01-fastapi-crud`) — and those resolve via ordinary PEP 420 implicit
+namespace-package lookup the instant `rootdir` is on `sys.path`, no `__init__.py` anywhere
+required. This is exactly the layout pyright/Pylance, ruff's import sorter, and VS Code's default
+Python analysis already assume once a `pyproject.toml` sits at that directory, so it costs
+adopters zero configuration — the review note's bar.
+
+What it deliberately does **not** fix: a *relative* import between test modules, e.g.
+`tests/assertion/test_explanations.py`'s `from .conftest import callequal`. That resolves against
+the importing module's `__package__`, which under the synthetic-name scheme is `velox_tests.
+assertion` — a name with no directory anywhere on disk — so no `sys.path` entry can ever satisfy
+it (the failure names `velox_tests`, not `tests`; `sys.path` is never even consulted). Building
+that back would mean synthesizing namespace-package stubs for every ancestor directory, i.e.
+reintroducing the per-directory package-walking machinery spec/03 §3 explicitly deletes versus
+pytest, to support a convention this resolution rejects outright: **relative imports between test
+modules are unsupported.** Share code via an absolute import rooted at `rootdir` instead (`from
+tests.assertion.conftest import callequal`) — the one `sys.path` insertion above already makes
+that work. This doesn't block the M1 gate: `examples/01`/`examples/02` use only absolute imports;
+`tests/assertion/`'s one relative import only surfaces when running velox's own suite under
+velox, which M1-PLAN's own dogfood item already treats as not realistic before M3.
+Spec updated: [02](02-cli-and-config.md) §5, [03](03-discovery-and-collection.md) §3.
 
 ### FastAPI testing — RESOLVED (2026-08-07)
 2. `app.dependency_overrides` and `app.state` are per-app-instance mutable dicts, so the docs-blessed idiom — mutate a module-level singleton's overrides and reset in teardown — is a process-global write that concurrent tests clobber; the `create_app(settings)` factory that dodges it is adoption-hostile, because real FastAPI code is singleton-shaped and no team rewrites production wiring to adopt a test runner. The resolution keeps the singleton and moves the *view*: routes bake in only a pointer to the app (`dependency_overrides_provider`, captured at route-decoration time) and read the override dynamically on every request via `getattr(provider, "dependency_overrides", {}).get(call, call)`, so replacing that attribute once with a ContextVar-layered `Mapping` proxy makes overrides per-test while the app object stays shared and untouched. A new MVP module, `velox.fastapi`, installs the proxy once per app object and scopes each `client()` block's mappings to a layer — reads consult layer then base, writes inside a layer stay in the layer, nested clients stack inner-wins — with `app.state` layered the same way and a loud I6 escalation if the proxy is ever replaced out from under velox. This is tier (c)'s ContextVar-routing insight applied to exactly one well-behaved surface (~120 LOC, no general patch machinery); general-purpose `velox.patch` remains deferred. It rests on a handful of upstream facts, which velox pins with assumption tests (`tests/test_fastapi_layering.py`) so that an upstream change breaks velox's own suite rather than adopters' runs. Mechanism, limits, and rejected alternatives: [08](08-patching-and-isolation.md) §3.1; the surface and the canonical fixture: [01](01-public-api.md) §3.

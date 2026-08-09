@@ -28,6 +28,7 @@ before the first test module import, and passes `test_file_patterns`/`ignore` th
 from __future__ import annotations
 
 import argparse
+import contextlib
 import math
 import os
 import sys
@@ -350,6 +351,27 @@ def main(argv: list[str] | None = None) -> int:
     env_backup = {key: os.environ.get(key) for key in config.env}
     os.environ.update(config.env)
 
+    # spec/02 §5 / spec/00 §11 "Fixture import path": `rootdir` goes on `sys.path` exactly once,
+    # here — before the first test module import below (`_rewrite.install`/`discover_files`/
+    # `_collect.collect`) — so a plain absolute import rooted at `rootdir` resolves via ordinary
+    # PEP 420 namespace-package lookup, no `__init__.py` anywhere required: `from tests.fixtures
+    # import api_client`, `from relay.cache import FakeClock`. Collection's own import mechanism
+    # is untouched by this — test modules still import under path-derived `velox_tests.*` names
+    # (spec/03 §3), so this alone does *not* make relative imports between test modules resolve
+    # (`from .conftest import x`); those stay unsupported by design (spec/03 §3).
+    # `sys.path[0]`, not appended: matches pytest's `prepend` import-mode convention, so the test
+    # tree's own sources shadow a same-named installed package rather than losing to it.
+    # `str(rootdir)`, not the `Path`: `sys.path` holds strings, and comparing a `Path` against it
+    # with `in` would never match an existing string entry, inserting a fresh duplicate on every
+    # `main()` call rather than recognizing "already there". Only removed on the way out if this
+    # call is the one that added it — same "repeated in-process `main()` calls must not leak"
+    # reasoning as `env_backup` above and `hook_already_installed` below, and the same reason it
+    # is not simply appended once at import time instead.
+    rootdir_str = str(rootdir)
+    sys_path_inserted = rootdir_str not in sys.path
+    if sys_path_inserted:
+        sys.path.insert(0, rootdir_str)
+
     # Must be installed before any test module is imported below — a module already sitting in
     # `sys.modules` can't retroactively be rewritten. `warn` already happened inside `plan`
     # above, so this call is handed the decision it made rather than re-probing the cache.
@@ -508,6 +530,14 @@ def main(argv: list[str] | None = None) -> int:
         # not something introduced here, and not fixed here.
         if not hook_already_installed:
             _rewrite.uninstall()
+        # Symmetric with `hook_already_installed` above: only remove what this call put on
+        # `sys.path`, and only if it's still there (test code, or a nested `main()`, is free to
+        # have already removed it) — `list.remove` raises `ValueError` on a missing entry rather
+        # than silently no-op'ing the way `dict.pop(key, None)` does above, so this needs its own
+        # guard.
+        if sys_path_inserted:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(rootdir_str)
         # Symmetric with `env_backup`'s own comment above: restores exactly the keys this call
         # touched, to exactly what they were before it touched them (or removes them, if they
         # didn't exist), regardless of how this `try` exits.

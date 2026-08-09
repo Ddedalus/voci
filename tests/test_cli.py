@@ -7,6 +7,7 @@ this just proves the package imports and the entrypoint is wired up.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -455,3 +456,62 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
     # collection-error tracebacks, and the `N tests: ...` summary).
     assert "tests ·" in non_empty_lines[-1]
     assert "wall (Σ" in non_empty_lines[-1]
+
+
+def test_main_prepends_rootdir_to_sys_path_for_absolute_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec/00 §11 "Fixture import path" / spec/02 §5: `rootdir` goes on `sys.path` once, before
+    the first test module import, so a plain absolute import rooted at `rootdir` -- a sibling
+    package, or a shared `tests/fixtures.py` -- resolves without an `__init__.py` anywhere
+    (PEP 420 namespace packages). Mirrors the two shipped examples' actual imports: `relay.cache`
+    (a sibling top-level package) and `tests.fixtures` (a shared fixture module)."""
+    (tmp_path / "relay").mkdir()
+    (tmp_path / "relay" / "__init__.py").write_text("VALUE = 42\n")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "fixtures.py").write_text("SHARED = 'shared-value'\n")
+    (tests_dir / "test_imports.py").write_text(
+        "from relay import VALUE\n"
+        "from tests.fixtures import SHARED\n\n"
+        "async def test_sees_both():\n"
+        "    assert VALUE == 42\n"
+        "    assert SHARED == 'shared-value'\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 0
+
+
+def test_main_removes_rootdir_from_sys_path_after_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main` is called repeatedly in-process (this package's own test suite does exactly that) --
+    the `rootdir` insertion above must not leak from one call into the next, or grow `sys.path`
+    without bound over many calls."""
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+    rootdir_str = str(tmp_path.resolve())
+    assert rootdir_str not in sys.path
+
+    assert main([]) == 0
+    assert rootdir_str not in sys.path
+
+    assert main([]) == 0
+    assert rootdir_str not in sys.path
+
+
+def test_main_does_not_disturb_a_preexisting_sys_path_entry_for_rootdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `rootdir` was already on `sys.path` before this call (an embedder's own setup, or a
+    nested `main()`), this call must not remove it on the way out -- symmetric with
+    `hook_already_installed`'s "only torn down if this call is the one that put it there"."""
+    (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+    rootdir_str = str(tmp_path.resolve())
+    monkeypatch.syspath_prepend(rootdir_str)
+    assert rootdir_str in sys.path
+
+    assert main([]) == 0
+    assert rootdir_str in sys.path
