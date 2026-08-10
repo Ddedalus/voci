@@ -75,13 +75,42 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
 
 ## Remaining work
 
-- [ ] **Dogfood the example suites, in CI** — get
-  `examples/01-fastapi-crud` (needs its own `uv sync` — it depends on `fastapi`/`sqlalchemy`, not
-  present in the root env) and `examples/02-async-library` (stdlib-only, no separate env needed)
-  actually green under `uv run velox`, fix whatever real bugs that surfaces, and add both as a CI
-  job. This is the concrete, checkable form of "velox runs its own suite" — the closest thing to a
-  self-hosted proof available before the migration codegen (M3) makes running `tests/` itself
-  under velox realistic.
+- [x] **Dogfood `examples/01-fastapi-crud`, locally** — its own `.venv`
+  (`uv venv && uv pip install -r requirements.txt -e ../..`), run repeatedly under
+  `uv run velox`/`.venv/bin/velox` at `--concurrency 1`, 16 (config default), and 64: 22 tests, 0
+  failed, 0 collection errors, every time. Three real bugs found and fixed, all in the example
+  (not velox itself) — see the commit for detail on each:
+  - `tests/fixtures.py::engine` — pysqlite/aiosqlite's own implicit-transaction heuristics
+    defeated the transaction-per-test rollback `session` relies on, so a row one test inserted
+    stayed visible to the next (`alice@example.com` UNIQUE-constraint `IntegrityError`, reproduced
+    at `--concurrency 1` too — not a concurrency bug). Fixed with SQLAlchemy's own documented
+    `connect`/`begin` event-listener recipe for SQLite.
+  - `app/main.py::create_user` never logged the "email already registered" case its own test
+    asserted against, and never rolled back the session after the caught `IntegrityError` either
+    — a latent `PendingRollbackError` for any later operation sharing that session (only reachable
+    through the test client, which shares one session across a test's requests; production hands
+    each request its own). Added both the `logger.warning(...)` and the `session.rollback()`.
+  - `tests/test_orders.py::test_duplicate_email_is_logged` read `r.message` off a raw
+    `velox.log_records` `LogRecord`, which is unset (velox's capture handler never calls
+    `record.getMessage()`/formats onto a stream the way pytest's `LogCaptureHandler` does —
+    deliberately no pytest runtime-compat shim, per the project's compat-via-codegen-only
+    decision). Fixed to read `logs.messages` instead; `examples/02-async-library/tests/
+    test_delivery.py:87` has the identical bug, still open (see the CI item below).
+
+  Also surfaced four things in velox's own public API that the example (written ahead of the
+  runner) assumed worked: `@velox.parametrize` expansion, `class Test*` grouping, `@velox.xfail`
+  execution, and `-m`/tag selection plus most of spec/02 §1's CLI surface. None block "velox runs
+  its own suite" or this example's green run (routed around all four — see its README's "Known
+  gaps"); broken out into their own tracked items below rather than fixed here, since each is its
+  own spec/00-§7-scale feature, not a slice-sized bug fix. — `3785c36`
+- [ ] **...in CI, and `examples/02-async-library` too** — `examples/02-async-library` is
+  stdlib-only (no separate env needed) but still has the "4 unrelated pre-existing bugs" the
+  rootdir-import-convention slice surfaced and left open (see "Already shipped" above), plus the
+  `r.message`/`logs.messages` bug named just above — triage the same way example 01's did before
+  it's worth calling green. Once both examples run clean, add them as a CI job. This — plus the
+  two example dogfood passes above — is the concrete, checkable form of "velox runs its own
+  suite": the closest thing to a self-hosted proof available before the migration codegen (M3)
+  makes running `tests/` itself under velox realistic.
 
 ## Tracked but not blocking the gate
 
@@ -90,3 +119,34 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   invocation syntax in spec/02 §1 but not part of M1's DI/concurrency/assertions/capture/reporter
   bullet, and nothing above depends on it. Pick up opportunistically or fold into whichever M2 CLI
   slice touches `-k`/`-m` selection.
+- [ ] **`@velox.parametrize` expansion** — `ParamSet` is recorded on a function's marks
+  (`_marks.py`) the moment the decorator is applied, but `_collect.collect` never reads it: a
+  parametrized test collects as a single record with its extra parameter treated as a missing
+  `Depends()` injection, which `_fixtures.plan_for` rejects with a `DIError` (`parameter(s) ...
+  have no default and are not injected via Depends(...)`) — a collection error, not a graceful
+  "not implemented" message, and not the "multiple passing tests" spec/01 §9 documents as MVP.
+  Found dogfooding `examples/01-fastapi-crud` (see above); worked around there by writing the
+  parametrized cases out as separate functions.
+- [ ] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
+  ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Not
+  implemented: `_collect.collect` only looks for module-level `async def test_*` (`vars(module)
+  .values()`), so a `Test*` class's methods are silently collected as zero tests — no
+  `CollectionError`, no `Skipped` entry, nothing. Worth at minimum a loud diagnostic (I8: "silent
+  passes are bugs" — this is a silent *absence*, arguably the same class of problem) even before
+  the feature itself lands. Found dogfooding `examples/01-fastapi-crud`; worked around there by
+  flattening the one `Test*` class to free functions.
+- [ ] **`@velox.xfail` execution** — `XFail` is recorded on a function's marks the same way `skip`/
+  `skipif` are, but `_run.py`'s `Outcome` enum has four members today (`PASSED`/`FAILED`/`ERROR`/
+  `TIMEOUT` — its own module docstring says so explicitly) and nothing reads `marks.xfail` to turn
+  a failing call into `XFAILED` (or a passing one into `XPASSED`, under `strict=True`). A test
+  decorated `@velox.xfail(..., strict=True)` today just reports `FAILED`, indistinguishable from a
+  real regression. Needs the `Outcome` enum extended (spec/05 §4) plus reporter/exit-code changes
+  to match, not a small patch. Found dogfooding `examples/01-fastapi-crud`; worked around there
+  with `skip` (which *is* wired end to end) instead.
+- [ ] **Tag-based selection (`-m`) and the rest of the CLI surface** — `@velox.tag` records names on
+  a function's marks (works, and is harmless to apply today) but nothing consumes them: `-m`
+  doesn't exist in `cli.py`'s parser, alongside `-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`,
+  and `--collect-only` — all documented in spec/02 §1, all absent from `build_parser`. Matches
+  spec/00 §7's MVP table (`-k`/`-m` explicitly "Deferred"); grouped here as one item since they're
+  naturally one CLI slice's worth of work. Bare paths (a file or a directory, no `::`) already
+  work today and aren't part of this item.
