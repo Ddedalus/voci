@@ -1,11 +1,7 @@
 """Migration tests: `exclusive=True`.
 
-`migration_db` carries the token that would, once exclusive-resource admission is real (it isn't
-yet -- M1-PLAN.md), serialise these against each other and against nothing else, while the rest of
-`test_ledger.py` runs at full width alongside them. Nothing here actually depends on that today:
-each test gets its own on-disk database via `tmp_path` (the fixture's own docstring says so), so
-running them concurrently is safe regardless -- the token declares an intent this suite doesn't
-yet need enforced, the same way `test_webhooks.py`'s fixed port genuinely does.
+`migration_db` carries the token, inherited by every test whose dependency graph reaches it. Each
+test also gets its own on-disk database via `tmp_path`.
 """
 
 from __future__ import annotations
@@ -31,14 +27,9 @@ async def _assert_migrates_to(target: int, conn: sqlite3.Connection) -> None:
     assert await asyncio.to_thread(migrate, conn, target) == target
 
 
-# `@velox.parametrize("target", [m.version for m in MIGRATIONS])` would collapse the three cases
-# below into one test -- declared public API, not yet expanded by the collector into records
-# (M1-PLAN.md), so they're separate tests instead, each carrying the `migration_db` token (would
-# be serialized against each other and nothing else, once exclusive= admission is real -- also
-# M1-PLAN.md; each already gets its own on-disk database via `tmp_path`, so nothing is actually at
-# stake if they overlap today, only the demonstration of the token itself). Logical order still
-# governs the report regardless: the failure block for the middle version always appears between
-# the other two, no matter which finished first.
+# Each target version is its own test, each carrying the `migration_db` token. Failure detail
+# prints in logical order regardless of completion order: the middle version's failure block
+# always appears between the other two.
 async def test_migrates_to_version_1(conn: sqlite3.Connection = Depends(migration_db)) -> None:
     await _assert_migrates_to(1, conn)
 

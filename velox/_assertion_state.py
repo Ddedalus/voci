@@ -4,8 +4,7 @@ The vendored explanation engine reaches for three values while building a failur
 the custom comparison hook, the assertion-pass hook, and the config that controls verbosity
 and truncation. Upstream they are module globals that pytest saves and restores around each
 test item. velox runs tests as concurrent asyncio tasks in one process, so a module global is
-simply wrong — this is the one genuine concurrency blocker in the whole subsystem (spec/07
-§4.1), and ContextVars are the entire fix: asyncio copies the context into each task, so a
+simply wrong, and ContextVars are the fix: asyncio copies the context into each task, so a
 value set for one test is invisible to its siblings.
 
 `velox/_vendor/assertion/util.py` exposes these under their upstream names via a module-level
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
 __all__ = ["CONTEXT_GLOBALS", "assertion_state", "get_config", "set_config"]
 
 #: Called as `(op, left, right) -> str | None` to override the explanation for a comparison.
-#: This is velox's replacement for pytest's `pytest_assertrepr_compare` hook (spec/07 §9).
+#: This is velox's replacement for pytest's `pytest_assertrepr_compare` hook.
 _reprcompare: ContextVar[Callable[[str, object, object], str | None] | None] = ContextVar(
     "velox_reprcompare", default=None
 )

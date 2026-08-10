@@ -60,11 +60,7 @@ def flaky_relay(
 ) -> Relay:
     """`relay`, rebuilt with `flaky_transport` in place of `transport`.
 
-    Deriving this from `relay` automatically — `relay.with_(transport=flaky_transport)` — is
-    roadmap (spec/01 §10): `Fixture.with_()` was prototyped and pulled before the runtime landed
-    because deriving-by-identity breaks caching at module/session scope. Until that lands, the
-    replacement idiom is a sibling fixture, built exactly like `relay`, with one dependency
-    swapped by hand — which is what this is.
+    A sibling fixture, built exactly like `relay`, with one dependency swapped by hand.
     """
     return Relay(transport, retries=settings.retries, base_delay=0.001)
 

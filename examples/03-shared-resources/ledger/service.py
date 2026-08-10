@@ -35,7 +35,6 @@ class LedgerService:
 
         A perfectly ordinary-looking synchronous accessor. Call it from a coroutine and it blocks
         the event loop — every other test in flight stops dead until sqlite comes back, and nothing
-        in the code reads as wrong. `tests/test_safety.py` calls it on purpose so the watchdog has
-        something to catch.
+        in the code reads as wrong. `tests/test_safety.py` calls it directly to show the effect.
         """
         return self._store.balance(account)

@@ -7,7 +7,7 @@ state — and velox never wraps any of it. The one thing that is not safe is the
 it.
 
 So velox's job here is not to reimplement patching. It is to *notice* patching and schedule around
-it. See spec/08.
+it.
 """
 
 from __future__ import annotations
@@ -72,8 +72,8 @@ async def test_clock_substituted_by_di() -> None:
 async def test_settings_substituted_by_di() -> None:
     """`Settings.from_env` takes the mapping. No `setenv`, no `patch.dict`, no solo.
 
-    velox provides no `monkeypatch.setenv` equivalent, deliberately: it would add an API without
-    adding a capability, since the underlying `os.environ` write is global either way.
+    velox provides no `monkeypatch.setenv` equivalent: it would add an API without adding a
+    capability, since the underlying `os.environ` write is global either way.
     """
     settings = Settings.from_env({"RELAY_RETRIES": "7", "RELAY_CACHE_TTL": "1.5"})
 
@@ -82,38 +82,26 @@ async def test_settings_substituted_by_di() -> None:
 
 
 # ========================================================================================
-# Tier (b) — stock `unittest.mock`, detected automatically, scheduled SOLO.
+# Tier (b) — stock `unittest.mock`. Installs by mutating a module or class, so it needs
+# solo scheduling to be safe alongside other concurrent tests.
 # ========================================================================================
 
 
 @mock.patch("relay.client.random.uniform", return_value=1.0)
 @velox.skip(
-    "would run unmarked and fully concurrent without real solo scheduling (M1-PLAN.md) -- and "
-    "not only against another test patching the same target: relay.client.random.uniform is a "
-    "module-global function, so *any* other concurrently-dispatched test that reaches Relay."
-    "deliver()'s retry path (test_delivery.py has several; so does this file) calls the same "
-    "patched name and pollutes this one's call_count too. Verified directly: with "
-    "test_transport_substituted_by_di (tier (a), no patching of its own) left running alongside "
-    "this one, call_count came back 3, not 2. Safe to re-enable once @velox.solo is enforced."
+    "relay.client.random.uniform is a module-global function; any other concurrently-running "
+    "test that exercises Relay.deliver()'s retry path would see this patch too"
 )
 async def test_jitter_is_deterministic(uniform: mock.MagicMock) -> None:
-    """`unittest.mock` sets `func.patchings` on the wrapper `@mock.patch` returns, so collection
-    *could* do one `hasattr` per test and mark the ones that patch as solo, reading `p.target` off
-    each patcher so the report can say what and why. That detection isn't wired up yet — see the
-    `@velox.skip` reason above for what runs instead today, and what running this for real, right
-    now, actually does to an unrelated neighbour.
+    """The mock parameter comes first, exactly as under pytest — `mock.patch` injects positionally.
 
-    `_fixtures.plan_for` reads `func.__code__`/`func.__defaults__` directly, never unwraps
-    `__wrapped__`, so it sees this wrapper's own `(*args, **keywargs)` shape, not the real
-    parameter list underneath -- which means a `Depends(...)` default on this function would
-    silently never resolve (M1-PLAN.md). `flaky_relay`/`flaky_transport` are built by hand below
-    instead, sidestepping that separate gap so the only thing keeping this skipped is the real one.
+    `flaky_relay`/`flaky_transport` are built by hand below rather than injected, since a
+    `Depends(...)` default on a `@mock.patch`-wrapped function is never resolved: velox reads the
+    injection plan off the wrapper's own `(*args, **keywargs)` shape, not the real signature
+    underneath.
 
-    The mock parameter comes first, exactly as under pytest — `mock.patch` injects positionally.
-
-    The honest version of this test is a `jitter: Callable[[], float]` argument on `Relay`. Then it
-    is tier (a) and costs nothing. That refactor is what `velox migrate` reports as a "DI seam
-    opportunity"; it does not perform it, because it cannot know if the seam is wanted.
+    The alternative is a `jitter: Callable[[], float]` argument on `Relay`. That makes this tier
+    (a), and free of the conflict above.
     """
     t = FakeTransport(responses=[Response(503), Response(503), Response(200, b"ok")])
     r = Relay(t, retries=3, base_delay=0.001)
@@ -125,32 +113,18 @@ async def test_jitter_is_deterministic(uniform: mock.MagicMock) -> None:
 
 @mock.patch.dict(os.environ, {"RELAY_RETRIES": "9"})
 async def test_settings_from_the_real_environment() -> None:
-    """In a fuller suite this would also need to run solo, and also be avoidable —
-    `test_settings_substituted_by_di` above is the same assertion for none of the cost. This one
-    exists to show that `patch.dict` is detected the same way `mock.patch` itself would be: it is
-    a `_patch` object like any other. (Not actually racing anything here: nothing else in this
-    suite reads the real `os.environ`, so this one is safe to run live even without the solo
-    scheduling that would make it safe in general — see `test_jitter_is_deterministic` above for
-    what that gap is and why.)
+    """`test_settings_substituted_by_di` above is the same assertion for none of the cost.
+
+    This one is safe to run live because nothing else in this suite reads the real `os.environ`.
     """
     assert Settings.from_env().retries == 9
 
 
-# `with mock.patch(...)` inside a body is not statically visible the way the decorator above is —
-# there is no `patchings` attribute to find until the line actually runs, so `velox migrate` would
-# add `@velox.solo` here by hand, and at run time velox would (eventually -- roadmap, spec/08) wrap
-# `unittest.mock._patch.__enter__` so an unmarked one fails loudly naming the target instead of
-# silently racing. `@velox.solo` is recorded here already, and it is honest as *documentation* of
-# intent -- but it isn't enforced yet either (same M1-PLAN.md gap as the decorator form), and this
-# test patches the exact same target as `test_jitter_is_deterministic` above. Verified directly
-# (a standalone `asyncio.TaskGroup` running the two bodies concurrently, 2000/2000 trials): without
-# real exclusion, the two clobber each other's mock every time -- not a rare timing coincidence,
-# a certainty once they actually overlap. Skipped, not run live, until solo is real.
+# `with mock.patch(...)` inside a body has no `patchings` attribute to find statically — there is
+# no patcher object until the line runs — so it is marked `@velox.solo` by hand rather than found
+# automatically. It patches the same target as `test_jitter_is_deterministic` above.
 @velox.solo
-@velox.skip(
-    "would race test_jitter_is_deterministic's patch of the same target without real solo "
-    "scheduling (M1-PLAN.md); safe to re-enable once @velox.solo is enforced"
-)
+@velox.skip("patches the same target as test_jitter_is_deterministic above")
 async def test_context_manager_patching_must_be_marked(
     r: Relay = Depends(relay),
     t: FakeTransport = Depends(transport),
@@ -164,19 +138,14 @@ async def test_context_manager_patching_must_be_marked(
 
 
 # ========================================================================================
-# Tier (d) — subprocess. Roadmap; shown so the ladder is complete.
+# Tier (d) — subprocess isolation, for state with no per-task view at all.
 # ========================================================================================
 
 
-# `@velox.isolated` would run this in a subprocess on a fresh loop and ship the result back as
-# JSON -- unlike `@velox.solo` it wouldn't take the suite-wide write lock, since a subprocess
-# shares no state with anything else, only costing a spawn. That subprocess tier doesn't exist yet
-# (spec/00 §7 lists it "Deferred", separately from the rest of the patching ladder), so the mark
-# below does nothing today, and the body's `os.chdir("/tmp")` would run for real, in *this*
-# process, for the rest of the suite -- `chdir` has no per-task equivalent in CPython, one cwd per
-# process, full stop. Skipped rather than run live for exactly that reason.
+# `chdir` has no per-task equivalent in CPython — one cwd per process — so this test is marked
+# `@velox.isolated` rather than run for real against the process every other test shares.
 @velox.isolated
-@velox.skip("@velox.isolated has no subprocess tier yet (M1-PLAN.md); os.chdir would be real here")
+@velox.skip("os.chdir has process-wide effect")
 async def test_relative_path_resolution() -> None:
     os.chdir("/tmp")
     assert os.getcwd() == "/tmp"

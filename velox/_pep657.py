@@ -1,19 +1,12 @@
 """The universal explanation floor: caret spans for assertions the rewriter never touched.
 
-pytest rewrites test files only. An `assert` inside a helper module — `tests/helpers.py`, a
-shared assertion function, anything imported from application code — raises a bare
-`AssertionError` with no explanation at all. That is pytest's biggest fidelity gap, and PEP 657
-closes most of it for free: since 3.11 every code object carries column spans for its
-instructions, so the failing expression can be underlined without re-evaluating anything.
-
-    tests/helpers.py:14: AssertionError
-        assert resp.status_code == expected
-               ~~~~~~~~~~~~~~~~~^^~~~~~~~~~
-
-Nothing here re-executes user code, so it is sound in the presence of side effects — the
-distinction that killed pytest's `--assert=reinterp` (spec/07 §7). It is strictly weaker than
-rewriting (no operand values, just the span), which is exactly why it is the floor and not the
-plan: it also makes `--assert=plain` a usable mode rather than a punishment.
+An `assert` inside an unrewritten module — a helper, a shared assertion function, anything
+imported from application code — raises a bare `AssertionError` with no explanation. PEP 657
+closes most of that gap for free: since 3.11 every code object carries column spans for its
+instructions, so the failing expression can be underlined without re-evaluating anything, e.g.
+`assert resp.status_code == expected` becomes `~~~~~~~~~~~~~~~~~^^~~~~~~~~~` underneath. Sound in
+the presence of side effects, and strictly weaker than rewriting (no operand values, just the
+span) — which is why it is the floor, not the plan, and why `--assert=plain` is a usable mode.
 """
 
 from __future__ import annotations

@@ -4,25 +4,18 @@ These are ordinary `Fixture` objects, declared with the ordinary decorator — t
 privileged about them except that the runtime supplies the value instead of calling the function.
 The five free functions at the bottom of this module (`tmp_path`, `tmp_path_factory`, `capture`,
 `log_records`, `test_info`) are `builtin_fixture(func, provider=...)`-built: `func`'s own body
-stays `raise NotImplementedError(...)` — intentional, not a stub waiting to be filled in, because
-`func` is never called once `provider` is set (`_di._construct` checks `.provider` first,
-`_fixtures.builtin_fixture`'s own docstring). The real values come from `velox._capture`'s five
+stays `raise NotImplementedError(...)`, since `func` is never called once `provider` is set —
+`_di._construct` checks `.provider` first. The real values come from `velox._capture`'s five
 providers instead, wired in below.
 
-The five *types* those providers hand back (`Capture`, `LogRecords`, `TmpPathFactory`, plus the
-already-plain `TestInfo`) are real, working implementations, not stubs — someone has to actually
-be `capture.out`/`log_records.set_level(...)`/`tmp_path_factory.mktemp(...)` for user code to call.
-They deliberately take generic constructor arguments (a `Sink`-shaped `_CapturedText` protocol, a
-live `list[LogRecord]`, a bare `Path`) rather than importing `velox._capture` concrete types, so
-this module never needs to know `_capture`'s own internals beyond the small structural shape each
-class actually reads from — `_capture.py` is the one that imports *this* module's types to build
-them, and `builtin_fixture`'s providers are wired in via a bottom-of-file import specifically to
-keep that dependency one-directional in spirit even though the modules do end up importing each
-other (see the comment at the bottom of this file for why that's safe).
+The five types those providers hand back (`Capture`, `LogRecords`, `TmpPathFactory`, plus the
+already-plain `TestInfo`) take generic constructor arguments (a `Sink`-shaped protocol, a live
+`list[LogRecord]`, a bare `Path`) rather than importing `velox._capture`'s concrete types, so this
+module never needs to know `_capture`'s own internals beyond the small structural shape each class
+reads from — `_capture.py` is the one that imports these types to build them.
 
-There is deliberately no `monkeypatch`: it would add API without adding capability, since the
-underlying write is process-global either way. Use `unittest.mock` (which velox schedules solo)
-or a DI override.
+There is no `monkeypatch`: it would add API without adding capability, since the underlying write
+is process-global either way. Use `unittest.mock` (which velox schedules solo) or a DI override.
 """
 
 from __future__ import annotations
@@ -62,10 +55,8 @@ class TestInfo:
     timeout: float | None
     """The suite's effective `--timeout` budget for this test, or `None` for no limit. Reflects
     what `_run._run_one` actually enforces, not a per-test `@velox.timeout(...)` mark override —
-    `_run.py`'s M1 concurrency slice does not consult marks for the enforced budget yet (a
-    pre-existing gap predating this fixture, unrelated to spec/09), so reporting anything other
-    than the value actually in force here would be reporting something false (I6: never silently
-    degrade, and that includes never claiming a number is enforced when it isn't)."""
+    reporting anything other than the value actually in force would be reporting something
+    false."""
     worker: int
     """Which concurrency slot (`0..concurrency-1`) this test is occupying."""
 
@@ -73,8 +64,7 @@ class TestInfo:
 class _CapturedText(Protocol):
     """The structural shape `Capture` needs from whatever holds the live captured text — a
     `velox._capture.Sink`, in practice, but named here as a `Protocol` rather than imported
-    concretely so this module never has to depend on `_capture`'s own internals (module
-    docstring)."""
+    concretely so this module never has to depend on `_capture`'s own internals."""
 
     @property
     def out(self) -> str: ...
@@ -84,13 +74,11 @@ class _CapturedText(Protocol):
 
 @final
 class Capture:
-    """The current test's captured stdout/stderr (spec/09), live during the test.
+    """The current test's captured stdout/stderr, live during the test.
 
     Holds a reference to the test's `Sink`, not a snapshot: `.out`/`.err` read straight through to
-    it on every access, so text written after this fixture was injected (including from code that
-    runs later in the same test) is visible immediately — spec/09's "live during the test, not
-    just post-hoc" requirement falls out of that for free, with no polling or buffering needed
-    here.
+    it on every access, so text written after this fixture was injected — including from code
+    that runs later in the same test — is visible immediately, with no polling or buffering.
     """
 
     __slots__ = ("_source",)
@@ -172,7 +160,7 @@ class _LevelOverride(AbstractContextManager[None]):
 
 @final
 class LogRecords:
-    """The `caplog` equivalent: structured records captured for this test (spec/09).
+    """The `caplog` equivalent: structured records captured for this test.
 
     Wraps the live `list[logging.LogRecord]` `_capture._RoutingHandler.emit` appends to — not a
     copy — so `.records`/`.messages` reflect records logged after this fixture was injected,
@@ -205,20 +193,10 @@ class LogRecords:
         see `_resolve_level` and `_LevelOverride`'s docstrings for why that ordering is load-
         bearing, not incidental.
 
-        spec/09 §2's documented hazard, stated precisely: logger levels are process-global, so
-        this call under concurrency can affect what a *concurrent sibling* captures for a logger
-        of the same name, in whichever direction this call moves it. Raising the level (the common
-        case — "let me see DEBUG for a bit") can make a sibling that had *lowered* it capture more
-        than that sibling expected, which is at worst benign for a "this record is present"
-        assertion and only hazardous for a "no records were emitted" one. But lowering the level
-        (`set_level(logging.CRITICAL, ...)` to silence a noisy dependency — an equally ordinary use
-        of this API) can just as easily make a concurrent sibling's own `set_level(DEBUG, ...)`
-        block capture *nothing at all* for a record it definitely logged — verified: a sibling's
-        `set_level(CRITICAL)` overlapping this block silently drops this block's own DEBUG record,
-        so a "this record is present" assertion is exactly what breaks in that direction. Both
-        directions are hazardous for "this record is present"; only the raising direction is even
-        benign for "no records were emitted". A strict mode that escalates `set_level` to run solo
-        is roadmap (spec/09 §8), not built this session.
+        Logger levels are process-global: this call under concurrency can change what a
+        concurrent sibling captures for a logger of the same name, in either direction. See
+        `docs/rationale.md` ("set_level's concurrency hazard") for which direction is safe and
+        which silently drops a sibling's records.
         """
         resolved = _resolve_level(level)
         if logger is not None and not isinstance(logger, str):
@@ -232,13 +210,11 @@ class TmpPathFactory:
     """Session-scoped temp directory factory: same numbered-root and retention policy as pytest.
 
     `mktemp` numbers by construction (a per-basename counter starting at `0`), never by scanning
-    the directory for a free number and retrying — the same "uniqueness by construction, not
-    scan-and-retry" argument spec/09 §5 makes for `tmp_path` applies here too, and matters for the
-    identical reason: this factory is session-scoped, so two concurrently-running tests can both
-    be holding it and calling `.mktemp(...)` from their own test bodies at the same time. The
-    counter itself needs no lock despite that: incrementing a plain `dict` entry has no `await` in
-    it, and asyncio is single-threaded, so no rival task's own step can ever interleave between
-    the read and the write.
+    the directory for a free number and retrying: this factory is session-scoped, so two
+    concurrently-running tests can both be holding it and calling `.mktemp(...)` at the same time.
+    The counter itself needs no lock despite that: incrementing a plain `dict` entry has no
+    `await` in it, and asyncio is single-threaded, so no rival task's own step can ever interleave
+    between the read and the write.
     """
 
     __slots__ = ("_basetemp", "_counters")
@@ -249,10 +225,9 @@ class TmpPathFactory:
 
     def mktemp(self, basename: str, *, numbered: bool = True) -> Path:
         # Module-level `_capture` (bound at the bottom of this file, after this class is already
-        # defined) rather than a top-of-file import: same import-cycle reasoning as the rest of
-        # this module (see the comment above the bottom-of-file import). Resolved at *call* time,
-        # not class-definition time, so the ordering is fine — by the time anything can actually
-        # call `mktemp`, the module has finished loading and `_capture` is bound.
+        # defined) rather than a top-of-file import: same import-cycle reasoning as the
+        # bottom-of-file import below. Resolved at call time, not class-definition time, so by
+        # the time anything can actually call `mktemp`, `_capture` is already bound.
         sanitized = _capture.sanitize_test_id(basename)
         if numbered:
             n = self._counters.get(sanitized, 0)
@@ -301,18 +276,13 @@ def test_info() -> TestInfo:
     raise NotImplementedError(_RUNTIME)
 
 
-# ------------------------------------------------------------------------------------------
-# Rewire the five fixtures above onto `velox._capture`'s providers (spec/09), turning each from
-# a `func`-raises-`NotImplementedError` stub into a runtime-supplied builtin fixture.
+# Rewire the five fixtures above onto `velox._capture`'s providers, turning each from a
+# `func`-raises-`NotImplementedError` stub into a runtime-supplied builtin fixture.
 #
-# Imported here, at the bottom of the module, rather than at the top with everything else: this
-# creates a genuine import cycle (`_capture` imports `Capture`/`LogRecords`/`TestInfo`/
-# `TmpPathFactory` from *this* module, to construct them inside its providers), and Python
-# resolves that cycle correctly only because every name `_capture.py` needs from here is already
-# defined by the time control reaches this line — the five `@fixture()`-decorated objects above
-# are the only thing still to come, and `_capture` never touches those (it only touches the
-# classes, which are long since defined). `velox/_capture.py`'s own module docstring documents
-# the other half of this from its own side.
+# Imported here, at the bottom of the module, not at the top: `_capture` imports the classes
+# above from this module, creating a genuine import cycle. It resolves cleanly because every name
+# `_capture.py` needs is already defined by the time control reaches this line — see
+# docs/rationale.md ("_builtins/_capture import cycle") for the full shape of it.
 from velox import _capture  # noqa: E402
 
 tmp_path = builtin_fixture(tmp_path.func, provider=_capture.tmp_path_provider, scope="function")

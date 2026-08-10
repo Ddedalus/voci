@@ -1,32 +1,15 @@
 """FastAPI support: per-test dependency overrides against the app you already have.
 
-The FastAPI docs teach `app.dependency_overrides[dep] = fake` and a `.clear()` in teardown. Both
-halves are per-app-instance state, so a suite that runs sixteen tests at once against one
-module-level `app = FastAPI()` has sixteen tests writing one dict and one of them wiping it — the
-most likely footgun in the reference stack. The usual escape is an app *factory*, which is a change
-to production code made purely to suit the tests.
+`app.dependency_overrides` and `app.state` are both per-app-instance state: a suite running
+several tests concurrently against one module-level `app = FastAPI()` has all of them writing the
+same dict. This module swaps each attribute, once per app, for a proxy that layers a `ContextVar`
+of per-test values over whatever the app already had. Concurrent tests each see their own layer
+through the same singleton; nothing on the app itself changes; there is nothing to clean up. See
+`docs/rationale.md` ("ContextVar-layered FastAPI proxy") for why this is safe to do from outside
+FastAPI's own code.
 
-velox does not ask for that change. Read from source (`fastapi/dependencies/utils.py`,
-`starlette/applications.py`, `httpx/_transports/asgi.py`):
-
-- A route bakes in only a *pointer* to the app (`dependency_overrides_provider`). The override is
-  read at request-solve time, and FastAPI's whole contract with the attribute is a truthiness check
-  plus `.get(call, call)`.
-- `request.app` is `scope["app"]`, which `Starlette.__call__` sets to the singleton on every
-  request. `app.state` is one `State` — pure attribute delegation over a `_state` dict — built once
-  and never reassigned upstream.
-- `ASGITransport` awaits the app *in the calling task*, so a request inherits the caller's
-  `contextvars.Context`. velox runs each test in a fresh one.
-
-So the attribute can be swapped, once, for a proxy that layers a ContextVar of per-test overrides
-over whatever the app already had. Concurrent tests each see their own layer through the same
-singleton; nothing in the app changes; there is nothing to clean up. This is spec/08's
-"the write is global, but the view doesn't have to be" applied to the one target where it is
-cheap — a documented attribute with a two-method contract.
-
-Importing this module requires `fastapi` and `httpx`. `velox/__init__.py` deliberately does not,
-so the core package keeps zero hard dependencies; usage is `import velox.fastapi` or
-`from velox import fastapi as velox_fastapi`.
+Importing this module requires `fastapi` and `httpx`; `velox/__init__.py` does not, so the core
+package keeps zero hard dependencies. Use `import velox.fastapi`.
 """
 
 from __future__ import annotations
@@ -214,16 +197,12 @@ class _LayeredState(State):
         return self._layers.push(values)
 
     def __getattr__(self, key: Any) -> Any:
-        # Only reached when ordinary lookup fails. For an instance built through `__init__`,
-        # neither `_state` nor `_layers` ever lands here — both are real attributes by
-        # construction. But `_LayeredState.__new__(_LayeredState)` skips `__init__` entirely, and
-        # the default `copy.copy`/`copy.deepcopy` machinery builds via `__reduce_ex__` the same
-        # way — before `__copy__`/`__deepcopy__` below intercept it. On an instance built that
-        # way, `self._layers` misses the slot, which is itself an attribute-lookup failure: Python
-        # calls back into this very method to resolve it, and `self._layers` inside that call
-        # fails the same way again — unbounded recursion, not a single retry.
-        # `object.__getattribute__` is the raw lookup with no such fallback, so use it to ask "is
-        # this actually set" without risking another call into `__getattr__`.
+        # Only reached when ordinary lookup fails. An instance built via a bare `__new__` (as the
+        # default `copy`/`deepcopy` machinery does before `__copy__`/`__deepcopy__` intercept it)
+        # has no `_layers` slot, and a plain `self._layers` there would recurse into this method
+        # unboundedly. `object.__getattribute__` is used instead so "is this set" can be asked
+        # without risking another call into `__getattr__` — see docs/rationale.md ("ContextVar-
+        # layered FastAPI proxy") for the fuller shape of this.
         try:
             layers = object.__getattribute__(self, "_layers")
         except AttributeError:
@@ -252,10 +231,9 @@ class _LayeredState(State):
         return State(self._layers.merged(self._state))
 
     def __deepcopy__(self, memo: dict[int, Any]) -> State:
-        """As `__copy__`, and for the same reason `copy.deepcopy` used to fail outright: a
+        """As `__copy__`, and for the same reason the default `__reduce_ex__` path would fail: a
         `ContextVar` cannot be deep-copied, and `_layers` holds one. Deep-copying only the merged
-        *values* sidesteps it — `app.state` was deep-copyable before velox swapped it in, and this
-        keeps it that way.
+        *values* sidesteps it, keeping `app.state` deep-copyable the way plain `State` already is.
         """
         return State(_copy.deepcopy(self._layers.merged(self._state), memo))
 
@@ -345,8 +323,8 @@ def _install(app: FastAPI) -> _Install:
 
     velox is single-threaded async and nothing below suspends, so the check and the set cannot
     interleave with another test's — a lock here would be a claim about threads that velox does
-    not make. Escalating rather than reinstalling on a replaced attribute is spec/00 I6: a
-    silently re-established layer would lose whatever the assignment discarded.
+    not make. A replaced attribute raises rather than silently reinstalling: a silently
+    re-established layer would lose whatever the assignment discarded.
 
     The swap outlives this call — nothing restores the object the user built until `uninstall`
     says so explicitly. Fine inside a velox run; anything elsewhere in the same process that goes
@@ -462,8 +440,8 @@ async def client(
 def lifespan(app: FastAPI) -> Fixture[FastAPI]:
     """A session-scoped fixture that runs `app`'s startup and shutdown around the whole run.
 
-    `client()` deliberately does not do this — `ASGITransport` speaks HTTP scopes only, and a
-    lifespan that really builds an engine and a connection pool is not something to run once per
+    `client()` speaks HTTP scopes only through `ASGITransport`, so a lifespan that builds an
+    engine or a connection pool needs a separate fixture, run once per suite rather than once per
     test. Depend on this where the app's startup is what puts the state under test in place::
 
         started = velox.fastapi.lifespan(app)
@@ -475,10 +453,9 @@ def lifespan(app: FastAPI) -> Fixture[FastAPI]:
     which is exactly what makes them visible to every test.
 
     Memoised per `app`: `Fixture` has no `__eq__`/`__hash__`, so the session cache keys on
-    identity, and calling this twice for the same app — a second test module writing the
-    docstring's line, a helper that calls it inside a fixture body — must return the *same*
-    object or the cache runs the app's startup and shutdown once per call site instead of once per
-    run, which is exactly the cost this function exists to avoid paying.
+    identity, and calling this twice for the same app — a second test module, a helper that calls
+    it inside a fixture body — must return the *same* object, or the cache runs the app's startup
+    and shutdown once per call site instead of once per run.
     """
     found = _LIFESPANS.get(app)
     if found is not None:

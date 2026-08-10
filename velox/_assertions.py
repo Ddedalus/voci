@@ -1,7 +1,7 @@
 """Assertion helpers.
 
-The primary assertion mechanism is plain `assert`, rewritten for introspection (spec/07). These
-two cover what `assert` alone cannot express.
+The primary assertion mechanism is plain `assert`, rewritten for introspection. These two cover
+what `assert` alone cannot express.
 
 Unlike the rest of the package, these are implemented rather than stubbed: they are pure, they
 depend on nothing in the runtime, and having them work makes the examples readable.
@@ -183,6 +183,6 @@ def approx(
 ) -> Approx:
     """`assert value == velox.approx(0.3)`.
 
-    MVP: scalars only. Sequences, mappings, and numpy arrays are roadmap.
+    Scalars only: `int`, `float`, and `complex`.
     """
     return Approx(expected, rel=rel, abs=abs, nan_ok=nan_ok)

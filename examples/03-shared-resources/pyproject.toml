@@ -7,10 +7,8 @@ requires-python = ">=3.13"
 testpaths = ["tests"]
 concurrency = 32
 timeout = 60
-# watchdog_threshold and basetemp_retention are spec'd (spec/02 §3) but not recognized by
-# _config.py yet -- deliberately deferred, no consumer before M2 (docs/M1-PLAN.md). The config
-# loader rejects unknown keys rather than silently ignoring a typo, so they can't be listed here
-# until they're real; see the "Known gaps" section of this example's README.
+# An unrecognized key here is an error, not a warning -- a typo'd config key that silently does
+# nothing is a footgun velox doesn't have to have.
 
 [tool.ruff]
 line-length = 100

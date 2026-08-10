@@ -1,21 +1,14 @@
-"""Configuration file loading: `[tool.velox]` in `pyproject.toml` (spec/02 §3) — M1 slice.
+"""Configuration file loading: `[tool.velox]` in `pyproject.toml`.
 
-One file, one table, no inheritance, no per-directory config (spec/02 §3's own opening line).
-This module owns exactly two things: finding *which* `pyproject.toml` governs a run (the rootdir
-search) and turning its `[tool.velox]` table into a validated `Config`. It does not apply any of
-it — `cli.py` merges `Config` against CLI args (CLI wins) and built-in defaults, because the
-precedence rule (spec/02 §3: "CLI > environment > `[tool.velox]` > built-in defaults") is a
-property of *all three* tiers together, not of this module alone. The `VELOX_*` environment tier
-in that chain is not implemented here — nothing in the shipped examples uses it yet, and it's a
-separate, independently-scoped surface; see spec/02 §2's option tables for the names it would use.
+One file, one table, no inheritance, no per-directory config. This module owns exactly two
+things: finding *which* `pyproject.toml` governs a run (the rootdir search) and turning its
+`[tool.velox]` table into a validated `Config`. It does not apply any of it — `cli.py` merges
+`Config` against CLI args (CLI wins) and built-in defaults, since the precedence between CLI,
+environment, and config file is a property of all three tiers together, not of this module alone.
 
-Only the keys the shipped examples (`examples/01-fastapi-crud`, `examples/02-async-library`)
-actually need are recognized: `testpaths`, `concurrency`, `timeout`, `test_file_patterns`,
-`ignore`, `env` — every one of spec/02 §3's example table *except* `watchdog_threshold`, which has
-no consumer yet (no watchdog exists before M2) and is left for whichever M2 slice builds one.
-Recognizing a key this module can't make do anything would be exactly the "typo'd key silently
-does nothing" footgun spec/02 §3 says `[tool.velox]` must not have (enforced below by rejecting
-anything outside that set, not just those six).
+Only a fixed set of keys is recognized: `testpaths`, `concurrency`, `timeout`,
+`test_file_patterns`, `ignore`, `env`. An unrecognized key is rejected outright rather than
+silently doing nothing — the alternative is a typo that quietly changes no behavior at all.
 """
 
 from __future__ import annotations
@@ -29,7 +22,6 @@ from types import MappingProxyType
 
 __all__ = ["Config", "ConfigError", "resolve"]
 
-#: spec/02 §3's example table, minus `watchdog_threshold` — see the module docstring for why.
 _KNOWN_KEYS = frozenset(
     {"testpaths", "concurrency", "timeout", "test_file_patterns", "ignore", "env"}
 )
@@ -38,10 +30,9 @@ _KNOWN_KEYS = frozenset(
 class ConfigError(Exception):
     """A `[tool.velox]` table (or the `pyproject.toml` containing it) that can't be used.
 
-    Always a usage error at the CLI (spec/02 §4, exit 4) — never a reason to fall back to
-    defaults silently. A config the user wrote that velox can't honor is exactly the "escalate,
-    never silently degrade" case (I6): guessing what they meant would risk running the wrong
-    tests with the wrong settings and calling it success.
+    Always a usage error at the CLI — never a reason to fall back to defaults silently. A config
+    the user wrote that velox can't honor should escalate rather than guess at what they meant,
+    which risks running the wrong tests with the wrong settings and calling it success.
     """
 
 
@@ -51,26 +42,23 @@ class Config:
 
     Every optional field is `None` (or, for `env`, empty) when either no `[tool.velox]` table was
     found at all or the table simply didn't set that key — `cli.py` is the one that knows what
-    "unset" should fall back to for each (built-in defaults live there, not here, so this module
-    stays ignorant of e.g. `_run.DEFAULT_CONCURRENCY`).
+    "unset" should fall back to for each; built-in defaults live there, not here.
     """
 
-    #: Where `[tool.velox]` was found, or the common ancestor of the requested paths (spec/02 §3:
-    #: "if none is found, the common ancestor itself is the rootdir and defaults apply") if it
-    #: wasn't. Callers resolve relative config paths (`testpaths`) against this, not `cwd()`.
+    #: Where `[tool.velox]` was found, or the common ancestor of the requested paths if it wasn't.
+    #: Callers resolve relative config paths (`testpaths`) against this, not `cwd()`.
     rootdir: Path
     #: The `pyproject.toml` that supplied this config, or `None` if none was found — surfaced so
-    #: `cli.py` can name it in the startup header, the same transparency `_rewrite.plan`'s own
-    #: header line already gives the assertion-rewrite decision.
+    #: `cli.py` can name it in the startup header.
     source: Path | None = None
     testpaths: tuple[str, ...] | None = None
     concurrency: int | None = None
     timeout: float | None = None
     test_file_patterns: tuple[str, ...] | None = None
     ignore: tuple[str, ...] | None = None
-    #: `Mapping`, not `dict`: every other collection field here is a `tuple` for the same
-    #: reason -- `frozen=True` only stops `config.env = ...`, not `config.env["X"] = "Y"` mutating
-    #: a shared `dict` in place out from under whoever else holds this `Config`. `MappingProxyType`
+    #: `Mapping`, not `dict`: every other collection field here is a `tuple` for the same reason
+    #: -- `frozen=True` only stops `config.env = ...`, not `config.env["X"] = "Y"` mutating a
+    #: shared `dict` in place out from under whoever else holds this `Config`. `MappingProxyType`
     #: closes that gap the same way a `tuple` does for `testpaths`/`ignore`/`test_file_patterns`.
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
@@ -78,19 +66,16 @@ class Config:
 def resolve(explicit_paths: Sequence[Path]) -> Config:
     """Find the governing `pyproject.toml`, if any, and parse its `[tool.velox]` table.
 
-    spec/02 §3: rootdir search starts at "the common ancestor of PATHS" and walks upward,
-    stopping as soon as a `pyproject.toml` declaring `[tool.velox]` is found. Per the spec's own
-    review note ("pay attention to not cause carnage when traversing the path up to root ...
-    should stop at git root"), the walk also stops the moment it reaches a directory containing
-    `.git` — checking that directory's own `pyproject.toml` first (the common case: a `.git` at
-    the project root sitting next to the `pyproject.toml` that governs it), but never looking
-    above it. A `pyproject.toml` with no `[tool.velox]` table (a package nested inside a bigger
-    repo, say) is not a match; the walk continues past it.
+    The rootdir search starts at the common ancestor of `explicit_paths` and walks upward,
+    stopping as soon as a `pyproject.toml` declaring `[tool.velox]` is found. The walk also stops
+    the moment it reaches a directory containing `.git` — checking that directory's own
+    `pyproject.toml` first (the common case: a `.git` at the project root sitting next to the
+    `pyproject.toml` that governs it), but never looking above it. A `pyproject.toml` with no
+    `[tool.velox]` table (a package nested inside a bigger repo, say) is not a match; the walk
+    continues past it.
 
-    `explicit_paths` is `cli.main`'s `args.paths`, already known to exist (`cli._invalid_path_
-    argument` runs first) — empty when the user gave none, in which case the search starts at
-    `cwd()`, matching "the common ancestor of PATHS" degenerating to "here" when there is no
-    PATHS.
+    `explicit_paths` is `cli.main`'s `args.paths`, already known to exist — empty when the user
+    gave none, in which case the search starts at `cwd()`.
     """
     start = _search_start(explicit_paths)
     current = start
@@ -114,7 +99,7 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
 
 def _search_start(explicit_paths: Sequence[Path]) -> Path:
     """The directory the upward search begins at: the resolved common ancestor of
-    `explicit_paths`, or `cwd()` if there are none (spec/02 §3's "if PATHS is empty").
+    `explicit_paths`, or `cwd()` if there are none.
 
     Each path contributes its own directory, not itself, when it names a file directly — a
     single `velox tests/test_x.py` must not make `tests/test_x.py` (a file, not a directory) the
@@ -131,9 +116,8 @@ def _search_start(explicit_paths: Sequence[Path]) -> Path:
         return Path(os.path.commonpath(dirs))
     except ValueError as exc:
         # `commonpath` raises when its inputs don't share a root at all (mixed drives on
-        # Windows; on the Linux/macOS targets spec/00 §2 actually commits to, every `.resolve()`d
-        # path shares `/`, so this is unreachable there) -- a `ConfigError` gives `cli.main` a
-        # clean exit-4 usage error instead of an unhandled traceback (I6).
+        # Windows; unreachable on Linux/macOS, where every `.resolve()`d path shares `/`) -- a
+        # `ConfigError` gives `cli.main` a clean usage error instead of an unhandled traceback.
         raise ConfigError(
             f"can't find a common directory for {[str(p) for p in explicit_paths]}: {exc}"
         ) from exc

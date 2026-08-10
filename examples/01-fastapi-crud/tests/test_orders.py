@@ -34,9 +34,6 @@ async def _assert_order_rejected(client: AsyncClient, user: User, total_cents: i
     assert response.status_code == 422
 
 
-# `@velox.parametrize` would collapse these into one test -- declared public API, not yet expanded
-# by the collector into records (see `tests/test_users.py`'s `test_create_user_bob` and neighbours
-# for the same gap, and M1-PLAN.md for the tracked item).
 async def test_create_order_rejects_zero_total(
     user: User = Depends(alice),
     client: AsyncClient = Depends(api_client),
@@ -87,17 +84,10 @@ async def premium_client(
 ) -> AsyncIterator[AsyncClient]:
     """`api_client`, rebuilt with `premium_settings` in place of the default.
 
-    Per-node override of an existing fixture — deriving this from `api_client` by writing
-    `api_client.with_(settings=premium_settings)` — is roadmap (spec/01 §10). `Fixture.with_()`
-    was prototyped and pulled before the runtime landed: it returns a fresh, identity-keyed
-    `Fixture` on every call, which is fine at function scope but breaks module/session-scope
-    caching (two callers of `.with_()` with equal overrides get two distinct instances of what
-    should be one shared resource). Until that is resolved, the replacement idiom is this: a
-    sibling fixture, built exactly like `api_client`, with one dependency swapped by hand.
-
+    A sibling fixture, built exactly like `api_client`, with one dependency swapped by hand.
     Everything else in the graph — the session, the engine, the app itself — is still shared with
     every other test. There is no patching and no override registry; the substitution is an
-    ordinary fixture in the static graph, so the scheduler and the validator both see the truth.
+    ordinary fixture in the static graph.
 
     The tests below run against the same singleton `app` as every other test in this suite, and
     read `settings.max_orders_per_user == 2` while their neighbours read the default. That is the

@@ -6,13 +6,13 @@ the edits in `VENDOR.md`.
 
 Two things here are velox's own, not ports:
 
-* **The cold-start guarantee** (spec/07 §5). Rewriting costs 4.6x on a cold import and 1/154th
-  of that warm, so the pyc cache is load-bearing, not an optimisation. velox resolves one cache
-  root, probes it once, and if it is unwritable says so on stderr and drops to `plain` — rather
-  than silently paying 4.6x on every run in a CI container.
-* **Which modules get rewritten** (spec/07 Q16). pytest rewrites files matching `test_*.py`
-  plus conftests; assertions in `tests/fixtures.py` get nothing. velox rewrites every `.py`
-  file discovered under the test roots, which is a superset, and costs one path check.
+* **The cold-start guarantee.** Rewriting costs 4.6x on a cold import and 1/154th of that warm,
+  so the pyc cache is load-bearing, not an optimisation. velox resolves one cache root, probes it
+  once, and if it is unwritable says so on stderr and drops to `plain` — rather than silently
+  paying 4.6x on every run in a CI container.
+* **Which modules get rewritten.** pytest rewrites files matching `test_*.py` plus conftests;
+  assertions in `tests/fixtures.py` get nothing. velox rewrites every `.py` file discovered under
+  the test roots, which is a superset, and costs one path check.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class AssertionSetup:
     """What assertion introspection actually ended up doing, for the report header.
 
     A benchmark run that quietly fell back to `plain` is a corrupted benchmark, so the
-    fallback is recorded rather than merely warned about (spec/07 §5.3).
+    fallback is recorded rather than merely warned about.
     """
 
     mode: AssertMode
@@ -91,7 +91,8 @@ class AssertionSetup:
 
 
 def resolve_cache_dir(explicit: str | os.PathLike[str] | None = None) -> Path:
-    """Where rewritten pycs go, in the order spec/07 §5.1 lays out.
+    """Where rewritten pycs go: an explicit path, then `VELOX_REWRITE_CACHE`, then the platform's
+    cache directory, then the interpreter's own pycache prefix, then a `.velox_cache` under `cwd()`.
 
     Does not check writability — `_probe_writable` does that, separately, so a caller can
     report the path it tried even when the probe fails.
@@ -164,12 +165,11 @@ def _probe_writable(cache_dir: Path) -> str | None:
 class _DiscoveredPaths:
     """The `Session` the vendored rewriter asks about, holding every discovered test file.
 
-    Answering spec/07 Q16 needs no change to the vendored code at all. `_initialpaths` feeds
-    two things upstream: `isinitpath`, which forces a rewrite regardless of filename, and the
-    early-bailout's basename set, which stops those same files being skipped before the path
-    is ever consulted. Handing it every discovered `.py` — `fixtures.py`, `helpers.py`,
-    `conftest.py` and the `test_*.py` files alike — makes "rewrite everything under the test
-    roots" fall out of the existing logic.
+    `_initialpaths` feeds two things upstream, unmodified: `isinitpath`, which forces a rewrite
+    regardless of filename, and the early-bailout's basename set, which stops those same files
+    being skipped before the path is ever consulted. Handing it every discovered `.py` file —
+    `fixtures.py`, `helpers.py`, `conftest.py`, and the `test_*.py` files alike — makes "rewrite
+    everything under the test roots" fall out of the vendored logic with no change to it.
     """
 
     _initialpaths: frozenset[Path]
@@ -186,8 +186,8 @@ def _prune_dir(path: Path, skip_roots: frozenset[Path]) -> bool:
     """Whether `path` (a directory found during the walk) should not be descended into.
 
     Dot-directories (`.git`, `.venv`, `.mypy_cache`, ...), `__pycache__`, `node_modules`, and
-    `site-packages` are skipped by name alone — cheap, and covers the overwhelming majority of
-    what a bare `rglob` used to drag in. A `pyvenv.cfg` catches virtualenvs that weren't named
+    `site-packages` are skipped by name alone — cheap, and covers the overwhelming majority of a
+    project tree that is not the user's own code. A `pyvenv.cfg` catches virtualenvs not named
     `.venv`, and `skip_roots` catches the interpreter's own install prefix, in case a root is
     broad enough to reach it without going through a named venv directory at all.
     """
@@ -202,13 +202,10 @@ def _prune_dir(path: Path, skip_roots: frozenset[Path]) -> bool:
 def _discover_python_files(roots: Iterable[Path]) -> frozenset[Path]:
     """Every `.py` file under `roots`, absolutely-pathed. Files are taken as-is.
 
-    Walked with `os.walk`, which allows pruning `dirnames` in place — `Path.rglob` cannot prune,
-    so it used to descend into virtualenvs, VCS directories, caches, and vendored trees just as
-    readily as the user's own tests. That mattered here specifically: every discovered file lands
-    in `_initialpaths` below, which not only forces a rewrite (`isinitpath`) but also feeds the
-    rewriter's name-based early-bailout set, so an unpruned walk meant velox recompiled and
-    rewrote asserts across the entire installed dependency tree on a cold run — the opposite of
-    the cold-start guarantee this module exists to defend.
+    Walked with `os.walk`, which allows pruning `dirnames` in place, unlike `Path.rglob`. Every
+    discovered file lands in `_initialpaths`, which not only forces a rewrite (`isinitpath`) but
+    also feeds the rewriter's name-based early-bailout set — pruning here is what keeps velox from
+    recompiling and rewriting asserts across the entire installed dependency tree on a cold run.
     """
     found: set[Path] = set()
     skip_roots = frozenset(
@@ -248,8 +245,8 @@ def plan(
     """
     # `AssertMode` is a `Literal`, which covers argparse's `choices=` path (see `cli.py`) but not
     # a programmatic caller's typo or a config file read without going through argparse at all —
-    # those reach this function as a plain `str`, and an unrecognised one used to silently mean
-    # "rewrite" because only `"plain"` was ever tested for.
+    # those reach this function as a plain `str`, so an unrecognised value is checked explicitly
+    # rather than falling through to "rewrite" by default.
     if mode not in ("rewrite", "plain"):
         raise ValueError(f"unknown assertion mode {mode!r}; expected 'rewrite' or 'plain'")
 
@@ -417,7 +414,7 @@ def compare_explanation(op: str, left: object, right: object, config: Config | N
 def assertion_context(config: Config | None = None) -> AbstractContextManager[None]:
     """Bind the explanation hook for the current context. Use around each test.
 
-    ContextVar-scoped, so concurrent tests never see each other's config (spec/07 §4.1).
+    ContextVar-scoped, so concurrent tests never see each other's config.
     """
     resolved = config if config is not None else Config()
     return assertion_state(
@@ -434,7 +431,7 @@ _TEMP_PREFIX = "@py"
 
 
 def strip_rewriter_temps(variables: dict[str, object]) -> dict[str, object]:
-    """Drop the rewriter's scratch variables from a frame's locals (spec/07 §6).
+    """Drop the rewriter's scratch variables from a frame's locals.
 
     Without this, every failure in a rewritten module shows a wall of `@py_assert*` bindings
     above the ones the user wrote.

@@ -87,10 +87,8 @@ def database_url(tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory)) ->
 async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]:
     """One engine for the entire run.
 
-    This fixture is the head-to-head argument. Under `pytest-xdist -n 4` this is four engines in
-    four processes, each with its own pool, each paying the schema setup. Here it is constructed
-    once, on first use, and every concurrent test shares it — the single-flight guarantee in
-    spec/04 means 200 tests starting at once produce exactly one `create_async_engine` call.
+    Constructed once, on first use, and shared by every concurrent test — the single-flight
+    guarantee means 200 tests starting at once produce exactly one `create_async_engine` call.
     """
     e = create_async_engine(url)
     _configure_sqlite_explicit_transactions(e)

@@ -181,7 +181,7 @@ def solo[F: Callable[..., Any]](fn: F) -> F:
 
 
 def isolated[F: Callable[..., Any]](fn: F) -> F:
-    """Run in a subprocess on a fresh loop. Roadmap — accepted now, not yet honored.
+    """Run in a subprocess on a fresh loop.
 
     Applied bare, with no parentheses. Unlike `solo` this takes no suite-wide lock: an isolated
     test shares no process state, so it costs a spawn rather than the suite's concurrency.
@@ -201,9 +201,8 @@ def parametrize[F: Callable[..., Any]](
     with several, each entry is a tuple aligned to the names.
 
     Stacked decorators produce the cartesian product in a stable, defined order: outermost varies
-    slowest. `indirect=` is not supported — the closest DI equivalent, a parametrized value passed
-    into a fixture via a per-node override, is roadmap (spec/01 §10); today the fixture itself
-    takes the parametrized value as an ordinary argument.
+    slowest. There is no `indirect=`: a fixture that needs the parametrized value takes it as an
+    ordinary argument instead.
     """
     # Validated here, at decoration time, rather than left to fail in the collector: by then the
     # traceback no longer points at the decorator, and a stale `ids` list would silently mislabel

@@ -65,9 +65,7 @@ async def _assert_not_retried(status: int, r: Relay, t: FakeTransport) -> None:
     assert len(t.sent) == 1
 
 
-# `@velox.parametrize("status", [200, 201, 204, 400, 404, 422])` would collapse the six cases below
-# into one test -- declared public API, not yet expanded by the collector into records
-# (M1-PLAN.md), so they're separate tests sharing `_assert_not_retried` above instead.
+# Each status is its own test, sharing `_assert_not_retried` above.
 async def test_200_is_never_retried(
     r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
 ) -> None:
@@ -117,9 +115,8 @@ async def test_retries_are_logged(
         await r.deliver("https://hooks.test/v1", b"retry-me")
 
     # `logs.messages` is `record.getMessage()` already applied, aligned index-for-index with
-    # `logs.records`. Reading `.message` off a raw `logs.records` entry (pytest's `caplog` idiom)
-    # doesn't work here: velox's capture handler never formats a record onto a stream the way
-    # pytest's `LogCaptureHandler` does, so that attribute is never set (spec/09 §2).
+    # `logs.records`. The raw `logging.LogRecord`s in `logs.records` never get a `.message`
+    # attribute set on them, since velox's capture handler never formats a record onto a stream.
     warnings = [rec for rec in logs.records if rec.levelno == logging.WARNING]
     assert len(warnings) == 2
     assert "attempt 1/3" in logs.messages[0]

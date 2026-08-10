@@ -1,22 +1,21 @@
 """Fixture objects, the `Depends` sentinel, and the static injection/resolution plans.
 
-This module owns the objects the rest of velox is built on: `Fixture`, which is what
-`@velox.fixture()` returns, the sentinel `Depends()` leaves in `__defaults__`, and — the M1
-addition — `ResolutionPlan`, the flattened, statically-validated, topologically-sorted
-construction order for one test function's whole transitive fixture graph (spec/04 §1-2).
+This module owns the objects the rest of velox is built on: `Fixture`, what `@velox.fixture()`
+returns, the sentinel `Depends()` leaves in `__defaults__`, and `ResolutionPlan`, the flattened,
+statically-validated, topologically-sorted construction order for one test function's whole
+transitive fixture graph.
 
-Both plans are built once, at decoration/collection time, by scanning `__defaults__` /
-`__kwdefaults__` — never `inspect.signature`, never `get_type_hints`. Annotations are for the
-reader and the type checker only (spec/01 design rule 3).
+Both are built once, at decoration/collection time, by scanning `__defaults__`/`__kwdefaults__` —
+never `inspect.signature`, never `get_type_hints`. Annotations are for the reader and the type
+checker only; they are never load-bearing.
 
-`ResolutionPlan` is a flat list, not a tree: `_di.py` executes it as a straight loop with no
-graph walking at run time (spec/04 §1, I5). Building it *is* the graph walk, done exactly once
-per test function, memoized so a diamond-shaped graph produces one step per fixture rather than
-one per path to it — except `scope="call"` fixtures, which are deliberately never memoized (spec
-/04's "never shared" is a statement about the *plan*, not just the runtime cache: every
-`Depends()` site pointing at a call-scoped fixture gets its own step and, later, its own cache
-key). Actual construction, caching, and teardown are `_di.py`'s job; this module only decides
-*what* needs building and *in what order* — the declarative half.
+`ResolutionPlan` is a flat list, not a tree: `_di.py` executes it as a straight loop with no graph
+walking at run time. Building it *is* the graph walk, done once per test function and memoized so
+a diamond-shaped graph produces one step per fixture rather than one per path to it — except
+`scope="call"` fixtures, which are never memoized, since each `Depends()` site pointing at one
+needs its own step and its own cache key. Construction, caching, and teardown are `_di.py`'s job;
+this module only decides *what* needs building and *in what order* — the declarative half of the
+DI system, with `_di.py` as the dynamic half.
 """
 
 from __future__ import annotations
@@ -42,9 +41,9 @@ __all__ = [
 ]
 
 type Closer = Callable[[], Awaitable[None]]
-"""Mirrors `_di.Closer` — kept as a separate alias rather than imported, so this module (the
-declarative half, per the module docstring) never has to import `_di` (the dynamic half) at all.
-Both names must keep meaning the same thing; nothing enforces that beyond this comment."""
+"""Mirrors `_di.Closer` — kept as a separate alias rather than imported, so the declarative half
+never has to import the dynamic half. Both names must keep meaning the same thing; nothing
+enforces that beyond this comment."""
 
 type Scope = Literal["call", "function", "module", "session"]
 """How widely one constructed instance is shared.
@@ -84,12 +83,10 @@ def Depends[T](dependency: Fixture[T], /) -> T:
     Takes the `Fixture` object, not a name and not a bare callable. Typed as returning `T` so the
     annotation on the parameter is genuinely checked; returns a sentinel at run time.
 
-    The `isinstance` check is spec/04 §2's "`Depends()` on a non-fixture" validation, caught here
-    rather than deferred to plan-building: `Depends()` is called at class-body/module-body
-    evaluation time (it's sitting in a default), which is strictly earlier than collection, so
-    catching it here gives the earliest possible, most-precisely-attributed diagnostic — the
-    traceback points at the actual `Depends(...)` call site instead of an opaque failure three
-    layers into `plan_for`.
+    Validated here rather than deferred to plan-building: `Depends()` runs at class-body/module-
+    body evaluation time (it's sitting in a default), earlier than collection, so a non-`Fixture`
+    argument is caught with the traceback pointing at the actual call site instead of surfacing
+    as an opaque failure inside `plan_for`.
     """
     if not isinstance(dependency, Fixture):
         raise TypeError(
@@ -117,14 +114,10 @@ def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
     positional = code.co_varnames[: code.co_argcount]
     defaults = func.__defaults__ or ()
     offset = len(positional) - len(defaults)
-    # `co_argcount` covers positional-only *and* positional-or-keyword parameters, and both would
-    # otherwise be recorded below as `keyword_only=False` — indistinguishable, even though only
-    # one of them can actually be injected. `_di.setup`/`_construct` bind every injection with
-    # `**kwargs` (never positionally), so a `Depends(...)` on a positional-only parameter can
-    # never be supplied at construction time no matter what the plan says — caught here, at
-    # decoration time, rather than left to fail as an opaque `TypeError` naming no fixture, the
-    # same class of "caught before anything runs" diagnostic `_reject_annotated_depends` above
-    # gives for the `Annotated[...]` mistake.
+    # `_di` binds every injection by keyword (`**kwargs`, never positionally), so a
+    # `Depends(...)` default on a positional-only parameter (before `/`) could never actually be
+    # supplied at construction time. Rejected here, at decoration time, rather than left to fail
+    # later as an opaque `TypeError` naming no fixture.
     posonly_count = code.co_posonlyargcount
     for index, (param, default) in enumerate(
         zip(positional[offset:], defaults, strict=True), start=offset
@@ -136,7 +129,7 @@ def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
                     f"{name}({param!r}): Depends(...) on a positional-only parameter (before "
                     f"'/') is not supported -- velox binds every injection by keyword, and a "
                     f"positional-only parameter can never accept one. Move {param!r} after the "
-                    f"'/', or stop injecting it (spec/04 §2)."
+                    f"'/', or stop injecting it."
                 )
             injections.append(injection)
 
@@ -152,10 +145,9 @@ def _reject_annotated_depends(func: Callable[..., Any]) -> None:
 
     `def t(db: Annotated[Session, Depends(db_fx)])` is the FastAPI spelling, and it is a habit
     users arrive with — it reads as injected, but since `plan_of` only ever looks at
-    `__defaults__`/`__kwdefaults__` (spec/01 rule 3, deliberately never `inspect.signature` or
-    `get_type_hints`), the parameter gets nothing and the test would run with a raw `Dependency`
-    object bound to `db`. Nothing downstream would ever catch that, so it is caught here instead,
-    at decoration time, pointing at the working spelling.
+    `__defaults__`/`__kwdefaults__`, the parameter gets nothing and the test would run with a raw
+    `Dependency` object bound to `db`. Nothing downstream would ever catch that, so it is caught
+    here instead, at decoration time, pointing at the working spelling.
 
     Best effort only: this reads raw `__annotations__` purely to detect the mistake, not to build
     the plan, so a string annotation (postponed evaluation) or any other exotic annotation is
@@ -188,17 +180,13 @@ def _injection(param: str, default: object, *, keyword_only: bool) -> Injection 
 @final
 @dataclass(frozen=True, slots=True)
 class BuiltinContext:
-    """The per-setup-call context a `BuiltinProvider` needs beyond its own injected `kwargs`
-    (spec/09, spec/01 §6) — everything `_di.setup` already has to hand from its own parameters.
+    """The per-setup-call context a `BuiltinProvider` needs beyond its own injected `kwargs` —
+    everything `_di.setup` already has to hand from its own parameters.
 
-    Deliberately *not* the whole story: ambient, per-test-task facts a provider needs that don't
+    Deliberately not the whole story: ambient, per-test-task facts a provider needs that don't
     naturally flow through `_di.setup`'s signature (the current capture sink, the log-record
-    buffer, the concurrency-slot/"worker" index, marks/tags, the `--timeout` budget) are the
-    runtime's to supply some other way — a `ContextVar` set by `_run.py` around each test's
-    setup/call/teardown envelope is the natural fit, the same mechanism spec/09 §1/§3 already
-    specifies for capture attribution generally. This dataclass only carries what `_di.setup`
-    itself owns; extend it here if a provider ends up needing something `setup` already has as a
-    plain parameter rather than something ambient.
+    buffer, the concurrency-slot/"worker" index, marks/tags, the timeout budget) are supplied some
+    other way, typically a `ContextVar` set around each test's setup/call/teardown envelope.
     """
 
     test_id: str
@@ -209,9 +197,9 @@ type BuiltinProvider = Callable[
     [Mapping[str, Any], BuiltinContext], Awaitable[tuple[Any, Closer | None]]
 ]
 """What a runtime-supplied (as opposed to user-written) fixture hands `_di._construct` instead of
-a call to `Fixture.func` — same `(value, closer)` shape `_construct` already produces for every
-other fixture kind, so nothing downstream of construction (caching, refcounting, teardown) needs
-to know the difference. See `builtin_fixture` below and `_builtins.py`'s module docstring."""
+a call to `Fixture.func` — the same `(value, closer)` shape `_construct` already produces for
+every other fixture kind, so nothing downstream of construction (caching, refcounting, teardown)
+needs to know the difference. See `builtin_fixture` below."""
 
 
 @final
@@ -219,8 +207,7 @@ class Fixture[T]:
     """A fixture: the callable, plus everything the scheduler needs to know statically.
 
     Constructed by `@velox.fixture()`. Immutable — there is no method that derives a modified
-    copy. Per-node override (replacing one named dependency of an existing `Fixture` to get a new
-    one) is roadmap; see spec/01 §10 for why it was deferred rather than shipped.
+    copy.
     """
 
     __slots__ = ("_exclusive", "_func", "_name", "_plan", "_provider", "_scope")
@@ -240,15 +227,12 @@ class Fixture[T]:
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
         self._plan = plan_of(func)
         self._provider = provider
-        # Every fixture's own body is checked for missing injections the moment it's built, not
-        # only when some test's `plan_for` walk happens to reach it: a fixture can only ever be
-        # called with the parameters `Depends(...)` supplies (there is no name-based lookup to
-        # fall back on), so a required, non-injected parameter is broken *by construction*,
-        # regardless of who ends up depending on it or whether anyone ever does. Checking here
-        # rather than in `plan_for`'s `visit` means it fires exactly once per fixture (not once
-        # per path a diamond graph reaches it by) and fires even for a fixture no collected test
-        # currently uses — the same "validate the whole graph once, at startup" spec/04 §2 opens
-        # by promising, just moved to the earliest point a fixture's own shape is fully known.
+        # Checked here rather than only when some test's `plan_for` walk reaches this fixture: a
+        # fixture can only ever be called with the parameters `Depends(...)` supplies (there is no
+        # name-based lookup to fall back on), so a required, non-injected parameter is broken by
+        # construction regardless of who depends on it. Checking at build time means it fires once
+        # per fixture, not once per path a diamond graph reaches it by, and fires even for a
+        # fixture no collected test currently uses.
         _check_missing_injections(func, self._plan)
         _check_acyclic(self)
 
@@ -298,8 +282,7 @@ class Fixture[T]:
         No injection is performed — any un-passed `Depends(...)` parameter keeps its sentinel
         default. This exists so a fixture stays a normal callable; overriding one dependency for
         one test is done by writing a separate fixture function with the replacement wired in and
-        passing *that* to `Depends(...)` at the call site (tier (a), spec/08 §3) — replacing one
-        named dependency of an existing `Fixture` in place is roadmap (spec/01 §10).
+        passing *that* to `Depends(...)` at the call site.
         """
         return self._func(*args, **kwargs)
 
@@ -311,12 +294,8 @@ class Fixture[T]:
 def _check_acyclic(root: Fixture[Any]) -> None:
     """Raise if `root`'s dependency graph loops back on itself.
 
-    A single `@velox.fixture()` decoration can never produce a cycle — to depend on a fixture it
-    has to already exist as an object — but a future late-rebind mechanism (deep per-node
-    override, spec/01 §10, is the leading candidate) could, and the check belongs here once
-    rather than in every future graph walker. Identity-keyed (`id()`), not `Fixture.__eq__`/
-    `__hash__`: giving `Fixture` structural equality is exactly the open question that deferred
-    that feature, and this must not force that decision.
+    Identity-keyed (`id()`), not `Fixture.__eq__`/`__hash__`: `Fixture` deliberately has no
+    structural equality, so identity is the only notion of "same fixture" this can rely on.
     """
     on_path: set[int] = set()
 
@@ -355,11 +334,11 @@ def fixture(
 
     :param scope: how widely one constructed instance is shared. See `Scope`.
     :param exclusive: `True`, or a string token naming a contended resource. Tests transitively
-        depending on it never run concurrently with each other (spec/06).
+        depending on it never run concurrently with each other.
     :param name: display name in errors, reports, and `--durations`. Defaults to `fn.__name__`.
 
     There is no `autouse` — a dependency you cannot see in the signature is exactly what velox
-    exists to remove. There is no `params` / `ids` yet; parametrized fixtures are roadmap.
+    exists to remove.
     """
 
     def decorate(fn: Callable[..., Any], /) -> Fixture[Any]:
@@ -376,12 +355,9 @@ def builtin_fixture(
     name: str | None = None,
 ) -> Fixture[Any]:
     """Construct a `Fixture` whose value the velox runtime supplies directly, instead of by
-    calling `func` — `_builtins.py`'s module docstring: "there is nothing privileged about them
-    except that the runtime supplies the value instead of calling the function." `func` is kept
-    only so the fixture has a `__name__`/signature/return annotation to display and to typecheck
-    call sites against; `_di._construct` checks `.provider` before it would ever reach `func`, so
-    `func`'s own body is unreachable at run time (`_builtins.py` raises `NotImplementedError` in
-    every one, and that is intentional documentation, not a bug to fix).
+    calling `func`. `func` is kept only so the fixture has a `__name__`/signature/return
+    annotation to display and to typecheck call sites against; `_di._construct` checks `.provider`
+    before it would ever reach `func`, so `func`'s own body is unreachable at run time.
 
     Distinct from `fixture()` — not exposed as one of its parameters — so a user fixture can never
     accidentally (or deliberately) become provider-backed; only this package's own `_builtins.py`
@@ -390,26 +366,18 @@ def builtin_fixture(
     return Fixture(func, scope=scope, name=name, provider=provider)
 
 
-# --------------------------------------------------------------------------------------------
-# Resolution plans (spec/04 §1-2) — M1.
-# --------------------------------------------------------------------------------------------
-
-
 class DIError(Exception):
     """A static DI validation failure: scope nesting, a missing injection.
 
     Raised by `plan_for`, always before any test runs. `_collect.collect` catches this and turns
     it into a `CollectionError` attributed to the offending test, alongside every other kind of
-    collection failure (spec/04 §2's "exits `4` with all errors listed rather than the first" is
-    the run-wide version of that same idea; M1 keeps the per-file `CollectionError` list rather
-    than introducing a second severity tier — see `_collect.py`).
+    collection failure.
     """
 
 
-#: SESSION > MODULE > FUNCTION; a fixture may depend only on equal-or-wider scopes (spec/04 §2).
-#: `"call"` is ranked with `"function"`: both tear down at end of test (spec/04 §4's teardown
-#: column), and the compatibility rule only cares about *lifetime*, not the caching behavior that
-#: otherwise tells the two apart. A `Fixture.scope` is always one of these four keys.
+#: SESSION > MODULE > FUNCTION; a fixture may depend only on equal-or-wider scopes. `"call"` is
+#: ranked with `"function"`: both tear down at end of test, and the compatibility rule only cares
+#: about *lifetime*, not the caching behavior that otherwise tells the two apart.
 _SCOPE_RANK: dict[Scope, int] = {"session": 3, "module": 2, "function": 1, "call": 1}
 
 
@@ -420,7 +388,7 @@ class PlanStep:
 
     `args` names this fixture's own `Depends(...)` parameters, each resolved to the `step_id` of
     an *earlier* step in the same plan that supplies it — never a `Fixture` reference, so
-    executing a plan is array indexing, not graph walking (spec/04 §1, I5).
+    executing a plan is array indexing, not graph walking.
     """
 
     step_id: int
@@ -436,8 +404,8 @@ class ResolutionPlan:
 
     `steps` is dependency-before-dependent (a valid topological order of the graph) — `_di.py`
     constructs by walking it forwards and tears down by walking it *backwards*, which is what
-    gives teardown inversion (dependents unwind before dependencies, spec/04 §5) without any
-    extra bookkeeping: reversing a topological order is always a valid reverse-topological order.
+    gives teardown inversion (dependents unwind before dependencies) without any extra
+    bookkeeping: reversing a topological order is always a valid reverse-topological order.
 
     A fixture reachable by more than one path (a diamond) gets exactly one step — see the module
     docstring for why `scope="call"` fixtures are the deliberate exception.
@@ -453,26 +421,20 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
 
     `func` is a test function (an already-decorated `Fixture` never needs this — its own
     dependencies are just `Fixture.dependencies`/`Fixture.plan`, walked fresh at the point
-    something depends on *it*). Raises `DIError` for every static check spec/04 §2 lists that
-    the graph shape alone can decide: scope compatibility and missing injections. Cycles and
-    `Depends()`-on-a-non-`Fixture` are caught earlier and don't need re-checking here — cycles at
-    `Fixture.__init__` (`_check_acyclic`, since a fixture can only ever depend on
-    already-constructed `Fixture` objects, roadmap deep-override schemes aside) and a bad
-    `Depends()` argument at `Depends()`'s own call site.
+    something depends on *it*). Raises `DIError` for the two checks the graph shape alone can
+    decide: scope compatibility and missing injections. Cycles and `Depends()`-on-a-non-`Fixture`
+    are caught earlier, at `Fixture.__init__` and at `Depends()`'s own call site respectively, and
+    don't need re-checking here.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
-    # below reaches has already had its own body checked at `Fixture.__init__` time (spec/04 §2's
-    # row applies to the whole graph, but a fixture's own shape is fully known — and wrong or
-    # right independent of who depends on it — the moment `@velox.fixture()` builds it, which is
-    # strictly earlier than any `plan_for` walk that happens to visit it).
+    # below reaches already had its own body checked at `Fixture.__init__` time, independent of
+    # who depends on it.
     _check_missing_injections(func, root_injections)
 
     steps: list[PlanStep] = []
     #: `id(fixture) -> step_id`, non-`"call"` scopes only — the memo that turns a diamond into
-    #: one step (see module docstring). Deliberately keyed by `id()`, not the `Fixture` itself:
-    #: same rationale as `_check_acyclic`, and structural equality on `Fixture` is an open
-    #: question this must not have an opinion on.
+    #: one step. Keyed by `id()`, not the `Fixture` itself: `Fixture` has no structural equality.
     memo: dict[int, int] = {}
 
     def visit(source: Fixture[Any], dependent: Fixture[Any] | None) -> int:
@@ -484,7 +446,7 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
             raise DIError(
                 f"{holder} (scope={dependent_scope!r}) depends on fixture {source.name!r} "
                 f"(scope={source.scope!r}): a narrower-scoped fixture would be torn down while "
-                f"the wider one still held it (spec/04 §2)."
+                f"the wider one still held it."
             )
         if source.scope != "call":
             cached = memo.get(id(source))
@@ -510,9 +472,9 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
 def _check_missing_injections(func: Callable[..., Any], injections: tuple[Injection, ...]) -> None:
     """Raise `DIError` naming any parameter with no default that isn't `self` and isn't injected.
 
-    Deliberately reads `__code__`/`__defaults__` rather than `inspect.signature` (module
-    docstring, spec/01 rule 3) — this is a diagnostic, not the plan itself, but the same
-    "annotations are never load-bearing" rule applies to keep the two code paths consistent.
+    Reads `__code__`/`__defaults__` rather than `inspect.signature`, like `plan_of` — this is a
+    diagnostic, not the plan itself, but the same "annotations are never load-bearing" rule keeps
+    the two code paths consistent.
     """
     code = getattr(func, "__code__", None)
     if code is None:
@@ -534,5 +496,5 @@ def _check_missing_injections(func: Callable[..., Any], injections: tuple[Inject
         raise DIError(
             f"{name}: parameter(s) {params} have no default and are not injected via "
             f"Depends(...) -- velox has no name-based fixture lookup, so an uninjected "
-            f"parameter can never be supplied (spec/04 §2)."
+            f"parameter can never be supplied."
         )

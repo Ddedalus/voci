@@ -50,11 +50,8 @@ async def _assert_balance_arithmetic(
     assert await svc.balance(acct) == expected
 
 
-# `@velox.parametrize("amounts,expected", [...])` would collapse the four cases below into one
-# test -- declared public API, not yet expanded by the collector into records (M1-PLAN.md), so
-# they're separate tests instead. Each still gets its own `account`, because `velox.test_info.id`
-# (which `account` derives from) includes the function's own qualname -- distinct functions cannot
-# collide any more than distinct parametrize ids could, even though all four run at the same time.
+# Each case is its own test, and each still gets its own `account`: `velox.test_info.id` includes
+# the function's own qualname, so distinct functions can't collide even though all four run at once.
 async def test_balance_arithmetic_single_deposit(
     svc: LedgerService = Depends(ledger),
     acct: str = Depends(account),

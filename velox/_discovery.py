@@ -1,8 +1,7 @@
-"""Discovery: the walk that finds candidate test files (spec/03 §2).
+"""Discovery: the walk that finds candidate test files.
 
-M0 scope: walk + filename filter + directory ignore set, nothing else. No collection cache
-(spec/03 §6, roadmap) and no `-k`/`-m` predicates — those act on `TestRecord`, once one exists
-(spec/03 §4 step 5), not on paths.
+Walk, filename filter, directory ignore set — nothing else. Selection predicates like `-k`/`-m`
+act on a `TestRecord`, which doesn't exist yet at this stage, not on a path.
 """
 
 from __future__ import annotations
@@ -14,10 +13,10 @@ from pathlib import Path
 
 __all__ = ["DEFAULT_IGNORE_DIRS", "DEFAULT_TEST_FILE_PATTERNS", "discover_files"]
 
-#: spec/02 §3 `[tool.velox] test_file_patterns` default.
+#: `[tool.velox] test_file_patterns` default.
 DEFAULT_TEST_FILE_PATTERNS: tuple[str, ...] = ("test_*.py", "*_test.py")
 
-#: spec/02 §3 `[tool.velox] ignore` default.
+#: `[tool.velox] ignore` default.
 DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset(
     {
         ".git",
@@ -38,23 +37,19 @@ def discover_files(
     patterns: Iterable[str] = DEFAULT_TEST_FILE_PATTERNS,
     ignore_dirs: frozenset[str] = DEFAULT_IGNORE_DIRS,
 ) -> list[Path]:
-    """One walk per root in `roots`, filtered to test files (spec/03 §2).
+    """One walk per root in `roots`, filtered to test files.
 
-    - An entry in `roots` that is already a file is taken as-is, no pattern check against it —
-      "if PATHS contains explicit files or ids, the walk is skipped for those entries" (spec/03
-      §2). A directory is walked with `os.scandir`; entries named in `ignore_dirs` are pruned
+    - An entry in `roots` that is already a file is taken as-is, with no pattern check against
+      it. A directory is walked with `os.scandir`; entries named in `ignore_dirs` are pruned
       without descending into them. A root that doesn't exist contributes nothing here — this
       function has no way to tell "typo'd path" from "a genuinely empty selection" apart, and
       shouldn't guess; `cli.main` validates `PATHS` before any root reaches this function, so a
-      bad explicit path is already an exit-4 usage error by the time discovery would see it.
+      bad explicit path is already a usage error by the time discovery would see it.
     - Symlink loops are avoided by tracking visited `(st_dev, st_ino)` pairs.
     - The concatenation across all roots is de-duplicated (overlapping/duplicate roots would
       otherwise hand `collect` the same file twice, producing two `TestRecord`s sharing one id)
       and sorted, so the result — and therefore `collect`'s `index` assignment — is a function of
-      the resolved test set, not of `roots`' argv order (spec/03 §4, I2). Sorting the resolved
-      absolute path rather than a path relative to some rootdir (this function is never handed
-      one) coincides with spec/03 §4's "sorted by relative path" whenever every discovered file
-      shares a common ancestor, true of any realistic single-invocation root set.
+      the resolved test set, not of `roots`' argv order.
 
     Returns absolute paths.
     """

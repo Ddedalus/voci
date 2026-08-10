@@ -30,9 +30,7 @@ async def _assert_user_created(client: AsyncClient, email: str) -> None:
     assert response.json()["is_active"] is True
 
 
-# `@velox.parametrize` would collapse the three cases below into one test — it's public API
-# (spec/01 §9) but `_collect.collect` doesn't expand it into records yet (M1-PLAN.md), so they're
-# separate tests sharing `_assert_user_created` above instead of separate `assert` blocks.
+# Each case is its own test function, sharing `_assert_user_created` above.
 async def test_create_user_bob(client: AsyncClient = Depends(api_client)) -> None:
     await _assert_user_created(client, "bob@example.com")
 
@@ -55,8 +53,8 @@ async def test_create_user_rejects_duplicate_email(
 
     `alice` depends on `session`, and so does `api_client`. Both get the *same* `AsyncSession`:
     within one test, a function-scoped fixture is constructed exactly once no matter how many
-    paths reach it (spec/04 §4). So the user this test created through the ORM is visible to the
-    request it makes over HTTP.
+    paths reach it. So the user this test created through the ORM is visible to the request it
+    makes over HTTP.
     """
     response = await client.post("/users", json={"email": user.email})
 
@@ -82,10 +80,6 @@ async def test_create_user_writes_a_row(
     assert row.credit_cents == 0
 
 
-# `@velox.tag` records the name on the function's marks the same way `@velox.parametrize` does
-# above; `-m "not slow"` to select against it is the same "declared, not wired" gap (spec/00 §7),
-# so this test still runs on every plain `velox` invocation today. `@velox.timeout` is real,
-# unconditionally, and does apply here (spec/05 §2-4).
 @velox.tag("slow")
 @velox.timeout(30)
 async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
@@ -97,10 +91,6 @@ async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
     assert listing.status_code == 200
 
 
-# The reference stack reaches for `@velox.xfail(..., strict=True)` here -- declared, but not yet
-# enacted by `_run.py` (M1-PLAN.md), so it would just report plain `FAILED`. `skip` *is* wired
-# (see `test_response_carries_request_id` below) and says the same thing honestly in the meantime:
-# remove this once GET /users?limit= exists, don't wait for xfail to flip it red automatically.
 @velox.skip("pagination is not implemented yet (GET /users has no route -- 405, not 200)")
 async def test_list_users_is_paginated(client: AsyncClient = Depends(api_client)) -> None:
     response = await client.get("/users?limit=10")
@@ -112,20 +102,13 @@ REQUEST_ID_MIDDLEWARE_ENABLED = False
 
 @velox.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
 async def test_response_carries_request_id(client: AsyncClient = Depends(api_client)) -> None:
-    """`skipif` conditions are evaluated at collection, not at each test's own setup.
+    """`skipif` conditions are evaluated at collection, once per test, before any test runs.
 
-    (Unlike pytest, for now: `_collect.collect` calls `_skip_reason` — which evaluates a callable
-    condition or reads a bare `bool` — once per test while building `records`/`skipped`, before
-    any test runs. A condition cheap enough to import-time-evaluate, like the feature flag here,
-    can't tell the difference; one with real side effects would notice.)
+    A condition cheap enough to import-time-evaluate, like the feature flag here, can't tell the
+    difference; one with real side effects would notice.
     """
     response = await client.get("/health")
     assert "x-request-id" in response.headers
-
-
-# `class Test*` grouping (spec/01 §7) isn't collected yet -- `_collect.collect` only looks for
-# module-level `async def test_*` (M1-PLAN.md), so these were flattened out of a `TestDeactivation`
-# class that used to silently collect as zero tests, zero errors.
 
 
 async def test_deactivate(

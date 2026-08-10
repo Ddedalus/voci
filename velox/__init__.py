@@ -1,10 +1,9 @@
 """velox: a fast, concurrent test runner for fully-async Python codebases.
 
-This is the whole public surface. Everything else is private and may move.
-
-Currently the *declarative* half is real — fixtures build their dependency plan, marks attach
-their records, `raises` and `approx` work. The execution half (collection, scheduling, running,
-reporting) is not implemented yet; see `spec/`.
+This is the whole public surface — everything else is private and may move. It exports
+dependency injection (`fixture`, `Depends`, `Scope`), marks for selecting and shaping tests
+(`skip`, `xfail`, `parametrize`, `tag`, ...), built-in fixtures (`tmp_path`, `capture`,
+`log_records`, `test_info`), and assertion helpers (`raises`, `approx`).
 """
 
 from velox._assertions import Approx, ExceptionInfo, RaisesContext, approx, raises
@@ -37,11 +36,8 @@ from velox._marks import (
 )
 from velox._version import __version__
 
-# Grouped by purpose in the imports above; sorted here because that is what the linter wants.
-# DI: Depends, Fixture, Scope, fixture. Marks: isolated, parametrize, skip, skipif, solo, tag,
-# timeout, xfail. Built-in fixtures: capture, log_records, test_info, tmp_path,
-# tmp_path_factory. Assertions: approx, raises. Everything capitalized is a type you may need to
-# name in an annotation.
+# Grouped by purpose above (DI, marks, built-in fixtures, assertions) but sorted alphabetically
+# here. Everything capitalized is a type you may need to name in an annotation.
 __all__ = [
     "Approx",
     "Capture",
