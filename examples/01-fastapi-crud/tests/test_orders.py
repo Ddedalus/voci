@@ -29,14 +29,33 @@ async def test_create_order(
     assert response.json()["total_cents"] == 1250
 
 
-@velox.parametrize("total", [0, -1, -9999])
-async def test_create_order_rejects_non_positive_total(
-    total: int,
+async def _assert_order_rejected(client: AsyncClient, user: User, total_cents: int) -> None:
+    response = await client.post(f"/users/{user.id}/orders", json={"total_cents": total_cents})
+    assert response.status_code == 422
+
+
+# `@velox.parametrize` would collapse these into one test -- declared public API, not yet expanded
+# by the collector into records (see `tests/test_users.py`'s `test_create_user_bob` and neighbours
+# for the same gap, and M1-PLAN.md for the tracked item).
+async def test_create_order_rejects_zero_total(
     user: User = Depends(alice),
     client: AsyncClient = Depends(api_client),
 ) -> None:
-    response = await client.post(f"/users/{user.id}/orders", json={"total_cents": total})
-    assert response.status_code == 422
+    await _assert_order_rejected(client, user, 0)
+
+
+async def test_create_order_rejects_negative_total(
+    user: User = Depends(alice),
+    client: AsyncClient = Depends(api_client),
+) -> None:
+    await _assert_order_rejected(client, user, -1)
+
+
+async def test_create_order_rejects_very_negative_total(
+    user: User = Depends(alice),
+    client: AsyncClient = Depends(api_client),
+) -> None:
+    await _assert_order_rejected(client, user, -9999)
 
 
 async def test_list_orders_filters_by_minimum(
@@ -152,11 +171,16 @@ async def test_duplicate_email_is_logged(
     Attribution is by ContextVar rather than by a global handler swap, so sixteen concurrent tests
     each see only their own records — including records emitted from `asyncio.to_thread` calls,
     which inherit the context.
+
+    `logs.messages` is `record.getMessage()` already applied — velox's handler never formats a
+    record onto a stream the way pytest's does, so the raw `logging.LogRecord`s in `logs.records`
+    never get a `.message` attribute set on them. Read `.records` for level/name/exc_info; read
+    `.messages` for text.
     """
     with logs.set_level(logging.WARNING, logger="app"):
         await client.post("/users", json={"email": user.email})
 
-    assert any("already registered" in r.message for r in logs.records)
+    assert any("already registered" in message for message in logs.messages)
 
 
 async def test_export_orders_to_disk(

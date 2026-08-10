@@ -47,7 +47,11 @@ construction (R§7).
   form "this record is present" and hazardous for "no records were emitted". Documented; a strict
   mode escalates `set_level` to solo (roadmap).
 - Formatting is applied at report time, not at emit time — cheaper, and lets `-v` change format
-  after the fact.
+  after the fact. One consequence: unlike pytest's `LogCaptureHandler` (which calls `self.format
+  (record)` in `emit`, setting `record.message` as a side effect), velox's handler never formats a
+  record onto a stream, so a raw `LogRecord` off `velox.log_records.records` has no `.message`
+  attribute set. Use `velox.log_records.messages` (`record.getMessage()`, already applied) for
+  text; `.records` is for level/name/exc_info and similar structured fields.
 
 ## 3. Threads
 

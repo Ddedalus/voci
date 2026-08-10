@@ -22,21 +22,29 @@ async def test_health(client: AsyncClient = Depends(api_client)) -> None:
     assert response.json() == {"status": "ok"}
 
 
-@velox.parametrize("email", ["bob@example.com", "carol+tag@example.com", "dave@sub.example.com"])
-async def test_create_user(email: str, client: AsyncClient = Depends(api_client)) -> None:
-    """Parametrized values are ordinary parameters; injected ones have a `Depends` default.
-
-    velox tells them apart by looking at the defaults, so the two mix in any order and there is
-    no `indirect=` to reason about.
-
-    Ids: `tests/test_users.py::test_create_user[bob@example.com]`, and so on — generated from the
-    value, stable across runs, and copy-pasteable back onto the command line.
-    """
+async def _assert_user_created(client: AsyncClient, email: str) -> None:
     response = await client.post("/users", json={"email": email})
 
     assert response.status_code == 201
     assert response.json()["email"] == email
     assert response.json()["is_active"] is True
+
+
+# `@velox.parametrize` would collapse the three cases below into one test — it's public API
+# (spec/01 §9) but `_collect.collect` doesn't expand it into records yet (M1-PLAN.md), so they're
+# separate tests sharing `_assert_user_created` above instead of separate `assert` blocks.
+async def test_create_user_bob(client: AsyncClient = Depends(api_client)) -> None:
+    await _assert_user_created(client, "bob@example.com")
+
+
+async def test_create_user_with_a_tag_in_the_local_part(
+    client: AsyncClient = Depends(api_client),
+) -> None:
+    await _assert_user_created(client, "carol+tag@example.com")
+
+
+async def test_create_user_with_a_subdomain(client: AsyncClient = Depends(api_client)) -> None:
+    await _assert_user_created(client, "dave@sub.example.com")
 
 
 async def test_create_user_rejects_duplicate_email(
@@ -74,13 +82,13 @@ async def test_create_user_writes_a_row(
     assert row.credit_cents == 0
 
 
+# `@velox.tag` records the name on the function's marks the same way `@velox.parametrize` does
+# above; `-m "not slow"` to select against it is the same "declared, not wired" gap (spec/00 §7),
+# so this test still runs on every plain `velox` invocation today. `@velox.timeout` is real,
+# unconditionally, and does apply here (spec/05 §2-4).
 @velox.tag("slow")
 @velox.timeout(30)
 async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
-    """`@velox.tag` is the `@pytest.mark.<name>` replacement for the selection use case:
-    `velox -m "not slow"`. `@velox.timeout` overrides the per-test default (300s) for this test
-    only.
-    """
     for i in range(200):
         response = await client.post("/users", json={"email": f"user{i}@example.com"})
         assert response.status_code == 201
@@ -89,13 +97,12 @@ async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
     assert listing.status_code == 200
 
 
-@velox.xfail("pagination is not implemented yet", strict=True)
+# The reference stack reaches for `@velox.xfail(..., strict=True)` here -- declared, but not yet
+# enacted by `_run.py` (M1-PLAN.md), so it would just report plain `FAILED`. `skip` *is* wired
+# (see `test_response_carries_request_id` below) and says the same thing honestly in the meantime:
+# remove this once GET /users?limit= exists, don't wait for xfail to flip it red automatically.
+@velox.skip("pagination is not implemented yet (GET /users has no route -- 405, not 200)")
 async def test_list_users_is_paginated(client: AsyncClient = Depends(api_client)) -> None:
-    """`strict=True` means this failing is expected but *passing* is a failure.
-
-    That is the property that makes xfail a to-do list rather than a graveyard: the day someone
-    implements pagination, this test turns red and tells them to delete the marker.
-    """
     response = await client.get("/users?limit=10")
     assert response.status_code == 200
 
@@ -105,38 +112,36 @@ REQUEST_ID_MIDDLEWARE_ENABLED = False
 
 @velox.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
 async def test_response_carries_request_id(client: AsyncClient = Depends(api_client)) -> None:
-    """`skipif` conditions are evaluated at run time, not at collection.
+    """`skipif` conditions are evaluated at collection, not at each test's own setup.
 
-    Same as pytest, and deliberately so: a collection-time evaluation would put arbitrary user
-    code in the startup budget.
+    (Unlike pytest, for now: `_collect.collect` calls `_skip_reason` — which evaluates a callable
+    condition or reads a bare `bool` — once per test while building `records`/`skipped`, before
+    any test runs. A condition cheap enough to import-time-evaluate, like the feature flag here,
+    can't tell the difference; one with real side effects would notice.)
     """
     response = await client.get("/health")
     assert "x-request-id" in response.headers
 
 
-class TestDeactivation:
-    """Classes are pure namespacing.
+# `class Test*` grouping (spec/01 §7) isn't collected yet -- `_collect.collect` only looks for
+# module-level `async def test_*` (M1-PLAN.md), so these were flattened out of a `TestDeactivation`
+# class that used to silently collect as zero tests, zero errors.
 
-    No `__init__`, no `setup_method`, no shared instance state — velox instantiates the class per
-    test and ignores `self`. If you want setup, that is what a function-scoped fixture is. The ids
-    read `tests/test_users.py::TestDeactivation::test_deactivate`.
-    """
 
-    async def test_deactivate(
-        self,
-        user: User = Depends(alice),
-        client: AsyncClient = Depends(api_client),
-    ) -> None:
-        response = await client.delete(f"/users/{user.id}")
-        assert response.status_code == 204
+async def test_deactivate(
+    user: User = Depends(alice),
+    client: AsyncClient = Depends(api_client),
+) -> None:
+    response = await client.delete(f"/users/{user.id}")
+    assert response.status_code == 204
 
-        after = await client.get(f"/users/{user.id}")
-        assert after.json()["is_active"] is False
+    after = await client.get(f"/users/{user.id}")
+    assert after.json()["is_active"] is False
 
-    async def test_deactivate_is_idempotent(
-        self,
-        user: User = Depends(alice),
-        client: AsyncClient = Depends(api_client),
-    ) -> None:
-        assert (await client.delete(f"/users/{user.id}")).status_code == 204
-        assert (await client.delete(f"/users/{user.id}")).status_code == 204
+
+async def test_deactivate_is_idempotent(
+    user: User = Depends(alice),
+    client: AsyncClient = Depends(api_client),
+) -> None:
+    assert (await client.delete(f"/users/{user.id}")).status_code == 204
+    assert (await client.delete(f"/users/{user.id}")).status_code == 204

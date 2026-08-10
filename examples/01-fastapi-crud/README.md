@@ -11,7 +11,7 @@ app/
   main.py         routes + the module-level `app = FastAPI(...)`, written for production only
 tests/
   fixtures.py     engine, session, api_client, alice, payment_sandbox
-  test_users.py   the baseline shape: parametrize, marks, class grouping
+  test_users.py   the baseline shape: fixtures, skip/skipif, a timeout override
   test_orders.py  per-node override via a sibling fixture, raises/approx, built-ins, exclusive
 ```
 
@@ -24,62 +24,70 @@ uv pip install -r requirements.txt -e ../..
 
 ## Commands
 
+This is the current, working CLI surface — not the eventual one. `-k`/`-m` selection, `-v`/`-q`
+verbosity, `--durations`, `--collect-only`, `--serial`, and `path.py::test_name` id addressing are
+all real, spec'd invocation syntax (spec/02 §1) that M1 hasn't wired up yet; see
+[`docs/M1-PLAN.md`](../../docs/M1-PLAN.md) for what's tracked where. What's below runs today.
+
 ```bash
-velox                                     # everything, 16 tests in flight
-velox -v                                  # one line per test, plus token contention
-velox -q                                  # one character per file
+velox                          # everything (22 tests), up to 16 at once ([tool.velox] concurrency)
+velox tests/test_users.py      # one file (velox tests/test_users.py::test_health -- not yet: `::`
+                                # id addressing is M2, see M1-PLAN.md's "Test-id selection" item)
 
-velox tests/test_users.py                 # one file
-velox 'tests/test_users.py::test_health'  # one test
-velox 'tests/test_users.py::test_create_user[bob@example.com]'   # one parametrization
-velox -k "order and not limit"            # keyword expression over the id
-velox -m "not slow"                       # tag expression over @velox.tag
-
-velox --serial                            # concurrency=1 — the first debugging step
-velox --concurrency 64                    # if the database can take it
-velox -x                                  # stop dispatching on the first failure
-velox --durations 5                       # what to tune --concurrency against
-velox --collect-only                      # ids in logical order, exit 0
+velox --concurrency 1          # exactly serial -- the first debugging step
+velox --concurrency 64         # if the database can take it
+velox --timeout 5              # per-test setup+call budget; TIMEOUT, not FAILED, past it
+velox -s                       # (or --capture=no) live, id-prefixed stdout/stderr instead of
+                                # captured-and-shown-only-on-failure
+velox --assert plain           # skip the rewrite import hook; PEP 657 caret fallback still applies
 ```
-
-Ids are byte-identical to pytest's addressing syntax, so anything already pinned in CI transfers
-unchanged.
 
 ## Expected output
 
 ```
-velox 0.1.0 · python 3.13.2 · uvloop · concurrency 16 · seed 0 · assert=rewrite
+$ velox
+assertions: rewrite, cache /home/you/.cache/velox/rewrite
+config: /path/to/examples/01-fastapi-crud/pyproject.toml
+PASS  tests/test_users.py                10 tests   Σ 3.84s
+PASS  tests/test_orders.py               12 tests   Σ 7.29s
+tests/test_users.py::test_list_users_is_paginated SKIPPED (pagination is not implemented yet (GET /users has no route -- 405, not 200))
+tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is behind a feature flag)
+22 tests: 22 passed, 0 failed, 0 errored, 2 skipped, 0 collection error(s)
 
-PASS  tests/test_users.py                  23 tests   0.68s
-PASS  tests/test_orders.py                 16 tests   1.12s
-
-39 tests · 37 passed · 1 xfailed · 1 skipped · 1.4s wall (Σ 8.9s, 6.4× concurrency)
+22 tests · 0 failed · 1.14s wall (Σ 11.13s, 9.8x concurrency)
 ```
 
-The last line is the one to watch. `Σ 8.9s` is the serial cost of the same work; `1.4s wall` is what
-you waited. When that ratio collapses, `--durations` and the exclusive-token summary under `-v` will
-say why.
+The last line is the one to watch. `Σ 11.13s` is the serial cost of the 22 dispatched tests; `1.14s
+wall` is what you actually waited. `assertions:`/`config:` above it are printed unconditionally
+(spec/02 §5, spec/07 §5.3) so a run never picks up rewrite-cache or `[tool.velox]` behavior you
+didn't know was there. The two `SKIPPED` lines are `skip`/`skipif`, and are excluded from the "22
+tests" dispatched count — they never ran (see `test_users.py` for why each is skipped, and for the
+still-declared-but-not-yet-enforced `@velox.xfail` this one used to be).
 
-A failing run:
+A failing run (`tests/test_orders.py::test_order_limit_is_enforced`, provoked here by editing its
+own assertion — see its source for what it actually checks):
 
 ```
-PASS  tests/test_users.py                  23 tests   0.71s
-FAIL  tests/test_orders.py                 16 tests   1.19s   (1 failed)
+assertions: rewrite, cache /home/you/.cache/velox/rewrite
+config: /path/to/examples/01-fastapi-crud/pyproject.toml
+PASS  tests/test_users.py                10 tests   Σ 5.25s
+FAIL  tests/test_orders.py               12 tests   Σ 9.04s   (1 failed)
+tests/test_users.py::test_list_users_is_paginated SKIPPED (pagination is not implemented yet (GET /users has no route -- 405, not 200))
+tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is behind a feature flag)
+22 tests: 21 passed, 1 failed, 0 errored, 2 skipped, 0 collection error(s)
 
-──────────────────────── tests/test_orders.py::test_order_limit_is_enforced ────────────────────────
+FAILED tests/test_orders.py::test_order_limit_is_enforced
+Traceback (most recent call last):
+  File ".../velox/_run.py", line 294, in _run_one
+    await coro
+  File ".../tests/test_orders.py", line 134, in test_order_limit_is_enforced
+    assert limited.status_code == 430
+AssertionError: assert 429 == 430
+ +  where 429 = <Response [429 Too Many Requests]>.status_code
+--- short test summary ---
+FAILED tests/test_orders.py::test_order_limit_is_enforced - AssertionError: assert 429 == 430
 
-    limited = await client.post(url, json={"total_cents": 100})
-
->   assert limited.status_code == 429
-E   assert 201 == 429
-E    +  where 201 = <Response [201 Created]>.status_code
-
-  tests/test_orders.py:88 in test_order_limit_is_enforced
-
-short test summary
-FAILED tests/test_orders.py::test_order_limit_is_enforced - assert 201 == 429
-
-39 tests · 1 failed · 37 passed · 1 xfailed · 1.5s wall (Σ 9.1s, 6.1× concurrency)
+22 tests · 1 failed · 1.36s wall (Σ 14.29s, 10.5x concurrency)
 ```
 
 Failure detail is printed at the end in **logical** (collection) order, never in completion order,
@@ -126,6 +134,32 @@ needs a design decision, not a patch.
 **`tests/fixtures.py::payment_sandbox`** — `exclusive="payments-sandbox"`. The constraint is declared
 on the *resource*; every test that transitively depends on it inherits the token and the scheduler
 does the rest. No test has to remember to annotate itself, so no test can forget.
+
+## Known gaps (tracked, not bugs in this suite)
+
+Dogfooding this example against the current runner surfaced four things declared in velox's public
+API that the runner doesn't act on yet — all tracked in
+[`docs/M1-PLAN.md`](../../docs/M1-PLAN.md) "Tracked but not blocking the gate":
+
+- **`@velox.parametrize`** expands to a `ParamSet` mark but `_collect.collect` doesn't turn it into
+  one `TestRecord` per case — applying it produces a `DIError` ("parameter(s) ... have no default
+  and are not injected"), not multiple passing tests. `test_users.py`/`test_orders.py` spell the
+  cases out as separate functions instead; see `test_create_user_bob` and its neighbours.
+- **`class Test*` grouping** is spec'd as pure namespacing (spec/01 §7) but `_collect.collect` only
+  looks for module-level `async def test_*` functions — a `Test*` class's methods are silently
+  collected as zero tests, with no error and no skip entry. Flattened to free functions here.
+- **`@velox.xfail`** is recorded on a function's marks but nothing reads it at run time (`_run.py`'s
+  `Outcome` enum has four members: `PASSED`/`FAILED`/`ERROR`/`TIMEOUT` — no `XFAILED`/`XPASSED`
+  yet), so a decorated test that "fails as expected" is reported plain `FAILED`. `skip` *is* wired
+  end to end and is used in `test_users.py` where the reference stack would otherwise reach for
+  `xfail`.
+- **`-m`/tag-based selection** and most of the CLI surface documented in spec/02 §1
+  (`-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`, `--collect-only`, `path.py::test_name` id
+  addressing) aren't wired into `cli.py` yet — `@velox.tag("slow")` on `test_bulk_signup` still
+  records the tag, it just can't be selected against today.
+
+None of these block a green run — `velox` with no arguments passes end to end (see "Expected
+output" above) — they're just not what they'll eventually be.
 
 ## What is not here
 

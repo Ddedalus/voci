@@ -16,7 +16,10 @@ from collections.abc import AsyncIterator
 
 import velox
 from httpx import AsyncClient
+from sqlalchemy import Connection, event
+from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import ConnectionPoolEntry
 from velox import Depends
 from velox import fastapi as velox_fastapi
 
@@ -28,6 +31,31 @@ from app.settings import Settings
 # --------------------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------------------
+
+
+def _sqlite_no_implicit_transaction(
+    dbapi_connection: DBAPIConnection, _record: ConnectionPoolEntry
+) -> None:
+    """`connect` listener for `engine` below: turn off pysqlite/aiosqlite's own implicit-BEGIN/
+    implicit-COMMIT heuristics, so the explicit `conn.begin()` + SAVEPOINT nesting `session`
+    relies on for transaction-per-test rollback is the *only* transaction control in play.
+
+    Without this (and `_sqlite_begin` below), `trans.rollback()` in `session` is a no-op against
+    the driver's own transaction: a row one test inserted stays visible to the next one, keyed
+    against the same file — an `alice@example.com` UNIQUE-constraint failure a few tests later, if
+    you're wondering what a rollback that never happened looks like from the outside. This is
+    SQLAlchemy's own documented fix for pysqlite/aiosqlite (`AsyncEngine.begin()` docs, "DBAPI
+    AUTOCOMMIT").
+    """
+    # `isolation_level` is a pysqlite/aiosqlite extension, not part of the DBAPI-2.0 surface
+    # `DBAPIConnection` types — real on the object this hook actually receives.
+    dbapi_connection.isolation_level = None  # type: ignore[attr-defined]
+
+
+def _sqlite_begin(conn: Connection) -> None:
+    """`begin` listener for `engine` below: issue `BEGIN` ourselves now that
+    `_sqlite_no_implicit_transaction` has told the driver not to."""
+    conn.exec_driver_sql("BEGIN")
 
 
 @velox.fixture(scope="session")
@@ -48,6 +76,8 @@ async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]
     spec/04 means 200 tests starting at once produce exactly one `create_async_engine` call.
     """
     e = create_async_engine(url)
+    event.listens_for(e.sync_engine, "connect")(_sqlite_no_implicit_transaction)
+    event.listens_for(e.sync_engine, "begin")(_sqlite_begin)
     async with e.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     try:
