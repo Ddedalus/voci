@@ -1,14 +1,7 @@
-"""Comparison-diff explanations — ported from pytest's `testing/test_assertion.py`.
+"""Comparison-diff explanations, ported from pytest's `testing/test_assertion.py`.
 
-These are the point of vendoring. The explanation engine is the largest chunk of the vendored
-code and the part users actually look at, and upstream's tests for it are the asset that
-reimplementing would have forfeited (spec/07 §1). Ported near-verbatim: the helpers in
-`conftest.py` are shaped like upstream's `callequal`/`callop` so a re-vendor can diff these
-against `testing/test_assertion.py` and see what moved.
-
-Deliberately *not* ported: everything requiring pytest's `pytester` fixture (running a nested
-pytest process), and everything about `pytest_assertrepr_compare` hook dispatch, which velox
-has no equivalent of — custom explainers become plain callables on a type (spec/07 §9).
+The helpers in `conftest.py` are shaped like upstream's `callequal`/`callop`, so these can be
+diffed directly against `testing/test_assertion.py`.
 """
 
 from __future__ import annotations
@@ -274,12 +267,8 @@ class TestSetComparisons:
 
 
 class TestTruncationBudget:
-    """The budget bounds the work done, not just the output shown.
-
-    This matters more for velox than for pytest: an explanation is built inside a failing
-    test's task while other tests are still running, so an unbounded ndiff over a huge string
-    is time the whole run pays for.
-    """
+    """The truncation budget bounds the work done building an explanation, not just the
+    output shown."""
 
     def test_text_diff_budget_caps_ndiff_input(self) -> None:
         left = "\n".join(f"left {i}" for i in range(1000))

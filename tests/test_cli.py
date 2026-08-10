@@ -1,7 +1,5 @@
-"""Placeholder tests for the velox CLI scaffold.
-
-Real collection/scheduling/reporting tests land alongside those features;
-this just proves the package imports and the entrypoint is wired up.
+"""Tests for `velox.cli`: argument parsing, usage errors, config merging, and `main`
+end to end (discover -> collect -> run -> report -> exit code).
 """
 
 from __future__ import annotations
@@ -29,27 +27,15 @@ def test_build_parser_prints_version(capsys: pytest.CaptureFixture[str]) -> None
 
 
 def test_main_with_one_broken_module_and_nothing_else_exits_one(tmp_path: Path) -> None:
-    """`main` returns its status rather than raising `SystemExit` (that mechanism belongs to the
-    `if __name__ == "__main__": sys.exit(main())` block), so a caller invoking it directly — like
-    this test — must still see it.
-
-    Hermetic version of "one collection error, zero records ⇒ exit 1" (spec/02 §4). An earlier
-    version of this test pointed `main([])` at this repo's own `tests/` dir instead: that
-    re-imported and *executed* every module under it a second time, under `velox_tests.*` names
-    that stayed in `sys.modules` afterwards (module-level side effects — hook installation in the
-    assertion tests, fixture state — running twice, in an order pytest doesn't control), was
-    cwd-dependent, and its `== 1` assertion silently re-encoded today's contents of `tests/`:
-    adding one `async def test_*` anywhere in this repo's suite would have turned it red for
-    reasons unrelated to the CLI.
-    """
+    """`main` returns its status rather than raising `SystemExit` (that mechanism belongs to
+    the `if __name__ == "__main__": sys.exit(main())` block)."""
     (tmp_path / "test_broken.py").write_text("raise RuntimeError('boom')\n")
     assert main([str(tmp_path)]) == 1
 
 
 def test_main_all_passing_exits_zero(tmp_path: Path) -> None:
-    """The exit code every CI green build actually depends on — untested through `main` before
-    this (only `_run.exit_code_for` was tested in isolation, which never exercises the
-    discover -> collect -> run wiring that decides what it's called with)."""
+    """The exit code every CI green build actually depends on — exercised through the real
+    discover -> collect -> run wiring, not just `_run.exit_code_for` in isolation."""
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     assert main([str(tmp_path)]) == 0
 
@@ -61,8 +47,8 @@ def test_main_empty_directory_exits_five(tmp_path: Path) -> None:
 def test_main_rejects_a_nonexistent_path_as_a_usage_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A typo'd path and a genuinely empty suite must not look the same (I8) — both used to
-    silently walk to nothing and exit 5."""
+    """A typo'd path and a genuinely empty suite must not look the same: a nonexistent path
+    is a usage error (exit 4), not silently treated as zero tests collected (exit 5)."""
     missing = tmp_path / "does_not_exist"
     status = main([str(missing)])
     assert status == 4
@@ -72,8 +58,8 @@ def test_main_rejects_a_nonexistent_path_as_a_usage_error(
 def test_main_rejects_a_test_id_argument_as_a_usage_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """spec/02 §1 documents `path.py::test_name` as supported invocation syntax; M0 doesn't
-    parse it yet and must say so rather than fail as a missing path."""
+    """`path.py::test_name` is a plausible invocation, but test ids are not parsed -- that
+    must be reported as a usage error, not fail as though the path were simply missing."""
     status = main(["tests/test_run.py::test_x"])
     assert status == 4
     assert "test ids" in capsys.readouterr().err
@@ -97,8 +83,8 @@ def test_default_roots_fall_back_to_cwd_without_a_tests_dir(
 def test_rewrite_cache_with_plain_mode_is_a_usage_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`plan` never resolves `--rewrite-cache` in `plain` mode, so passing both used to be a
-    silently-ignored contradiction instead of an error the user could act on."""
+    """`plan` never resolves `--rewrite-cache` in `plain` mode, so passing both must be a
+    usage error the user can act on, not a silently-ignored contradiction."""
     status = main(["--assert=plain", "--rewrite-cache=/tmp/wherever"])
     assert status == 4
     assert "--rewrite-cache" in capsys.readouterr().err
@@ -107,7 +93,7 @@ def test_rewrite_cache_with_plain_mode_is_a_usage_error(
 def test_main_runs_a_passing_and_a_failing_async_test(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """End-to-end M0 slice: discover -> import -> run -> print -> exit code (spec/00 §8)."""
+    """End to end: discover -> import -> run -> print -> exit code."""
     (tmp_path / "test_sample.py").write_text(
         "async def test_pass():\n"
         "    assert 1 + 1 == 2\n"
@@ -122,13 +108,10 @@ def test_main_runs_a_passing_and_a_failing_async_test(
 
     out = capsys.readouterr().out
     assert status == 1  # one failure present
-    # M1 reporter slice: the flat "id OUTCOME" dump is gone, replaced by `_report.Reporter`'s
-    # per-file block (spec/10 §2) plus the failure-details/short-summary sections `finish` builds
-    # (see `test_report.py` for the reporter's own dedicated coverage) -- both tests live in one
-    # file, so the block is marked FAIL with a "(1 failed)" count rather than a per-test PASS line.
-    # Matched as a whole line, not an unanchored substring: `"FAIL" in out` would also be satisfied
-    # by the unrelated "FAILED <id>" failure-details header a few lines below, so it alone doesn't
-    # actually pin that a per-file block was ever emitted.
+    # `_report.Reporter` prints a per-file block, not a per-test line; both tests live in one
+    # file, so the block is marked FAIL with a "(1 failed)" count. Matched as a whole line, not
+    # an unanchored substring: `"FAIL" in out` would also match the unrelated "FAILED <id>"
+    # failure-details header a few lines below.
     block_lines = [
         line for line in out.splitlines() if line.startswith("PASS ") or line.startswith("FAIL ")
     ]
@@ -139,10 +122,7 @@ def test_main_runs_a_passing_and_a_failing_async_test(
     assert "(1 failed)" in block_line
     assert "::test_fail" in out
     # A bare, un-rewritten `assert` also raises `AssertionError` — asserting only that string
-    # would pass even if the rewrite hook were never actually consulted (as it in fact wasn't,
-    # for a while: `_collect._import_module` used to import via `spec_from_file_location`
-    # alone, which never consults `sys.meta_path`, silently defeating `cli.main`'s
-    # `_rewrite.install` call despite the `assertions: rewrite` header line). Assert on the
+    # would pass even if the rewrite hook were never actually consulted. Assert on the
     # introspection text instead — `"assert 2 == 3"` is only ever produced by the AST rewrite.
     assert "assert 2 == 3" in out
 
@@ -150,9 +130,9 @@ def test_main_runs_a_passing_and_a_failing_async_test(
 def test_main_reports_a_setup_failure_as_error_not_failed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """M1: a fixture that raises during setup produces `Outcome.ERROR`, distinct from `FAILED` —
-    end to end through `main`, this covers both the per-test line (`ERROR`, not `FAILED`) and the
-    summary's `errored` bucket, neither of which anything exercised before this."""
+    """A fixture that raises during setup produces `Outcome.ERROR`, distinct from `FAILED` —
+    end to end through `main`, covering both the per-test line (`ERROR`, not `FAILED`) and the
+    summary's `errored` bucket."""
     (tmp_path / "test_sample.py").write_text(
         "import velox\n\n"
         "@velox.fixture()\n"
@@ -166,9 +146,9 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
 
     out = capsys.readouterr().out
     assert status == 1
-    # M1 reporter slice: the failure-details section prints "ERROR <id>", not "<id> ERROR" -- pin
-    # that shape as a whole line, not just that both substrings appear somewhere in the output.
-    # Excludes the short-summary line further down, which also starts with "ERROR " but continues
+    # The failure-details section prints "ERROR <id>", not "<id> ERROR" -- pin that shape as a
+    # whole line, not just that both substrings appear somewhere in the output. Excludes the
+    # short-summary line further down, which also starts with "ERROR " but continues
     # `" - <reason>"`.
     detail_lines = [
         line for line in out.splitlines() if line.startswith("ERROR ") and " - " not in line
@@ -180,10 +160,8 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
 
 
 def test_bad_concurrency_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    """M1 concurrency: `--concurrency` must be a positive integer -- `0`/negative is a usage
-    error (exit 4), same style as the other checks in `main` (`_invalid_path_argument`, the
-    `--rewrite-cache`/`--assert=plain` combo). Covers both sides of `main`'s `< 1` check, not just
-    `0` -- `--concurrency=-4` also pins that the message interpolates the actual value given."""
+    """`--concurrency` must be a positive integer -- `0`/negative is a usage error (exit 4)
+    whose message interpolates the actual value given."""
     for bad in ("--concurrency=0", "--concurrency=-4"):
         status = main([bad])
         assert status == 4
@@ -196,10 +174,8 @@ def test_main_runs_end_to_end_with_a_custom_concurrency(tmp_path: Path) -> None:
 
 
 def test_bad_timeout_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    """The `--timeout` sibling of `test_bad_concurrency_value_is_a_usage_error`: `0`/negative/
-    non-finite are all rejected the same way, per `build_parser`'s comment on this flag (a `0` or
-    negative "budget" would otherwise mean "fail every test that happens to suspend," not a
-    useful, well-defined mode)."""
+    """`--timeout` must be a positive, finite number -- `0`, negative, `nan`, and `inf` are
+    all usage errors (exit 4)."""
     for bad in ("--timeout=0", "--timeout=-1", "--timeout=nan", "--timeout=inf"):
         status = main([bad])
         assert status == 4
@@ -210,7 +186,7 @@ def test_main_reports_a_timeout_as_its_own_outcome(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """End-to-end `--timeout`: a hanging test surfaces `TIMEOUT`, distinct from `FAILED`/`ERROR`,
-    in both the per-test line and the summary's now-explicit `timed out` bucket."""
+    in both the per-test line and the summary's `timed out` bucket."""
     (tmp_path / "test_sample.py").write_text(
         "import asyncio\n\nasync def test_hangs():\n    await asyncio.sleep(10)\n"
     )
@@ -219,9 +195,7 @@ def test_main_reports_a_timeout_as_its_own_outcome(
 
     out = capsys.readouterr().out
     assert status == 1
-    # M1 reporter slice: pin the failure-details header as a whole line ("TIMEOUT <id>"), same
-    # reasoning as the equivalent assertion on
-    # `test_main_reports_a_setup_failure_as_error_not_failed`.
+    # Pin the failure-details header as a whole line ("TIMEOUT <id>").
     detail_lines = [
         line for line in out.splitlines() if line.startswith("TIMEOUT ") and " - " not in line
     ]
@@ -234,7 +208,7 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A `@velox.skip`-marked test must neither run for real nor fail the build over being
-    skipped (spec/05 §4: `skipped` contributes `0` to the exit code, same as `passed`)."""
+    skipped -- `skipped` contributes `0` to the exit code, same as `passed`."""
     (tmp_path / "test_sample.py").write_text(
         "import velox\n\n"
         "@velox.skip('not ready')\n"
@@ -261,8 +235,8 @@ def test_main_prints_no_config_when_none_is_found(
 def test_main_applies_tool_velox_env_before_the_first_test_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """spec/02 §5: "`env` from config is applied before the first test module import" -- a test
-    module reading `os.environ` at import time (not just inside a test body) must already see it."""
+    """`env` from config is applied before the first test module import -- a test module
+    reading `os.environ` at import time (not just inside a test body) must already see it."""
     monkeypatch.delenv("VELOX_CONFIG_SMOKE", raising=False)
     (tmp_path / "pyproject.toml").write_text(
         "[tool.velox]\nenv = { VELOX_CONFIG_SMOKE = 'from-config' }\n"
@@ -283,10 +257,8 @@ def test_main_applies_tool_velox_env_before_the_first_test_import(
 def test_main_restores_tool_velox_env_after_the_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`main` is called repeatedly in-process (this package's own test suite does exactly that) --
-    `[tool.velox] env` must not leak from one call into the next, or into whatever called `main`
-    for a side effect other than exiting. Covers both a key that already existed (restored to its
-    old value) and one that didn't (removed again)."""
+    """`[tool.velox] env` must not leak from one `main` call into the next -- covers both a key
+    that already existed (restored to its old value) and one that didn't (removed again)."""
     monkeypatch.setenv("VELOX_CONFIG_PREEXISTING", "original")
     monkeypatch.delenv("VELOX_CONFIG_NEW", raising=False)
     (tmp_path / "pyproject.toml").write_text(
@@ -322,9 +294,8 @@ def test_main_config_testpaths_is_used_when_no_paths_are_given(
 def test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`testpaths = []` is a real, if unusual, config -- it must not be treated the same as
-    "unset" and silently fall back to `_default_test_roots` (a `tests/` dir that also exists
-    here, which would otherwise mask the bug by finding a real test anyway)."""
+    """`testpaths = []` must not be treated the same as "unset" and silently fall back to
+    `_default_test_roots`."""
     (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntestpaths = []\n")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_it.py").write_text("async def test_it():\n    pass\n")
@@ -338,7 +309,7 @@ def test_main_cli_concurrency_overrides_config(
 ) -> None:
     """`[tool.velox] concurrency = 0` would be a usage error if it were ever consulted -- passing
     `--concurrency=2` on the command line must win instead of the merge falling through to the
-    bad config value (spec/02 §3: CLI > `[tool.velox]`)."""
+    bad config value: CLI flags take priority over `[tool.velox]`."""
     (tmp_path / "pyproject.toml").write_text("[tool.velox]\nconcurrency = 0\n")
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     monkeypatch.chdir(tmp_path)
@@ -383,8 +354,8 @@ def test_main_rejects_a_bad_config_timeout_value_as_a_usage_error(
 def test_main_config_test_file_patterns_empty_list_means_no_files_not_the_built_in_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`test_file_patterns = []` is a real, if unusual, config -- same reasoning (and same
-    regression) as `test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default`."""
+    """`test_file_patterns = []` must not be treated the same as "unset" and silently fall
+    back to the built-in `test_*.py` pattern."""
     (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntest_file_patterns = []\n")
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    raise AssertionError\n")
     monkeypatch.chdir(tmp_path)
@@ -395,8 +366,8 @@ def test_main_config_test_file_patterns_empty_list_means_no_files_not_the_built_
 def test_main_nonexistent_config_testpath_entry_is_a_usage_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A typo'd `[tool.velox] testpaths` entry must get the same I8 treatment as a typo'd CLI
-    path (`test_main_rejects_a_nonexistent_path_as_a_usage_error`) -- not a silent "0 tests"."""
+    """A typo'd `[tool.velox] testpaths` entry is a usage error (exit 4), not a silent
+    "0 tests"."""
     (tmp_path / "pyproject.toml").write_text("[tool.velox]\ntestpaths = ['tset']\n")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_it.py").write_text("async def test_it():\n    pass\n")
@@ -412,10 +383,9 @@ def test_main_nonexistent_config_testpath_entry_is_a_usage_error(
 def test_main_env_is_restored_even_when_rewrite_install_fails_after_it_is_applied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression: `env_backup`'s restore used to sit in a `finally` that `_rewrite.install`
-    could bypass entirely (by raising before that `try` was ever entered), leaking `[tool.velox]
-    env` into the process. The mutation now happens *inside* the same `try` the restore guards,
-    so even an exception from `_rewrite.install` itself must still be undone."""
+    """The `env` mutation happens inside the same `try` the restore guards, so even an
+    exception from `_rewrite.install` itself must still be undone -- not leak `[tool.velox]
+    env` into the process."""
     monkeypatch.delenv("VELOX_CONFIG_INSTALL_FAILS", raising=False)
     (tmp_path / "pyproject.toml").write_text(
         "[tool.velox]\nenv = { VELOX_CONFIG_INSTALL_FAILS = 'leaked' }\n"
@@ -472,21 +442,12 @@ def test_main_config_test_file_patterns_and_ignore_are_honored(
 def test_main_prints_jest_style_per_file_blocks_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """M1 reporter slice (spec/10 §2), end to end through `main`: two files, one all-passing and
-    one with a failure, produce two per-file scrollback blocks plus a failure-details/short-summary
-    section and the wall-vs-Σ final line -- not the old flat "id OUTCOME" dump (see
-    `tests/test_report.py` for the reporter's own unit coverage of every piece exercised here).
+    """End to end through `main`: two files, one all-passing and one with a failure, produce two
+    per-file scrollback blocks plus a failure-details/short-summary section and the wall-vs-Σ
+    final line.
 
-    Every assertion below matches a *line*, not just an unanchored substring somewhere in `out` —
-    two block lines pinned by prefix and content (not just "PASS" and "test_a.py" each appearing
-    somewhere, which would also be satisfied by a run that printed only a `PASS` block and
-    mentioned `test_a.py` in an unrelated traceback path) — and three properties an earlier version
-    of this test named but never actually checked: that there are exactly *two* block lines (one
-    per file, not per test — the regression the block format exists to prevent), that the wall-vs-Σ
-    line is genuinely the run's last output (this session's cli.py reorder), and that the
-    short-summary *reason* recovers a real assert message rather than the rewriter's own
-    explanation (`assert 1 == 2` alone is the one shape the old text-heuristic bug happened to get
-    right; `assert total == 4, "widget count"` is the shape it got wrong).
+    Every assertion below matches a whole *line*, not an unanchored substring somewhere in
+    `out`.
     """
     (tmp_path / "test_a.py").write_text(
         "async def test_one():\n    pass\n\nasync def test_two():\n    pass\n"
@@ -518,16 +479,13 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
     assert "--- short test summary ---" in out
     (detail_line,) = [line for line in lines if line.startswith("FAILED ") and " - " not in line]
     assert "::test_broken" in detail_line
-    # The user's own message, not the rewriter's `assert 3 == 4` explanation that follows it in
-    # the traceback -- this is exactly the case the old text heuristic got wrong (spec/07's
-    # vendored rewriter appends its explanation *after* the exception line under the default
-    # `--assert=rewrite`).
+    # The user's own message, not the rewriter's `assert 3 == 4` explanation, which the vendored
+    # rewriter appends *after* the exception line under the default `--assert=rewrite`.
     (summary_line,) = [line for line in lines if "test_broken -" in line]
     assert summary_line.endswith("AssertionError: widget count")
 
-    # Wall-vs-Σ final line (spec/10 §2's proof-of-value metric) — and genuinely the run's *last*
-    # line, per this session's `cli.py` reorder (it used to be buried above the skip list,
-    # collection-error tracebacks, and the `N tests: ...` summary).
+    # Wall-vs-Σ is the run's proof-of-value metric, and must be genuinely the *last* line --
+    # after the skip list, collection-error tracebacks, and the `N tests: ...` summary.
     assert "tests ·" in non_empty_lines[-1]
     assert "wall (Σ" in non_empty_lines[-1]
 
@@ -535,11 +493,9 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
 def test_main_prepends_rootdir_to_sys_path_for_absolute_imports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """spec/00 §11 "Fixture import path" / spec/02 §5: `rootdir` goes on `sys.path` once, before
-    the first test module import, so a plain absolute import rooted at `rootdir` -- a sibling
-    package, or a shared `tests/fixtures.py` -- resolves without an `__init__.py` anywhere
-    (PEP 420 namespace packages). Mirrors the two shipped examples' actual imports: `relay.cache`
-    (a sibling top-level package) and `tests.fixtures` (a shared fixture module)."""
+    """`rootdir` goes on `sys.path` once, before the first test module import, so a plain
+    absolute import rooted at `rootdir` -- a sibling package, or a shared `tests/fixtures.py`
+    -- resolves without an `__init__.py` anywhere (PEP 420 namespace packages)."""
     (tmp_path / "relay").mkdir()
     (tmp_path / "relay" / "__init__.py").write_text("VALUE = 42\n")
     tests_dir = tmp_path / "tests"
@@ -560,9 +516,8 @@ def test_main_prepends_rootdir_to_sys_path_for_absolute_imports(
 def test_main_removes_rootdir_from_sys_path_after_the_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`main` is called repeatedly in-process (this package's own test suite does exactly that) --
-    the `rootdir` insertion above must not leak from one call into the next, or grow `sys.path`
-    without bound over many calls."""
+    """The `rootdir` insertion must not leak from one `main` call into the next, or grow
+    `sys.path` without bound over many calls."""
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     monkeypatch.chdir(tmp_path)
     rootdir_str = str(tmp_path.resolve())
@@ -579,8 +534,7 @@ def test_main_does_not_disturb_a_preexisting_sys_path_entry_for_rootdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """If `rootdir` was already on `sys.path` before this call (an embedder's own setup, or a
-    nested `main()`), this call must not remove it on the way out -- symmetric with
-    `hook_already_installed`'s "only torn down if this call is the one that put it there"."""
+    nested `main()`), this call must not remove it on the way out."""
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     monkeypatch.chdir(tmp_path)
     rootdir_str = str(tmp_path.resolve())

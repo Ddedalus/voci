@@ -127,11 +127,10 @@ async def test_concurrent_delivery_does_not_serialise(
     r: Relay = Depends(relay),
     t: FakeTransport = Depends(transport),
 ) -> None:
-    """`@velox.timeout` overrides the suite default for this test.
+    """Sixteen deliveries with 50ms of latency each finish in well under their serial cost.
 
-    The timeout is an `asyncio.timeout` around the whole test envelope, so it also covers setup
-    and teardown, and a test that blows it is reported as `timeout` rather than as a generic
-    failure.
+    The `@velox.timeout(5)` above is not enforced yet, so this test is held to the suite-wide
+    `--timeout`; the budget it names is what it should get once per-test timeouts land.
     """
     t.latency = 0.05
 

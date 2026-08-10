@@ -46,6 +46,12 @@ reading the bodies.
 - **No counterfactuals.** Don't document what the code doesn't do, what a future version might do,
   what was considered and rejected, or what another component defers. Describe what is there.
   Everything unbuilt goes in `ROADMAP.md`, once.
+
+  One exception, and only this one: **public API that a user can apply today and that silently
+  does nothing must say so**, in one clause, pointing at `ROADMAP.md` — `"""Mark this test to run
+  alone. Not yet enforced; see ROADMAP.md."""`. A docstring that describes the intended behaviour
+  of an inert decorator is worse than no docstring, because the user writes the mark and believes
+  they are protected. Never let this exception grow into a general status report.
 - **Write as if the code was always this way.** Ban "now", "still", "no longer", "used to",
   "instead of before", "deliberately not", "this replaces".
 - **Don't argue with pytest.** One neutral comparison in `README.md` sets expectations; that's the
@@ -56,6 +62,31 @@ reading the bodies.
   one-line pointer.
 - **Docstrings are prose, not slide decks.** No bold-heading walls, no ASCII diagrams of code that
   is right there, no bulleted inventories of what a module contains.
+- **A docstring states what is in the file. Nothing else.** Not what the file *doesn't* contain,
+  not what other modules do instead, not why it was built this way, not what it replaces, not its
+  implementation status, and never how good it is. Defining a module by negation ("there is no X
+  here", "unlike the rest of the package") tells a reader nothing about what they're looking at.
+  If a sentence would still be true written on a different file, delete it.
+
+  ```python
+  # Bad — negation, status report, self-assessment, rhetoric:
+  """Assertion helpers.
+
+  The primary assertion mechanism is plain `assert`, rewritten for introspection. These two
+  cover what `assert` alone cannot express.
+
+  Unlike the rest of the package, these are implemented rather than stubbed: they are pure,
+  they depend on nothing in the runtime, and having them work makes the examples readable.
+  """
+
+  # Good — what is in the file:
+  """`raises` and `approx`: the two assertion helpers velox provides.
+
+  `raises` is an async context manager that captures an expected exception and exposes it as
+  `ExceptionInfo`, with optional type and message matching. `approx` wraps a number or a
+  collection of numbers for tolerant `==` comparison.
+  """
+  ```
 
 `docs/M1-PLAN.md` is the internal build log — the one place where milestone vocabulary, commit
 pointers, and per-slice history belong. Nothing else links to it.

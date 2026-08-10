@@ -1,15 +1,13 @@
 """Dependency-injection runtime: single-flight scope store + resolution-plan execution.
 
-The static half — `Fixture`, `Depends`, `ResolutionPlan` — lives in `_fixtures.py`. This module is
-the dynamic half: constructing each cache-keyed fixture instance exactly once, sharing it with
-every other requester that asks for the same key, and tearing it down in dependent-before-
-dependency order once nothing needs it any more.
+`ScopeStore` constructs each cache-keyed fixture instance exactly once, hands the same instance to
+every later requester of that key, and closes it when the last one releases it. `setup` walks a
+`ResolutionPlan`'s steps forward to build one test's arguments; `teardown` walks the same steps
+back to release them, which is what produces dependent-before-dependency ordering.
 
-`ResolutionPlan.steps` already flattens a test's entire transitive fixture graph into one
-deduplicated list, not just the test's direct dependencies, so teardown never needs to cascade
-from a dependent into its dependencies at run time — every fixture the test touches, however deep,
-is already its own entry in `steps`, acquired once and released once by the same per-test loop.
-Reversing that loop is what gives teardown inversion; nothing else has to track it.
+The plans themselves are built in `_fixtures.py`, already flattened over a test's entire
+transitive fixture graph, so every fixture a test touches — however deep — is its own entry in
+`steps`, acquired and released by that one loop.
 """
 
 from __future__ import annotations
@@ -137,9 +135,9 @@ class ScopeStore:
 
         A no-op for a `key` this store never *successfully* acquired — an unknown key, or one
         whose `build()` raised — so a caller can always release what it holds without first
-        checking whether construction actually succeeded. A failed entry is deliberately left in
-        place rather than deleted here: a concurrent or later requester of the same key still
-        needs to replay its cached exception (`aclose` leaves it alone for the same reason).
+        checking whether construction actually succeeded. A failed entry is left in place, not
+        deleted here: a concurrent or later requester of the same key still needs to replay its
+        cached exception (`aclose` leaves it alone for the same reason).
 
         `session` scope never tears down through this path, only through `aclose` at the very end
         of the run; its refcount still decrements, for symmetry with `acquire`.

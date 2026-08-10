@@ -1,15 +1,14 @@
 """FastAPI support: per-test dependency overrides against the app you already have.
 
-`app.dependency_overrides` and `app.state` are both per-app-instance state: a suite running
-several tests concurrently against one module-level `app = FastAPI()` has all of them writing the
-same dict. This module swaps each attribute, once per app, for a proxy that layers a `ContextVar`
-of per-test values over whatever the app already had. Concurrent tests each see their own layer
-through the same singleton; nothing on the app itself changes; there is nothing to clean up. See
-`docs/rationale.md` ("ContextVar-layered FastAPI proxy") for why this is safe to do from outside
-FastAPI's own code.
+`app.dependency_overrides` and `app.state` are per-app-instance state, shared by every test that
+runs against one module-level `app = FastAPI()`. This module swaps each attribute, once per app,
+for a proxy layering a `ContextVar` of per-test values over what the app already had, so
+concurrent tests read and write their own layer through the same app object. `client` yields an
+`httpx.AsyncClient` bound to one such layer, which lasts for the block and needs no cleanup. See
+`docs/rationale.md` for why this is safe from outside FastAPI's own code.
 
-Importing this module requires `fastapi` and `httpx`; `velox/__init__.py` does not, so the core
-package keeps zero hard dependencies. Use `import velox.fastapi`.
+Requires `fastapi` and `httpx`, which `velox/__init__.py` does not import. Use
+`import velox.fastapi`.
 """
 
 from __future__ import annotations

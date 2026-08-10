@@ -1,14 +1,11 @@
-"""spec/07 §4.2 and §5 — pyc cache identity, and the cold-start guarantee.
+"""Tests for the pyc cache: cache-key identity, and the cold-start fallback guarantee.
 
-The cache is load-bearing, not an optimisation: rewriting costs 4.6x on a cold import and a
-warm pyc load is 154x faster than that (R§2). Two consequences, both tested here.
+*Identity*: a cached pyc must never be reused by something that would have generated
+different bytecode. `enable_assertion_pass_hook` changes codegen without changing the key,
+which upstream derives from the CPython magic number alone.
 
-*Identity*: a cached pyc must never be reused by something that would have generated different
-bytecode. Upstream keys on the CPython magic number alone, which is why
-`enable_assertion_pass_hook` is a documented footgun — it changes codegen and not the key.
-
-*Availability*: velox is benchmarked cold in CI containers, so an unwritable cache must be a
-loud, named, recorded fallback rather than a silent 4.6x on every run.
+*Availability*: an unwritable cache falls back to a named, recorded degradation rather than
+a silent one.
 """
 
 from __future__ import annotations
@@ -31,20 +28,16 @@ class TestCacheKey:
         assert "pytest" not in vendored.PYTEST_TAG
 
     def test_codegen_options_change_the_key(self) -> None:
-        """The footgun, closed. Flipping a codegen flag must not reuse the old pycs."""
         default = vendored._velox_pyc_tail(Config())
         with_hook = vendored._velox_pyc_tail(Config({"enable_assertion_pass_hook": True}))
         assert default != with_hook
 
     def test_non_codegen_options_do_not_change_the_key(self) -> None:
-        """Verbosity affects rendering at run time, not generated code — it must not split
-        the cache, or every `-v` run would pay a cold import."""
         assert vendored._velox_pyc_tail(Config(verbosity=0)) == vendored._velox_pyc_tail(
             Config(verbosity=2)
         )
 
     def test_every_declared_codegen_option_is_hashed(self) -> None:
-        """Guards the list itself: adding a codegen flag without listing it is the bug."""
         base = vendored._velox_pyc_tail(Config())
         for name in vendored.VELOX_CODEGEN_OPTIONS:
             assert vendored._velox_pyc_tail(Config({name: "sentinel-value"})) != base
@@ -52,7 +45,6 @@ class TestCacheKey:
 
 class TestPycWriting:
     def test_pyc_is_written_and_reused(self, tmp_path: Path) -> None:
-        """The warm path. If this breaks, every run is a cold run and nothing else fails."""
         roots = tmp_path / "suite"
         roots.mkdir()
         (roots / "test_cached.py").write_text("def check():\n    assert 1 == 1\n")
@@ -84,12 +76,7 @@ class TestPycWriting:
         assert pycs[0].stat().st_mtime_ns == first_mtime
 
     def test_temp_pyc_is_keyed_on_pid_and_thread(self) -> None:
-        """Two threads importing different modules must not collide on one temp filename.
-
-        Checked by reading the source of the write path rather than by racing threads: the
-        race is real but rare, and a flaky test that passes 99 times out of 100 would be worse
-        than no test at all.
-        """
+        """Two threads importing different modules must not collide on one temp filename."""
         import inspect
 
         source = inspect.getsource(vendored._write_pyc)
@@ -104,7 +91,7 @@ class TestPycWriting:
 
 
 class TestCacheDirResolution:
-    """spec/07 §5.1, in order: explicit flag, env var, platform cache dir, pycache_prefix."""
+    """Resolution order: explicit flag, env var, platform cache dir, then pycache_prefix."""
 
     def test_explicit_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_CACHE_DIR, str(tmp_path / "from-env"))
@@ -137,7 +124,7 @@ class TestCacheDirResolution:
 
 
 class TestColdStartGuarantee:
-    """spec/07 §5.3 — an unwritable cache must be loud, named, and recorded."""
+    """An unwritable cache must fall back loudly: a named, recorded degradation."""
 
     def test_writable_cache_stays_in_rewrite_mode(self, tmp_path: Path) -> None:
         setup = plan([], cache_dir=tmp_path / "cache")
@@ -174,7 +161,6 @@ class TestColdStartGuarantee:
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can write to anything")
     def test_fallback_is_recorded_in_the_report_header(self, tmp_path: Path) -> None:
-        """A benchmark run that silently fell back is a corrupted benchmark."""
         readonly = tmp_path / "readonly"
         readonly.mkdir()
         readonly.chmod(0o555)
@@ -192,7 +178,8 @@ class TestColdStartGuarantee:
         assert header == f"assertions: rewrite, cache {tmp_path / 'cache'}"
 
     def test_plain_mode_is_not_degraded(self, tmp_path: Path) -> None:
-        """`plain` chosen deliberately reads differently from `plain` fallen back into."""
+        """Explicitly-chosen `plain` mode is not marked `degraded`, unlike a fallback into
+        `plain`."""
         setup = plan([], mode="plain", cache_dir=tmp_path / "cache")
         assert setup.header_line() == "assertions: plain"
         assert not setup.degraded
@@ -215,9 +202,8 @@ class TestColdStartGuarantee:
     def test_install_warns_only_once_given_a_precomputed_setup(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """`install` used to call `plan` again internally without forwarding `warn`, so a
-        caller that already ran `plan` for the report header (as `cli.main` does) got the same
-        two-line stderr warning a second time."""
+        """A caller that already ran `plan` for the report header (as `cli.main` does) and
+        passes that `setup` to `install` gets exactly one stderr warning, not two."""
         readonly = tmp_path / "readonly"
         readonly.mkdir()
         readonly.chmod(0o555)
@@ -248,8 +234,7 @@ class TestColdStartGuarantee:
 
 
 class TestProbeCleanup:
-    """A mistyped `--rewrite-cache` used to leave an empty directory tree behind: velox falls
-    back to `plain` and never uses it, but `mkdir(parents=True)` had already created it."""
+    """A failed write probe removes any cache directory it freshly created."""
 
     def test_probe_failure_removes_a_freshly_created_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

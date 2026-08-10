@@ -1,10 +1,9 @@
 """Marks: decorators that attach one frozen record to the decorated function.
 
-Marks are objects, not strings. There is no open-ended mark namespace, no `--strict-markers`,
-and no plugin-consumed marks — those exist in pytest to feed a hook system velox does not have.
-
-Every decorator here returns the *same* function object with `__velox_marks__` replaced, so
-stacking is order-independent except for `parametrize` (see below).
+Marks are objects, not strings: `skip`, `skipif`, `xfail`, `parametrize`, `tag`, `timeout`,
+`solo` and `isolated` each fold one frozen record into the function's `__velox_marks__`. Every
+decorator returns the *same* function object with that attribute replaced, so stacking is
+order-independent except for `parametrize` (see below).
 """
 
 from __future__ import annotations
@@ -99,7 +98,7 @@ def marks_of(fn: object) -> Marks:
     return marks_dict.get(MARKS_ATTR) or Marks()
 
 
-# Marks still live on the function object (`__velox_marks__` is part of the tested surface — see
+# Marks live on the function object (`__velox_marks__` is part of the tested surface — see
 # `marks_of`), so a helper reused as a test body in two modules would otherwise accumulate both
 # sites' marks, and a second `@skip` would silently overwrite the first. Accumulating marks
 # (`skipifs`, `tags`, `parametrizations`) legitimately stack across decorators; a *scalar* mark
@@ -145,8 +144,8 @@ def skipif[F: Callable[..., Any]](
 def xfail[F: Callable[..., Any]](
     reason: str, *, strict: bool = False, raises: ExcTypes | None = None
 ) -> Callable[[F], F]:
-    """Expect failure. `strict=True` turns an unexpected pass into a failure; `raises=` narrows
-    which exception counts as expected."""
+    """Record an expected-failure mark, with `reason`. `strict` and `raises` refine what counts
+    as the expected failure. Not yet enforced in reporting; see `ROADMAP.md`."""
 
     def decorate(fn: F) -> F:
         return _amend(fn, xfail=XFail(reason, strict=strict, raises=raises))
@@ -155,7 +154,8 @@ def xfail[F: Callable[..., Any]](
 
 
 def tag[F: Callable[..., Any]](*names: str) -> Callable[[F], F]:
-    """Attach selection tags, matched by `-m`. Replaces `@pytest.mark.<name>` for selection only."""
+    """Attach selection tags to a test, exposed as `TestInfo.tags`. Not yet selectable via `-m`;
+    see `ROADMAP.md`."""
 
     def decorate(fn: F) -> F:
         return _amend(fn, tags=(*marks_of(fn).tags, *names))
@@ -164,7 +164,10 @@ def tag[F: Callable[..., Any]](*names: str) -> Callable[[F], F]:
 
 
 def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
-    """Per-test timeout in seconds. Overrides `--timeout`."""
+    """Record a per-test timeout, in seconds.
+
+    Not yet enforced — every test is held to the suite-wide `--timeout` budget; see `ROADMAP.md`.
+    """
 
     def decorate(fn: F) -> F:
         return _amend(fn, timeout=seconds)
@@ -173,18 +176,17 @@ def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
 
 
 def solo[F: Callable[..., Any]](fn: F) -> F:
-    """Run alone: the whole suite drains first, and nothing else runs alongside.
+    """Mark this test to run alone, with nothing else scheduled alongside it.
 
-    Applied bare, with no parentheses. This is what a global write costs.
+    Applied bare, with no parentheses. Not yet enforced; see `ROADMAP.md`.
     """
     return _amend(fn, solo=True)
 
 
 def isolated[F: Callable[..., Any]](fn: F) -> F:
-    """Run in a subprocess on a fresh loop.
+    """Mark this test to run in a subprocess on a fresh loop.
 
-    Applied bare, with no parentheses. Unlike `solo` this takes no suite-wide lock: an isolated
-    test shares no process state, so it costs a spawn rather than the suite's concurrency.
+    Applied bare, with no parentheses. Not yet enforced; see `ROADMAP.md`.
     """
     return _amend(fn, isolated=True)
 
@@ -195,18 +197,15 @@ def parametrize[F: Callable[..., Any]](
     *,
     ids: Sequence[str] | Callable[[object], str | None] | None = None,
 ) -> Callable[[F], F]:
-    """Run the test once per case.
+    """Record a `parametrize` mark. `argnames` is `"a,b"` or `["a", "b"]`; with one name, each
+    entry of `argvalues` is that value, with several, each entry is a tuple aligned to the
+    names. Stacked decorators combine in a stable, defined order: outermost varies slowest.
 
-    `argnames` is `"a,b"` or `["a", "b"]`; with one name, each entry of `argvalues` is that value,
-    with several, each entry is a tuple aligned to the names.
-
-    Stacked decorators produce the cartesian product in a stable, defined order: outermost varies
-    slowest. There is no `indirect=`: a fixture that needs the parametrized value takes it as an
-    ordinary argument instead.
+    Not yet expanded at collection; see `ROADMAP.md`.
     """
-    # Validated here, at decoration time, rather than left to fail in the collector: by then the
-    # traceback no longer points at the decorator, and a stale `ids` list would silently mislabel
-    # every later case instead of raising.
+    # Validated here, at decoration time: failing in the collector instead points the traceback
+    # elsewhere, and a stale `ids` list would silently mislabel every later case instead of
+    # raising.
     names = _split(argnames)
     if not names:
         raise ValueError(f"parametrize({argnames!r}): no argument names given")

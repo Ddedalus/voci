@@ -34,8 +34,8 @@ from velox._marks import marks_of
 
 __all__ = ["Outcome", "TestResult", "exit_code_for", "run_suite"]
 
-#: Deliberately much larger than a typical core count: most suites are bound by a
-#: downstream service's latency, not by CPU.
+#: Much larger than a typical core count: most suites are bound by a downstream
+#: service's latency, not by CPU.
 DEFAULT_CONCURRENCY = 16
 
 
@@ -200,7 +200,7 @@ async def _run_one(
         except (KeyboardInterrupt, SystemExit):
             raise
         except asyncio.CancelledError:
-            # Deliberately not re-raised (unlike the setup/call guards above): teardown
+            # Not re-raised (unlike the setup/call guards above): teardown
             # runs outside the `async with deadline:` block, so there is no
             # asyncio.timeout __aexit__ left to hand a re-raise to, and no outer
             # handler in this function left to catch it -- re-raising here would let a
@@ -221,8 +221,8 @@ async def _run_one(
             teardown_summary = _summarize_exception(exc)
     elif partial_module_keys:
         # Setup failed (or timed out) partway through but had already acquired a
-        # module-scope key -- _di.setup deliberately left it unreleased, so it still
-        # needs to reach run_suite's module-lifetime accounting.
+        # module-scope key -- _di.setup leaves it unreleased, so it needs to reach
+        # run_suite's module-lifetime accounting.
         module_keys = tuple(partial_module_keys)
 
     duration = time.monotonic() - start
@@ -301,8 +301,8 @@ def run_suite(
     store = _di.ScopeStore()
 
     # install() is the first thing here that can fail and the first thing that mutates
-    # process-global state, deliberately in that order: it resolves its one fallible
-    # step (basetemp_root) before touching sys.stdout/sys.stderr/the log handler, so a
+    # process-global state, in that order: it resolves its one fallible step
+    # (basetemp_root) before touching sys.stdout/sys.stderr/the log handler, so a
     # failure here leaves nothing installed for the finally below to need to undo.
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
     try:
@@ -347,9 +347,9 @@ def run_suite(
                     if remaining_by_module[record.path] == 0:
                         keys = pending_module_keys.pop(record.path, None)
                         if keys:
-                            # Deliberately still inside this test's current_test_context:
-                            # this test is the module's last, so a module-scope
-                            # fixture's own teardown print is attributed to it.
+                            # Inside this test's current_test_context: this test is
+                            # the module's last, so a module-scope fixture's own
+                            # teardown print is attributed to it.
                             await _teardown_module_scope(
                                 store,
                                 keys,

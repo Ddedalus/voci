@@ -1,9 +1,8 @@
-"""spec/07 §4.3 — the universal explanation floor.
+"""Tests for the PEP 657 fallback: explanations for asserts in unrewritten code.
 
 pytest rewrites test files only, so an `assert` in a helper module raises a bare
-`AssertionError` with nothing under it. That is pytest's own biggest fidelity gap. PEP 657
-column spans close most of it for free and, unlike re-evaluation, without running user code a
-second time — the distinction that killed `--assert=reinterp` (spec/07 §7).
+`AssertionError` with nothing under it. PEP 657 column spans close most of that gap for
+free, and without running user code a second time to re-evaluate the expression.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from velox._pep657 import explain_assertion, source_at
 
 @pytest.fixture
 def unrewritten(tmp_path: Path):
-    """Import a module *without* the rewriting hook — the situation this floor exists for."""
+    """Import a module without the rewriting hook."""
     import importlib.util
     import sys
 
@@ -47,7 +46,7 @@ def _explain(fn, *args) -> str | None:
 
 
 def test_renders_the_spec_example(unrewritten) -> None:
-    """The exact shape spec/07 §4.3 promises."""
+    """The underline spans exactly the failing sub-expression, per PEP 657's column info."""
     mod = unrewritten(
         """
         def check(resp, expected):
@@ -116,8 +115,8 @@ def test_operator_inside_a_string_literal_is_ignored(unrewritten) -> None:
 
 
 def test_operator_inside_a_triple_quoted_string_is_ignored(unrewritten) -> None:
-    """Minimal fix, not a full lexer: `'''` used to read as an empty `''` plus a stray `'`,
-    desynchronising the rest of the scan rather than skipping the string as one unit."""
+    """A triple-quoted string is skipped as one unit, not read as an empty `''` plus a stray
+    `'`."""
     mod = unrewritten("def check(x):\n    assert x == '''a == b'''\n")
     explanation = _explain(mod.check, "nope")
     assert explanation is not None
@@ -130,17 +129,13 @@ def test_assert_prefixed_identifier_is_not_mistaken_for_the_keyword(
 ) -> None:
     """`assert_called_once()` (mock), `assertEqual(...)` (unittest), and
     `assert_frame_equal(...)` (pandas) all begin with the same six characters as the keyword but
-    are identifiers, not statements. A bare `startswith("assert")` would claim the line and hand
-    `_operator_span` a call expression to underline as though it were a comparison.
-
-    `linecache.getline` is patched rather than relying on some real library's internals, which
-    would depend on exactly how that library raises and could change out from under this test;
-    the point being tested is the keyword check, not any particular caller's plumbing.
-    """
+    are identifiers, not statements."""
 
     def check() -> None:
         raise AssertionError()
 
+    # `linecache.getline` is faked directly rather than raising through a real library, so this
+    # pins the keyword check itself rather than any particular caller's plumbing.
     monkeypatch.setattr(linecache, "getline", lambda *a, **k: "    assert_called_once()\n")
     assert _explain(check) is None
 

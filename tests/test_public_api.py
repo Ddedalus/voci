@@ -1,7 +1,5 @@
-"""Tests for the declarative half of the public API (spec/01).
-
-Nothing here runs a test through velox — the runtime does not exist yet. These pin the shapes:
-what the decorators build and what the plan reads off `__defaults__`.
+"""Tests for velox's public API: fixture declaration, marks, parametrize, builtin fixtures,
+and the `approx`/`raises` assertion helpers.
 """
 
 from __future__ import annotations
@@ -141,12 +139,8 @@ def test_builtin_fixtures_are_fixtures() -> None:
 
 
 def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
-    """`set_level` validates its `level`/`logger` arguments the moment it is called, not deferred
-    to `with ...:` — a `@contextlib.contextmanager`-based implementation would defer to
-    `__enter__` instead (the decorated function is a generator; nothing in its body runs before
-    the first `next()`, which `__enter__` triggers), so `cm = log_records.set_level("nonsense")`
-    would succeed and only `with cm:` would raise. This pins the eager behavior: the call itself
-    raises, before any `with` block exists to enter."""
+    """`set_level` validates its `level`/`logger` arguments the moment it is called, not
+    deferred until `with ...:` is entered."""
     records = velox.LogRecords([])
 
     with pytest.raises(ValueError, match="unknown logging level"):
@@ -165,13 +159,8 @@ def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
         assert logging.getLogger().level == logging.DEBUG
     assert logging.getLogger().level == previous
 
-    # The restore must also survive the *abnormal* exit path -- a raised level must not leak past
-    # a test whose body raised. `_LevelOverride.__exit__` ignores `exc_info` entirely (a plain
-    # `finally`-shaped restore, not conditioned on how the block exited), which is exactly the
-    # property a future accidental rewrite to `@contextlib.contextmanager` could silently break if
-    # the `yield` weren't wrapped in its own `try/finally` -- pinned here so that regression would
-    # actually fail a test instead of only showing up as a leaked level in some later, unrelated
-    # test.
+    # The restore must also survive the *abnormal* exit path -- a raised level must not leak
+    # past a test whose body raised.
     with pytest.raises(RuntimeError, match="boom"), records.set_level("DEBUG"):
         assert logging.getLogger().level == logging.DEBUG
         raise RuntimeError("boom")

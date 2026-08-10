@@ -32,11 +32,8 @@ class Reporter:
     """Streams per-file blocks as tests finish (`on_result`) and prints the
     end-of-run sections once, after `run_suite` returns (`finish`).
 
-    `records` is walked directly to seed per-file counts, not reduced to an
-    `{id: path}` dict first, since a factory-generated test can repeat its id across
-    instances. `stream` is bound once at construction rather than read from
-    `sys.stdout` lazily, since `_run.run_suite` replaces `sys.stdout` with a
-    `_capture.Router` for the run's duration.
+    `records` seeds per-file counts by walking the sequence directly, not by
+    reducing it to an `{id: path}` dict. `stream` is bound once, at construction.
     """
 
     records: Sequence[TestRecord]

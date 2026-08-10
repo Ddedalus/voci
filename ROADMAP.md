@@ -21,7 +21,8 @@ concurrently by hand, or run with `--concurrency 1`.
   lock, so a test that declares a shared resource still runs alongside everything else.
 - `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
 - `@velox.xfail` — an expected failure reports as `FAILED`, indistinguishable from a regression.
-- `@velox.tag` — recorded, but there is no `-m` to select on it.
+- `@velox.tag` — recorded and exposed as `TestInfo.tags`, but there is no `-m` to select on it.
+- `@velox.timeout` — recorded, but never read: every test is held to the suite-wide `--timeout`.
 - `@velox.parametrize` — recorded, but not expanded at collection; a parametrized test currently
   fails collection because its extra parameter looks like a missing dependency.
 

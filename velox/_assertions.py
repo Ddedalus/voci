@@ -1,10 +1,8 @@
-"""Assertion helpers.
+"""`raises` and `approx`: the two assertion helpers velox provides.
 
-The primary assertion mechanism is plain `assert`, rewritten for introspection. These two cover
-what `assert` alone cannot express.
-
-Unlike the rest of the package, these are implemented rather than stubbed: they are pure, they
-depend on nothing in the runtime, and having them work makes the examples readable.
+`raises` is a context manager that catches an expected exception and exposes it as
+`ExceptionInfo`, optionally matching the exception type and a regex against its message.
+`approx` wraps a number, or a collection of numbers, for tolerant `==` comparison.
 """
 
 from __future__ import annotations

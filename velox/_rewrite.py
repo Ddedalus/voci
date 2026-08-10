@@ -1,18 +1,12 @@
 """Installing assertion introspection: cache resolution, the import hook, the explanation hook.
 
-This is velox's replacement for `_pytest/assertion/__init__.py` — the plugin glue, not the
-rewriter. The rewriter itself is vendored (`velox/_vendor/assertion/`) and untouched apart from
-the edits in `VENDOR.md`.
+The rewriter itself is vendored in `velox/_vendor/assertion/`; this module is the glue that turns
+it on. `install` resolves one pyc cache root and probes it once — an unwritable root prints a
+message on stderr and drops the run to `plain` mode — then installs the meta-path import hook and
+registers the explanation hook that renders a failed comparison as a diff.
 
-Two things here are velox's own, not ports:
-
-* **The cold-start guarantee.** Rewriting costs 4.6x on a cold import and 1/154th of that warm,
-  so the pyc cache is load-bearing, not an optimisation. velox resolves one cache root, probes it
-  once, and if it is unwritable says so on stderr and drops to `plain` — rather than silently
-  paying 4.6x on every run in a CI container.
-* **Which modules get rewritten.** pytest rewrites files matching `test_*.py` plus conftests;
-  assertions in `tests/fixtures.py` get nothing. velox rewrites every `.py` file discovered under
-  the test roots, which is a superset, and costs one path check.
+Every `.py` file discovered under the test roots is rewritten, not just files matching the test
+name patterns, so assertions in a shared helper module get the same treatment as those in a test.
 """
 
 from __future__ import annotations
@@ -49,8 +43,8 @@ __all__ = [
     "uninstall",
 ]
 
-#: `rewrite` is the default; `plain` keeps bare asserts and leans on the PEP 657 floor
-#: (`velox/_pep657.py`), which is why `plain` is a usable mode rather than a punishment.
+#: `rewrite` is the default. `plain` keeps bare asserts and leans on the PEP 657 floor
+#: (`velox/_pep657.py`) for explanations.
 type AssertMode = Literal["rewrite", "plain"]
 
 ENV_CACHE_DIR = "VELOX_REWRITE_CACHE"
@@ -61,11 +55,7 @@ _PROBE_NAME = ".velox-write-probe"
 
 @dataclass(frozen=True, slots=True)
 class AssertionSetup:
-    """What assertion introspection actually ended up doing, for the report header.
-
-    A benchmark run that quietly fell back to `plain` is a corrupted benchmark, so the
-    fallback is recorded rather than merely warned about.
-    """
+    """What assertion introspection actually ended up doing, for the report header."""
 
     mode: AssertMode
     #: None in `plain` mode, or when the resolved root failed its probe.
@@ -366,11 +356,9 @@ def explanation_lines(
 ) -> list[str] | None:
     """The detailed diff for `left op right`, as lines, or None when there is nothing to add.
 
-    This is the shape pytest's `pytest_assertrepr_compare` returns, kept deliberately so the
-    ported upstream tests exercise velox's wiring rather than a paraphrase of it.
-
-    Pre-budgets the formatting to what the truncator will actually keep, so an enormous diff is
-    never built in full just to be thrown away.
+    Matches the shape pytest's `pytest_assertrepr_compare` returns. Pre-budgets the formatting
+    to what the truncator will actually keep, so an enormous diff is never built in full just to
+    be thrown away.
     """
     config = config if config is not None else Config()
 

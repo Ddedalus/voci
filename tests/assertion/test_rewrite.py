@@ -1,9 +1,5 @@
-"""The rewriter, end to end: it must be sound, and it must explain.
-
-The vendored AST pass is upstream's and upstream tests it heavily. What is worth testing here
-is the contract velox depends on and the seams velox changed — soundness under side effects,
-`await` inside an `assert`, line-number fidelity, and which modules get rewritten at all
-(spec/07 Q16).
+"""The rewriter, end to end: soundness under side effects, `await` inside an `assert`,
+line-number fidelity, and which modules get rewritten at all.
 """
 
 from __future__ import annotations
@@ -35,12 +31,8 @@ def test_comparison_gets_an_explanation(rewritten) -> None:
 
 
 def test_subexpressions_evaluated_exactly_once(rewritten) -> None:
-    """The soundness property. Naive re-evaluation is what killed `--assert=reinterp`.
-
-    Every subexpression is hoisted into a temp before the condition is tested, so a failing
-    assert reports values that were actually computed rather than recomputing them — which
-    would run side effects a second time (spec/07 §7).
-    """
+    """Every subexpression is hoisted into a temp before the condition is tested, so a failing
+    assert reports values that were actually computed, not recomputed."""
     mod = rewritten(
         """
         calls = []
@@ -76,7 +68,6 @@ def test_side_effects_run_once_even_in_a_passing_assert(rewritten) -> None:
 
 
 def test_await_inside_assert(rewritten) -> None:
-    """Non-negotiable for an async-first runner (spec/07 §6), so it gets its own test."""
     mod = rewritten(
         """
         async def value():
@@ -154,12 +145,8 @@ def test_explicit_message_is_preserved(rewritten) -> None:
 
 
 def test_non_test_module_under_the_root_is_rewritten(rewritten) -> None:
-    """spec/07 Q16.
-
-    pytest rewrites `test_*.py` and conftests only, so an assert in `tests/fixtures.py` gets a
-    bare `AssertionError`. velox rewrites everything discovered under the test roots, which is
-    a superset, so fixture and helper modules explain themselves like tests do.
-    """
+    """velox rewrites every module discovered under the test roots, not just `test_*.py`
+    files and conftests -- so a helper module's own asserts explain themselves too."""
     mod = rewritten(
         "def helper_check(a, b):\n    assert a == b\n",
         name="fixtures",
@@ -170,7 +157,7 @@ def test_non_test_module_under_the_root_is_rewritten(rewritten) -> None:
 
 
 def test_rewriter_temps_are_filtered_from_locals() -> None:
-    """spec/07 §6: without this, every failure shows a wall of `@py_assert*` bindings."""
+    """Without this, every failure shows a wall of `@py_assert*` bindings."""
     from velox._rewrite import iter_user_locals, strip_rewriter_temps
 
     frame_locals = {
@@ -237,7 +224,7 @@ class TestInstall:
 class TestDiscoverPythonFiles:
     """`_discover_python_files` feeds `_initialpaths` (see `_DiscoveredPaths`), which forces a
     rewrite and defeats the rewriter's own name-based bailout — so anything it finds under a
-    virtualenv or vendored tree used to get rewritten right along with the user's own tests."""
+    virtualenv or vendored tree would get rewritten right along with the user's own tests."""
 
     def test_prunes_a_directory_containing_a_pyvenv_cfg(self, tmp_path: Path) -> None:
         project = tmp_path / "project"
@@ -269,7 +256,7 @@ class TestDiscoverPythonFiles:
 
 
 def test_plan_rejects_an_unrecognised_mode() -> None:
-    """Only `"plain"` was ever tested for, so a typo from a programmatic caller — or a config
-    value that never went through argparse's `choices=` — used to silently mean "rewrite"."""
+    """A typo from a programmatic caller, or a config value that never went through argparse's
+    `choices=`, must raise rather than silently mean "rewrite"."""
     with pytest.raises(ValueError, match="bogus"):
         plan([], mode="bogus")  # type: ignore[arg-type]

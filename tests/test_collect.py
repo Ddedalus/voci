@@ -1,4 +1,4 @@
-"""Regression tests for velox._collect (spec/03 §3-4)."""
+"""Tests for velox._collect: test discovery, module import, and collection errors."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ def test_module_name_for_escapes_non_identifier_segments(tmp_path: Path) -> None
 
 
 def test_module_name_for_two_same_named_files_never_collide(tmp_path: Path) -> None:
-    """The entire content of pytest's `ImportPathMismatchError`, deleted rather than solved."""
     first = module_name_for(tmp_path / "pkg_a" / "test_utils.py", tmp_path)
     second = module_name_for(tmp_path / "pkg_b" / "test_utils.py", tmp_path)
     assert first != second
@@ -41,9 +40,8 @@ def test_module_name_for_two_same_named_files_never_collide(tmp_path: Path) -> N
 def test_module_name_for_escaping_does_not_reopen_the_collision_it_guards_against(
     tmp_path: Path,
 ) -> None:
-    """A bare character-replace (`-` -> `_`) would make `api-v2` and `api_v2` collide again —
-    exactly the collision `module_name_for` exists to prevent. The digest appended for whichever
-    segment needed escaping keeps them apart."""
+    """A bare character-replace (`-` -> `_`) would make `api-v2` and `api_v2` collide again;
+    the digest appended for whichever segment needed escaping keeps them apart."""
     dashed = module_name_for(tmp_path / "api-v2" / "test_a.py", tmp_path)
     clean = module_name_for(tmp_path / "api_v2" / "test_a.py", tmp_path)
     assert dashed != clean
@@ -71,8 +69,8 @@ def test_collect_orders_records_by_definition_line_not_name(tmp_path: Path) -> N
     assert [record.qualname for record in result.records] == ["test_b", "test_a", "test_sync"]
     assert [record.index for record in result.records] == [0, 1, 2]
     assert [record.lineno for record in result.records] == [1, 7, 10]
-    # `path` is relative to `rootdir` (spec/03 §1, I2) — not the absolute `tmp_path` the file
-    # actually lives under, which would bake a machine-specific path into every id.
+    # `path` is relative to `rootdir` -- not the absolute `tmp_path` the file actually lives
+    # under, which would bake a machine-specific path into every id.
     assert result.records[0].id == "test_sample.py::test_b"
     assert result.records[0].path == Path("test_sample.py")
 
@@ -107,8 +105,7 @@ def test_import_error_becomes_a_collection_error_and_does_not_abort(tmp_path: Pa
         "async def test_ok():\n    pass\n",
     )
 
-    # Deterministic order matters here: the broken file first proves a failure doesn't stop
-    # collection of files that come after it.
+    # The broken file is first: a failure must not stop collection of files after it.
     result = collect([broken, fine], rootdir=tmp_path)
 
     assert len(result.errors) == 1
@@ -145,8 +142,7 @@ def test_a_failed_import_does_not_leave_a_half_initialized_module_in_sys_modules
 
 
 def test_a_successful_import_is_also_not_left_resident_in_sys_modules(tmp_path: Path) -> None:
-    """Companion to the failure-path cleanup: leaving successful imports registered forever
-    would mean every `collect()` call in a process permanently grows `sys.modules`."""
+    """A successful import is also removed from `sys.modules` after collection."""
     fine = _write(tmp_path / "test_fine.py", "async def test_ok():\n    pass\n")
 
     result = collect([fine], rootdir=tmp_path)
@@ -158,12 +154,12 @@ def test_a_successful_import_is_also_not_left_resident_in_sys_modules(tmp_path: 
 def test_helper_named_test_star_imported_from_elsewhere_is_not_collected_twice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """spec/03 §4 step 1's `__module__` filter: a `test_*`-named function imported into a module
-    from somewhere else must not be collected as if it were defined there."""
+    """The `__module__` filter: a `test_*`-named function imported into a module from
+    somewhere else must not be collected as if it were defined there."""
     # `test_main.py`'s `from ... import ...` below is an ordinary Python import statement, which
     # goes through the *real* import system (not velox's path-derived one) and therefore needs
-    # the helper module findable on `sys.path` — velox itself never touches `sys.path` (spec/03
-    # §3), this is purely to make the test's own fixture module importable the normal way.
+    # the helper module findable on `sys.path` — velox itself never touches `sys.path`, this is
+    # purely to make the test's own fixture module importable the normal way.
     monkeypatch.syspath_prepend(str(tmp_path))
     helper = _write(
         tmp_path / "velox_test_collect_helper.py", "async def test_helper():\n    pass\n"
@@ -176,14 +172,10 @@ def test_helper_named_test_star_imported_from_elsewhere_is_not_collected_twice(
     try:
         result = collect([helper, main], rootdir=tmp_path)
     finally:
-        # The plain `import` statement above registers a real, un-prefixed `sys.modules` entry
-        # (distinct from velox's own `velox_tests.velox_test_collect_helper`, which `collect`
-        # already cleans up itself) — this test's own doing, so this test's own cleanup.
+        # The plain `import` statement above registers a real, un-prefixed `sys.modules` entry,
+        # distinct from velox's own `velox_tests.velox_test_collect_helper`.
         sys.modules.pop("velox_test_collect_helper", None)
 
-    # `velox_test_collect_helper.py` doesn't match `test_*.py`/`*_test.py`, but it's collected
-    # here as an explicit file to prove the point either way: `test_helper` is only ever
-    # attributed to its own defining module, never to `test_main` too.
     ids = [record.id for record in result.records]
     assert ids == ["velox_test_collect_helper.py::test_helper", "test_main.py::test_own"]
 
@@ -229,9 +221,8 @@ def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> 
 def test_depends_defaulted_parameter_is_collected_with_a_real_resolution_plan(
     tmp_path: Path,
 ) -> None:
-    """M1: a well-formed `Depends(...)` graph is no longer refused — collection resolves it via
-    `_fixtures.plan_for` and attaches the resulting `ResolutionPlan` to the `TestRecord` instead
-    of turning the test away."""
+    """A well-formed `Depends(...)` graph is not refused — collection resolves it via
+    `_fixtures.plan_for` and attaches the resulting `ResolutionPlan` to the `TestRecord`."""
     path = _write(
         tmp_path / "test_sample.py",
         "import velox\n\n"
@@ -269,8 +260,8 @@ def test_a_test_with_no_dependencies_still_gets_a_trivial_resolution_plan(
 
 def test_a_malformed_di_graph_is_still_a_collection_error(tmp_path: Path) -> None:
     """A test whose fixture graph fails `plan_for`'s static validation (here: a session-scoped
-    fixture depending on a function-scoped one, spec/04 §2) is refused exactly like a broken
-    import — attributed to the file, collection of the rest of the suite continues."""
+    fixture depending on a function-scoped one) is refused exactly like a broken import —
+    attributed to the file, collection of the rest of the suite continues."""
     path = _write(
         tmp_path / "test_sample.py",
         "import velox\n\n"
@@ -308,10 +299,10 @@ def test_a_missing_injection_is_still_a_collection_error(tmp_path: Path) -> None
 
 
 def test_assertion_rewrite_hook_is_consulted_when_installed(tmp_path: Path) -> None:
-    """End-to-end proof that `_import_module` actually gives the installed hook a chance
-    (rather than bypassing `sys.meta_path` via a bare `spec_from_file_location`, the M0-skeleton
-    bug this fixes): a rewritten module's failing `assert 2 == 3` carries the explanation text
-    only the AST rewrite produces, not a bare `AssertionError`."""
+    """End-to-end proof that `_import_module` actually gives the installed hook a chance,
+    rather than bypassing `sys.meta_path` via a bare `spec_from_file_location`: a rewritten
+    module's failing `assert 2 == 3` carries the explanation text only the AST rewrite
+    produces, not a bare `AssertionError`."""
     path = _write(
         tmp_path / "test_sample.py",
         "async def test_fails():\n    x = 2\n    y = 3\n    assert x == y\n",
