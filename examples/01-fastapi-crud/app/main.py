@@ -74,6 +74,21 @@ async def create_user(
         # tests, `api_client` overrides `get_session` with the one `session` fixture shared by
         # every request the test makes (`tests/fixtures.py`), so a second request in the same
         # test landing on this same session is exactly the case this rollback is for.
+        #
+        # Coarser than it looks: `session` (`tests/fixtures.py`) joins one SAVEPOINT for its
+        # whole lifetime (`join_transaction_mode="create_savepoint"`), so this rolls back to
+        # *that* boundary -- every flush the test's own fixtures made through this same session
+        # before this request, not just this request's failed insert. Scoping the rollback to
+        # only this insert would need its own nested SAVEPOINT (`session.begin_nested()`), which
+        # turns out not to compose cleanly with a flush failure here: SQLAlchemy's unit-of-work
+        # still requires the same session-level `rollback()` afterward, which then rolls back to
+        # the *nearest remaining* SAVEPOINT -- the one the test's own fixtures share, not a
+        # narrower one, since there isn't a narrower one left once the nested block has already
+        # unwound. Not exercised by any test in this suite today (none reads a fixture-created
+        # row through this same session after triggering this 409), but real: extending
+        # `tests/fixtures.py::alice` to be read again after a duplicate-email 409 in the same
+        # test would need each fixture's own state committed to its own durable savepoint first,
+        # not this one-line fix.
         await session.rollback()
         logger.warning("signup rejected: email already registered: %s", payload.email)
         raise HTTPException(status_code=409, detail="email already registered") from exc

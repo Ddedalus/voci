@@ -36,9 +36,9 @@ from app.settings import Settings
 def _sqlite_no_implicit_transaction(
     dbapi_connection: DBAPIConnection, _record: ConnectionPoolEntry
 ) -> None:
-    """`connect` listener for `engine` below: turn off pysqlite/aiosqlite's own implicit-BEGIN/
-    implicit-COMMIT heuristics, so the explicit `conn.begin()` + SAVEPOINT nesting `session`
-    relies on for transaction-per-test rollback is the *only* transaction control in play.
+    """`connect` listener: turn off pysqlite/aiosqlite's own implicit-BEGIN/implicit-COMMIT
+    heuristics, so the explicit `conn.begin()` + SAVEPOINT nesting `session` relies on for
+    transaction-per-test rollback is the *only* transaction control in play.
 
     Without this (and `_sqlite_begin` below), `trans.rollback()` in `session` is a no-op against
     the driver's own transaction: a row one test inserted stays visible to the next one, keyed
@@ -53,9 +53,26 @@ def _sqlite_no_implicit_transaction(
 
 
 def _sqlite_begin(conn: Connection) -> None:
-    """`begin` listener for `engine` below: issue `BEGIN` ourselves now that
-    `_sqlite_no_implicit_transaction` has told the driver not to."""
+    """`begin` listener: issue `BEGIN` ourselves now that `_sqlite_no_implicit_transaction` has
+    told the driver not to."""
     conn.exec_driver_sql("BEGIN")
+
+
+def _configure_sqlite_explicit_transactions(e: AsyncEngine) -> None:
+    """Wire both listeners above onto `e`, one call instead of two paired ones a future fixture
+    could register out of order or forget half of.
+
+    Guarded by dialect: `database_url` below documents Postgres as the swap for a suite you
+    actually care about the wall clock of, and neither listener is sqlite-specific by name alone
+    — `isolation_level = None` on a non-pysqlite/aiosqlite connection is a no-op at best, a raw
+    `"BEGIN"` on every `Connection.begin()` a real conflict with a different driver's own
+    transaction handling at worst. Skipping both outright on a non-sqlite engine means that swap
+    doesn't have to remember to remove this pair, or silently reintroduce either failure mode.
+    """
+    if e.dialect.name != "sqlite":
+        return
+    event.listens_for(e.sync_engine, "connect")(_sqlite_no_implicit_transaction)
+    event.listens_for(e.sync_engine, "begin")(_sqlite_begin)
 
 
 @velox.fixture(scope="session")
@@ -76,8 +93,7 @@ async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]
     spec/04 means 200 tests starting at once produce exactly one `create_async_engine` call.
     """
     e = create_async_engine(url)
-    event.listens_for(e.sync_engine, "connect")(_sqlite_no_implicit_transaction)
-    event.listens_for(e.sync_engine, "begin")(_sqlite_begin)
+    _configure_sqlite_explicit_transactions(e)
     async with e.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     try:

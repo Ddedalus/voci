@@ -41,21 +41,46 @@ async def test_balance_of_unknown_account_is_zero(
     assert await svc.balance("acct::nobody") == 0
 
 
-@velox.parametrize("amounts,expected", [([1], 1), ([1, 2, 3], 6), ([-5, 5], 0), ([], 0)])
-async def test_balance_arithmetic(
-    amounts: list[int],
-    expected: int,
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+async def _assert_balance_arithmetic(
+    amounts: list[int], expected: int, svc: LedgerService, acct: str
 ) -> None:
-    """Each parametrization gets its own `account`, because `velox.test_info.id` includes the
-    parameter id. `acct::tests/test_ledger.py::test_balance_arithmetic[amounts1-6]` cannot collide
-    with its siblings even though all four run at the same time.
-    """
     for amount in amounts:
         await svc.append(acct, amount)
 
     assert await svc.balance(acct) == expected
+
+
+# `@velox.parametrize("amounts,expected", [...])` would collapse the four cases below into one
+# test -- declared public API, not yet expanded by the collector into records (M1-PLAN.md), so
+# they're separate tests instead. Each still gets its own `account`, because `velox.test_info.id`
+# (which `account` derives from) includes the function's own qualname -- distinct functions cannot
+# collide any more than distinct parametrize ids could, even though all four run at the same time.
+async def test_balance_arithmetic_single_deposit(
+    svc: LedgerService = Depends(ledger),
+    acct: str = Depends(account),
+) -> None:
+    await _assert_balance_arithmetic([1], 1, svc, acct)
+
+
+async def test_balance_arithmetic_multiple_deposits(
+    svc: LedgerService = Depends(ledger),
+    acct: str = Depends(account),
+) -> None:
+    await _assert_balance_arithmetic([1, 2, 3], 6, svc, acct)
+
+
+async def test_balance_arithmetic_deposit_and_withdrawal_cancel_out(
+    svc: LedgerService = Depends(ledger),
+    acct: str = Depends(account),
+) -> None:
+    await _assert_balance_arithmetic([-5, 5], 0, svc, acct)
+
+
+async def test_balance_arithmetic_no_entries(
+    svc: LedgerService = Depends(ledger),
+    acct: str = Depends(account),
+) -> None:
+    await _assert_balance_arithmetic([], 0, svc, acct)
 
 
 async def test_entries_are_ordered(

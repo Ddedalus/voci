@@ -12,8 +12,8 @@ relay/
 tests/
   fixtures.py
   test_delivery.py   retries, logs, timeout, sync tests
-  test_cache.py      parametrize, ids, approx, xfail(raises=)
-  test_patching.py   the ladder, cheapest rung first
+  test_cache.py      ids, approx, and a size-eviction gap tracked with skip
+  test_patching.py   the ladder, cheapest rung first — see "Known gaps" below
 ```
 
 ## Setup
@@ -24,46 +24,61 @@ uv venv && uv pip install -e ../..
 
 ## Commands
 
+This is the current, working CLI surface, not the eventual one — see
+[`examples/01-fastapi-crud`'s README](../01-fastapi-crud/README.md#commands) for the full list of
+what's still missing (`-k`/`-m`, `-v`/`-q`, `::` test-id addressing, `--durations`,
+`--collect-only`, `--serial`).
+
 ```bash
-velox
-velox -v                          # per-test lines, and which tier each patching test used
-velox tests/test_patching.py      # the interesting file
-velox -k "not patch"              # skip the solo ones and watch the wall clock drop
-velox --concurrency 1             # everything serial: solo costs nothing, and shows nothing
+velox                          # everything (28 tests, 4 skipped)
+velox tests/test_patching.py   # the interesting file
+velox --concurrency 1          # exactly serial
+velox --concurrency 64
+velox --timeout 5
 ```
 
 ## Expected output
 
 ```
-velox 0.1.0 · python 3.13.2 · uvloop · concurrency 16 · seed 0 · assert=rewrite
+$ velox
+assertions: rewrite, cache /home/you/.cache/velox/rewrite
+config: /path/to/examples/02-async-library/pyproject.toml
+PASS  tests/test_cache.py                12 tests   Σ 0.00s
+PASS  tests/test_patching.py              5 tests   Σ 0.01s
+PASS  tests/test_delivery.py             11 tests   Σ 0.07s
+tests/test_cache.py::test_evicts_when_full SKIPPED (cache does not evict on size yet ...)
+tests/test_patching.py::test_context_manager_patching_must_be_marked SKIPPED (would race ...)
+tests/test_patching.py::test_relative_path_resolution SKIPPED (@velox.isolated has no ...)
+tests/test_patching.py::test_jitter_is_deterministic SKIPPED (would run unmarked and ...)
+28 tests: 28 passed, 0 failed, 0 errored, 4 skipped, 0 collection error(s)
 
-PASS  tests/test_cache.py                  15 tests   0.09s
-PASS  tests/test_delivery.py               16 tests   0.42s
-PASS  tests/test_patching.py                7 tests   0.31s
-
-  3 tests ran solo · suite drained for 0.21s (38% of wall clock)
-      relay.client.random.uniform      2 tests
-      os.environ                       1 test
-
-38 tests · 37 passed · 1 xfailed · 0.55s wall (Σ 1.9s, 3.5× concurrency)
+28 tests · 0 failed · 0.06s wall (Σ 0.07s, 1.3x concurrency)
 ```
 
-That solo block is the feature. Three tests out of thirty-eight held the suite's write lock for
-38% of the run. Nothing is hidden and nothing is estimated — a suite that drifts into two hundred
-solo tests has lost its parallelism, and it should find that out from the summary rather than from
-a stopwatch six months later.
+No solo write-lock block, no wall-clock cost from patching, and no `xfailed` count — see "Known
+gaps" below for why: the four `SKIPPED` lines are exactly the tests that would have demonstrated
+those things, held back rather than run in a way that would be flaky or actively unsafe today.
 
 ## The ladder
 
-`tests/test_patching.py` walks it in order.
+`tests/test_patching.py` walks it in order. "Live" means dispatched and asserted on every run;
+"skipped" means the code is there to read but `velox` doesn't execute it (see "Known gaps").
 
-| Tier | Mechanism | Concurrency | In this suite |
-|---|---|---|---|
-| **(a)** | Dependency injection — a sibling fixture, a constructor argument, a `Protocol` | Full | 4 tests |
-| **(a)** | `MagicMock` / `create_autospec` as a *value* | Full | 1 test |
-| **(b)** | `@mock.patch(...)` — detected statically, scheduled solo | Suite drains | 2 tests |
-| **(b)** | `with mock.patch(...)` — invisible statically, must be marked `@velox.solo` | Suite drains | 1 test |
-| **(d)** | `@velox.isolated` — subprocess, fresh loop | Full, minus a spawn | 1 test *(roadmap)* |
+| Tier | Mechanism | Concurrency | In this suite | Status |
+|---|---|---|---|---|
+| **(a)** | Dependency injection — a sibling fixture, a constructor argument, a `Protocol` | Full | 4 tests | Live |
+| **(a)** | `MagicMock` / `create_autospec` as a *value* | Full | 1 test | Live |
+| **(b)** | `@mock.patch(...)` — would be detected statically, scheduled solo | Suite drains | 2 tests | 1 live¹, 1 skipped |
+| **(b)** | `with mock.patch(...)` — invisible statically, must be marked `@velox.solo` | Suite drains | 1 test | Skipped |
+| **(d)** | `@velox.isolated` — subprocess, fresh loop | Full, minus a spawn | 1 test | Skipped *(roadmap)* |
+
+¹ `test_settings_from_the_real_environment` (`mock.patch.dict(os.environ, ...)`) is live because
+nothing else in this suite reads the real `os.environ` — there's no live neighbour for it to race.
+`test_jitter_is_deterministic` (`mock.patch("relay.client.random.uniform", ...)`) is *not* live:
+`Relay.deliver`'s retry path is exercised by several other tests in this suite, and a decorator
+patch is a real, process-global `setattr` for its whole duration — every one of those concurrently
+running would call the same patched name. See its own `@velox.skip` reason for how that was
+verified, not just asserted.
 
 Two things are worth stating plainly, because they are the most common misreadings:
 
@@ -78,29 +93,71 @@ sees.
 cost. The name is reserved for the routing tier (spec/08 §5), where it would do something
 `mock.patch` structurally *cannot*: let two concurrent tests patch the same target differently.
 Until that exists, the answer is "use `unittest.mock`, and velox will schedule it safely" — which
-also means every existing `mock.patch` call site in a migrating suite keeps working untouched.
+also means every existing `mock.patch` call site in a migrating suite keeps working untouched, once
+that scheduling actually lands (see "Known gaps").
 
-## Detection, concretely
+## Detection, concretely (design, not yet built — spec/08)
 
-- **Decorator form** costs one attribute lookup at collection. `unittest.mock`'s
+- **Decorator form** would cost one attribute lookup at collection. `unittest.mock`'s
   `_patch.decorate_callable` sets `func.patchings = [self]` on the wrapper it returns (and appends
   for stacked patches), so `hasattr(func, "patchings")` finds every decorated test, and reading
-  `p.target` off each patcher is what fills in the "relay.client.random.uniform — 2 tests" line
-  above.
+  `p.target` off each patcher is what would fill in a "relay.client.random.uniform — N tests" line
+  in the report.
 - **Context-manager form** cannot be seen from the function object; the patcher does not exist
-  until the `with` line executes. velox wraps `unittest.mock._patch.__enter__` so an unmarked one
-  **fails with an actionable message** instead of silently racing, and `velox migrate` adds the
-  `@velox.solo` decorator statically so a migrated suite is annotated before it first runs.
+  until the `with` line executes. The plan is for velox to wrap `unittest.mock._patch.__enter__` so
+  an unmarked one **fails with an actionable message** instead of silently racing, and for
+  `velox migrate` to add the `@velox.solo` decorator statically so a migrated suite is annotated
+  before it first runs.
+
+## Known gaps (tracked, not bugs in this suite)
+
+Dogfooding this example against the current runner surfaced the same class of thing
+[`examples/01-fastapi-crud`'s README](../01-fastapi-crud/README.md#known-gaps-tracked-not-bugs-in-this-suite)
+did — public API that's declared but not yet acted on — plus one specific to this example's subject
+(patching detection), all tracked in [`docs/M1-PLAN.md`](../../docs/M1-PLAN.md):
+
+- **`@velox.solo`/`@velox.isolated` aren't enforced.** Both marks are recorded on a function's
+  marks the same way `skip`/`skipif` are, but `_run.py`'s own module docstring says so directly:
+  "exclusive-resource admission, the solo write-lock tier, aging... still deliberately not built
+  this slice." A test marked `@velox.solo` runs exactly like an unmarked one — fully concurrent,
+  no suite-wide lock — which is unsafe, not just unfinished, for a test that does a real global
+  `setattr`. `test_context_manager_patching_must_be_marked` is skipped rather than left to race.
+- **`@mock.patch`-decorated tests don't just skip solo scheduling — DI silently no-ops for them.**
+  `_fixtures.plan_for` reads `func.__code__`/`func.__defaults__` directly (deliberately never
+  `inspect.signature`/`__wrapped__` — see `_fixtures.py`'s own module docstring), so a
+  `@mock.patch(...)`-wrapped test presents as `(*args, **keywargs)`: zero named parameters, zero
+  `Depends()` defaults found. Any `Depends(...)` default on the *real* function underneath is
+  never resolved — the raw, unresolved `Depends(...)` object is what the parameter gets, since
+  velox ends up calling the wrapper with no arguments at all and Python falls back to the
+  function's own literal default. `test_jitter_is_deterministic` sidesteps this by building its
+  `Relay`/`FakeTransport` by hand instead of injecting them.
+- **`@velox.xfail` execution and `@velox.parametrize` expansion** — same gaps as example 01,
+  found again here: `test_evicts_when_full` uses `skip` in place of `xfail(strict=True,
+  raises=AssertionError)`, and `test_expiry_boundary_*`/`test_ttl_is_respected_for_*`/
+  `test_2xx_4xx_is_never_retried`-shaped tests are parametrize cases written out by hand.
+- **`.records[i].message` is unset** on a `velox.log_records` `LogRecord` — same trap as example
+  01's `test_duplicate_email_is_logged`, hit again in `test_retries_are_logged` and fixed the same
+  way (`logs.messages`, index-aligned with `logs.records`). Documented in
+  [spec/09 §2](../../spec/09-capture-and-logging.md).
+
+None of these block a green run — `velox` with no arguments passes end to end (see "Expected
+output" above) — but they're why four tests in `test_patching.py` are marked `skip` instead of
+demonstrating solo/isolated scheduling live: running them for real today would either be flaky (two
+`mock.patch` calls racing the same global) or actively unsafe (`os.chdir` with no subprocess to
+contain it).
 
 ## The point of the file layout
 
 `relay/cache.py` and `relay/client.py` are the same code with one difference: the cache takes its
 clock as a parameter and the client does not.
 
-That difference is worth 38% of this suite's wall clock. The cache's time-travel tests run sixteen
-wide; the client's jitter test stops the world. No mocking library can close that gap — it is a
-property of the code under test, and the only fix is a constructor argument.
+Once solo/isolated scheduling exists, that difference is what will show up as wall-clock cost in
+the report — the cache's time-travel tests running sixteen wide, the client's jitter test stopping
+the world for everyone. Today it shows up differently: as the four `SKIPPED` lines above, since
+running the client's version live isn't safe yet either way. No mocking library closes that gap —
+it is a property of the code under test, and the only fix is a constructor argument.
 
 This is the argument velox is really making. Explicit dependency injection is not overhead you pay
-for the framework's benefit; it is the thing that makes your suite parallelisable, and velox's
-reporting is arranged to keep showing you the bill until you take the seam.
+for the framework's benefit; it is the thing that makes your suite parallelisable, and it is also,
+right now, the thing standing between "this test runs" and "this test is marked skip and waits for
+a scheduler."
