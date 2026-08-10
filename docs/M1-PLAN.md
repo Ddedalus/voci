@@ -75,13 +75,108 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
 
 ## Remaining work
 
-- [ ] **Dogfood the example suites, in CI** — get
-  `examples/01-fastapi-crud` (needs its own `uv sync` — it depends on `fastapi`/`sqlalchemy`, not
-  present in the root env) and `examples/02-async-library` (stdlib-only, no separate env needed)
-  actually green under `uv run velox`, fix whatever real bugs that surfaces, and add both as a CI
-  job. This is the concrete, checkable form of "velox runs its own suite" — the closest thing to a
-  self-hosted proof available before the migration codegen (M3) makes running `tests/` itself
-  under velox realistic.
+- [x] **Dogfood `examples/01-fastapi-crud`, locally** — its own `.venv`
+  (`uv venv && uv pip install -r requirements.txt -e ../..`), run repeatedly under
+  `uv run velox`/`.venv/bin/velox` at `--concurrency 1`, 16 (config default), and 64: 22 tests, 0
+  failed, 0 collection errors, every time. Three real bugs found and fixed, all in the example
+  (not velox itself) — see the commit for detail on each:
+  - `tests/fixtures.py::engine` — pysqlite/aiosqlite's own implicit-transaction heuristics
+    defeated the transaction-per-test rollback `session` relies on, so a row one test inserted
+    stayed visible to the next (`alice@example.com` UNIQUE-constraint `IntegrityError`, reproduced
+    at `--concurrency 1` too — not a concurrency bug). Fixed with SQLAlchemy's own documented
+    `connect`/`begin` event-listener recipe for SQLite.
+  - `app/main.py::create_user` never logged the "email already registered" case its own test
+    asserted against, and never rolled back the session after the caught `IntegrityError` either
+    — a latent `PendingRollbackError` for any later operation sharing that session (only reachable
+    through the test client, which shares one session across a test's requests; production hands
+    each request its own). Added both the `logger.warning(...)` and the `session.rollback()`.
+  - `tests/test_orders.py::test_duplicate_email_is_logged` read `r.message` off a raw
+    `velox.log_records` `LogRecord`, which is unset (velox's capture handler never calls
+    `record.getMessage()`/formats onto a stream the way pytest's `LogCaptureHandler` does —
+    deliberately no pytest runtime-compat shim, per the project's compat-via-codegen-only
+    decision). Fixed to read `logs.messages` instead; `examples/02-async-library/tests/
+    test_delivery.py:87` has the identical bug, still open (see the CI item below).
+
+  Also surfaced four things in velox's own public API that the example (written ahead of the
+  runner) assumed worked: `@velox.parametrize` expansion, `class Test*` grouping, `@velox.xfail`
+  execution, and `-m`/tag selection plus most of spec/02 §1's CLI surface. None block "velox runs
+  its own suite" or this example's green run (routed around all four — see its README's "Known
+  gaps"); broken out into their own tracked items below rather than fixed here, since each is its
+  own spec/00-§7-scale feature, not a slice-sized bug fix. — `3785c36`
+- [x] **Dogfood `examples/02-async-library`, locally** — standalone (`uv venv && uv pip install
+  -e ../..`, no separate `requirements.txt`), run repeatedly at `--concurrency 1`/16 (config
+  default)/64: 28 tests, 0 failed, 4 skipped, 0 collection errors, every time — this closes the "4
+  unrelated pre-existing bugs" the rootdir-import-convention slice surfaced and left open (see
+  "Already shipped" above), plus the `r.message`/`logs.messages` bug example 01 also hit. Two real
+  bugs found and fixed:
+  - `relay/settings.py::Settings.from_env` read `cls.endpoint`/`cls.retries`/`cls.cache_ttl` as
+    its fallback default — but `Settings` is `@dataclass(slots=True)`, which replaces each of
+    those class attributes with a slot descriptor, not the field's actual default value, so any
+    key missing from the passed-in mapping got a `member_descriptor` object instead of a real
+    default, `TypeError`ing the moment `int()`/`float()` touched it. Fixed by building
+    `defaults = cls()` (a real instance, real values) and reading the fallback off that instead.
+  - `tests/test_delivery.py::test_retries_are_logged` had the same `r.message` bug example 01's
+    `test_duplicate_email_is_logged` did; fixed the same way (`logs.messages`).
+
+  This example's whole subject is the solo/mock-patching-detection tier (spec/08), which doesn't
+  exist yet any more than example 01's four gaps did — and here the gap is more than "undetected,
+  unscheduled": `_fixtures.plan_for` reads `func.__code__`/`func.__defaults__` directly (never
+  `inspect.signature`/`__wrapped__`), so a `@mock.patch(...)`-decorated test presents as
+  `(*args, **keywargs)` — zero named parameters found, so any `Depends(...)` default on the real
+  function underneath is *silently never resolved* rather than rejected; the parameter gets the
+  raw, unresolved `Depends(...)` object instead of a fixture value or a collection error. Worse,
+  and verified directly rather than just reasoned about: a `mock.patch` on a module-global name
+  patches it for every concurrently-running test that reaches the same code path, not only for
+  tests that patch it themselves — a standalone `asyncio.TaskGroup` repro running this example's
+  decorator-based patch test alongside an unrelated tier-(a) test (no patching of its own) got a
+  corrupted `call_count` on the very first trial. Both marks that would fix this
+  (`@velox.solo`/`@mock.patch` detection) are declared, not enforced (`_run.py`'s own module
+  docstring: "the solo write-lock tier... still deliberately not built"), so the four tests that
+  would demonstrate it live are `@velox.skip`, not run unguarded — see the example's own README
+  "Known gaps" for the full reasoning and the exact repro for each. — `96dfc9b`
+- [x] **Dogfood `examples/03-shared-resources`, locally** — standalone, same pattern, run
+  repeatedly at `--concurrency 1`/32 (config default)/64: 23 tests, 0 failed, 1 skipped, 0
+  collection errors. `pyproject.toml` set `watchdog_threshold`/`basetemp_retention`, both real
+  spec/02 §3 keys the config loader correctly rejects as unknown (no consumer before M2) — removed
+  from the file, documented instead. Two real bugs found and fixed, both in the example:
+  - `tests/fixtures.py::migrated_store`/`migration_db` opened a `sqlite3.Connection` via
+    `asyncio.to_thread(sqlite3.connect, ...)` and then used it across further `to_thread` calls —
+    but `asyncio.to_thread` hands each call to whichever worker the default executor's pool has
+    free, not the same one from call to call, and a plain `sqlite3.connect` refuses to touch its
+    connection from any thread but the one that created it: `sqlite3.ProgrammingError: SQLite
+    objects created in a thread can only be used in that same thread`, on nearly every test. Fixed
+    with `check_same_thread=False` — safe here specifically because the awaits already fully
+    serialize access to the connection; nothing touches it from two threads *at once*.
+  - `ledger/store.py::Store.connect` re-issues `PRAGMA journal_mode=WAL` as the first statement on
+    every brand-new connection, every call, from every test — switching journal mode needs a real
+    (if brief) exclusive lock, so at high concurrency (`--concurrency 64`) dozens of first-ever
+    calls raced for that lock before any of them had switched the database over yet:
+    `sqlite3.OperationalError: database is locked`, intermittent (2 failures in the first ~85
+    stress runs before the fix, 0 in 250 after). Fixed by switching to WAL once, in the
+    session-scoped `migrated_store` fixture, before any test-level connection is ever opened —
+    every later `PRAGMA journal_mode=WAL` is then already-WAL and a no-op.
+
+  Also, like example 02: this example's whole subject is scheduling machinery — `exclusive=`
+  admission, `@velox.solo`, and the loop-starvation watchdog — none of which exists (`_run.py`'s
+  docstring again; the watchdog has no code at all, not even declared-but-unenforced). Two real,
+  verified conflicts followed directly from that: `test_webhooks.py`'s `receiver` fixture binds a
+  real, fixed OS port, and running its four original tests concurrently reproduced a real `OSError:
+  address already in use` deterministically, every time — merged into one test that runs all four
+  scenarios in sequence against a single bind instead of restoring the four-way split. Two
+  `@velox.solo`-marked tests flip the same process-global flag registry `test_ledger.py::
+  test_transfer_is_permitted_to_overdraw_by_default` depends on staying off; verified with the same
+  adversarial-`TaskGroup` technique as example 02 (3000/3000 trials corrupted) that one of the two
+  actually collides with that test, so it's `@velox.skip`, while the other (which flips a flag
+  nothing else reads) stays live. The blocking-call watchdog-bait test still runs and still passes
+  — real stall, no diagnostic, nothing else in this small suite times out waiting for the loop back
+  — its docstring and `@velox.tag("watchdog-demo")` were rewritten to stop promising output that
+  can't appear. Also corrected: a test claiming to demonstrate "returning a value"/un-awaited-
+  coroutine detection (I8) that neither its own body nor `_run.py` actually implements — see the
+  new tracked item below. — `96dfc9b`
+- [ ] **...in CI** — all three examples now run green, repeatedly, locally. Add them as a CI job.
+  This — plus the three example dogfood passes above — is the concrete, checkable form of "velox
+  runs its own suite": the closest thing to a self-hosted proof available before the migration
+  codegen (M3) makes running `tests/` itself under velox realistic.
 
 ## Tracked but not blocking the gate
 
@@ -90,3 +185,78 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   invocation syntax in spec/02 §1 but not part of M1's DI/concurrency/assertions/capture/reporter
   bullet, and nothing above depends on it. Pick up opportunistically or fold into whichever M2 CLI
   slice touches `-k`/`-m` selection.
+- [ ] **`@velox.parametrize` expansion** — `ParamSet` is recorded on a function's marks
+  (`_marks.py`) the moment the decorator is applied, but `_collect.collect` never reads it: a
+  parametrized test collects as a single record with its extra parameter treated as a missing
+  `Depends()` injection, which `_fixtures.plan_for` rejects with a `DIError` (`parameter(s) ...
+  have no default and are not injected via Depends(...)`) — a collection error, not a graceful
+  "not implemented" message, and not the "multiple passing tests" spec/01 §9 documents as MVP.
+  Found dogfooding `examples/01-fastapi-crud` (see above); worked around there by writing the
+  parametrized cases out as separate functions.
+- [ ] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
+  ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Not
+  implemented: `_collect.collect` only looks for module-level `async def test_*` (`vars(module)
+  .values()`), so a `Test*` class's methods are silently collected as zero tests — no
+  `CollectionError`, no `Skipped` entry, nothing. Worth at minimum a loud diagnostic (I8: "silent
+  passes are bugs" — this is a silent *absence*, arguably the same class of problem) even before
+  the feature itself lands. Found dogfooding `examples/01-fastapi-crud`; worked around there by
+  flattening the one `Test*` class to free functions.
+- [ ] **`@velox.xfail` execution** — `XFail` is recorded on a function's marks the same way `skip`/
+  `skipif` are, but `_run.py`'s `Outcome` enum has four members today (`PASSED`/`FAILED`/`ERROR`/
+  `TIMEOUT` — its own module docstring says so explicitly) and nothing reads `marks.xfail` to turn
+  a failing call into `XFAILED` (or a passing one into `XPASSED`, under `strict=True`). A test
+  decorated `@velox.xfail(..., strict=True)` today just reports `FAILED`, indistinguishable from a
+  real regression. Needs the `Outcome` enum extended (spec/05 §4) plus reporter/exit-code changes
+  to match, not a small patch. Found dogfooding `examples/01-fastapi-crud`; worked around there
+  with `skip` (which *is* wired end to end) instead.
+- [ ] **Tag-based selection (`-m`) and the rest of the CLI surface** — `@velox.tag` records names on
+  a function's marks (works, and is harmless to apply today) but nothing consumes them: `-m`
+  doesn't exist in `cli.py`'s parser, alongside `-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`,
+  and `--collect-only` — all documented in spec/02 §1, all absent from `build_parser`. Matches
+  spec/00 §7's MVP table (`-k`/`-m` explicitly "Deferred"); grouped here as one item since they're
+  naturally one CLI slice's worth of work. Bare paths (a file or a directory, no `::`) already
+  work today and aren't part of this item.
+- [ ] **`exclusive=`/`@velox.solo` admission, and `@velox.isolated`'s subprocess tier** — all three
+  are recorded on a function's/fixture's marks (`Marks.solo`, `Marks.isolated`, `Fixture.exclusive`
+  already exist), but `_run.py`'s own module docstring says outright that "exclusive-resource
+  admission, the solo write-lock tier, aging... [are] still deliberately not built this slice
+  (spec/06, a separate scheduler session)" — a test carrying any of the three marks runs exactly
+  like one that doesn't: fully concurrent, no suite-wide lock, no subprocess. Where the marked
+  resource is genuinely shared and mutable, this isn't just unfinished, it's actively unsafe: found
+  dogfooding `examples/02-async-library` (two `mock.patch` calls on the same module-global target,
+  verified colliding 2000/2000 adversarial trials) and `examples/03-shared-resources` (a fixed TCP
+  port, `OSError: address already in use`, reproduced deterministically every run; a shared feature
+  flag registry, verified colliding 3000/3000 adversarial trials). Worked around in both examples
+  by not running the conflicting shape concurrently — merging separately-dispatched tests into one
+  sequential test, or `@velox.skip` — rather than leaving it to race. Spec/00 §7's MVP table lists
+  "Solo tier" as MVP (In-MVP column) but "Exclusive-resource admission... beyond the basic rule" as
+  Deferred, an inconsistency with `_run.py`'s own docstring worth reconciling before this is
+  scoped as a slice.
+- [ ] **`@mock.patch`-decorated tests silently skip DI, not just solo scheduling** — a sharper
+  version of the item above, found dogfooding `examples/02-async-library`:
+  `_fixtures.plan_for`/`plan_of` read `func.__code__`/`func.__defaults__` directly (deliberately,
+  per `_fixtures.py`'s own module docstring: "never `inspect.signature`, never... unwrapping
+  `__wrapped__`"), so a test wrapped by `@mock.patch(...)` — whose real signature is `(*args,
+  **keywargs)` — presents zero named parameters to collection. Any `Depends(...)` default on the
+  *real* function underneath is never found, so it's never resolved either: `_run.py` ends up
+  calling the wrapper with no arguments, and the parameter that should have been injected instead
+  gets Python's own fallback — the literal, unresolved `Depends(...)` object — rather than a
+  `DIError` or a real value. Silent, not loud; worth its own fix (likely: detect `hasattr(func,
+  "patchings")` at collection and build the plan from `func.__wrapped__` instead) independent of
+  whether solo scheduling has landed yet, since a `Depends()` default silently not resolving is an
+  I8 violation on its own.
+- [ ] **The loop-starvation watchdog does not exist** — no code at all, not even a declared,
+  unenforced mark; `watchdog_threshold` is a real spec/02 §3 config key the loader correctly
+  rejects as unknown (M1-PLAN.md's own config-loader entry above: "no consumer before M2"), and
+  `--watchdog-threshold`/`--watchdog fail` aren't in `cli.py`. A blocking sync call from a
+  coroutine (`examples/03-shared-resources/ledger/service.py::LedgerService.balance_blocking`)
+  still stalls the real event loop for real today — the bug the watchdog would catch is live,
+  nothing diagnoses it.
+- [ ] **A test returning a value, or leaving a coroutine un-awaited, isn't caught.** I8 ("silent
+  passes are bugs") names this failure shape explicitly as unacceptable, but nothing in `_run.py`
+  inspects a dispatched test's return value, and no warnings filter escalates a `RuntimeWarning:
+  coroutine ... was never awaited` to a failure. Found dogfooding `examples/03-shared-resources`,
+  whose `test_a_test_must_not_return_a_value` claimed to demonstrate this without actually
+  exercising either case in its body; renamed to `test_awaiting_actually_runs_the_coroutine` and
+  its docstring corrected to say so, rather than deleted, since the underlying gap is real and
+  worth a test once it exists to test.

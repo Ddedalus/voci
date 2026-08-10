@@ -16,8 +16,15 @@ class Settings:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         env = os.environ if env is None else env
+        # `defaults = cls()`, not `cls.endpoint`/`cls.retries`/`cls.cache_ttl` directly:
+        # `slots=True` replaces each of those class attributes with a slot descriptor, not the
+        # field's default value, so reading them off the class itself (rather than off an
+        # instance) hands `env.get` a `member_descriptor` as its fallback -- silently wrong until
+        # something tries to `int()`/`float()` it. An instance built with no arguments is real
+        # values, every field.
+        defaults = cls()
         return cls(
-            endpoint=env.get("RELAY_ENDPOINT", cls.endpoint),
-            retries=int(env.get("RELAY_RETRIES", cls.retries)),
-            cache_ttl=float(env.get("RELAY_CACHE_TTL", cls.cache_ttl)),
+            endpoint=env.get("RELAY_ENDPOINT", defaults.endpoint),
+            retries=int(env.get("RELAY_RETRIES", defaults.retries)),
+            cache_ttl=float(env.get("RELAY_CACHE_TTL", defaults.cache_ttl)),
         )

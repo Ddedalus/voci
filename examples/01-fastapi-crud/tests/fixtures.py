@@ -16,7 +16,10 @@ from collections.abc import AsyncIterator
 
 import velox
 from httpx import AsyncClient
+from sqlalchemy import Connection, event
+from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import ConnectionPoolEntry
 from velox import Depends
 from velox import fastapi as velox_fastapi
 
@@ -28,6 +31,48 @@ from app.settings import Settings
 # --------------------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------------------
+
+
+def _sqlite_no_implicit_transaction(
+    dbapi_connection: DBAPIConnection, _record: ConnectionPoolEntry
+) -> None:
+    """`connect` listener: turn off pysqlite/aiosqlite's own implicit-BEGIN/implicit-COMMIT
+    heuristics, so the explicit `conn.begin()` + SAVEPOINT nesting `session` relies on for
+    transaction-per-test rollback is the *only* transaction control in play.
+
+    Without this (and `_sqlite_begin` below), `trans.rollback()` in `session` is a no-op against
+    the driver's own transaction: a row one test inserted stays visible to the next one, keyed
+    against the same file — an `alice@example.com` UNIQUE-constraint failure a few tests later, if
+    you're wondering what a rollback that never happened looks like from the outside. This is
+    SQLAlchemy's own documented fix for pysqlite/aiosqlite (`AsyncEngine.begin()` docs, "DBAPI
+    AUTOCOMMIT").
+    """
+    # `isolation_level` is a pysqlite/aiosqlite extension, not part of the DBAPI-2.0 surface
+    # `DBAPIConnection` types — real on the object this hook actually receives.
+    dbapi_connection.isolation_level = None  # type: ignore[attr-defined]
+
+
+def _sqlite_begin(conn: Connection) -> None:
+    """`begin` listener: issue `BEGIN` ourselves now that `_sqlite_no_implicit_transaction` has
+    told the driver not to."""
+    conn.exec_driver_sql("BEGIN")
+
+
+def _configure_sqlite_explicit_transactions(e: AsyncEngine) -> None:
+    """Wire both listeners above onto `e`, one call instead of two paired ones a future fixture
+    could register out of order or forget half of.
+
+    Guarded by dialect: `database_url` below documents Postgres as the swap for a suite you
+    actually care about the wall clock of, and neither listener is sqlite-specific by name alone
+    — `isolation_level = None` on a non-pysqlite/aiosqlite connection is a no-op at best, a raw
+    `"BEGIN"` on every `Connection.begin()` a real conflict with a different driver's own
+    transaction handling at worst. Skipping both outright on a non-sqlite engine means that swap
+    doesn't have to remember to remove this pair, or silently reintroduce either failure mode.
+    """
+    if e.dialect.name != "sqlite":
+        return
+    event.listens_for(e.sync_engine, "connect")(_sqlite_no_implicit_transaction)
+    event.listens_for(e.sync_engine, "begin")(_sqlite_begin)
 
 
 @velox.fixture(scope="session")
@@ -48,6 +93,7 @@ async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]
     spec/04 means 200 tests starting at once produce exactly one `create_async_engine` call.
     """
     e = create_async_engine(url)
+    _configure_sqlite_explicit_transactions(e)
     async with e.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     try:
