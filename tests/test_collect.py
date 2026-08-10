@@ -61,20 +61,43 @@ def test_collect_orders_records_by_definition_line_not_name(tmp_path: Path) -> N
         "async def test_a():\n"
         "    pass\n"
         "\n"
-        "def test_sync():\n"  # sync `def test_*` — must not be collected
+        "def test_sync():\n"  # sync `def test_*` — collected same as an async one
         "    pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
 
     assert result.errors == []
-    assert [record.qualname for record in result.records] == ["test_b", "test_a"]
-    assert [record.index for record in result.records] == [0, 1]
-    assert [record.lineno for record in result.records] == [1, 7]
+    assert [record.qualname for record in result.records] == ["test_b", "test_a", "test_sync"]
+    assert [record.index for record in result.records] == [0, 1, 2]
+    assert [record.lineno for record in result.records] == [1, 7, 10]
     # `path` is relative to `rootdir` (spec/03 §1, I2) — not the absolute `tmp_path` the file
     # actually lives under, which would bake a machine-specific path into every id.
     assert result.records[0].id == "test_sample.py::test_b"
     assert result.records[0].path == Path("test_sample.py")
+
+
+def test_sync_def_test_star_is_collected_on_its_own(tmp_path: Path) -> None:
+    path = _write(tmp_path / "test_sample.py", "def test_sync():\n    pass\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.qualname for record in result.records] == ["test_sync"]
+
+
+def test_a_class_is_not_collected_even_when_named_like_a_test(tmp_path: Path) -> None:
+    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); `_is_own_test_function`
+    excludes it because a class isn't a `FunctionType`, not because of its name."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n    def test_method(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
 
 
 def test_import_error_becomes_a_collection_error_and_does_not_abort(tmp_path: Path) -> None:
@@ -304,8 +327,8 @@ def test_assertion_rewrite_hook_is_consulted_when_installed(tmp_path: Path) -> N
     assert len(result.records) == 1
     failure = result.records[0].func
     try:
-        # `func` is `Callable[..., object]` (see `_run.run_suite`'s identical cast) — only
-        # `async def test_*` is ever collected, so this is always a coroutine at runtime.
+        # `func` is `Callable[..., object]` (see `_run.run_suite`'s identical cast) — `test_fails`
+        # above is declared `async def`, so this particular `failure()` is a coroutine.
         asyncio.run(cast("Coroutine[Any, Any, object]", failure()))
     except AssertionError as exc:
         assert "assert 2 == 3" in str(exc)

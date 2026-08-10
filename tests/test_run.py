@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -83,6 +84,72 @@ def test_run_suite_preserves_record_order() -> None:
         Outcome.FAILED,
         Outcome.PASSED,
     ]
+
+
+# ------------------------------------------------------------------------------------------
+# A sync `def test_*`: collected the same as an `async def` one (`_collect.py`), but its call
+# phase runs on the loop's default executor (`_capture.ContextPropagatingExecutor`) rather than
+# being awaited directly -- see docs/rationale.md ("_run.py — execution").
+# ------------------------------------------------------------------------------------------
+
+
+def _sync_passes() -> None:
+    pass
+
+
+def _sync_fails() -> None:
+    raise AssertionError("nope")
+
+
+def test_sync_test_produces_passed() -> None:
+    (result,) = run_suite([_record(0, _sync_passes, "test_sync_passes")])
+    assert result.outcome is Outcome.PASSED
+    assert result.failure is None
+
+
+def test_sync_test_failure_produces_failed_with_traceback() -> None:
+    (result,) = run_suite([_record(0, _sync_fails, "test_sync_fails")])
+    assert result.outcome is Outcome.FAILED
+    assert result.failure is not None
+    assert "AssertionError" in result.failure
+    assert "nope" in result.failure
+
+
+def test_sync_test_with_a_fixture_is_injected_with_a_working_value() -> None:
+    @velox.fixture()
+    def answer() -> int:
+        return 42
+
+    def test_func(x: int = velox.Depends(answer)) -> None:
+        assert x == 42
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.PASSED
+    assert result.failure is None
+
+
+def test_sync_test_does_not_stall_a_concurrently_dispatched_async_test() -> None:
+    """The whole point of running a sync test on the executor rather than inline: a blocking
+    `time.sleep` in its body must not hold up the shared event loop that a sibling async test's
+    own `asyncio.sleep` is scheduled on. Serial execution of the two would take >= 0.2s; run
+    concurrently, on separate threads, the sync one no longer blocks the async one's wakeup."""
+
+    def _sync_sleeper() -> None:
+        time.sleep(0.1)
+
+    async def _async_sleeper() -> None:
+        await asyncio.sleep(0.1)
+
+    start = time.monotonic()
+    results = run_suite(
+        [_record(0, _sync_sleeper, "test_sync"), _record(1, _async_sleeper, "test_async")],
+        concurrency=2,
+    )
+    elapsed = time.monotonic() - start
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert elapsed < 0.18
 
 
 def test_duration_is_timed() -> None:

@@ -25,9 +25,8 @@ concurrently by hand, or run with `--concurrency 1`.
 - `@velox.parametrize` — recorded, but not expanded at collection; a parametrized test currently
   fails collection because its extra parameter looks like a missing dependency.
 
-Two more shapes are collected as *nothing at all*, with no error: a plain `def test_*` (collection
-requires a coroutine function) and a method on a `class Test*`. Write tests as module-level
-`async def` until both report properly.
+A `test_*` method on a `class Test*` is collected as *nothing at all*, with no error. Write tests
+as module-level functions until class-based collection lands.
 
 ## Next
 

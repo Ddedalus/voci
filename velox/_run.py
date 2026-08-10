@@ -2,10 +2,13 @@
 
 Tests are dispatched as concurrent `asyncio` tasks under a shared `asyncio.Semaphore`
 that bounds how many run at once; each gets a real setup -> call -> teardown envelope,
-plus an optional per-test `asyncio.timeout` budget. Results are collected back into
-logical (collection) order regardless of the order tests actually finish in, so a run's
-output is reproducible independent of scheduling. This module also derives the process
-exit code from the collected results and collection errors.
+plus an optional per-test `asyncio.timeout` budget. An `async def` test's call phase is
+awaited directly; a sync `def` one runs on the context-propagating executor
+(`_capture.ContextPropagatingExecutor`) instead, so a blocking call inside it holds only
+its own concurrency slot rather than the shared event loop. Results are collected back
+into logical (collection) order regardless of the order tests actually finish in, so a
+run's output is reproducible independent of scheduling. This module also derives the
+process exit code from the collected results and collection errors.
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
+import functools
+import inspect
 import logging
 import math
 import time
@@ -138,10 +143,18 @@ async def _run_one(
 
             if setup_failure is None:
                 try:
-                    # Only `async def test_*` is ever collected, so this always
-                    # produces a coroutine once argument binding succeeds.
-                    coro = cast("Coroutine[Any, Any, object]", record.func(**kwargs))
-                    await coro
+                    if inspect.iscoroutinefunction(record.func):
+                        coro = cast("Coroutine[Any, Any, object]", record.func(**kwargs))
+                        await coro
+                    else:
+                        # A sync `def test_*`: dispatched to the loop's default executor
+                        # (`_capture.ContextPropagatingExecutor`, installed by `run_suite`)
+                        # rather than called inline, so a blocking call in its body stalls
+                        # only this test's own concurrency slot instead of the shared loop
+                        # every other concurrently-dispatched test also runs on.
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, functools.partial(record.func, **kwargs)
+                        )
                 except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                     raise
                 except BaseException as exc:

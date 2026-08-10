@@ -13,7 +13,9 @@ attributed to that file rather than aborting the run. The assertion-rewriting me
 installed, is consulted explicitly (`_import_module`) — `spec_from_file_location` alone never
 gives it the chance to run.
 
-Only `async def test_*` functions are collected; a sync `test_*` is silently left uncollected.
+Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
+ones on the context-propagating executor rather than inline. A `test_*` method on a `class Test*`
+is silently left uncollected.
 """
 
 from __future__ import annotations
@@ -171,7 +173,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
        consults the installed assertion-rewriting hook first). An exception here becomes a
        `CollectionError`; the file contributes zero records and collection continues to the next
        file.
-    2. Within the imported module, find `async def test_*` functions *defined* in it — i.e.
+    2. Within the imported module, find `test_*` functions *defined* in it — i.e.
        `getattr(obj, "__module__", None) == module.__name__`, so a `test_*` helper imported from
        elsewhere isn't collected twice.
     3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
@@ -288,9 +290,14 @@ def _import_module(path: Path, module_name: str) -> object:
 
 
 def _is_own_test_function(obj: object, module_name: str) -> bool:
-    """Whether `obj` is a collectible test: an `async def test_*` defined in this module."""
+    """Whether `obj` is a collectible test: a `def` or `async def` `test_*` function defined in
+    this module.
+
+    `inspect.isfunction` covers both -- an `async def` is a plain `FunctionType` with a flag on
+    its code object, not a distinct type -- and, unlike `callable()`, excludes a `class Test*`
+    (still not collected; see `ROADMAP.md`)."""
     return (
-        inspect.iscoroutinefunction(obj)
+        inspect.isfunction(obj)
         and getattr(obj, "__name__", "").startswith("test_")
         and getattr(obj, "__module__", None) == module_name
     )

@@ -219,6 +219,19 @@ Drop the cross-check and every catch-and-substitute test silently reports `FAILE
 mechanism can preempt a test body that never reaches an `await` — cooperative scheduling has
 nothing to interrupt.
 
+**A sync test runs on the executor; a sync fixture runs inline.** These look like the same
+decision made twice, backwards. They aren't: a fixture's sync body is typically a quick setup
+step feeding straight into the test that depends on it, so paying a thread hop buys little. A
+test's own body is the one place a suite author writes the slow, blocking call on purpose —
+`time.sleep`, a sync DB driver, `requests`. Calling it inline would stall every other
+concurrently-dispatched test sharing the one event loop for as long as it runs; dispatching it to
+`_capture.ContextPropagatingExecutor` via `run_in_executor(None, ...)` costs that test's own
+concurrency slot instead of everyone else's. Neither path can be preempted by the test's own
+`--timeout` once the call starts — cooperative cancellation has nothing to interrupt an `await` a
+sync body never reaches, and a thread pool worker can't be killed out from under it — so the
+budget still elapses and the result still reports `TIMEOUT`, just with the thread finishing out of
+band afterward.
+
 **Module-scope fixtures are released by the suite, not by the test.** Releasing a module's fixtures
 when a test's own teardown runs would tear them down as soon as the *first* of that module's
 concurrent tests finished, while its siblings still held live references — `scope="module"`
