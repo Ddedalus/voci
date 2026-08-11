@@ -7,9 +7,9 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 
 Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
-with per-test timeouts · `skip`/`skipif` · assertion introspection with comparison diffs ·
-stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
-`velox.fastapi` per-test dependency overrides.
+with per-test timeouts, overridable with `@velox.timeout(...)` · `skip`/`skipif`/`xfail` ·
+assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` · the
+reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Declared but not enforced
 
@@ -20,9 +20,7 @@ concurrently by hand, or run with `--concurrency 1`.
 - `exclusive=` on a fixture, and `@velox.solo` — no admission control and no suite-wide write
   lock, so a test that declares a shared resource still runs alongside everything else.
 - `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
-- `@velox.xfail` — an expected failure reports as `FAILED`, indistinguishable from a regression.
 - `@velox.tag` — recorded and exposed as `TestInfo.tags`, but there is no `-m` to select on it.
-- `@velox.timeout` — recorded, but never read: every test is held to the suite-wide `--timeout`.
 - `@velox.parametrize` — recorded, but not expanded at collection; a parametrized test currently
   fails collection because its extra parameter looks like a missing dependency.
 

@@ -446,7 +446,7 @@ def test_failure_summary_for_timeout_is_the_budget_message() -> None:
     (result,) = run_suite([_record(0, _hangs, "test_hangs")], timeout=0.05)
 
     assert result.outcome is Outcome.TIMEOUT
-    assert result.failure_summary == "test exceeded the --timeout=0.05s budget"
+    assert result.failure_summary == "test exceeded its 0.05s timeout budget"
 
 
 def test_failure_summary_takes_only_the_first_line_of_a_multiline_exception_message() -> None:
@@ -1061,6 +1061,119 @@ def test_timeout_during_call_still_runs_teardown_for_what_setup_acquired() -> No
     assert torn_down == ["closed"]
 
 
+def test_timeout_mark_overrides_the_suite_wide_timeout() -> None:
+    """`@velox.timeout(...)` wins over `run_suite`'s own `timeout=` for that one test, even
+    when the suite budget would otherwise have been generous enough to let it pass."""
+
+    @velox.timeout(0.05)
+    async def _hangs() -> None:
+        await asyncio.sleep(10)
+
+    (result,) = run_suite([_record(0, _hangs, "test_hangs")], timeout=10)
+
+    assert result.outcome is Outcome.TIMEOUT
+    assert result.failure is not None
+    assert "0.05" in result.failure
+
+
+def test_timeout_mark_can_grant_more_time_than_the_suite_budget() -> None:
+    @velox.timeout(1)
+    async def _sleeps() -> None:
+        await asyncio.sleep(0.05)
+
+    (result,) = run_suite([_record(0, _sleeps, "test_sleeps")], timeout=0.02)
+
+    assert result.outcome is Outcome.PASSED
+
+
+# `@velox.xfail`: a failing call reports XFAILED, a passing one XPASSED (or FAILED, if strict).
+# ------------------------------------------------------------------------------------------
+
+
+def test_xfail_call_failure_reports_xfailed_not_failed() -> None:
+    @velox.xfail("known broken")
+    async def _fails() -> None:
+        raise AssertionError("nope")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.XFAILED
+    assert result.failure is not None
+    assert "known broken" in result.failure
+
+
+def test_xfail_call_passing_reports_xpassed_not_passed() -> None:
+    @velox.xfail("thought this was broken")
+    async def _passes() -> None:
+        pass
+
+    (result,) = run_suite([_record(0, _passes, "test_passes")])
+
+    assert result.outcome is Outcome.XPASSED
+
+
+def test_xfail_strict_call_passing_reports_failed() -> None:
+    @velox.xfail("thought this was broken", strict=True)
+    async def _passes() -> None:
+        pass
+
+    (result,) = run_suite([_record(0, _passes, "test_passes")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure is not None
+    assert "strict" in result.failure
+
+
+def test_xfail_raises_matching_the_exception_type_reports_xfailed() -> None:
+    @velox.xfail("known broken", raises=ValueError)
+    async def _fails() -> None:
+        raise ValueError("nope")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.XFAILED
+
+
+def test_xfail_raises_not_matching_the_exception_type_reports_failed() -> None:
+    """A `raises=` mismatch is a real regression, not the expected failure -- reported FAILED,
+    same as no `xfail` mark at all."""
+
+    @velox.xfail("known broken", raises=ValueError)
+    async def _fails() -> None:
+        raise TypeError("wrong kind of broken")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.FAILED
+
+
+def test_xfail_does_not_apply_to_a_setup_error() -> None:
+    """`xfail` wraps the call phase only -- a fixture that raises during setup still reports
+    ERROR, `xfail` mark or not."""
+
+    @velox.fixture()
+    def broken() -> int:
+        raise RuntimeError("setup boom")
+
+    @velox.xfail("expected to fail")
+    async def test_func(x: int = velox.Depends(broken)) -> None:
+        raise AssertionError("must never run: setup already failed")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+
+
+def test_xfail_does_not_apply_to_a_timeout() -> None:
+    @velox.xfail("expected to fail")
+    async def _hangs() -> None:
+        await asyncio.sleep(10)
+
+    (result,) = run_suite([_record(0, _hangs, "test_hangs")], timeout=0.05)
+
+    assert result.outcome is Outcome.TIMEOUT
+
+
 def _result(outcome: Outcome) -> Result:
     return Result(
         id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None, failure_summary=None
@@ -1100,3 +1213,11 @@ def test_exit_code_all_skipped_is_zero_not_five() -> None:
 
 def test_exit_code_skipped_does_not_mask_a_real_failure() -> None:
     assert exit_code_for([_result(Outcome.FAILED)], [], skipped=1) == 1
+
+
+def test_exit_code_xfailed_and_xpassed_are_not_failures() -> None:
+    """Both mean the test behaved exactly as its `xfail` mark said it would -- neither should
+    turn a run red. A strict xpass reports FAILED instead of XPASSED (covered in test_run.py's
+    `@velox.xfail` section), so it never reaches `exit_code_for` as XPASSED."""
+    results = [_result(Outcome.PASSED), _result(Outcome.XFAILED), _result(Outcome.XPASSED)]
+    assert exit_code_for(results, []) == 0

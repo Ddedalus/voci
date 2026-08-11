@@ -44,7 +44,7 @@ _TRACEBACK_FAILURE = (
     "AssertionError: assert 2 == 3\n"
 )
 
-_TIMEOUT_FAILURE = "test exceeded the --timeout=1.0s budget"
+_TIMEOUT_FAILURE = "test exceeded its 1.0s timeout budget"
 
 _TIMEOUT_FAILURE_WITH_TRACEBACK = (
     f"{_TIMEOUT_FAILURE}\n\nTraceback (most recent call last):\n  ...\nCancelledError\n"
@@ -135,6 +135,27 @@ def test_file_block_reports_fail_and_failed_count_when_any_test_failed() -> None
     assert "(2 failed)" in out
 
 
+def test_file_block_stays_pass_when_the_only_non_passed_results_are_xfail() -> None:
+    """XFAILED and XPASSED both mean the test behaved exactly as its `xfail` mark said it
+    would -- neither should flip the file's block to FAIL."""
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+        _test_record(f"{path}::test_c", path, index=2),
+    ]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.on_result(_result(f"{path}::test_a", 0))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom"))
+    reporter.on_result(_result(f"{path}::test_c", 2, outcome=Outcome.XPASSED))
+
+    out = stream.getvalue()
+    assert "PASS" in out
+    assert "FAIL" not in out
+
+
 def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
     """Two records sharing an id (as a factory-generated test's repeated `func.__qualname__`
     would produce) must each count toward the file's total, not collapse into one entry."""
@@ -219,6 +240,23 @@ def test_finish_orders_by_the_results_argument_not_ids_natural_sort() -> None:
     first_summary_z = out.index("test_z", out.index("--- short test summary ---"))
     first_summary_a = out.index("test_a", out.index("--- short test summary ---"))
     assert first_summary_z < first_summary_a
+
+
+def test_finish_omits_xfailed_and_xpassed_from_failure_details_and_short_summary() -> None:
+    path = Path("f.py")
+    passed = _result(f"{path}::test_a", 0)
+    xfailed = _result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom")
+    xpassed = _result(f"{path}::test_c", 2, outcome=Outcome.XPASSED)
+    records = [_test_record(r.id, path, index=i) for i, r in enumerate([passed, xfailed, xpassed])]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.finish([passed, xfailed, xpassed], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "--- short test summary ---" not in out
+    assert "boom" not in out
+    assert "3 tests · 0 failed" in out
 
 
 # Short-summary "reason" extraction: a direct read of `TestResult.failure_summary`.

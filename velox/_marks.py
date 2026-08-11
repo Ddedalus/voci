@@ -9,6 +9,7 @@ order-independent except for `parametrize` (see below).
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -144,8 +145,10 @@ def skipif[F: Callable[..., Any]](
 def xfail[F: Callable[..., Any]](
     reason: str, *, strict: bool = False, raises: ExcTypes | None = None
 ) -> Callable[[F], F]:
-    """Record an expected-failure mark, with `reason`. `strict` and `raises` refine what counts
-    as the expected failure. Not yet enforced in reporting; see `ROADMAP.md`."""
+    """Record an expected-failure mark, with `reason`. A call phase that raises reports
+    `XFAILED` instead of `FAILED`; one that passes reports `XPASSED`, or fails the test outright
+    if `strict` is set. `raises`, if given, narrows which exception type counts as the expected
+    failure -- any other exception still reports `FAILED`."""
 
     def decorate(fn: F) -> F:
         return _amend(fn, xfail=XFail(reason, strict=strict, raises=raises))
@@ -164,12 +167,12 @@ def tag[F: Callable[..., Any]](*names: str) -> Callable[[F], F]:
 
 
 def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
-    """Record a per-test timeout, in seconds.
-
-    Not yet enforced — every test is held to the suite-wide `--timeout` budget; see `ROADMAP.md`.
-    """
+    """Record a per-test timeout, in seconds, overriding the suite-wide `--timeout` budget for
+    this test alone."""
 
     def decorate(fn: F) -> F:
+        if not (math.isfinite(seconds) and seconds > 0):
+            raise ValueError(f"timeout must be a positive, finite number of seconds, got {seconds}")
         return _amend(fn, timeout=seconds)
 
     return decorate

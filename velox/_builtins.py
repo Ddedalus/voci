@@ -45,9 +45,8 @@ class TestInfo:
     """`relative/path/test_file.py::test_name[param-id]`."""
     tags: tuple[str, ...]
     timeout: float | None
-    """The suite's effective `--timeout` budget for this test, or `None` for no limit — the
-    value `_run._run_one` actually enforces, which may differ from a per-test
-    `@velox.timeout(...)` mark."""
+    """The budget this test is actually held to, or `None` for no limit: a per-test
+    `@velox.timeout(...)` mark if it carries one, else the suite's `--timeout`."""
     worker: int
     """Which concurrency slot (`0..concurrency-1`) this test is occupying."""
 

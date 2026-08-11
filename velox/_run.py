@@ -1,8 +1,10 @@
-"""Runs collected tests concurrently and reports each one's pass/fail/error/timeout outcome.
+"""Runs collected tests concurrently and reports each one's pass/fail/error/timeout/xfail/xpass
+outcome.
 
 Tests are dispatched as concurrent `asyncio` tasks under a shared `asyncio.Semaphore`
 that bounds how many run at once; each gets a real setup -> call -> teardown envelope,
-plus an optional per-test `asyncio.timeout` budget. An `async def` test's call phase is
+plus an optional per-test `asyncio.timeout` budget -- the suite-wide `--timeout`, or a
+`@velox.timeout(...)` mark overriding it for that test alone. An `async def` test's call phase is
 awaited directly; a sync `def` one runs on the context-propagating executor
 (`_capture.ContextPropagatingExecutor`) instead, so a blocking call inside it holds only
 its own concurrency slot rather than the shared event loop. Results are collected back
@@ -30,9 +32,9 @@ from typing import Any, TextIO, cast
 
 from velox import _capture, _di
 from velox._collect import CollectionError, TestRecord
-from velox._marks import marks_of
+from velox._marks import XFail, marks_of
 
-__all__ = ["Outcome", "TestResult", "exit_code_for", "run_suite"]
+__all__ = ["FAILING_OUTCOMES", "Outcome", "TestResult", "exit_code_for", "run_suite"]
 
 #: Much larger than a typical core count: most suites are bound by a downstream
 #: service's latency, not by CPU.
@@ -50,11 +52,20 @@ class Outcome(enum.Enum):
     #: than a flavor of FAILED/ERROR, since the fix (raise the budget, or find the
     #: blocking call) is different from either.
     TIMEOUT = "timeout"
+    #: The call phase raised the failure a `@velox.xfail(...)` mark expected. Not a
+    #: failing outcome regardless of `strict` -- `strict` only governs XPASSED.
+    XFAILED = "xfailed"
+    #: The call phase passed despite a `@velox.xfail(...)` mark. Only reached when
+    #: `strict` is unset; a strict mark's unexpected pass reports FAILED instead, since
+    #: at that point there is no "expected" disposition left to report.
+    XPASSED = "xpassed"
 
 
 #: Outcomes that count as failing, both for the process exit code and for which
-#: results keep their captured stdout/stderr/log records around.
-_FAILING_OUTCOMES = (Outcome.FAILED, Outcome.ERROR, Outcome.TIMEOUT)
+#: results keep their captured stdout/stderr/log records around. XFAILED and XPASSED
+#: are deliberately excluded: both mean the test behaved exactly as its `xfail` mark
+#: said it would.
+FAILING_OUTCOMES = (Outcome.FAILED, Outcome.ERROR, Outcome.TIMEOUT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +99,38 @@ def _summarize_exception(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
 
 
+def _resolve_call_outcome(
+    xfail: XFail | None,
+    *,
+    call_exc: BaseException | None,
+    call_failure: str | None,
+    call_summary: str | None,
+) -> tuple[Outcome, str | None, str | None]:
+    """The call phase's own FAILED/PASSED disposition, reread through `xfail` when
+    `record.func` carries one. A `raises=` mismatch still reports FAILED -- the wrong
+    exception is not the failure the mark said to expect."""
+    if call_failure is not None:
+        if xfail is None or (
+            xfail.raises is not None
+            and not (call_exc is not None and isinstance(call_exc, xfail.raises))
+        ):
+            return Outcome.FAILED, call_failure, call_summary
+        return Outcome.XFAILED, f"{call_failure}\n(expected failure: {xfail.reason})", call_summary
+    if xfail is None:
+        return Outcome.PASSED, None, None
+    if xfail.strict:
+        return (
+            Outcome.FAILED,
+            f"test passed, but was marked @velox.xfail(reason={xfail.reason!r}, strict=True)",
+            f"XPASS(strict): expected failure but the test passed ({xfail.reason})",
+        )
+    return (
+        Outcome.XPASSED,
+        f"expected failure ({xfail.reason}), but the test passed",
+        f"XPASS: {xfail.reason}",
+    )
+
+
 async def _run_one(
     record: TestRecord, store: _di.ScopeStore, *, timeout: float | None
 ) -> tuple[TestResult, tuple[_di.CacheKey, ...]]:
@@ -102,14 +145,18 @@ async def _run_one(
     Teardown always runs once setup has acquired anything, whatever the call phase did.
     A timed-out envelope is reported TIMEOUT ahead of any other phase's failure; setup
     raising is ERROR; teardown raising is ERROR even over a passing call (both
-    tracebacks are kept if the call also failed); otherwise FAILED (call raised) or
-    PASSED.
+    tracebacks are kept if the call also failed); otherwise FAILED or PASSED (call
+    raised or not), reread as XFAILED/XPASSED when `record.func` carries a
+    `@velox.xfail(...)` mark. `xfail` only ever reclassifies those last two -- a timeout,
+    a setup error or a teardown error reports as such regardless of the mark, the same
+    way pytest's own xfail only wraps the test's call phase.
     """
     start = time.monotonic()
     setup_failure: str | None = None
     setup_summary: str | None = None
     call_failure: str | None = None
     call_summary: str | None = None
+    call_exc: BaseException | None = None
     teardown_failure: str | None = None
     teardown_summary: str | None = None
     cancelled_failure: str | None = None
@@ -160,6 +207,7 @@ async def _run_one(
                 except BaseException as exc:
                     call_failure = traceback.format_exc()
                     call_summary = _summarize_exception(exc)
+                    call_exc = exc
     except TimeoutError:
         # Only reachable when `timeout` is not None. By the time this is caught,
         # `asyncio.timeout.__aexit__` has already converted its own cancellation into
@@ -229,7 +277,10 @@ async def _run_one(
 
     if timed_out:
         outcome = Outcome.TIMEOUT
-        failure = f"test exceeded the --timeout={timeout}s budget"
+        # Phrased without naming --timeout specifically: `timeout` here may be the
+        # suite-wide budget or a per-test `@velox.timeout(...)` override, and this
+        # message doesn't know which.
+        failure = f"test exceeded its {timeout}s timeout budget"
         summary = failure
         # Whichever of these is set (never both) is the exception that actually
         # surfaced while the deadline was expiring, kept for context.
@@ -247,10 +298,13 @@ async def _run_one(
         )
         # Call-first, mirroring failure's own text ordering just above.
         summary = call_summary if call_failure is not None else teardown_summary
-    elif call_failure is not None:
-        outcome, failure, summary = Outcome.FAILED, call_failure, call_summary
     else:
-        outcome, failure, summary = Outcome.PASSED, None, None
+        outcome, failure, summary = _resolve_call_outcome(
+            marks_of(record.func).xfail,
+            call_exc=call_exc,
+            call_failure=call_failure,
+            call_summary=call_summary,
+        )
 
     result = TestResult(
         id=record.id,
@@ -331,13 +385,18 @@ def run_suite(
                 # does, transitively, to this test.
                 slot = worker_slots.acquire()
                 sink = _capture.Sink(label=record.id)
+                marks = marks_of(record.func)
+                # A `@velox.timeout(...)` mark overrides the suite-wide budget for this
+                # test alone; `marks.timeout is None` is the common case of "no override",
+                # not "no limit" -- that's what the bare `timeout` parameter already means.
+                test_timeout = marks.timeout if marks.timeout is not None else timeout
                 test_context = _capture.TestContext(
-                    sink=sink, tags=marks_of(record.func).tags, timeout=timeout, worker=slot
+                    sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
                 )
                 token = _capture.current_test_context.set(test_context)
                 try:
                     try:
-                        result, module_keys = await _run_one(record, store, timeout=timeout)
+                        result, module_keys = await _run_one(record, store, timeout=test_timeout)
                     finally:
                         worker_slots.release(slot)
 
@@ -363,7 +422,7 @@ def run_suite(
                     _capture.current_test_context.reset(token)
 
                 # Captured output is only worth keeping for a failing result.
-                if result.outcome in _FAILING_OUTCOMES:
+                if result.outcome in FAILING_OUTCOMES:
                     result = dataclasses.replace(
                         result,
                         captured_stdout=sink.out,
@@ -481,6 +540,6 @@ def exit_code_for(
     `FAILED`/`ERROR`/`TIMEOUT` result, `0` otherwise."""
     if not results and not errors and not skipped:
         return 5
-    if errors or any(result.outcome in _FAILING_OUTCOMES for result in results):
+    if errors or any(result.outcome in FAILING_OUTCOMES for result in results):
         return 1
     return 0
