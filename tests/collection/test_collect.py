@@ -253,9 +253,9 @@ def test_tag_expr_excludes_non_matching_tests_into_deselected(tmp_path: Path) ->
     assert result.errors == []
 
 
-def test_tag_expr_deselection_is_checked_ahead_of_skip(tmp_path: Path) -> None:
-    """A test excluded by `tag_expr` never reaches the skip check -- it lands in `deselected`,
-    not `skipped`, even when it also carries a skip mark."""
+def test_skip_takes_priority_over_tag_expr_deselection(tmp_path: Path) -> None:
+    """A skip-marked test is always `skipped`, never `deselected`, regardless of `-m` -- a
+    test's skip status must not flip depending on which tags happen to be selected."""
     path = _write(
         tmp_path / "test_sample.py",
         "import velox\n\n"
@@ -268,8 +268,9 @@ def test_tag_expr_deselection_is_checked_ahead_of_skip(tmp_path: Path) -> None:
     result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
 
     assert result.records == []
-    assert result.skipped == []
-    assert result.deselected == ["test_sample.py::test_slow_and_skipped"]
+    assert result.deselected == []
+    assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_slow_and_skipped"]
+    assert result.skipped[0].reason == "unrelated reason"
 
 
 def test_no_tag_expr_deselects_nothing(tmp_path: Path) -> None:

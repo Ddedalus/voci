@@ -1,9 +1,10 @@
 """Boolean `-m` selection over `@velox.tag` names.
 
 `compile_tag_expression` turns a string like `"slow and not flaky"` into a `TagExpression`: a
-compiled predicate that tests one test's tags against the expression. Only tag names, `and`,
-`or`, `not`, and parentheses are accepted -- anything else raises `TagExpressionError` naming
-what was found instead, rather than a bare `SyntaxError`.
+predicate that tests one test's tags against the expression. A tag name is a bare identifier, or
+a quoted string for a name that isn't one (`'smoke.fast'`, `'-slow'`), combined with `and`,
+`or`, `not`, and parentheses -- anything else raises `TagExpressionError` naming what was found
+instead of a bare `SyntaxError`.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable
 from dataclasses import dataclass
-from types import CodeType
 
 __all__ = ["TagExpression", "TagExpressionError", "compile_tag_expression"]
 
@@ -20,9 +20,9 @@ class TagExpressionError(ValueError):
     """`-m EXPR` where `EXPR` is not a boolean combination of tag names."""
 
 
-# What compile_tag_expression allows through: an expression built only from names combined with
-# `and`/`or`/`not` and parentheses -- no calls, attributes, comparisons, or literals. This is the
-# whitelist eval() below relies on for safety, not just a style preference.
+# What compile_tag_expression allows through: a tag name (a bare identifier, or a quoted string
+# for a name that isn't a legal identifier) combined with `and`/`or`/`not` and parentheses. No
+# calls, attribute access, comparisons, or non-string literals.
 _ALLOWED_NODES = (
     ast.Expression,
     ast.BoolOp,
@@ -32,6 +32,7 @@ _ALLOWED_NODES = (
     ast.Not,
     ast.Name,
     ast.Load,
+    ast.Constant,
 )
 
 
@@ -40,32 +41,45 @@ class TagExpression:
     """A compiled `-m` expression. Call `matches` with a test's tags to test selection."""
 
     raw: str
-    _code: CodeType
-    _names: tuple[str, ...]
+    _tree: ast.Expression
 
     def matches(self, tags: Iterable[str]) -> bool:
-        present = frozenset(tags)
-        env = {name: name in present for name in self._names}
-        # Safe despite eval(): compile_tag_expression already rejected every node except
-        # names, and/or/not, and parentheses, so there is no call or attribute access this
-        # expression could perform.
-        return bool(eval(self._code, {"__builtins__": {}}, env))
+        return _evaluate(self._tree.body, frozenset(tags))
 
 
 def compile_tag_expression(expr: str) -> TagExpression:
     """Parse `expr` into a `TagExpression`. Raises `TagExpressionError` if `expr` is not a
-    boolean combination of bare tag names -- e.g. it contains a call, a comparison, or is
-    empty."""
+    boolean combination of tag names -- e.g. it contains a call, a comparison, a non-string
+    literal, or is empty."""
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as exc:
-        raise TagExpressionError(f"invalid -m expression {expr!r}: {exc.msg}") from exc
+        raise _invalid(expr, exc.msg or "syntax error") from exc
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
-            raise TagExpressionError(
-                f"invalid -m expression {expr!r}: only tag names, 'and', 'or', 'not', and "
-                f"parentheses are allowed, not {type(node).__name__}"
-            )
-    names = tuple(sorted({node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}))
-    code = compile(tree, "<tag-expression>", "eval")
-    return TagExpression(raw=expr, _code=code, _names=names)
+            raise _invalid(expr, f"not allowed: {type(node).__name__}")
+        if isinstance(node, ast.Constant) and not isinstance(node.value, str):
+            raise _invalid(expr, f"not a quoted tag name: {node.value!r}")
+    return TagExpression(raw=expr, _tree=tree)
+
+
+def _invalid(expr: str, detail: str) -> TagExpressionError:
+    return TagExpressionError(
+        f"invalid -m expression {expr!r}: {detail} -- only tag names (bare identifiers, or "
+        f"quoted strings for names that aren't), 'and', 'or', 'not', and parentheses are allowed"
+    )
+
+
+def _evaluate(node: ast.expr, tags: frozenset[str]) -> bool:
+    """Walks `node`, a tree already vetted by `compile_tag_expression`, matching each tag
+    reference -- `ast.Name` or a string `ast.Constant` alike -- against `tags`."""
+    if isinstance(node, ast.Name):
+        return node.id in tags
+    if isinstance(node, ast.Constant):
+        return node.value in tags
+    if isinstance(node, ast.UnaryOp):
+        return not _evaluate(node.operand, tags)
+    if isinstance(node, ast.BoolOp):
+        results = (_evaluate(value, tags) for value in node.values)
+        return any(results) if isinstance(node.op, ast.Or) else all(results)
+    raise TypeError(f"unreachable: {type(node).__name__} passed compile_tag_expression's checks")

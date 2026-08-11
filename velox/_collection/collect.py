@@ -6,7 +6,8 @@ function object and excluded from `records` into `skipped` instead of running fo
 `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`, and a malformed DI graph
 (bad scope nesting, a missing injection) becomes a `CollectionError`, the same way a bad import
 does. A `tag_expr` (see `tagexpr.py`) whose expression a test's `@velox.tag(...)` names don't
-satisfy excludes it into `deselected` instead, ahead of the skip check.
+satisfy excludes it into `deselected` instead -- checked after the skip check, so a skip-marked
+test is always `skipped`, never reclassified as deselected depending on `-m`.
 
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
@@ -97,8 +98,8 @@ class CollectionResult:
     errors: list[CollectionError]
     skipped: list[Skipped]
     deselected: list[str] = field(default_factory=list)
-    """Ids of tests excluded by `tag_expr`, not `skipped`: these never entered the skip/DI
-    checks at all."""
+    """Ids of tests excluded by `tag_expr`, not `skipped`: these passed the skip check (they
+    would otherwise run) but never reached the DI checks."""
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -185,12 +186,11 @@ def collect(
        elsewhere isn't collected twice.
     3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
        order.
-    4. Per function: `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names don't
-       satisfy it into `deselected`, ahead of every other check. Otherwise a `skip`/truthy-
-       `skipif` mark excludes it from `records` into `skipped` instead; a malformed DI graph
-       excludes it into `errors` instead. Otherwise build one `TestRecord`, `id` as
-       `"{path}::{qualname}"` with `path` relative to `rootdir`, carrying the `ResolutionPlan`
-       `plan_for` built.
+    4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
+       instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
+       don't satisfy it into `deselected`. Otherwise a malformed DI graph excludes it into
+       `errors` instead. Otherwise build one `TestRecord`, `id` as `"{path}::{qualname}"` with
+       `path` relative to `rootdir`, carrying the `ResolutionPlan` `plan_for` built.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order
@@ -223,10 +223,6 @@ def collect(
             test_id = f"{display_path}::{func.__qualname__}"
             marks = marks_of(func)
 
-            if tag_expr is not None and not tag_expr.matches(marks.tags):
-                deselected.append(test_id)
-                continue
-
             try:
                 reason = _skip_reason(marks)
             except Exception:
@@ -236,7 +232,14 @@ def collect(
                 continue
 
             if reason is not None:
+                # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
+                # regardless of -m -- @velox.skip is never silently reclassified as deselected
+                # depending on which tags happen to be in play.
                 skipped.append(Skipped(id=test_id, reason=reason))
+                continue
+
+            if tag_expr is not None and not tag_expr.matches(marks.tags):
+                deselected.append(test_id)
                 continue
 
             try:
@@ -244,7 +247,7 @@ def collect(
             except Exception:
                 # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
                 # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata. Both
-                # are attributed to this test and collection continues, same as the `marks_of`
+                # are attributed to this test and collection continues, same as the `_skip_reason`
                 # catch above.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue

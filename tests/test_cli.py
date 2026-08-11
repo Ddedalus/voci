@@ -261,6 +261,45 @@ def test_main_dash_m_matching_nothing_exits_five(
     assert "1 deselected" in out
 
 
+def test_main_shows_zero_deselected_when_dash_m_is_given_but_matches_everything(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`-m` is always shown in the summary once given, even when it deselects nothing --
+    unlike a run with no `-m` at all, where `deselected` never appears."""
+    project.write_passing_test()
+
+    status = main([str(project.root), "-m", "not slow"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "0 deselected" in out
+
+
+def test_main_dash_m_never_reclassifies_a_skip_marked_test_as_deselected(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A test that is both skip-marked and tag-excluded by `-m` must stay `SKIPPED` -- and the
+    exit code must not depend on whether `-m` happened to also exclude it."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "@velox.skip('not ready')\n"
+        "async def test_skipped():\n"
+        "    raise AssertionError('must not run')\n",
+    )
+
+    without_m = main([str(project.root)])
+    out_without_m = capsys.readouterr().out
+    with_m = main([str(project.root), "-m", "not slow"])
+    out_with_m = capsys.readouterr().out
+
+    assert without_m == with_m == 0
+    assert "test_skipped SKIPPED (not ready)" in out_without_m
+    assert "test_skipped SKIPPED (not ready)" in out_with_m
+    assert "deselected" not in out_without_m
+
+
 def test_main_without_dash_m_never_deselects(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

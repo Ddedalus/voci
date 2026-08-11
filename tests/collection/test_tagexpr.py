@@ -40,6 +40,24 @@ def test_raw_preserves_the_original_expression_text() -> None:
 
 
 @pytest.mark.parametrize(
+    "expr, tags, expected",
+    [
+        ("'smoke.fast'", ("smoke.fast",), True),
+        ("'smoke.fast'", (), False),
+        ("'integration-test'", ("integration-test",), True),
+        ("'-slow' and not 'flaky.v2'", ("-slow",), True),
+        ("'-slow' and not 'flaky.v2'", ("-slow", "flaky.v2"), False),
+    ],
+)
+def test_a_quoted_string_selects_a_tag_name_that_is_not_a_bare_identifier(
+    expr: str, tags: tuple[str, ...], expected: bool
+) -> None:
+    """A tag name with characters `and`/`or`/`not`/bare identifiers can't spell (a hyphen, a
+    dot) is still selectable, quoted."""
+    assert compile_tag_expression(expr).matches(tags) is expected
+
+
+@pytest.mark.parametrize(
     "expr",
     [
         "",
@@ -61,11 +79,15 @@ def test_a_syntactically_invalid_expression_raises(expr: str) -> None:
         "slow if True else 'x'",
         "[slow]",
         "1",
-        "'slow'",
+        "1.5",
+        "b'slow'",
+        "True",
+        "None",
     ],
 )
-def test_syntax_outside_names_and_and_or_not_is_rejected(expr: str) -> None:
-    """Only tag names combined with and/or/not/parens are accepted -- calls, attribute access,
-    comparisons, and literals are all rejected rather than silently evaluated."""
+def test_syntax_outside_names_quoted_names_and_and_or_not_is_rejected(expr: str) -> None:
+    """Only tag names (bare or quoted) combined with and/or/not/parens are accepted -- calls,
+    attribute access, comparisons, and non-string literals are all rejected rather than
+    silently evaluated."""
     with pytest.raises(TagExpressionError, match="invalid -m expression"):
         compile_tag_expression(expr)

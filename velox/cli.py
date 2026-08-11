@@ -50,8 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="EXPR",
         default=None,
         help="Run only tests whose @velox.tag(...) names satisfy this boolean expression, e.g. "
-        "'slow and not flaky'. Tags not mentioned in EXPR count as absent. A test that doesn't "
-        "match is deselected, not skipped.",
+        "'slow and not flaky'. A tag name that isn't a bare identifier (has a dash or a dot) "
+        "must be quoted, e.g. \"'smoke.fast'\". Tags not mentioned in EXPR count as absent. A "
+        "test that doesn't match is deselected, not skipped; a skip-marked test is always "
+        "skipped, regardless of EXPR.",
     )
     # --assert and --rewrite-cache below both affect real behavior, not just help text.
     parser.add_argument(
@@ -480,7 +482,10 @@ def main(argv: list[str] | None = None) -> int:
         summary += (
             f", {len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
-        if collected.deselected:
+        # Shown whenever -m was given, including a 0 count -- same always-shown treatment as
+        # skipped/errors, so the line reliably says whether -m was in effect rather than looking
+        # identical to a run without it.
+        if markexpr is not None:
             summary += f", {len(collected.deselected)} deselected"
         print(summary)
 
