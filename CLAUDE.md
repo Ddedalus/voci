@@ -19,37 +19,39 @@ own module and repointing their imports:
 - `just move source destination object...` — cut those objects out of `source`, append them to
   `destination`, copy `source`'s whole import block along for the ride, then `ruff --fix` both
   files so unused imports drop out and needed ones stay.
-- `just rewire object old.module new.module` — repoint every top-level `from old.module import
-  object` across the repo at `new.module`, preserving aliases, then `ruff --fix` the touched
-  files.
+- `just rewire object old.module new.module` — repoint every `from old.module import object`
+  clause across the repo (top-level or nested — inside `if TYPE_CHECKING:`, inside a function) at
+  `new.module`, preserving aliases and a trailing `# noqa` comment, then `ruff --fix` the touched
+  files. Prints a `- old line` / `+ new line` diff for every rewrite, worth reading rather than
+  trusting blind — see the sharp edge below.
+- `just rewire-module parent name new_parent new_name` — for a consumer that does `from parent
+  import name` (a whole submodule, e.g. `from velox import _capture`) and uses `name.thing`
+  throughout rather than importing specific names, repoint just that import at
+  `from new_parent import new_name as name`, so every existing `name.thing` call site stays
+  untouched. Same diff output as `rewire`.
 
-Both rewire the mechanical parts of the move: line ranges (decorators included) and imports.
-They don't touch a moved object's docstring or `__all__` — add those by hand afterward, same as
+All three rewire the mechanical parts of a move: line ranges (decorators included) and imports.
+None of them touch a moved object's docstring or `__all__` — add those by hand afterward, same as
 any other new module (see the Documentation section below).
 
 **Moving a whole file into a subpackage** (promoting `_x.py` to `_pkg/x.py`, nothing split) is
 `git mv`, not `just move` — `move` exists to split objects out of a multi-object file, and running
 it on an already-cohesive file re-emits it through ruff for no reason and loses git's rename
-tracking. Follow the `git mv` with `just rewire` for every name any other file imports from the
-old module. For a consumer that does `from velox import _x` and uses `_x.thing` throughout instead
-of `from velox._x import thing`, `rewire` won't touch it (it only follows `from module import
-name`) — change just the import line to `from velox._pkg import x as _x`, which rebinds the same
-local name so every `_x.thing` call site is untouched.
+tracking. Follow the `git mv` with `just rewire`/`just rewire-module` for every name or whole-module
+import any other file uses.
 
-`rewire` has three sharp edges, found while nesting `velox/`'s own subpackages:
-- It only scans a file's *top-level* statements, so an import nested inside `if TYPE_CHECKING:`
-  or inside a function body isn't found and needs a manual fix.
-- It regenerates the statement fresh rather than patching text in place, so a trailing `# noqa`
-  comment on the line gets dropped — check for one before running it on a line that has one.
-- Given `from pkg import name`, it can't tell "a submodule literally named `name`, aliased" from
-  "an object named `name`" apart — both are the same AST shape. If a subpackage's `__init__.py`
-  ever ends up with a real object sharing a name with one of its own submodules, a `rewire` call
-  for the object can rewrite the submodule-import line instead. Check the diff.
+**`rewire`'s one remaining sharp edge**, found while nesting `velox/`'s own subpackages and not
+fixable without filesystem awareness: given `from pkg import name`, it can't tell "a submodule
+literally named `name`, aliased" (use `rewire-module` for this) from "an object named `name`"
+(use `rewire`) apart — both are the same AST shape. Pointing `rewire` at a name that's actually a
+submodule import rewrites that import's *source*, silently producing a self-referential or wrong
+import. This is exactly what the printed diff is for: read it before moving on, especially when a
+name could plausibly be either.
 
-`rewire` only follows plain `from x import y` clauses (single- or multi-line); dotted `import x`
-usage and generated files (like `velox/_assertions/_vendor/_compare_any.py`, whose stand-in
-import lives as a string literal in `scripts/vendor_assertion.py`) need a manual fix and a
-`just vendor` re-run.
+`rewire`/`rewire-module` only follow `from x import y` clauses (single- or multi-line); dotted
+`import x` usage and generated files (like `velox/_assertions/_vendor/_compare_any.py`, whose
+stand-in import lives as a string literal in `scripts/vendor_assertion.py`) need a manual fix and
+a `just vendor` re-run.
 
 Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`.
 Git submodules for reference: `pytest/`, `fastapi/`.

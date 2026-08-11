@@ -128,6 +128,7 @@ move source destination +objects:
 rewire obj old_module new_module:
     #!/usr/bin/env -S uv run python3
     import ast
+    import re
     import subprocess
     import sys
     from pathlib import Path
@@ -140,20 +141,22 @@ rewire obj old_module new_module:
             if not any(part in skip_dirs for part in p.parts):
                 yield p
 
-    touched = []
+    touched, diffs = [], []
     for path in py_files():
         text = path.read_text()
         if old_module not in text or obj not in text:
             continue
         try:
-            body = ast.parse(text).body
+            tree = ast.parse(text)
         except SyntaxError:
             continue
 
+        # ast.walk, not tree.body: a nested import (inside `if TYPE_CHECKING:`, inside a
+        # function body) is otherwise invisible here and silently left unrewired.
         target = next(
             (
                 n
-                for n in body
+                for n in ast.walk(tree)
                 if isinstance(n, ast.ImportFrom)
                 and n.module == old_module
                 and any(a.name == obj for a in n.names)
@@ -163,20 +166,34 @@ rewire obj old_module new_module:
         if target is None:
             continue
 
+        lines = text.splitlines(keepends=True)
+        indent = re.match(r"[ \t]*", lines[target.lineno - 1]).group()
+        old_stmt = "".join(lines[target.lineno - 1 : target.end_lineno]).rstrip("\n")
+        # Only preserved when the import disappears entirely (single name, nothing left at
+        # this location) -- attaching it to a shrunk multi-name import would be a guess.
+        trailing_comment = ""
+        comment_match = re.search(r"\s*(#.*)$", lines[target.end_lineno - 1].rstrip("\n"))
+        if comment_match:
+            trailing_comment = "  " + comment_match.group(1)
+
         alias = next(a for a in target.names if a.name == obj)
         remaining = [a for a in target.names if a.name != obj]
-        new_line = f"from {new_module} import {obj}" + (f" as {alias.asname}" if alias.asname else "") + "\n"
+        new_line = f"{indent}from {new_module} import {obj}"
+        if alias.asname:
+            new_line += f" as {alias.asname}"
         if remaining:
             names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in remaining)
-            replacement = f"from {old_module} import {names}\n"
+            replacement = f"{indent}from {old_module} import {names}\n"
+            new_line += "\n"
         else:
             replacement = ""
+            new_line += f"{trailing_comment}\n"
 
-        lines = text.splitlines(keepends=True)
         before = "".join(lines[: target.lineno - 1])
         after = "".join(lines[target.end_lineno :])
         path.write_text(before + replacement + new_line + after)
         touched.append(str(path))
+        diffs.append((str(path), old_stmt, (replacement + new_line).rstrip("\n")))
 
     if not touched:
         print(f"no from-imports of {obj!r} from {old_module!r} found")
@@ -185,5 +202,93 @@ rewire obj old_module new_module:
     subprocess.run(["uv", "run", "ruff", "check", "--fix", "--unsafe-fixes", "--select", "I,F401", *touched])
     subprocess.run(["uv", "run", "ruff", "format", *touched], check=True)
     print(f"rewired {obj} ({old_module} -> {new_module}) in {len(touched)} file(s):")
-    for t in touched:
-        print(f"  {t}")
+    for path_str, old_stmt, new_stmt in diffs:
+        print(f"  {path_str}")
+        for line in old_stmt.splitlines():
+            print(f"    - {line}")
+        for line in new_stmt.splitlines():
+            print(f"    + {line}")
+
+# Repoint a whole-module import (`from parent import name`) at a new submodule, keeping the
+# same locally-bound alias so every existing `name.thing` call site elsewhere is untouched.
+rewire-module parent name new_parent new_name:
+    #!/usr/bin/env -S uv run python3
+    import ast
+    import re
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    parent, name = "{{parent}}", "{{name}}"
+    new_parent, new_name = "{{new_parent}}", "{{new_name}}"
+    skip_dirs = {".git", ".venv", "__pycache__", "pytest", "fastapi", "research", "spec"}
+
+    def py_files():
+        for p in Path(".").rglob("*.py"):
+            if not any(part in skip_dirs for part in p.parts):
+                yield p
+
+    touched, diffs = [], []
+    for path in py_files():
+        text = path.read_text()
+        if parent not in text or name not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+
+        target = next(
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.ImportFrom)
+                and n.module == parent
+                and any(a.name == name for a in n.names)
+            ),
+            None,
+        )
+        if target is None:
+            continue
+
+        lines = text.splitlines(keepends=True)
+        indent = re.match(r"[ \t]*", lines[target.lineno - 1]).group()
+        old_stmt = "".join(lines[target.lineno - 1 : target.end_lineno]).rstrip("\n")
+        trailing_comment = ""
+        comment_match = re.search(r"\s*(#.*)$", lines[target.end_lineno - 1].rstrip("\n"))
+        if comment_match:
+            trailing_comment = "  " + comment_match.group(1)
+
+        alias = next(a for a in target.names if a.name == name)
+        bound_name = alias.asname or name
+        remaining = [a for a in target.names if a.name != name]
+        new_line = f"{indent}from {new_parent} import {new_name}"
+        if new_name != bound_name:
+            new_line += f" as {bound_name}"
+        if remaining:
+            names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in remaining)
+            replacement = f"{indent}from {parent} import {names}\n"
+            new_line += "\n"
+        else:
+            replacement = ""
+            new_line += f"{trailing_comment}\n"
+
+        before = "".join(lines[: target.lineno - 1])
+        after = "".join(lines[target.end_lineno :])
+        path.write_text(before + replacement + new_line + after)
+        touched.append(str(path))
+        diffs.append((str(path), old_stmt, (replacement + new_line).rstrip("\n")))
+
+    if not touched:
+        print(f"no whole-module imports of {name!r} from {parent!r} found")
+        sys.exit(0)
+
+    subprocess.run(["uv", "run", "ruff", "check", "--fix", "--unsafe-fixes", "--select", "I,F401", *touched])
+    subprocess.run(["uv", "run", "ruff", "format", *touched], check=True)
+    print(f"rewired {name} ({parent} -> {new_parent}.{new_name}) in {len(touched)} file(s):")
+    for path_str, old_stmt, new_stmt in diffs:
+        print(f"  {path_str}")
+        for line in old_stmt.splitlines():
+            print(f"    - {line}")
+        for line in new_stmt.splitlines():
+            print(f"    + {line}")
