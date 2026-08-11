@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from _support import Project
+
 import pytest
 from velox._collection.discovery import discover_files
 
 
 def _touch(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("")
-    return path
+    return Project(path.parent).write(path.name, "")
 
 
 def test_finds_test_prefix_and_suffix_files(tmp_path: Path) -> None:

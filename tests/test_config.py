@@ -4,15 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from _support import Project
+
 import pytest
 from velox._config import Config, ConfigError, resolve
-
-
-def _write_pyproject(directory: Path, body: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / "pyproject.toml"
-    path.write_text(body)
-    return path
 
 
 def test_no_pyproject_anywhere_falls_back_to_defaults(tmp_path: Path) -> None:
@@ -25,8 +20,7 @@ def test_no_pyproject_anywhere_falls_back_to_defaults(tmp_path: Path) -> None:
 
 
 def test_finds_tool_velox_in_the_search_start_itself(tmp_path: Path) -> None:
-    _write_pyproject(
-        tmp_path,
+    Project(tmp_path).write_pyproject(
         "[tool.velox]\ntestpaths = ['tests']\nconcurrency = 8\ntimeout = 30\n",
     )
 
@@ -40,7 +34,7 @@ def test_finds_tool_velox_in_the_search_start_itself(tmp_path: Path) -> None:
 
 
 def test_walks_upward_from_a_nested_explicit_path(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nconcurrency = 5\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 5\n")
     nested = tmp_path / "a" / "b" / "test_deep.py"
     nested.parent.mkdir(parents=True)
     nested.write_text("")
@@ -54,9 +48,9 @@ def test_walks_upward_from_a_nested_explicit_path(tmp_path: Path) -> None:
 def test_a_plain_pyproject_without_tool_velox_is_skipped(tmp_path: Path) -> None:
     """A `pyproject.toml` with no `[tool.velox]` table is not a match -- the search keeps
     walking upward past it."""
-    _write_pyproject(tmp_path, "[project]\nname = 'unrelated'\n")
+    Project(tmp_path).write_pyproject("[project]\nname = 'unrelated'\n")
     nested = tmp_path / "pkg"
-    _write_pyproject(nested, "[tool.velox]\nconcurrency = 7\n")
+    Project(nested).write_pyproject("[tool.velox]\nconcurrency = 7\n")
     sub = nested / "tests"
     sub.mkdir()
 
@@ -73,7 +67,7 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
     project = repo / "sub"
     project.mkdir()
     # A `[tool.velox]` above the git root must never be picked up.
-    _write_pyproject(tmp_path, "[tool.velox]\nconcurrency = 99\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 99\n")
 
     config = resolve([project])
 
@@ -84,7 +78,7 @@ def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -
     """The git root itself is examined, not skipped."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    _write_pyproject(repo, "[tool.velox]\nconcurrency = 12\n")
+    Project(repo).write_pyproject("[tool.velox]\nconcurrency = 12\n")
     project = repo / "sub"
     project.mkdir()
 
@@ -97,7 +91,7 @@ def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -
 def test_no_explicit_paths_searches_from_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nconcurrency = 3\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 3\n")
     monkeypatch.chdir(tmp_path)
 
     config = resolve([])
@@ -107,7 +101,7 @@ def test_no_explicit_paths_searches_from_cwd(
 
 
 def test_search_start_is_the_common_ancestor_of_multiple_paths(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nconcurrency = 2\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 2\n")
     left = tmp_path / "left"
     right = tmp_path / "right"
     left.mkdir()
@@ -119,7 +113,7 @@ def test_search_start_is_the_common_ancestor_of_multiple_paths(tmp_path: Path) -
 
 
 def test_a_file_path_searches_from_its_parent_directory(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nconcurrency = 6\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 6\n")
     test_file = tmp_path / "test_one.py"
     test_file.write_text("")
 
@@ -130,21 +124,21 @@ def test_a_file_path_searches_from_its_parent_directory(tmp_path: Path) -> None:
 
 
 def test_unknown_key_is_a_config_error(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nnot_a_real_key = 1\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nnot_a_real_key = 1\n")
 
     with pytest.raises(ConfigError, match="not_a_real_key"):
         resolve([tmp_path])
 
 
 def test_tool_velox_must_be_a_table(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool]\nvelox = 'nope'\n")
+    Project(tmp_path).write_pyproject("[tool]\nvelox = 'nope'\n")
 
     with pytest.raises(ConfigError, match="must be a table"):
         resolve([tmp_path])
 
 
 def test_malformed_toml_is_a_config_error(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox\nthis is not valid toml")
+    Project(tmp_path).write_pyproject("[tool.velox\nthis is not valid toml")
 
     with pytest.raises(ConfigError):
         resolve([tmp_path])
@@ -152,51 +146,50 @@ def test_malformed_toml_is_a_config_error(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("bad", ["'sixteen'", "true", "16.5", "[1, 2]"])
 def test_concurrency_must_be_a_plain_integer(tmp_path: Path, bad: str) -> None:
-    _write_pyproject(tmp_path, f"[tool.velox]\nconcurrency = {bad}\n")
+    Project(tmp_path).write_pyproject(f"[tool.velox]\nconcurrency = {bad}\n")
 
     with pytest.raises(ConfigError, match="concurrency"):
         resolve([tmp_path])
 
 
 def test_timeout_accepts_both_int_and_float(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\ntimeout = 30\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = 30\n")
     assert resolve([tmp_path]).timeout == 30.0
 
-    _write_pyproject(tmp_path, "[tool.velox]\ntimeout = 30.5\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = 30.5\n")
     assert resolve([tmp_path]).timeout == 30.5
 
 
 def test_timeout_rejects_a_bool(tmp_path: Path) -> None:
     """TOML `true`/`false` are Python `bool`, a subclass of `int` -- `timeout = true` must be
     a usage error, not silently become `timeout = 1.0`."""
-    _write_pyproject(tmp_path, "[tool.velox]\ntimeout = true\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = true\n")
 
     with pytest.raises(ConfigError, match="timeout"):
         resolve([tmp_path])
 
 
 def test_testpaths_must_be_a_list_of_strings(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\ntestpaths = 'tests'\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\ntestpaths = 'tests'\n")
 
     with pytest.raises(ConfigError, match="testpaths"):
         resolve([tmp_path])
 
-    _write_pyproject(tmp_path, "[tool.velox]\ntestpaths = [1, 2]\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\ntestpaths = [1, 2]\n")
 
     with pytest.raises(ConfigError, match="testpaths"):
         resolve([tmp_path])
 
 
 def test_env_must_be_a_table_of_string_to_string(tmp_path: Path) -> None:
-    _write_pyproject(tmp_path, "[tool.velox]\nenv = { FOO = 1 }\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nenv = { FOO = 1 }\n")
 
     with pytest.raises(ConfigError, match="env"):
         resolve([tmp_path])
 
 
 def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> None:
-    _write_pyproject(
-        tmp_path,
+    Project(tmp_path).write_pyproject(
         "[tool.velox]\n"
         "env = { ENVIRONMENT = 'test', DEBUG = '0' }\n"
         "ignore = ['.git', 'vendor']\n"
@@ -212,7 +205,7 @@ def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> Non
 
 def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:
     """`watchdog_threshold` is not a recognized key -- an unknown key is a `ConfigError`."""
-    _write_pyproject(tmp_path, "[tool.velox]\nwatchdog_threshold = 1.0\n")
+    Project(tmp_path).write_pyproject("[tool.velox]\nwatchdog_threshold = 1.0\n")
 
     with pytest.raises(ConfigError, match="watchdog_threshold"):
         resolve([tmp_path])

@@ -8,15 +8,15 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, cast
 
+from _support import Project
+
 import pytest
 from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
 
 
 def _write(path: Path, source: str) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
-    return path
+    return Project(path.parent).write(path.name, source)
 
 
 def test_module_name_for_is_path_derived_and_rootdir_relative(tmp_path: Path) -> None:
