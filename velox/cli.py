@@ -19,7 +19,9 @@ import time
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _capture, _collect, _config, _discovery, _report, _rewrite, _run
+from velox import __version__, _capture, _config, _report, _rewrite, _run
+from velox._collection import collect as _collect
+from velox._collection import discovery as _discovery
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from velox._collect import TestRecord
+from velox._collection.collect import TestRecord
 from velox._run import FAILING_OUTCOMES, TestResult
 
 __all__ = ["Reporter"]

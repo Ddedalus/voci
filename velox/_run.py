@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, TextIO, cast
 
 from velox import _capture
-from velox._collect import CollectionError, TestRecord
+from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
 from velox._marks import XFail, marks_of
 

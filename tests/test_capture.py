@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import velox
 from velox import _capture
-from velox._collect import TestRecord as Record
+from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._run import Outcome, run_suite
 

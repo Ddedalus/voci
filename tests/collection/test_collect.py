@@ -1,4 +1,4 @@
-"""Tests for velox._collect: test discovery, module import, and collection errors."""
+"""Tests for velox._collection.collect: module import and collection errors."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 from velox import _rewrite
-from velox._collect import collect, module_name_for
+from velox._collection.collect import collect, module_name_for
 
 
 def _write(path: Path, source: str) -> Path:

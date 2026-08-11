@@ -137,7 +137,7 @@ that stays unenforced is a real defect, not an accepted limitation.
 Decisions that look like clutter until you know what they prevent. Each one has been reverted by
 somebody tidying up, at least in spirit.
 
-## `_collect.py` — import and collection
+## `_collection/collect.py` — import and collection
 
 **Each test file is imported under a synthetic module name.** The name is derived from the path
 relative to rootdir, and `sys.path` is never touched. This is what lets two `test_utils.py` files in

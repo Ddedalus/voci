@@ -1,11 +1,11 @@
-"""Tests for velox._discovery: file matching, ignore rules, and deterministic ordering."""
+"""Tests for velox._collection.discovery: file matching, ignore rules, deterministic ordering."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from velox._discovery import discover_files
+from velox._collection.discovery import discover_files
 
 
 def _touch(path: Path) -> Path:
