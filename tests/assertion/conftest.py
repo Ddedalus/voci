@@ -1,8 +1,5 @@
-"""Shared helpers for the assertion tests.
-
-velox's own suite still runs under pytest (see `justfile`), so these tests are written in
-pytest's idiom. That is a happy accident for the ported ones: upstream's helpers translate
-almost verbatim, which is the whole point of vendoring rather than reimplementing (spec/07 §1).
+"""Shared helpers for the assertion tests: `mock_config`, `callop`/`callequal`, and the
+`rewritten` fixture.
 """
 
 from __future__ import annotations
@@ -24,12 +21,7 @@ def mock_config(
     truncation_limit_lines: int | None = 0,
     truncation_limit_chars: int | None = 0,
 ) -> Config:
-    """velox's stand-in for upstream's `mock_config`.
-
-    Truncation defaults to off, matching upstream, so a diff assertion in a test is not
-    quietly clipped. velox needs no terminal-writer or plugin-manager doubles: there is no hook
-    dispatch to fake, so the shim `Config` is already the real thing.
-    """
+    """Builds a `Config` with truncation off by default."""
     return Config(
         {
             "assertion_text_diff_style": assertion_text_diff_style,
@@ -69,11 +61,7 @@ def callequal(
 @pytest.fixture
 def rewritten(tmp_path: Path) -> Iterator[Callable[..., Any]]:
     """Write a module, import it through the rewriting hook, and hand back the module.
-
-    velox's replacement for pytest's `pytester`: the tests that matter here are about what the
-    *importer* does, so a real import through a real meta-path hook is the cheapest honest
-    harness. Everything is torn down — hook, `sys.path`, `sys.modules` — because the hook is
-    process-global state.
+    Tears down the hook, `sys.path`, and `sys.modules` on exit.
     """
     installed: list[str] = []
     roots = tmp_path / "suite"

@@ -41,9 +41,7 @@ __all__ = [
 ]
 
 type Closer = Callable[[], Awaitable[None]]
-"""Mirrors `_di.Closer` — kept as a separate alias rather than imported, so the declarative half
-never has to import the dynamic half. Both names must keep meaning the same thing; nothing
-enforces that beyond this comment."""
+"""Mirrors `_di.Closer`. Nothing enforces that the two definitions match beyond this comment."""
 
 type Scope = Literal["call", "function", "module", "session"]
 """How widely one constructed instance is shared.
@@ -80,13 +78,9 @@ class Dependency[T]:
 def Depends[T](dependency: Fixture[T], /) -> T:
     """Declare an injected parameter: `param: Type = Depends(some_fixture)`.
 
-    Takes the `Fixture` object, not a name and not a bare callable. Typed as returning `T` so the
-    annotation on the parameter is genuinely checked; returns a sentinel at run time.
-
-    Validated here rather than deferred to plan-building: `Depends()` runs at class-body/module-
-    body evaluation time (it's sitting in a default), earlier than collection, so a non-`Fixture`
-    argument is caught with the traceback pointing at the actual call site instead of surfacing
-    as an opaque failure inside `plan_for`.
+    Takes the `Fixture` object itself, not a name or a bare callable. Typed as returning `T` so
+    the parameter's own annotation is checked normally, though at run time it returns a
+    sentinel. Raises `TypeError` immediately if `dependency` isn't a `Fixture`.
     """
     if not isinstance(dependency, Fixture):
         raise TypeError(
@@ -143,15 +137,10 @@ def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
 def _reject_annotated_depends(func: Callable[..., Any]) -> None:
     """Catch `Depends(...)` written inside `Annotated[...]` metadata instead of default position.
 
-    `def t(db: Annotated[Session, Depends(db_fx)])` is the FastAPI spelling, and it is a habit
-    users arrive with — it reads as injected, but since `plan_of` only ever looks at
-    `__defaults__`/`__kwdefaults__`, the parameter gets nothing and the test would run with a raw
-    `Dependency` object bound to `db`. Nothing downstream would ever catch that, so it is caught
-    here instead, at decoration time, pointing at the working spelling.
-
-    Best effort only: this reads raw `__annotations__` purely to detect the mistake, not to build
-    the plan, so a string annotation (postponed evaluation) or any other exotic annotation is
-    silently left alone rather than risking a spurious raise.
+    `plan_of` only reads `__defaults__`/`__kwdefaults__`, so `Depends()` inside
+    `Annotated[...]` (the FastAPI spelling, e.g. `db: Annotated[Session, Depends(db_fx)]`) is
+    silently ignored there; this raises `TypeError` for it instead. Best effort: a string
+    annotation or other exotic form is left alone rather than risking a false positive.
     """
     annotations = getattr(func, "__annotations__", None)
     if not annotations:
@@ -180,13 +169,12 @@ def _injection(param: str, default: object, *, keyword_only: bool) -> Injection 
 @final
 @dataclass(frozen=True, slots=True)
 class BuiltinContext:
-    """The per-setup-call context a `BuiltinProvider` needs beyond its own injected `kwargs` —
+    """The per-setup-call context a `BuiltinProvider` needs beyond its own injected `kwargs`:
     everything `_di.setup` already has to hand from its own parameters.
 
-    Deliberately not the whole story: ambient, per-test-task facts a provider needs that don't
-    naturally flow through `_di.setup`'s signature (the current capture sink, the log-record
-    buffer, the concurrency-slot/"worker" index, marks/tags, the timeout budget) are supplied some
-    other way, typically a `ContextVar` set around each test's setup/call/teardown envelope.
+    A provider reaches other per-test facts — the capture sink, the log-record buffer, the
+    concurrency-slot index, marks, the timeout budget — through `ContextVar`s set around each
+    test's setup/call/teardown envelope.
     """
 
     test_id: str
@@ -206,8 +194,7 @@ needs to know the difference. See `builtin_fixture` below."""
 class Fixture[T]:
     """A fixture: the callable, plus everything the scheduler needs to know statically.
 
-    Constructed by `@velox.fixture()`. Immutable — there is no method that derives a modified
-    copy.
+    Constructed by `@velox.fixture()`. Immutable.
     """
 
     __slots__ = ("_exclusive", "_func", "_name", "_plan", "_provider", "_scope")
@@ -270,19 +257,17 @@ class Fixture[T]:
     def dependencies(self) -> tuple[Fixture[Any], ...]:
         """The fixture nodes this one depends on, for graph walking.
 
-        Acyclic by construction — `Fixture.__init__` checks the moment a fixture is built, so
-        every walker downstream (the scheduler, a future `--graph` dump) can recurse over this
-        without a visited-set of its own.
+        Acyclic by construction: `Fixture.__init__` checks at build time, so a walker can
+        recurse over this without tracking a visited set.
         """
         return tuple(i.source for i in self._plan)
 
     def __call__(self, *args: object, **kwargs: object) -> Any:
         """Call the underlying function directly, as ordinary Python.
 
-        No injection is performed — any un-passed `Depends(...)` parameter keeps its sentinel
-        default. This exists so a fixture stays a normal callable; overriding one dependency for
-        one test is done by writing a separate fixture function with the replacement wired in and
-        passing *that* to `Depends(...)` at the call site.
+        No injection is performed: any un-passed `Depends(...)` parameter keeps its sentinel
+        default. Overriding one dependency for one test means writing a separate fixture with
+        the replacement wired in and passing that to `Depends(...)` at the call site.
         """
         return self._func(*args, **kwargs)
 
@@ -294,8 +279,8 @@ class Fixture[T]:
 def _check_acyclic(root: Fixture[Any]) -> None:
     """Raise if `root`'s dependency graph loops back on itself.
 
-    Identity-keyed (`id()`), not `Fixture.__eq__`/`__hash__`: `Fixture` deliberately has no
-    structural equality, so identity is the only notion of "same fixture" this can rely on.
+    Keyed by `id()`: `Fixture` has no structural equality, so identity is the only available
+    notion of "same fixture".
     """
     on_path: set[int] = set()
 
@@ -336,9 +321,6 @@ def fixture(
     :param exclusive: `True`, or a string token naming a contended resource. Tests transitively
         depending on it never run concurrently with each other.
     :param name: display name in errors, reports, and `--durations`. Defaults to `fn.__name__`.
-
-    There is no `autouse` — a dependency you cannot see in the signature is exactly what velox
-    exists to remove.
     """
 
     def decorate(fn: Callable[..., Any], /) -> Fixture[Any]:
@@ -355,13 +337,10 @@ def builtin_fixture(
     name: str | None = None,
 ) -> Fixture[Any]:
     """Construct a `Fixture` whose value the velox runtime supplies directly, instead of by
-    calling `func`. `func` is kept only so the fixture has a `__name__`/signature/return
-    annotation to display and to typecheck call sites against; `_di._construct` checks `.provider`
-    before it would ever reach `func`, so `func`'s own body is unreachable at run time.
-
-    Distinct from `fixture()` — not exposed as one of its parameters — so a user fixture can never
-    accidentally (or deliberately) become provider-backed; only this package's own `_builtins.py`
-    calls this.
+    calling `func`. `func` is kept for its `__name__`, signature and return annotation, which
+    display and typecheck call sites against; `_di._construct` checks `.provider` first, so
+    `func`'s own body never runs. Not exposed through `fixture()`; only `_builtins.py` calls
+    this.
     """
     return Fixture(func, scope=scope, name=name, provider=provider)
 
@@ -387,8 +366,7 @@ class PlanStep:
     """One fixture construction, in an already-topologically-sorted `ResolutionPlan.steps`.
 
     `args` names this fixture's own `Depends(...)` parameters, each resolved to the `step_id` of
-    an *earlier* step in the same plan that supplies it — never a `Fixture` reference, so
-    executing a plan is array indexing, not graph walking.
+    an earlier step in the same plan — executing a plan is array indexing, not graph walking.
     """
 
     step_id: int
@@ -402,13 +380,12 @@ class PlanStep:
 class ResolutionPlan:
     """The whole transitive fixture graph one test function needs, flattened and ordered.
 
-    `steps` is dependency-before-dependent (a valid topological order of the graph) — `_di.py`
-    constructs by walking it forwards and tears down by walking it *backwards*, which is what
-    gives teardown inversion (dependents unwind before dependencies) without any extra
-    bookkeeping: reversing a topological order is always a valid reverse-topological order.
+    `steps` is dependency-before-dependent, a valid topological order of the graph; `_di.py`
+    constructs by walking it forwards and tears down by walking it backwards, producing
+    dependent-before-dependency teardown order.
 
-    A fixture reachable by more than one path (a diamond) gets exactly one step — see the module
-    docstring for why `scope="call"` fixtures are the deliberate exception.
+    A fixture reachable by more than one path (a diamond) gets exactly one step, except
+    `scope="call"` fixtures, each of which gets its own.
     """
 
     steps: tuple[PlanStep, ...]
@@ -419,12 +396,11 @@ class ResolutionPlan:
 def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
     """Build `func`'s `ResolutionPlan`: a topological walk over its `Depends(...)` graph.
 
-    `func` is a test function (an already-decorated `Fixture` never needs this — its own
-    dependencies are just `Fixture.dependencies`/`Fixture.plan`, walked fresh at the point
-    something depends on *it*). Raises `DIError` for the two checks the graph shape alone can
-    decide: scope compatibility and missing injections. Cycles and `Depends()`-on-a-non-`Fixture`
-    are caught earlier, at `Fixture.__init__` and at `Depends()`'s own call site respectively, and
-    don't need re-checking here.
+    `func` is a test function; an already-decorated `Fixture` never needs this, since its
+    dependencies are already `Fixture.dependencies`/`Fixture.plan`. Raises `DIError` for scope
+    compatibility and missing injections — the two checks the graph shape alone can decide.
+    Cycles and `Depends()` on a non-`Fixture` are caught earlier, at `Fixture.__init__` and at
+    `Depends()`'s own call site.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
@@ -472,9 +448,8 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
 def _check_missing_injections(func: Callable[..., Any], injections: tuple[Injection, ...]) -> None:
     """Raise `DIError` naming any parameter with no default that isn't `self` and isn't injected.
 
-    Reads `__code__`/`__defaults__` rather than `inspect.signature`, like `plan_of` — this is a
-    diagnostic, not the plan itself, but the same "annotations are never load-bearing" rule keeps
-    the two code paths consistent.
+    Reads `__code__`/`__defaults__`, the same way `plan_of` does, keeping the two code paths
+    consistent.
     """
     code = getattr(func, "__code__", None)
     if code is None:

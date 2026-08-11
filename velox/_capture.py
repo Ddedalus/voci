@@ -5,8 +5,7 @@ test's whole setup/call/teardown envelope, and every writer here -- `Router`, th
 logging handler, the builtin fixture providers -- just reads whichever `Sink` is
 currently set and falls back to a session-level sink when nothing is. Because each
 `asyncio` task holds its own independent copy of that context, concurrently-dispatched
-tests can never observe or clobber each other's sink, with no locks and no per-phase
-install/uninstall dance.
+tests can never observe or clobber each other's sink.
 """
 
 from __future__ import annotations
@@ -68,10 +67,9 @@ class _CappedBuffer:
     the last half as a rolling tail, with the middle dropped and replaced by a marker
     once anything has actually been dropped.
 
-    Guarded by its own lock: a test's `loop.run_in_executor(None, fn)` can write into
-    this same buffer from a worker thread while the test's own task is still writing
-    to it from the loop thread, so this is the one class in the module that genuinely
-    needs one.
+    Guarded by a lock: a test's `loop.run_in_executor(None, fn)` writes into this
+    buffer from a worker thread while the test's own task writes from the loop
+    thread.
     """
 
     __slots__ = (
@@ -258,13 +256,12 @@ def _echo(real: TextIO, label: str, text: str, at_line_start: bool) -> bool:
 @final
 class Router:
     """`sys.stdout`/`sys.stderr`'s replacement for the whole run. Installed once by
-    `install()`, restored exactly by `uninstall()`. `write` does nothing but ask
-    `current_test_context` which `Sink` is active right now and hand the text to it.
+    `install()`, restored exactly by `uninstall()`. `write` asks
+    `current_test_context` which `Sink` is active right now and hands the text to it.
 
-    A small duck-typed stream, not a real `io.TextIOBase` subclass -- covers what
-    stdlib `print`/`logging`/most libraries actually call. `fileno()` delegates to the
-    real stream; writes that reach it directly bypass capture and are unattributed by
-    construction, the same as any direct fd write.
+    A duck-typed stream covering what stdlib `print`/`logging`/most libraries
+    actually call. `fileno()` delegates to the real stream; writes that reach it
+    directly bypass capture and are unattributed, the same as any direct fd write.
     """
 
     __slots__ = ("_passthrough", "_real", "_session_sink", "_which")
@@ -327,8 +324,8 @@ class _RoutingHandler(logging.Handler):
     nothing else -- no formatting, so a reporter can format lazily and let `-v` change
     format after the fact.
 
-    Deliberately `level=logging.NOTSET`: this handler must never itself be the reason a
-    record is dropped -- each logger's own effective level decides what reaches here.
+    Sits at `level=logging.NOTSET`: each logger's own effective level decides what
+    reaches this handler.
     """
 
     def __init__(self, session_sink: Sink) -> None:
@@ -348,12 +345,9 @@ class _RoutingHandler(logging.Handler):
 class ContextPropagatingExecutor(concurrent.futures.ThreadPoolExecutor):
     """`loop.set_default_executor(...)`'s value for the whole run.
 
-    Plain `ThreadPoolExecutor.submit` runs `fn` in whatever `contextvars.Context` the
-    worker thread happens to have, never a copy of the submitter's -- so
-    `loop.run_in_executor(None, fn)` would otherwise always land in the session sink.
-    This subclass's `submit` copies the calling task's context at submit time and runs
-    `fn` inside it, so output from the executor thread is attributed to the test that
-    submitted it.
+    `submit` copies the calling task's `contextvars.Context` at submit time and runs
+    `fn` inside it, so output from the executor thread is attributed to the test
+    that submitted it.
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
@@ -367,11 +361,7 @@ class ContextPropagatingExecutor(concurrent.futures.ThreadPoolExecutor):
 @final
 class WorkerSlots:
     """A free-list of concurrency-slot indices `0..concurrency-1`, exposed to tests as
-    `TestInfo.worker`.
-
-    A plain list-based stack, not `asyncio.Queue` or a lock: `acquire`/`release` never
-    `await`, and asyncio is single-threaded, so the free list needs no synchronization
-    beyond that.
+    `TestInfo.worker`. `acquire`/`release` are synchronous, plain list operations.
     """
 
     __slots__ = ("_free",)
@@ -481,14 +471,14 @@ _MAX_COMPONENT_LEN = 120
 
 def sanitize_test_id(test_id: str) -> str:
     """`test_id`, made safe as a single path component, injectively (modulo an actual
-    hash collision): unsafe characters replaced, then a short digest of the original
-    string appended unconditionally, regardless of whether escaping changed anything --
-    see this module's rationale notes for the collision that an earlier, conditional
-    version of this function had.
+    hash collision): unsafe characters are replaced, then a short digest of the
+    original string is appended unconditionally, whether or not escaping changed
+    anything, so a safe id can never collide with another id's escaped form.
 
-    A test id long enough to still exceed a filesystem's component-length limit after
-    escaping and hashing is truncated with a fresh digest over the untruncated
-    original, so two long ids sharing a truncated prefix still can't collide.
+    A test id long enough to still exceed a filesystem's component-length limit
+    after escaping and hashing is truncated with a fresh digest over the
+    untruncated original, so two long ids sharing a truncated prefix still can't
+    collide.
     """
     escaped = _UNSAFE_ID_CHARS.sub("_", test_id)
     digest = hashlib.blake2b(test_id.encode(), digest_size=4).hexdigest()

@@ -1,14 +1,7 @@
-"""CI insurance for `velox.fastapi`, and for the upstream facts it is built on.
-
-Two jobs. The first is to prove the mechanism end to end: concurrent contexts hitting *one*
-module-level app see only their own dependency overrides and their own state. The second is to
-fail loudly the day fastapi, starlette or httpx changes one of the three facts that make that
-possible — `scope["app"]` is the singleton, the override is read per request, and the ASGI call
-happens in the caller's `contextvars.Context`. Those are read from source in the module docstring
-of `velox/fastapi.py`; these tests are what keep the reading true.
-
-velox's own suite runs under pytest, which has no event loop of its own here — no `pytest-asyncio`,
-no `anyio` plugin — so every async test is a `def` wrapped around one `asyncio.run`.
+"""Tests for `velox.fastapi`: concurrent dependency-override and state isolation over one
+module-level app, plus the upstream facts that isolation depends on -- `scope["app"]` is the
+singleton, the override is read per request, and the ASGI call happens in the caller's
+`contextvars.Context`.
 """
 
 from __future__ import annotations
@@ -25,8 +18,7 @@ from httpx import ASGITransport, AsyncClient
 import pytest
 from velox import fastapi as velox_fastapi
 
-# The point of the exercise: one module-level app, exactly as an application writes it, shared by
-# every test in this file and by every concurrent context inside them.
+# One module-level app, exactly as an application writes it, shared by every test in this file.
 app = FastAPI()
 
 _GATE: ContextVar[asyncio.Barrier | None] = ContextVar("gate", default=None)
@@ -77,12 +69,8 @@ async def flavor_seen_by(**kwargs: Any) -> str:
 
 
 def test_concurrent_contexts_each_see_their_own_overrides() -> None:
-    """Three tasks, three contexts, one singleton — and the requests genuinely overlap.
-
-    `asyncio.create_task` (which `gather` uses) copies the current context, so each branch below
-    is the isolation velox gives a test. The barrier holds all three handlers open at once, so a
-    passing run cannot be an artifact of them having taken turns.
-    """
+    """Three tasks, three contexts, one singleton -- and the requests genuinely overlap: a
+    barrier holds all three handlers open at once."""
 
     async def main() -> list[str]:
         gate = asyncio.Barrier(3)
@@ -103,7 +91,7 @@ def test_concurrent_contexts_each_see_their_own_overrides() -> None:
 
 
 def test_a_context_with_no_layer_sees_the_app_untouched() -> None:
-    """No `client()` anywhere: the proxy is installed, and still answers as the plain dict did."""
+    """No `client()` anywhere: the app answers as a plain, un-layered `FastAPI` would."""
 
     async def main() -> str:
         transport = ASGITransport(app=app)
@@ -133,7 +121,7 @@ def test_a_hand_written_override_stays_inside_the_test() -> None:
         async with velox_fastapi.client(app) as http:
             app.dependency_overrides[flavor] = lambda: "by hand"
             mine = (await http.get("/flavor")).json()["flavor"]
-            app.dependency_overrides.clear()  # the docs' teardown: local, and now a no-op
+            app.dependency_overrides.clear()  # the docs' teardown, applied to the local layer
             after_clear = (await http.get("/flavor")).json()["flavor"]
         return mine, after_clear
 
@@ -159,7 +147,7 @@ def test_overrides_read_as_a_mapping() -> None:
 
 
 def test_deleting_an_override_this_test_did_not_set_is_refused() -> None:
-    """I6: masking a shared entry per-test is not something this proxy can do, so it says so."""
+    """Masking a shared entry per-test is not something this proxy can do, so it raises."""
     other = FastAPI()
     other.dependency_overrides[flavor] = lambda: "shipped with the app"
 
@@ -223,12 +211,8 @@ def test_state_reports_a_missing_key_as_an_attribute_error() -> None:
 
 
 def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
-    """Finding 3: before the fix, a `client()` call with no `state=` pushed no state layer at
-    all, so a bare `app.state.cache = x` inside one context wrote straight to the app and was
-    visible to every other concurrently-running `client()` — the exact hazard this module exists
-    to prevent, for the one attribute nobody opted into. Two contexts, no `state=` kwarg on
-    either, each writing the same attribute: neither write may reach the other, or the app.
-    """
+    """Two contexts, neither passing `state=`, each writing the same attribute: neither write
+    may reach the other, or the app."""
     other = FastAPI()
 
     async def main() -> list[str]:
@@ -252,11 +236,8 @@ def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
 
 
 def test_copy_of_layered_state_is_a_plain_state_with_the_merged_view() -> None:
-    """Finding 1: `copy.copy(app.state)` used to raise `RecursionError` — `copy` builds the
-    instance via `__reduce_ex__` without calling `__init__`, and the first attribute touch on the
-    half-built object recursed through `__getattr__`. `__copy__` now intercepts it and hands back
-    a plain `State` snapshotting the merged view instead.
-    """
+    """`copy.copy(app.state)` returns a plain `State` snapshotting the merged view, not the
+    proxy."""
     import copy
 
     from starlette.datastructures import State
@@ -276,11 +257,8 @@ def test_copy_of_layered_state_is_a_plain_state_with_the_merged_view() -> None:
 
 
 def test_deepcopy_of_layered_state_no_longer_raises() -> None:
-    """Finding 1's second half: `copy.deepcopy(app.state)` used to raise `TypeError: cannot
-    pickle '_contextvars.ContextVar' object` — a regression, since `app.state` was deep-copyable
-    before velox swapped it in. `__deepcopy__` deep-copies only the merged values, never the
-    `ContextVar` itself, and the result is independent of the original.
-    """
+    """`copy.deepcopy(app.state)` deep-copies only the merged values, never the `ContextVar`
+    itself, and the result is independent of the original."""
     import copy
 
     other = fresh_app()
@@ -296,10 +274,8 @@ def test_deepcopy_of_layered_state_no_longer_raises() -> None:
 
 
 def test_bare_new_state_reads_raise_attribute_error_not_recursion_error() -> None:
-    """Finding 1's other reachable path: `_LayeredState.__new__` with no `__init__` ever run
-    leaves both `_layers` and `_state` unset. Before the fix, any attribute read on it recursed
-    until the stack blew; now it reports a plain, ordinary `AttributeError`.
-    """
+    """`_LayeredState.__new__` with no `__init__` ever run leaves both `_layers` and `_state`
+    unset; an attribute read on it raises a plain `AttributeError`."""
     bare = velox_fastapi._LayeredState.__new__(velox_fastapi._LayeredState)
     with pytest.raises(AttributeError):
         _ = bare.anything
@@ -322,12 +298,8 @@ def fresh_app() -> FastAPI:
 
 
 def test_fastapi_only_needs_truthiness_and_get() -> None:
-    """The narrow contract the whole design is sized against.
-
-    This object is not a `Mapping`, has no `__getitem__`, no `__iter__`, no `__len__` — and a
-    request still resolves through it. The day FastAPI reaches for anything else, this fails here
-    rather than in an adopter's suite.
-    """
+    """`dependency_overrides` need not be a `Mapping` -- an object with only `__bool__` and
+    `get` resolves a request just as well."""
 
     class Minimal:
         def __init__(self, mapping: dict[Any, Any]) -> None:
@@ -440,12 +412,8 @@ def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
 
 
 def test_lifespan_is_memoised_per_app() -> None:
-    """Finding 2: `Fixture` has no `__eq__`/`__hash__`, so the session cache keys on identity.
-    Before the fix, `lifespan(app) is lifespan(app)` was `False` — two call sites (two test
-    modules writing the docstring's `started = velox.fastapi.lifespan(app)`) got two distinct
-    "session-scoped" fixtures, and the cache ran the app's startup and shutdown once per call site
-    instead of once per run.
-    """
+    """`lifespan(app) is lifespan(app)`: two calls for the same app return the identical
+    session-scoped fixture, so startup and shutdown run once per run, not once per call site."""
     other = FastAPI()
 
     first = velox_fastapi.lifespan(other)
@@ -508,11 +476,8 @@ def test_replacing_state_escalates() -> None:
 
 
 def test_uninstall_restores_the_objects_velox_replaced() -> None:
-    """Finding 5: `_install`'s swap used to be permanent — nothing ever put back the
-    `dependency_overrides` dict or the `state` object the app was built with. `uninstall` is the
-    escape hatch: a process that goes on serving the real app after the suite that tested it can
-    get its original objects back, by identity.
-    """
+    """`uninstall` puts back the `dependency_overrides` dict and `state` object the app was
+    built with, by identity."""
     other = FastAPI()
     original_overrides = other.dependency_overrides
 
@@ -574,9 +539,8 @@ def test_uninstall_drops_the_memoised_lifespan_fixture() -> None:
 
 
 def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
-    """The state layer is now pushed unconditionally inside `client()` (finding 3), so the proxy
-    installs on first entry regardless of whether `state=` was passed — unlike `lifespan()`, which
-    never touches installation at all (see the canary below)."""
+    """The proxy installs on first `client()` entry regardless of whether `state=` was
+    passed."""
     other = FastAPI()
     before = other.state
 
@@ -591,8 +555,7 @@ def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
 
 def test_lifespan_alone_never_installs_anything() -> None:
     """Calling `lifespan(app)` without ever entering `client()` must not swap in the
-    overrides/state proxy — that install is `client()`'s job, and `lifespan()` uses its own
-    memoisation map precisely so asking for the fixture doesn't trigger it (finding 2)."""
+    overrides/state proxy -- that install is `client()`'s job."""
     other = FastAPI()
     before_state = other.state
     before_overrides = other.dependency_overrides

@@ -264,6 +264,20 @@ write into the *same* sink from a worker thread while the test's own task writes
 thread. Removing the lock to match the module's otherwise lock-free style reintroduces a real
 read-modify-write race.
 
+**The converse, for the structures that genuinely need no lock.** `WorkerSlots`' free list and
+`TmpPathFactory`'s per-basename counter are both shared across concurrent tests and both
+unsynchronized, because neither `await`s between reading and writing: asyncio is single-threaded,
+so no rival task can interleave a step in between. The guarantee is about the absence of a
+suspension point, not about the operation being small — make any part of either path `async`, or
+move it off the loop thread, and it needs revisiting.
+
+## `_rewrite.py` — assertion introspection
+
+**A fallback to `plain` is recorded as data, not just warned about.** When the pyc cache probe
+fails, `plan` prints to stderr *and* records the reason on `AssertionSetup`, which the report
+header then surfaces. A stderr warning is easy to miss in CI, and a benchmark run that silently
+degraded to `plain` measures the wrong thing with nothing in the numbers to say so.
+
 ## `cli.py` — entrypoint
 
 **Flags default to `None`, not to their real defaults.** Layering CLI over `[tool.velox]` over the

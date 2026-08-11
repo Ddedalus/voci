@@ -1,12 +1,11 @@
-"""The universal explanation floor: caret spans for assertions the rewriter never touched.
+"""Caret spans for assertions the rewriter never touched.
 
-An `assert` inside an unrewritten module — a helper, a shared assertion function, anything
-imported from application code — raises a bare `AssertionError` with no explanation. PEP 657
-closes most of that gap for free: since 3.11 every code object carries column spans for its
-instructions, so the failing expression can be underlined without re-evaluating anything, e.g.
-`assert resp.status_code == expected` becomes `~~~~~~~~~~~~~~~~~^^~~~~~~~~~` underneath. Sound in
-the presence of side effects, and strictly weaker than rewriting (no operand values, just the
-span) — which is why it is the floor, not the plan, and why `--assert=plain` is a usable mode.
+An `assert` in an unrewritten module — application code, or anything imported from outside the
+test roots — raises a bare `AssertionError` with no explanation. Every code object carries column
+spans for its instructions, so this module underlines the failing expression from the traceback
+alone, without re-evaluating it: `assert resp.status_code == expected` gains a
+`~~~~~~~~~~~~~~~~~^^~~~~~~~~~` underneath. The span is all it recovers; operand values need the
+rewriter.
 """
 
 from __future__ import annotations
@@ -171,10 +170,10 @@ def _skip_string(expr: str, i: int) -> int:
     """Index just past the string literal starting at `i`, or past `i` if it is unterminated.
 
     Triple quotes are checked first: without this, `'''` reads as an empty `''` followed by a
-    fresh `'`, which desynchronises the scan for the rest of the line. Still a blind spot for
-    f-string replacement fields containing nested quotes (legal since 3.12) — a full lexer would
-    close that, but this function deliberately stays a character scan; where it can't scan
-    reliably, `_operator_span`'s callers fall back to no carets rather than wrong ones.
+    fresh `'`, which desynchronises the scan for the rest of the line. A blind spot remains for
+    f-string replacement fields containing nested quotes (legal since 3.12); a full lexer would
+    close that, but this function stays a character scan. Where it can't scan reliably,
+    `_operator_span`'s callers fall back to no carets rather than wrong ones.
     """
     quote = expr[i]
     if expr[i : i + 3] == quote * 3:

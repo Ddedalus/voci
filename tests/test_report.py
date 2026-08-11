@@ -1,16 +1,6 @@
-"""Unit tests for `velox._report.Reporter` (spec/10 §2).
-
-Exercises `Reporter` directly against hand-built `TestResult`s and a `StringIO` stream, rather
-than going through `main`/`run_suite` end to end — the same "unit-test the piece in isolation,
-cover the wiring separately" split `tests/test_run.py` already uses for `_run_one`/`run_suite`
-(see its own `_record` helper, mirrored here by `_test_record`).
-
-`Reporter`'s own short-summary "reason" is now a direct read of `TestResult.failure_summary`
-(`_run._summarize_exception`'s output), not a text heuristic over `TestResult.failure` — so the
-"does this actually recover the right reason from a real traceback" coverage that used to live here
-now lives in `tests/test_run.py`, next to the code that builds `failure_summary` in the first
-place (`test_failure_summary_...`); what's left worth unit-testing here is just that `Reporter`
-reads the field faithfully, which is what the tests in the "short-summary reason" section below do.
+"""Tests for `velox._report.Reporter`: per-file scrollback blocks, end-of-run sections
+(failure details, short summary, unattributed output, wall-vs-Σ), and path elision --
+exercised directly against hand-built `TestResult`s and a `StringIO` stream.
 """
 
 from __future__ import annotations
@@ -35,11 +25,7 @@ async def _noop() -> None:
 
 def _test_record(id: str, path: Path, index: int = 0) -> Record:
     """A minimal, real `TestRecord` for feeding `Reporter`'s constructor. `Reporter` only ever
-    reads `.id`/`.path` off each record, but it takes real `TestRecord`s now, not a lossy
-    `{id: path}` dict (this session's fix for the duplicate-id undercount bug — see
-    `Reporter.__post_init__`'s own docstring), so tests need to build them rather than a bare
-    mapping. The rest of the fields are filler `test_run.py`'s own `_record` helper already
-    establishes the pattern for."""
+    reads `.id`/`.path` off each record; the rest of the fields are filler."""
     return Record(
         id=id,
         index=index,
@@ -58,7 +44,7 @@ _TRACEBACK_FAILURE = (
     "AssertionError: assert 2 == 3\n"
 )
 
-_TIMEOUT_FAILURE = "test exceeded the --timeout=1.0s budget"
+_TIMEOUT_FAILURE = "test exceeded its 1.0s timeout budget"
 
 _TIMEOUT_FAILURE_WITH_TRACEBACK = (
     f"{_TIMEOUT_FAILURE}\n\nTraceback (most recent call last):\n  ...\nCancelledError\n"
@@ -123,8 +109,8 @@ def test_file_block_only_prints_once_every_test_of_that_file_has_reported() -> N
     assert "PASS" in out
     assert str(path) in out
     assert "2 tests" in out
-    # Summed, not spanned (concurrent dispatch has no single attributable wall-clock span for
-    # "the file" -- spec/10 §2 / `on_result`'s own docstring), and labeled Σ as such.
+    # Summed, not spanned: concurrent dispatch has no single attributable wall-clock span for
+    # "the file", so durations are labeled Σ.
     assert "Σ 0.30s" in out
 
 
@@ -149,13 +135,30 @@ def test_file_block_reports_fail_and_failed_count_when_any_test_failed() -> None
     assert "(2 failed)" in out
 
 
+def test_file_block_stays_pass_when_the_only_non_passed_results_are_xfail() -> None:
+    """XFAILED and XPASSED both mean the test behaved exactly as its `xfail` mark said it
+    would -- neither should flip the file's block to FAIL."""
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+        _test_record(f"{path}::test_c", path, index=2),
+    ]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.on_result(_result(f"{path}::test_a", 0))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom"))
+    reporter.on_result(_result(f"{path}::test_c", 2, outcome=Outcome.XPASSED))
+
+    out = stream.getvalue()
+    assert "PASS" in out
+    assert "FAIL" not in out
+
+
 def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
-    """Regression for the must-fix bug: `Reporter` used to seed its per-file counts from an
-    `{id: path}` dict built by `cli.py`, which silently collapsed two records sharing an id into
-    one entry -- reachable with a completely ordinary suite, since a factory-generated test repeats
-    its `func.__qualname__` (hence its id, `f"{path}::{qualname}"`) for every instance it produces.
-    Undercounting used to make the file's block flush one test early, with the wrong verdict, and
-    silently drop the remaining result from the scrollback entirely."""
+    """Two records sharing an id (as a factory-generated test's repeated `func.__qualname__`
+    would produce) must each count toward the file's total, not collapse into one entry."""
     path = Path("tests/test_dup.py")
     shared_id = f"{path}::test_generated"
     records = [
@@ -176,24 +179,17 @@ def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
 
 
 def test_on_result_for_an_id_outside_records_raises_key_error() -> None:
-    """Documents the invariant `on_result`'s own docstring states rather than silently relies on:
-    a result whose id was never in the `records` `Reporter` was constructed with is a caller bug
-    (the caller must hand `Reporter` the same list it dispatches to `run_suite`), and it surfaces
-    loudly as a `KeyError` -- which, since `run_suite` never catches what `on_result` raises,
-    aborts the whole run rather than silently dropping one result. Unreachable from `cli.main` as
-    wired (see `Reporter`'s own docstring), but real for a caller that gets the invariant wrong."""
+    """A result whose id was never in the `records` `Reporter` was constructed with raises
+    `KeyError` loudly, rather than dropping the result silently."""
     reporter = Reporter(records=[], capture_passthrough=False, stream=io.StringIO())
     with pytest.raises(KeyError):
         reporter.on_result(_result("nope.py::test_x", 0))
 
 
 def test_blocks_flush_on_a_files_last_test_not_its_first() -> None:
-    """A single test per file can't tell "flush on last test" apart from "flush on first" or
-    "flush in arrival order" -- all three coincide when there is only one test to see. `file_a` has
-    two tests, `file_b` has one; `file_a`'s first test finishes earliest, `file_b`'s only test next,
-    and `file_a`'s second (and last) test finishes last. Correct output is `file_b`'s block, then
-    `file_a`'s -- an implementation that flushed on a file's first-seen test instead would print
-    `file_a` first, the moment its first result arrives."""
+    """`file_a` has two tests, `file_b` has one; `file_a`'s first test finishes earliest,
+    `file_b`'s only test next, and `file_a`'s second (and last) test finishes last. Correct
+    output is `file_b`'s block, then `file_a`'s."""
     file_a = Path("tests/test_a.py")
     file_b = Path("tests/test_b.py")
     records = [
@@ -225,10 +221,9 @@ def test_blocks_flush_on_a_files_last_test_not_its_first() -> None:
 
 
 def test_finish_orders_by_the_results_argument_not_ids_natural_sort() -> None:
-    """`finish` must order by `results`'s own position, not by re-deriving an order from the data
-    (an id sort, an outcome grouping, ...) -- ids are chosen here so that alphabetical order is the
-    *opposite* of the intended (index) order, so a `finish` that accidentally sorted by id instead
-    of trusting its argument would fail this even though it would pass a naively-chosen id pair."""
+    """`finish` orders by `results`'s own position, not by re-deriving an order from the data --
+    ids are chosen here so that alphabetical order is the *opposite* of the intended (index)
+    order."""
     path = Path("tests/test_sample.py")
     result0 = _result(f"{path}::test_z", 0, outcome=Outcome.FAILED, failure="AssertionError: a")
     result1 = _result(f"{path}::test_a", 1, outcome=Outcome.FAILED, failure="AssertionError: b")
@@ -247,9 +242,24 @@ def test_finish_orders_by_the_results_argument_not_ids_natural_sort() -> None:
     assert first_summary_z < first_summary_a
 
 
-# ------------------------------------------------------------------------------------------
-# Short-summary "reason" extraction -- a direct field read (see module docstring for why the
-# "does this recover the right reason from real traceback text" coverage lives in test_run.py now)
+def test_finish_omits_xfailed_and_xpassed_from_failure_details_and_short_summary() -> None:
+    path = Path("f.py")
+    passed = _result(f"{path}::test_a", 0)
+    xfailed = _result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom")
+    xpassed = _result(f"{path}::test_c", 2, outcome=Outcome.XPASSED)
+    records = [_test_record(r.id, path, index=i) for i, r in enumerate([passed, xfailed, xpassed])]
+    stream = io.StringIO()
+    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+
+    reporter.finish([passed, xfailed, xpassed], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "--- short test summary ---" not in out
+    assert "boom" not in out
+    assert "3 tests · 0 failed" in out
+
+
+# Short-summary "reason" extraction: a direct read of `TestResult.failure_summary`.
 # ------------------------------------------------------------------------------------------
 
 
@@ -442,8 +452,7 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
 
 
 def test_finish_with_zero_tests() -> None:
-    """The shape `velox` on an empty directory (or any run with nothing collected) produces --
-    `finish([], ...)` was uncovered anywhere in this file before."""
+    """The shape `velox` prints on an empty directory, or any run with nothing collected."""
     stream = io.StringIO()
     reporter = Reporter(records=[], capture_passthrough=False, stream=stream)
 
@@ -472,9 +481,7 @@ def test_wall_vs_sigma_line_guards_non_positive_wall_clock() -> None:
 
 
 def test_wall_vs_sigma_line_takes_the_real_ratio_for_a_small_nonzero_wall_clock() -> None:
-    """The guard's justification (`finish`'s own docstring) is that a real run -- even an empty or
-    very fast one -- still doesn't land on the `n/a` branch in practice; pin that a small-but-
-    positive `wall_clock` really does take the other branch, not merely that zero doesn't crash."""
+    """A small-but-positive `wall_clock` takes the ratio branch, not the `n/a` guard."""
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=0.001)]
     records = [_test_record(results[0].id, path)]
@@ -525,8 +532,7 @@ def test_file_block_path_column_is_elided_for_a_long_path() -> None:
 
 
 def test_is_tty_reflects_the_streams_own_isatty() -> None:
-    """Nothing branches on `is_tty` yet (module docstring's "no color" cut), but the value itself
-    should still be right: resolved once at construction via `stream.isatty()`, or `False` for a
-    stream with no such method at all (the class docstring's `getattr` fallback)."""
+    """`is_tty` is resolved once at construction via `stream.isatty()`, or `False` for a stream
+    with no such method at all."""
     assert Reporter(records=[], capture_passthrough=False, stream=io.StringIO()).is_tty is False
     assert Reporter(records=[], capture_passthrough=False, stream=_FakeTTYStream()).is_tty is True

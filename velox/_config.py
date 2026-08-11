@@ -1,14 +1,13 @@
 """Configuration file loading: `[tool.velox]` in `pyproject.toml`.
 
-One file, one table, no inheritance, no per-directory config. This module owns exactly two
-things: finding *which* `pyproject.toml` governs a run (the rootdir search) and turning its
-`[tool.velox]` table into a validated `Config`. It does not apply any of it — `cli.py` merges
-`Config` against CLI args (CLI wins) and built-in defaults, since the precedence between CLI,
-environment, and config file is a property of all three tiers together, not of this module alone.
+`resolve` searches upward from the given paths for the `pyproject.toml` declaring `[tool.velox]`,
+stopping at the git root, and turns that table into a validated `Config`. The directory holding it
+becomes the run's rootdir. One file, one table — there is no inheritance and no per-directory
+config.
 
-Only a fixed set of keys is recognized: `testpaths`, `concurrency`, `timeout`,
-`test_file_patterns`, `ignore`, `env`. An unrecognized key is rejected outright rather than
-silently doing nothing — the alternative is a typo that quietly changes no behavior at all.
+Six keys are recognized: `testpaths`, `concurrency`, `timeout`, `test_file_patterns`, `ignore` and
+`env`. Anything else is an error, as is a value of the wrong type or shape. `cli.py` merges the
+resulting `Config` against the command line and the built-in defaults.
 """
 
 from __future__ import annotations
@@ -30,9 +29,8 @@ _KNOWN_KEYS = frozenset(
 class ConfigError(Exception):
     """A `[tool.velox]` table (or the `pyproject.toml` containing it) that can't be used.
 
-    Always a usage error at the CLI — never a reason to fall back to defaults silently. A config
-    the user wrote that velox can't honor should escalate rather than guess at what they meant,
-    which risks running the wrong tests with the wrong settings and calling it success.
+    A usage error at the CLI. velox never falls back to defaults silently when the given
+    config can't be honored.
     """
 
 

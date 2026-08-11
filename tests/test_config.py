@@ -1,4 +1,4 @@
-"""Regression tests for velox._config (spec/02 §3)."""
+"""Tests for velox._config: `pyproject.toml` search, `[tool.velox]` validation, and merging."""
 
 from __future__ import annotations
 
@@ -52,9 +52,8 @@ def test_walks_upward_from_a_nested_explicit_path(tmp_path: Path) -> None:
 
 
 def test_a_plain_pyproject_without_tool_velox_is_skipped(tmp_path: Path) -> None:
-    """A `pyproject.toml` with no `[tool.velox]` table (a nested package with its own metadata,
-    say) is not a match -- the search must keep walking upward past it rather than treating "a
-    pyproject.toml exists" alone as good enough."""
+    """A `pyproject.toml` with no `[tool.velox]` table is not a match -- the search keeps
+    walking upward past it."""
     _write_pyproject(tmp_path, "[project]\nname = 'unrelated'\n")
     nested = tmp_path / "pkg"
     _write_pyproject(nested, "[tool.velox]\nconcurrency = 7\n")
@@ -68,7 +67,7 @@ def test_a_plain_pyproject_without_tool_velox_is_skipped(tmp_path: Path) -> None
 
 
 def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
-    """spec/02 §3's review note: never walk above the git root, even when nothing was found."""
+    """The search never walks above the git root, even when nothing was found."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     project = repo / "sub"
@@ -82,8 +81,7 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
 
 
 def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -> None:
-    """The git root is the last directory examined, not one to skip past -- the common case is a
-    `pyproject.toml` sitting right next to the `.git` it belongs to."""
+    """The git root itself is examined, not skipped."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     _write_pyproject(repo, "[tool.velox]\nconcurrency = 12\n")
@@ -169,9 +167,8 @@ def test_timeout_accepts_both_int_and_float(tmp_path: Path) -> None:
 
 
 def test_timeout_rejects_a_bool(tmp_path: Path) -> None:
-    """TOML `true`/`false` are Python `bool`, a subclass of `int` -- `isinstance(True, int)` is
-    `True`, so this must be checked for explicitly or `timeout = true` would silently become
-    `timeout = 1.0` instead of a usage error."""
+    """TOML `true`/`false` are Python `bool`, a subclass of `int` -- `timeout = true` must be
+    a usage error, not silently become `timeout = 1.0`."""
     _write_pyproject(tmp_path, "[tool.velox]\ntimeout = true\n")
 
     with pytest.raises(ConfigError, match="timeout"):
@@ -214,9 +211,7 @@ def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> Non
 
 
 def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:
-    """Deliberately not recognized yet -- no watchdog exists before M2 to consume it (see
-    `_config.py`'s module docstring). Pinned so this doesn't silently start being accepted (and
-    then ignored) by an unrelated future change."""
+    """`watchdog_threshold` is not a recognized key -- an unknown key is a `ConfigError`."""
     _write_pyproject(tmp_path, "[tool.velox]\nwatchdog_threshold = 1.0\n")
 
     with pytest.raises(ConfigError, match="watchdog_threshold"):

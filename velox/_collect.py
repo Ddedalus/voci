@@ -295,7 +295,7 @@ def _is_own_test_function(obj: object, module_name: str) -> bool:
 
     `inspect.isfunction` covers both -- an `async def` is a plain `FunctionType` with a flag on
     its code object, not a distinct type -- and, unlike `callable()`, excludes a `class Test*`
-    (still not collected; see `ROADMAP.md`)."""
+    (see `ROADMAP.md`)."""
     return (
         inspect.isfunction(obj)
         and getattr(obj, "__name__", "").startswith("test_")

@@ -201,14 +201,15 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   passes are bugs" — this is a silent *absence*, arguably the same class of problem) even before
   the feature itself lands. Found dogfooding `examples/01-fastapi-crud`; worked around there by
   flattening the one `Test*` class to free functions.
-- [ ] **`@velox.xfail` execution** — `XFail` is recorded on a function's marks the same way `skip`/
-  `skipif` are, but `_run.py`'s `Outcome` enum has four members today (`PASSED`/`FAILED`/`ERROR`/
-  `TIMEOUT` — its own module docstring says so explicitly) and nothing reads `marks.xfail` to turn
-  a failing call into `XFAILED` (or a passing one into `XPASSED`, under `strict=True`). A test
-  decorated `@velox.xfail(..., strict=True)` today just reports `FAILED`, indistinguishable from a
-  real regression. Needs the `Outcome` enum extended (spec/05 §4) plus reporter/exit-code changes
-  to match, not a small patch. Found dogfooding `examples/01-fastapi-crud`; worked around there
-  with `skip` (which *is* wired end to end) instead.
+- [x] **`@velox.xfail` execution** — was recorded on a function's marks the same way `skip`/
+  `skipif` are, but nothing read `marks.xfail` to turn a failing call into `XFAILED` (or a passing
+  one into `XPASSED`, under `strict=True`); a `strict=True` mark just reported `FAILED`,
+  indistinguishable from a real regression. Found dogfooding `examples/01-fastapi-crud`; worked
+  around there with `skip` (which *was* wired end to end) instead. Fixed by extending `_run.py`'s
+  `Outcome` enum with `XFAILED`/`XPASSED` and reading `marks.xfail` in `_resolve_call_outcome`;
+  `_report.py` and `cli.py`'s summary line updated to match. `@velox.timeout(...)` was fixed the
+  same pass — `dispatch_one` now reads `marks_of(record.func).timeout` and uses it in place of the
+  suite-wide `--timeout` for that one test.
 - [ ] **Tag-based selection (`-m`) and the rest of the CLI surface** — `@velox.tag` records names on
   a function's marks (works, and is harmless to apply today) but nothing consumes them: `-m`
   doesn't exist in `cli.py`'s parser, alongside `-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`,

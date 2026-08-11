@@ -1,21 +1,13 @@
 """Built-in fixtures and the types they hand back.
 
-These are ordinary `Fixture` objects, declared with the ordinary decorator — there is nothing
-privileged about them except that the runtime supplies the value instead of calling the function.
-The five free functions at the bottom of this module (`tmp_path`, `tmp_path_factory`, `capture`,
-`log_records`, `test_info`) are `builtin_fixture(func, provider=...)`-built: `func`'s own body
-stays `raise NotImplementedError(...)`, since `func` is never called once `provider` is set —
-`_di._construct` checks `.provider` first. The real values come from `velox._capture`'s five
-providers instead, wired in below.
+`tmp_path`, `tmp_path_factory`, `capture`, `log_records` and `test_info` are declared here as
+ordinary `Fixture` objects carrying a `provider`: the runtime calls that provider instead of the
+decorated function, and the providers themselves live in `velox._capture`, wired in at the bottom
+of this module.
 
-The five types those providers hand back (`Capture`, `LogRecords`, `TmpPathFactory`, plus the
-already-plain `TestInfo`) take generic constructor arguments (a `Sink`-shaped protocol, a live
-`list[LogRecord]`, a bare `Path`) rather than importing `velox._capture`'s concrete types, so this
-module never needs to know `_capture`'s own internals beyond the small structural shape each class
-reads from — `_capture.py` is the one that imports these types to build them.
-
-There is no `monkeypatch`: it would add API without adding capability, since the underlying write
-is process-global either way. Use `unittest.mock` (which velox schedules solo) or a DI override.
+The types those providers construct are defined here too — `Capture`, `LogRecords`,
+`TmpPathFactory` and `TestInfo` — each taking plain constructor arguments (a `Sink`-shaped
+protocol, a live `list[LogRecord]`, a `Path`).
 """
 
 from __future__ import annotations
@@ -47,24 +39,21 @@ _RUNTIME = "provided by the velox runtime; not callable directly"
 @final
 @dataclass(frozen=True, slots=True)
 class TestInfo:
-    """The `request` replacement: read-only, and deliberately tiny."""
+    """The `request` replacement: read-only and small."""
 
     id: str
     """`relative/path/test_file.py::test_name[param-id]`."""
     tags: tuple[str, ...]
     timeout: float | None
-    """The suite's effective `--timeout` budget for this test, or `None` for no limit. Reflects
-    what `_run._run_one` actually enforces, not a per-test `@velox.timeout(...)` mark override —
-    reporting anything other than the value actually in force would be reporting something
-    false."""
+    """The budget this test is actually held to, or `None` for no limit: a per-test
+    `@velox.timeout(...)` mark if it carries one, else the suite's `--timeout`."""
     worker: int
     """Which concurrency slot (`0..concurrency-1`) this test is occupying."""
 
 
 class _CapturedText(Protocol):
-    """The structural shape `Capture` needs from whatever holds the live captured text — a
-    `velox._capture.Sink`, in practice, but named here as a `Protocol` rather than imported
-    concretely so this module never has to depend on `_capture`'s own internals."""
+    """The structural shape `Capture` needs from whatever holds the live captured text: a
+    `velox._capture.Sink`, in practice."""
 
     @property
     def out(self) -> str: ...
@@ -76,9 +65,8 @@ class _CapturedText(Protocol):
 class Capture:
     """The current test's captured stdout/stderr, live during the test.
 
-    Holds a reference to the test's `Sink`, not a snapshot: `.out`/`.err` read straight through to
-    it on every access, so text written after this fixture was injected — including from code
-    that runs later in the same test — is visible immediately, with no polling or buffering.
+    Holds a reference to the test's `Sink`, not a snapshot: `.out`/`.err` read straight through
+    on every access, so text written after this fixture was injected is visible immediately.
     """
 
     __slots__ = ("_source",)
@@ -96,12 +84,11 @@ class Capture:
 
 
 def _resolve_level(level: int | str) -> int:
-    """`level`, as an int `logging` understands — resolved and validated *now*, not deferred.
+    """`level`, as an int `logging` understands, resolved and validated immediately.
 
-    `bool` is rejected even though `isinstance(True, int)` is `True` in Python: `set_level(True)`
-    is almost certainly a mistake (`True == 1`, a level nothing in `logging` ever means), and
-    silently accepting it as level `1` would be a confusing, hard-to-debug success rather than a
-    clear failure.
+    `bool` is rejected even though `isinstance(True, int)` is `True`: `set_level(True)` is
+    almost certainly a mistake, and silently treating it as level `1` would be a confusing
+    success rather than a clear failure.
     """
     if isinstance(level, bool):
         raise TypeError(f"set_level(level={level!r}): bool is not a valid logging level")
@@ -119,27 +106,15 @@ def _resolve_level(level: int | str) -> int:
 
 
 @final
+# Hand-rolled __enter__/__exit__ rather than @contextlib.contextmanager, so entering never
+# reruns a generator body; `set_level` does its own validation before this is constructed.
 class _LevelOverride(AbstractContextManager[None]):
     """`LogRecords.set_level`'s context manager: raises or lowers `logger`'s own explicit level
-    for the block, then restores exactly what was there before — including `logging.NOTSET`,
-    which means "inherit from my parent" and is a meaningfully different state from any concrete
-    level, so it must be restored as `NOTSET` itself rather than resolved-and-reapplied.
+    for the block, then restores exactly what was there before, including `logging.NOTSET`.
 
-    A hand-rolled `__enter__`/`__exit__` class, not `@contextlib.contextmanager`: the latter turns
-    the decorated function into a generator whose body — including any validation — does not run
-    until the first `next()`/`.send()`, which `__enter__` is what triggers. That defers a bad
-    `level`/`logger` argument's error from "the moment `set_level(...)` is called" to "the moment
-    `with ...:` is entered", which is the exact bug this class's caller (`LogRecords.set_level`)
-    exists to avoid — see `tests/test_public_api.py`'s
-    `test_log_records_set_level_raises_at_call_time_not_at_enter`. Validation itself happens in
-    `set_level` before this object is even constructed; this class only does the save/restore.
-
-    The "previous" level is snapshotted in `__enter__`, not in `__init__` — `set_level(...)`
-    returns this object without entering it, so holding it and entering later (or not at all) is a
-    supported shape, and snapshotting eagerly at construction time would pair the restore with
-    whatever the level happened to be at `set_level(...)`-call time rather than at the moment this
-    block actually took over, silently restoring a stale value if anything changed the logger's
-    level in between.
+    The previous level is snapshotted in `__enter__`, not in `__init__`, so `set_level(...)` can
+    return this object, be held, and be entered later without pairing the restore to a level
+    that may have since changed.
     """
 
     __slots__ = ("_level", "_logger", "_previous")
@@ -162,9 +137,9 @@ class _LevelOverride(AbstractContextManager[None]):
 class LogRecords:
     """The `caplog` equivalent: structured records captured for this test.
 
-    Wraps the live `list[logging.LogRecord]` `_capture._RoutingHandler.emit` appends to — not a
-    copy — so `.records`/`.messages` reflect records logged after this fixture was injected,
-    matching `Capture`'s own "live" contract.
+    Wraps the live `list[logging.LogRecord]` that `_capture._RoutingHandler.emit` appends to,
+    not a copy, so `.records`/`.messages` reflect records logged after this fixture was
+    injected.
     """
 
     __slots__ = ("_records",)
@@ -185,18 +160,13 @@ class LogRecords:
     ) -> AbstractContextManager[None]:
         """Raise or lower a logger's level for the duration of the block, then restore it.
 
-        `logger=None` means the root logger — every logger without its own explicit level
-        inherits from it (`Logger.getEffectiveLevel`'s walk up `.parent`), so this is the "just
-        let me see DEBUG records for a bit" case most tests actually want.
+        `logger=None` targets the root logger, which every logger without its own explicit
+        level inherits from (`Logger.getEffectiveLevel`'s walk up `.parent`). `level` and
+        `logger` are validated before the context manager is constructed or entered.
 
-        `level`/`logger` are validated *before* any context manager is constructed or entered —
-        see `_resolve_level` and `_LevelOverride`'s docstrings for why that ordering is load-
-        bearing, not incidental.
-
-        Logger levels are process-global: this call under concurrency can change what a
-        concurrent sibling captures for a logger of the same name, in either direction. See
-        `docs/rationale.md` ("set_level's concurrency hazard") for which direction is safe and
-        which silently drops a sibling's records.
+        Logger levels are process-global, so this call under concurrency can change what a
+        concurrent sibling captures for a logger of the same name. See `docs/rationale.md` for
+        which direction is safe.
         """
         resolved = _resolve_level(level)
         if logger is not None and not isinstance(logger, str):
@@ -207,14 +177,12 @@ class LogRecords:
 
 @final
 class TmpPathFactory:
-    """Session-scoped temp directory factory: same numbered-root and retention policy as pytest.
+    """Session-scoped temp directory factory, sharing pytest's numbered-root and retention
+    policy.
 
-    `mktemp` numbers by construction (a per-basename counter starting at `0`), never by scanning
-    the directory for a free number and retrying: this factory is session-scoped, so two
-    concurrently-running tests can both be holding it and calling `.mktemp(...)` at the same time.
-    The counter itself needs no lock despite that: incrementing a plain `dict` entry has no
-    `await` in it, and asyncio is single-threaded, so no rival task's own step can ever interleave
-    between the read and the write.
+    `mktemp` numbers by construction, a per-basename counter starting at `0`, rather than
+    scanning the directory for a free number — so two tests calling `.mktemp(...)`
+    concurrently never collide.
     """
 
     __slots__ = ("_basetemp", "_counters")
@@ -224,10 +192,8 @@ class TmpPathFactory:
         self._counters: dict[str, int] = {}
 
     def mktemp(self, basename: str, *, numbered: bool = True) -> Path:
-        # Module-level `_capture` (bound at the bottom of this file, after this class is already
-        # defined) rather than a top-of-file import: same import-cycle reasoning as the
-        # bottom-of-file import below. Resolved at call time, not class-definition time, so by
-        # the time anything can actually call `mktemp`, `_capture` is already bound.
+        # `_capture` is bound at the bottom of this module, after this class is defined (see the
+        # import-cycle note there); by the time anything can call `mktemp`, it's already bound.
         sanitized = _capture.sanitize_test_id(basename)
         if numbered:
             n = self._counters.get(sanitized, 0)
@@ -235,11 +201,10 @@ class TmpPathFactory:
             path = self._basetemp / f"{sanitized}{n}"
         else:
             path = self._basetemp / sanitized
-        # `exist_ok=False`: for `numbered=True` this can never legitimately collide (the counter
-        # above guarantees a fresh suffix every call); for `numbered=False` two calls with the
-        # same `basename` colliding is a caller bug (asking for the same fixed directory twice)
-        # that should surface as a clear `FileExistsError`, not silently hand back a directory a
-        # previous call may still be using.
+        # `exist_ok=False`: numbered calls never collide (the counter guarantees a fresh
+        # suffix); an unnumbered collision on the same `basename` is a caller bug that should
+        # raise `FileExistsError`, not silently hand back a directory a previous call may still
+        # be using.
         path.mkdir(parents=True, exist_ok=False)
         return path
 
@@ -249,10 +214,7 @@ class TmpPathFactory:
 
 @fixture()
 def tmp_path() -> Path:
-    """A directory unique to this test *by construction*: `basetemp/<sanitized-test-id>`.
-
-    No scan-and-retry for a free number — that is a serial-era artifact.
-    """
+    """A directory unique to this test, by construction: `basetemp/<sanitized-test-id>`."""
     raise NotImplementedError(_RUNTIME)
 
 

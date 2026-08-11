@@ -11,7 +11,7 @@ app/
   main.py         routes + the module-level `app = FastAPI(...)`, written for production only
 tests/
   fixtures.py     engine, session, api_client, alice, payment_sandbox
-  test_users.py   the baseline shape: fixtures, skip/skipif, a timeout override
+  test_users.py   the baseline shape: fixtures, skip/skipif, marks
   test_orders.py  per-node override via a sibling fixture, raises/approx, built-ins, exclusive
 ```
 

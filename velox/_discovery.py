@@ -1,7 +1,7 @@
 """Discovery: the walk that finds candidate test files.
 
-Walk, filename filter, directory ignore set — nothing else. Selection predicates like `-k`/`-m`
-act on a `TestRecord`, which doesn't exist yet at this stage, not on a path.
+One walk from each given root, filtered by filename pattern and a set of ignored directory names,
+returning paths in a stable order.
 """
 
 from __future__ import annotations

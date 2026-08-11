@@ -1,4 +1,4 @@
-"""Regression tests for velox._discovery (spec/03 §2)."""
+"""Tests for velox._discovery: file matching, ignore rules, and deterministic ordering."""
 
 from __future__ import annotations
 
@@ -81,9 +81,8 @@ def test_empty_directory_yields_nothing(tmp_path: Path) -> None:
 
 
 def test_symlink_loop_terminates_instead_of_recursing_forever(tmp_path: Path) -> None:
-    """The one genuinely tricky thing in this module: `visited` (`(st_dev, st_ino)`) is what
-    stops a directory symlinked back into its own ancestry from recursing forever. Without it
-    this call simply never returns."""
+    """`visited` (`(st_dev, st_ino)`) stops a directory symlinked back into its own ancestry
+    from recursing forever."""
     _touch(tmp_path / "test_top.py")
     loop = tmp_path / "loop"
     try:
@@ -113,8 +112,7 @@ def test_overlapping_roots_do_not_double_collect(tmp_path: Path) -> None:
 
 
 def test_argument_order_does_not_change_the_result(tmp_path: Path) -> None:
-    """spec/03 §4's index is defined over the resolved test set, not argv order — `velox b a`
-    and `velox a b` must discover (and later collect/index) the same tests the same way."""
+    """`velox b a` and `velox a b` must discover the same tests in the same order."""
     _touch(tmp_path / "a" / "test_a.py")
     _touch(tmp_path / "b" / "test_b.py")
 

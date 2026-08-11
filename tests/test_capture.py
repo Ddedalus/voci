@@ -1,11 +1,5 @@
-"""Tests for velox._capture (spec/09): Router/Sink attribution, logging, tmp_path, the
+"""Tests for velox._capture: Router/Sink attribution, logging, tmp_path, the
 context-propagating executor, and worker slots.
-
-Concurrency-proving tests here follow `test_run.py`'s own style: `asyncio.run(...)`-driven async
-scenarios, `asyncio.gather`/real `run_suite` dispatch rather than mocking anything out, and
-closures collecting side effects into a plain list/dict for the assertions afterward (single-
-threaded event loop, so no lock is needed for that bookkeeping — same reasoning `test_run.py`'s
-own `nonlocal in_flight, peak` tests already rely on).
 """
 
 from __future__ import annotations
@@ -62,8 +56,8 @@ def test_sink_keeps_everything_under_the_cap_verbatim() -> None:
 
 
 def test_sink_truncates_with_head_and_tail_once_over_the_cap() -> None:
-    """spec/09 §1: once the cap is exceeded, the buffer switches to head+tail truncation with a
-    marker rather than either silently dropping new writes or growing unboundedly (I5)."""
+    """Once the cap is exceeded, the buffer switches to head+tail truncation with a marker,
+    rather than either silently dropping new writes or growing unboundedly."""
     sink = _capture.Sink("t", limit=100)
     sink.write_out("A" * 40)  # fits entirely in the head
     sink.write_out("Z" * 5000)  # blows the cap wide open
@@ -71,22 +65,16 @@ def test_sink_truncates_with_head_and_tail_once_over_the_cap() -> None:
     out = sink.out
     assert out.startswith("A" * 40)
     assert "characters omitted" in out
-    # The whole point: nowhere near the naive 5040-character concatenation.
-    assert len(out) < 500
+    assert len(out) < 500  # nowhere near the naive 5040-character concatenation
     # The tail is real trailing content, not just the marker.
     assert out.endswith("Z" * 10)
 
 
 @pytest.mark.parametrize("n", [50, 51, 100, 101])
 def test_capped_buffer_marker_appears_iff_something_was_actually_dropped(n: int) -> None:
-    """Pins the real contract at the exact boundary a previous version got wrong: the marker
-    means "something was dropped", not "the head budget was exceeded". With `limit=100` (head
-    budget 50), a single write of `n` characters keeps everything for `n <= 100` -- the overflow
-    past the head always fits inside the 50-character tail budget -- and only starts genuinely
-    losing content at `n=101`. An earlier implementation latched a `_truncated` flag the moment
-    the head filled (`n > 50`) and showed the marker whenever that flag was set, so `n=51` and
-    `n=100` both produced a false "capture limit exceeded, 0 characters omitted" banner spliced
-    into output that was actually retained in full."""
+    """The marker means "something was dropped", not "the head budget was exceeded". With
+    `limit=100` (head budget 50), a write of `n` characters keeps everything verbatim for
+    `n <= 100` and only starts losing content at `n=101`."""
     buf = _capture._CappedBuffer(limit=100)
     buf.write("X" * n)
     out = buf.getvalue()
@@ -99,8 +87,7 @@ def test_capped_buffer_marker_appears_iff_something_was_actually_dropped(n: int)
 
 
 def test_sink_stdout_and_stderr_are_capped_independently() -> None:
-    """A chatty stderr logger must not starve stdout's own budget or vice versa (module
-    docstring's `DEFAULT_CAPTURE_LIMIT` comment)."""
+    """A chatty stderr logger must not starve stdout's own budget, or vice versa."""
     sink = _capture.Sink("t", limit=100)
     sink.write_err("E" * 5000)
     sink.write_out("plain stdout, untouched")
@@ -146,8 +133,8 @@ def test_router_routes_to_whichever_sink_is_currently_set() -> None:
 
 
 def test_router_passthrough_prefixes_each_line_with_the_sink_label() -> None:
-    """spec/09 §1: `-s`/`--capture=no` prefixes each line with the test id so concurrent output
-    stays readable — a single `write()` call is not guaranteed to be newline-aligned, so this
+    """`-s`/`--capture=no` prefixes each line with the test id so concurrent output stays
+    readable — a single `write()` call is not guaranteed to be newline-aligned, so this
     exercises a call ending mid-line followed by one starting mid-line."""
     real = io.StringIO()
     session_sink = _capture.Sink("<unattributed>")
@@ -180,16 +167,8 @@ def test_router_without_passthrough_never_touches_the_real_stream() -> None:
 
 
 def test_capture_isolates_concurrent_tests_stdout() -> None:
-    """The whole point of the Router/Sink mechanism (spec/09 §1): two tasks writing distinctive,
-    interleaved output at the same time must each see only their own text through their own
-    `Sink`, never their sibling's.
-
-    Forced into genuine lockstep with an `asyncio.Barrier(3)`: each of the three tasks writes once
-    per round, then blocks until the *other two* have also reached the barrier before writing
-    again, so consecutive writes provably come from different tasks rather than one task quietly
-    running to completion before the next starts (which would make the isolation assertions below
-    trivially true even if attribution were broken — the failure mode `order`'s own assertion
-    exists to catch)."""
+    """Concurrent tasks writing distinctive, interleaved output must each see only their own
+    text through their own `Sink`, never their sibling's."""
 
     async def scenario() -> None:
         session_sink = _capture.Sink("<unattributed>")
@@ -234,8 +213,8 @@ def test_capture_isolates_concurrent_tests_stdout() -> None:
 
 
 def test_capture_fixture_is_live_during_the_test_not_just_post_hoc() -> None:
-    """spec/09 §1/§7: `capture.out` reflects writes made *before* the read, mid-test — not a
-    snapshot taken at some later point."""
+    """`capture.out` reflects writes made *before* the read, mid-test — not a snapshot taken
+    at some later point."""
 
     async def test_func(cap: velox.Capture = velox.Depends(velox.capture)) -> None:
         print("first")
@@ -250,15 +229,8 @@ def test_capture_fixture_is_live_during_the_test_not_just_post_hoc() -> None:
 
 
 def test_run_suite_dispatches_two_concurrent_tests_without_cross_contaminating_capture() -> None:
-    """Same property as `test_capture_isolates_concurrent_tests_stdout`, but through the real
-    `run_suite` dispatch path end to end (Router install, per-test `Sink`/`TestContext`,
-    `velox.capture` provider) rather than driving `Router` directly.
-
-    Forced into lockstep with a shared `asyncio.Barrier(2)`, same reasoning as the lower-level
-    test above: without it, both isolation assertions would hold just as well if `test_alpha` ran
-    to completion before `test_beta` ever started, which would leave a regression that serialized
-    dispatch (or that handed every test the session sink) undetected.
-    """
+    """Concurrent tests must not cross-contaminate each other's captured stdout, through the
+    real `run_suite` dispatch path end to end."""
     order: list[str] = []
     barrier = asyncio.Barrier(2)
 
@@ -286,16 +258,14 @@ def test_run_suite_dispatches_two_concurrent_tests_without_cross_contaminating_c
     assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED], [
         r.failure for r in results
     ]
-    # Genuine interleaving, not two sequential runs: both labels appear within each of the
-    # first two rounds -- the exact resumption order within a round isn't guaranteed (asyncio
-    # doesn't promise which of two barrier-released tasks resumes first), so this checks "both
-    # showed up" per round rather than one fixed alternating sequence.
+    # Both labels appear within each of the first two rounds, not one fixed alternating
+    # sequence: asyncio doesn't promise which of two barrier-released tasks resumes first.
     assert set(order[:2]) == {"alpha", "beta"}
     assert set(order[2:4]) == {"alpha", "beta"}
 
 
 def test_failing_result_carries_captured_output_but_a_passing_one_does_not() -> None:
-    """spec/09 §6: captured output is attached to `TestResult` only for a failing outcome."""
+    """Captured output is attached to `TestResult` only for a failing outcome."""
 
     async def test_pass() -> None:
         print("pass-output")
@@ -318,10 +288,9 @@ def test_failing_result_carries_captured_output_but_a_passing_one_does_not() -> 
 
 
 def test_run_suite_reports_stray_output_from_a_detached_thread_as_unattributed() -> None:
-    """spec/09 §3's thread-attribution table: a raw `threading.Thread` has its own, empty
-    `contextvars.Context`, so its output cannot be attributed to any test and lands in the
-    session sink instead -- exercised here through `run_suite`'s `unattributed_output`
-    out-parameter, the real end-to-end path (spec/09 §9 Q4, "tee it in")."""
+    """A raw `threading.Thread` has its own, empty `contextvars.Context`, so its output cannot
+    be attributed to any test and lands in the session sink instead -- exercised here through
+    `run_suite`'s `unattributed_output` out-parameter, the real end-to-end path."""
     done = threading.Event()
 
     async def test_func() -> None:
@@ -353,8 +322,8 @@ def test_log_records_captures_structured_records_and_set_level_expands_visibilit
         logger = logging.getLogger(logger_name)
         logger.warning("warn-message")
         # DEBUG wouldn't be captured at all without raising this logger's own level first --
-        # the root handler always accepts everything it's handed (spec/09 §2), but nothing is
-        # handed to it unless the *originating* logger's effective level allows it through.
+        # the root handler always accepts everything it's handed, but nothing is handed to it
+        # unless the *originating* logger's effective level allows it through.
         logger.debug("not-yet-visible")
         with records.set_level(logging.DEBUG, logger=logger_name):
             logger.debug("debug-message")
@@ -369,8 +338,6 @@ def test_log_records_captures_structured_records_and_set_level_expands_visibilit
 
 
 def test_log_records_are_isolated_between_concurrent_tests() -> None:
-    """Same "forced lockstep, not just logically concurrent" reasoning as the stdout isolation
-    tests above — see `test_capture_isolates_concurrent_tests_stdout`'s docstring."""
     order: list[str] = []
     barrier = asyncio.Barrier(2)
 
@@ -406,19 +373,9 @@ def test_log_records_are_isolated_between_concurrent_tests() -> None:
 def test_set_level_is_not_isolated_under_concurrency_a_siblings_level_can_starve_a_capture() -> (
     None
 ):
-    """spec/09 §2's documented hazard, made concrete (see `LogRecords.set_level`'s own docstring
-    in `_builtins.py`): logger levels are process-global, so this is *not* a bug to fix, it is the
-    actual, documented contract — a concurrent sibling *lowering* the same logger's level (an
-    ordinary use of this API: silencing a noisy dependency) can make this test's own
-    `set_level(DEBUG)` block capture nothing at all, even though nothing about this test's own
-    code is wrong.
-
-    Ordered precisely with a shared `asyncio.Barrier(2)` so the sequence is deterministic rather
-    than a flaky race: `test_loud` sets DEBUG, `test_quiet` then overwrites the same logger to
-    CRITICAL (last write wins — `logging.Logger.setLevel` has no notion of "highest wins"),
-    `test_loud` logs while CRITICAL is still in effect, and only then does `test_quiet` restore
-    its own previous level.
-    """
+    """Logger levels are process-global (see `LogRecords.set_level`'s own docstring in
+    `_builtins.py`): a concurrent sibling lowering the same logger's level can make this
+    test's own `set_level(DEBUG)` block capture nothing at all."""
     logger_name = "velox_test_capture_hazard"
     barrier = asyncio.Barrier(2)
 
@@ -451,7 +408,7 @@ def test_set_level_is_not_isolated_under_concurrency_a_siblings_level_can_starve
 
 
 # ------------------------------------------------------------------------------------------
-# The context-propagating default executor (spec/09 §3).
+# The context-propagating default executor.
 # ------------------------------------------------------------------------------------------
 
 
@@ -474,7 +431,7 @@ def test_context_propagating_executor_propagates_the_submitters_contextvars() ->
 
 def test_run_suite_installs_a_context_propagating_default_executor() -> None:
     """`loop.run_in_executor(None, ...)` (the *default* executor, installed once per run by
-    `run_all`) attributes its output to the calling test's sink -- spec/09 §3's table entry."""
+    `run_all`) attributes its output to the calling test's sink."""
 
     async def test_func(cap: velox.Capture = velox.Depends(velox.capture)) -> None:
         loop = asyncio.get_running_loop()
@@ -521,20 +478,12 @@ def test_test_info_worker_stays_within_concurrency_bound_under_real_dispatch() -
     assert all(r.outcome is Outcome.PASSED for r in results), [r.failure for r in results]
     assert len(seen) == 12
     assert all(0 <= w < concurrency for w in seen)
-    # 12 tests, only 4 slots, each sleeping: more than one distinct slot index must actually have
-    # been handed out, or this would only be proving the trivial "0 is in range" case. This alone
-    # would still pass against a broken round-robin `acquire()`, though — see the sibling test
-    # below for the property that actually matters.
-    assert len(set(seen)) > 1
+    assert len(set(seen)) > 1  # more than one distinct slot index was actually handed out
 
 
 def test_test_info_worker_is_never_held_by_two_tests_at_once() -> None:
-    """The property `WorkerSlots` actually exists for (spec/09 §7: a future reporter's per-lane
-    layout) is not "every worker index is in range" — `list(range(concurrency))` guarantees that
-    on its own, and would survive `acquire()` degenerating to a constant `0` — it's "no two tests
-    hold the same index *at the same time*". Checked directly here with a `live` set each test
-    inserts into on entry and removes itself from on exit, asserting no collision at either point,
-    with `concurrency=4` and enough tests that the free list must genuinely cycle."""
+    """No two tests hold the same worker slot at the same time -- checked with a `live` set
+    each test inserts into on entry and removes itself from on exit."""
     concurrency = 4
     live: dict[int, str] = {}
 
@@ -573,8 +522,7 @@ def test_test_info_reports_tags_and_the_suite_wide_timeout() -> None:
 
 
 def test_sanitize_test_id_is_injective_for_ids_that_collide_after_escaping() -> None:
-    """`a/b` and `a b` both escape to `a_b` -- the digest suffix is what keeps them apart, per
-    spec/09 §5's own "hash-suffix anything that needed escaping"."""
+    """`a/b` and `a b` both escape to `a_b` -- the digest suffix is what keeps them apart."""
     a = _capture.sanitize_test_id("tests/test_x.py::test_foo[a/b]")
     b = _capture.sanitize_test_id("tests/test_x.py::test_foo[a b]")
     assert a != b
@@ -583,12 +531,9 @@ def test_sanitize_test_id_is_injective_for_ids_that_collide_after_escaping() -> 
 
 
 def test_sanitize_test_id_appends_a_digest_even_when_no_escaping_is_needed() -> None:
-    """Regression test: an earlier implementation appended the digest only when escaping changed
-    something, so an already-safe id came back verbatim -- and could then collide with a
-    *different* id's escaped-and-hashed output, since that output is itself a valid, already-safe
-    string. `sanitize_test_id("a/b")` used to equal the literal string `"a_b_82badf67"`, so an
-    already-safe id spelled exactly that way collided with `"a/b"`'s sanitized form. Appending the
-    digest to every output, always computed over the true original, closes that."""
+    """The digest is appended to every output, always computed over the true original --
+    not only when escaping changed something. `sanitize_test_id("a/b")` equals the literal
+    string `"a_b_82badf67"`, which an id spelled exactly that way must not collide with."""
     result = _capture.sanitize_test_id("already_safe_id")
     assert result != "already_safe_id"
     assert result.startswith("already_safe_id_")
@@ -599,10 +544,7 @@ def test_sanitize_test_id_appends_a_digest_even_when_no_escaping_is_needed() -> 
 
 
 def test_sanitize_test_id_truncates_very_long_ids_with_a_fresh_digest_suffix() -> None:
-    """The other half of the injectivity claim, previously untested: two long ids that share a
-    truncated prefix must not collide either. Both `"x" * 500` and `"x" * 499 + "y"` need no
-    escaping, so both blow straight past `_MAX_COMPONENT_LEN` on the digest-appended form alone
-    and hit the truncation branch — which must still tell them apart."""
+    """Two long ids that share a truncated prefix must not collide either."""
     long_id = "x" * 500
     other_long_id = "x" * 499 + "y"
 
@@ -641,10 +583,8 @@ def test_tmp_path_is_unique_per_test_and_lives_under_basetemp(tmp_path: Path) ->
 
 
 def test_tmp_path_factory_mktemp_numbers_by_construction(tmp_path: Path) -> None:
-    """`mktemp` names are `sanitize_test_id(basename)` plus the numbered suffix — since
-    `sanitize_test_id` always appends a digest (injectivity, see the `sanitize_test_id` tests
-    above), the directory names carry a hash suffix even for an already-safe `basename` like
-    `"data"`; what's pinned here is the numbering and uniqueness, not the exact literal name."""
+    """`mktemp` names are `sanitize_test_id(basename)` plus a numbered suffix, unique on
+    each call."""
     made: list[Path] = []
 
     async def test_func(
@@ -671,11 +611,8 @@ def test_tmp_path_factory_mktemp_numbers_by_construction(tmp_path: Path) -> None
 def test_basetemp_override_is_cleared_before_use_when_it_looks_like_a_previous_basetemp(
     tmp_path: Path,
 ) -> None:
-    """spec/09 §5's documented `--basetemp` warning: "this directory is cleared" — but only for a
-    directory that already carries `_capture.BASETEMP_MARKER_NAME`, i.e. one velox itself made on
-    an earlier run. That marker is the belt-and-braces half of the `--basetemp` safety story (the
-    other half is `cli.py`'s own path-shape validation, tested in `test_cli.py`) — see the sibling
-    test below for what happens without it."""
+    """A `--basetemp` override is cleared only when it already carries
+    `_capture.BASETEMP_MARKER_NAME`, i.e. one velox itself made on an earlier run."""
     override = tmp_path / "reused"
     override.mkdir()
     (override / _capture.BASETEMP_MARKER_NAME).write_text("")
@@ -694,11 +631,8 @@ def test_basetemp_override_is_cleared_before_use_when_it_looks_like_a_previous_b
 
 
 def test_basetemp_override_refuses_to_clear_a_directory_without_the_marker(tmp_path: Path) -> None:
-    """The other half of the belt-and-braces guard: an existing directory `--basetemp` points at
-    that does *not* carry the marker is refused rather than silently `rmtree`'d — the ordinary
-    mistake this guards against is pointing `--basetemp` at a directory that merely happens to
-    already exist (a typo, a directory the user actually cares about), not one velox itself made
-    on a previous run."""
+    """An existing directory that does *not* carry the marker is refused rather than silently
+    `rmtree`'d."""
     not_a_basetemp = tmp_path / "definitely_not_ours"
     not_a_basetemp.mkdir()
     (not_a_basetemp / "important.txt").write_text("do not delete me")
@@ -749,11 +683,9 @@ def test_install_is_idempotent_and_uninstall_restores_the_real_streams(tmp_path:
 def test_install_raises_rather_than_silently_ignoring_a_mismatched_second_call(
     tmp_path: Path,
 ) -> None:
-    """A second `install()` call that disagrees with the live setup (a different `basetemp`, or a
-    different `passthrough`) is a real conflict, not a harmless no-op — silently keeping the
-    *first* call's arguments and discarding the second's would be exactly the kind of quiet
-    degrade I6 argues against elsewhere in this module (`_require_test_context`'s loud
-    `RuntimeError` is the model here)."""
+    """A second `install()` call that disagrees with the live setup (a different `basetemp`, or
+    a different `passthrough`) raises rather than silently keeping the first call's
+    arguments."""
     try:
         _capture.install(basetemp=tmp_path / "one")
         with pytest.raises(RuntimeError, match="already called with"):
@@ -768,11 +700,10 @@ def test_install_raises_rather_than_silently_ignoring_a_mismatched_second_call(
 
 
 def test_install_rolls_back_cleanly_when_basetemp_resolution_fails(tmp_path: Path) -> None:
-    """spec/09's I1 claim ("no state survives a `run_suite` call that raises") must hold even when
-    the one fallible step inside `install()` — resolving `basetemp` — is what raises. Regression:
-    an earlier version of `install()` swapped `sys.stdout`/`sys.stderr` and added the root log
-    handler *before* this step, so a failure here left the process permanently mis-routed with no
-    way to recover (`uninstall()` was a no-op forever, since `_installed` was never set)."""
+    """No state may survive an `install()` call that raises, even when the one fallible step
+    inside it — resolving `basetemp` — is what raises: `sys.stdout`/`sys.stderr` and the root
+    log handler must be untouched, and `uninstall()` must remain a safe no-op rather than
+    inheriting half-applied state."""
     not_a_basetemp = tmp_path / "not_ours"
     not_a_basetemp.mkdir()  # exists, but carries no BASETEMP_MARKER_NAME -- install() must refuse
 
@@ -790,11 +721,10 @@ def test_install_rolls_back_cleanly_when_basetemp_resolution_fails(tmp_path: Pat
 
 
 def test_run_suite_uninstalls_capture_even_when_a_sibling_is_pending_during_an_interrupt() -> None:
-    """Regression: `runner.close()` (in `run_suite`'s own teardown) can re-raise
-    `KeyboardInterrupt`/`SystemExit` itself, not just the documented `RuntimeError`, whenever
-    sibling tasks are still pending when the interrupt lands — which used to skip
-    `_capture.uninstall()` entirely, leaving `sys.stdout`/`sys.stderr` permanently wrapped in
-    `Router`s after a Ctrl-C hit a real, multi-test run."""
+    """`runner.close()` (in `run_suite`'s own teardown) can re-raise `KeyboardInterrupt`/
+    `SystemExit` itself, not just the documented `RuntimeError`, whenever sibling tasks are
+    still pending when the interrupt lands. `_capture.uninstall()` must still run in that
+    case, restoring `sys.stdout`/`sys.stderr` rather than leaving them wrapped in `Router`s."""
 
     async def _raises_keyboard_interrupt() -> None:
         raise KeyboardInterrupt

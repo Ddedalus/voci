@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TextIO
 
 from velox._collect import TestRecord
-from velox._run import Outcome, TestResult
+from velox._run import FAILING_OUTCOMES, TestResult
 
 __all__ = ["Reporter"]
 
@@ -32,11 +32,8 @@ class Reporter:
     """Streams per-file blocks as tests finish (`on_result`) and prints the
     end-of-run sections once, after `run_suite` returns (`finish`).
 
-    `records` is walked directly to seed per-file counts, not reduced to an
-    `{id: path}` dict first, since a factory-generated test can repeat its id across
-    instances. `stream` is bound once at construction rather than read from
-    `sys.stdout` lazily, since `_run.run_suite` replaces `sys.stdout` with a
-    `_capture.Router` for the run's duration.
+    `records` seeds per-file counts by walking the sequence directly, not by
+    reducing it to an `{id: path}` dict. `stream` is bound once, at construction.
     """
 
     records: Sequence[TestRecord]
@@ -70,12 +67,14 @@ class Reporter:
             PASS  tests/api/test_users.py          12 tests   Σ 0.84s
             FAIL  tests/api/test_billing.py         8 tests   Σ 2.10s   (1 failed)
 
-        `PASS`/`FAIL` on whether every result for that file is `Outcome.PASSED`;
-        duration is the sum of each test's own `duration`, labeled Σ since concurrent
-        dispatch means no single wall-clock span is attributable to "the file". This
-        body has no `await`, so it runs atomically with respect to every other
-        `dispatch_one` under asyncio's cooperative scheduling -- nothing here needs a
-        lock.
+        `PASS`/`FAIL` on whether every result for that file has an outcome in
+        `FAILING_OUTCOMES` -- an `XFAILED`/`XPASSED` result doesn't flip the file to
+        `FAIL`, since either means the test behaved exactly as its `xfail` mark said it
+        would. Duration is the sum of each test's own `duration`, labeled Σ since
+        concurrent dispatch means no single wall-clock span is attributable to "the
+        file". This body has no `await`, so it runs atomically with respect to every
+        other `dispatch_one` under asyncio's cooperative scheduling -- nothing here
+        needs a lock.
         """
         path = self._path_by_id[result.id]
         self._buffered_by_path.setdefault(path, []).append(result)
@@ -88,7 +87,7 @@ class Reporter:
         in. `results` is in completion order, not logical order -- irrelevant here,
         since this only counts and sums them; logical order matters only once
         `finish` reads the caller's own `results` list."""
-        failed = sum(1 for result in results if result.outcome is not Outcome.PASSED)
+        failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
         status = "PASS" if failed == 0 else "FAIL"
         # A sum, not a span: under concurrency a file's summed durations can exceed
         # the whole run's wall clock, so it's labeled Σ to avoid reading like "this
@@ -116,13 +115,14 @@ class Reporter:
         """Called once, after `_run.run_suite` returns. `results` is the caller's
         full, authoritative list, already in logical order -- not whatever
         `on_result` buffered internally. Prints, in order: failure details (one block
-        per non-`PASSED` result, traceback plus captured sections), the short test
-        summary (one line per non-`PASSED` result), unattributed output if any, and
-        the wall-vs-Σ concurrency line. `captured_stdout`/`captured_stderr` are shown
-        only when `capture_passthrough` is off, since passthrough already echoed them
-        live; `log_records` are always shown, since they're never echoed live.
+        per `FAILING_OUTCOMES` result, traceback plus captured sections), the short
+        test summary (one line per `FAILING_OUTCOMES` result), unattributed output if
+        any, and the wall-vs-Σ concurrency line. `captured_stdout`/`captured_stderr`
+        are shown only when `capture_passthrough` is off, since passthrough already
+        echoed them live; `log_records` are always shown, since they're never echoed
+        live.
         """
-        failing = [result for result in results if result.outcome is not Outcome.PASSED]
+        failing = [result for result in results if result.outcome in FAILING_OUTCOMES]
 
         if failing:
             print(file=self.stream)

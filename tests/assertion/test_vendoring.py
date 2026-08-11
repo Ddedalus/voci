@@ -1,8 +1,5 @@
-"""Guards on the vendored tree itself.
-
-Vendoring is only cheap while the diff stays small and mechanical. These tests are what keeps
-it that way: they fail when someone hand-edits the vendored files, when the pytest submodule
-moves underneath them, or when a runtime dependency on pytest sneaks back in.
+"""Guards on the vendored tree: no hand-edits, the pytest submodule hasn't moved, and no
+runtime dependency on pytest.
 
 `--check` needs the pytest submodule, so the regeneration test skips without it; the rest run
 anywhere, including from an installed wheel.
@@ -30,10 +27,8 @@ def test_there_is_something_vendored() -> None:
 
 @pytest.mark.parametrize("path", VENDORED_SOURCES, ids=lambda p: p.name)
 def test_no_runtime_dependency_on_pytest(path: Path) -> None:
-    """The whole point: velox must not import pytest at run time.
-
-    Comments are exempt — the generated header names the upstream file it came from.
-    """
+    """velox must not import pytest at run time. Comments are exempt — the generated header
+    names the upstream file it came from."""
     offenders = [
         f"{i}: {line.strip()}"
         for i, line in enumerate(path.read_text().splitlines(), 1)
@@ -44,8 +39,8 @@ def test_no_runtime_dependency_on_pytest(path: Path) -> None:
 
 @pytest.mark.parametrize("path", VENDORED_SOURCES, ids=lambda p: p.name)
 def test_generated_header_is_intact(path: Path) -> None:
-    """`# ruff: noqa` keeps the files byte-identical to upstream (spec/07 Q17), and the header
-    is what tells a reader not to edit them by hand."""
+    """`# ruff: noqa` keeps the files byte-identical to upstream, and the header is what
+    tells a reader not to edit them by hand."""
     head = path.read_text(encoding="utf-8").split("\n", 6)
     assert head[0] == "# ruff: noqa"
     assert "Vendored from pytest" in head[2]
@@ -54,8 +49,7 @@ def test_generated_header_is_intact(path: Path) -> None:
 
 def test_pytest_is_not_imported_by_using_the_rewriter() -> None:
     """A fresh interpreter that installs and uses velox's assertion machinery must not end up
-    with `_pytest` in `sys.modules` — the vendored pycs bake in an import name, and getting
-    that wrong would make it pytest's."""
+    with `_pytest` in `sys.modules`."""
     code = (
         "import sys, tempfile, pathlib\n"
         "from velox._rewrite import install, uninstall, assertion_context, Config\n"
@@ -79,9 +73,7 @@ def test_pytest_is_not_imported_by_using_the_rewriter() -> None:
 
 
 def test_vendored_tree_matches_the_script() -> None:
-    """Regenerating must be a no-op. If this fails, either someone edited the vendored files
-    by hand or the pytest submodule moved — both need `scripts/vendor_assertion.py` re-run and
-    the resulting diff reviewed."""
+    """Regenerating the vendored tree from the pytest submodule must be a no-op."""
     if not (REPO / "pytest" / "src" / "_pytest").is_dir():
         pytest.skip("pytest submodule not checked out")
     result = subprocess.run(

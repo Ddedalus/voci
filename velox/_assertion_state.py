@@ -1,14 +1,11 @@
 """Per-test assertion state, held in ContextVars.
 
-The vendored explanation engine reaches for three values while building a failure message:
-the custom comparison hook, the assertion-pass hook, and the config that controls verbosity
-and truncation. Upstream they are module globals that pytest saves and restores around each
-test item. velox runs tests as concurrent asyncio tasks in one process, so a module global is
-simply wrong, and ContextVars are the fix: asyncio copies the context into each task, so a
-value set for one test is invisible to its siblings.
+The vendored explanation engine reads three values while building a failure message: the custom
+comparison hook, the assertion-pass hook, and the config controlling verbosity and truncation.
+Each is a `ContextVar` here, so a value set for one test is invisible to its siblings.
 
-`velox/_vendor/assertion/util.py` exposes these under their upstream names via a module-level
-`__getattr__`, so the vendored rewriter's `util._reprcompare` lookups never had to change.
+`velox/_vendor/assertion/util.py` exposes all three under their upstream names through a
+module-level `__getattr__`, which is how the vendored code reaches them unchanged.
 """
 
 from __future__ import annotations
@@ -38,8 +35,8 @@ _assertion_pass: ContextVar[Callable[[int, str, str], None] | None] = ContextVar
 #: Drives verbosity and truncation limits while an explanation is being built.
 _config: ContextVar[Config | None] = ContextVar("velox_assertion_config", default=None)
 
-#: The mapping the vendored `util` module resolves attribute reads against. Keys are the
-#: upstream global names, deliberately: that is what makes the vendored code work unmodified.
+#: The mapping the vendored `util` module resolves attribute reads against. Keys match the
+#: upstream global names, which is what makes the vendored code work unmodified.
 CONTEXT_GLOBALS: dict[str, ContextVar[Any]] = {
     "_reprcompare": _reprcompare,
     "_assertion_pass": _assertion_pass,

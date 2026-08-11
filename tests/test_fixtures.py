@@ -1,4 +1,4 @@
-"""Regression tests for velox._fixtures (spec/01 §3)."""
+"""Tests for velox._fixtures: injection scanning, cycle/scope validation, and `plan_for`."""
 
 from __future__ import annotations
 
@@ -23,8 +23,7 @@ def alpha() -> int:
 
 def test_annotated_depends_is_rejected_at_decoration_time() -> None:
     """`def t(db: Annotated[Session, Depends(fx)])` is the FastAPI spelling; velox only ever
-    reads `__defaults__`/`__kwdefaults__` (spec/01 rule 3), so it would silently inject nothing.
-    Caught here since nothing downstream ever will."""
+    reads `__defaults__`/`__kwdefaults__`, so it would silently inject nothing."""
 
     def bad(db: int = 0) -> int:
         return db
@@ -79,8 +78,7 @@ def test_check_acyclic_allows_a_diamond() -> None:
     _check_acyclic(top)  # must not raise
 
 
-# ------------------------------------------------------------------------------------------
-# `plan_for` (spec/04 §1-2) — M1.
+# `plan_for`: step ordering, deduplication, and validation.
 # ------------------------------------------------------------------------------------------
 
 
@@ -131,8 +129,8 @@ def test_plan_for_deduplicates_a_diamond_into_one_step() -> None:
 
 
 def test_plan_for_never_deduplicates_call_scope_even_in_a_diamond() -> None:
-    """The one deliberate exception to deduplication (module docstring): a `scope="call"`
-    fixture reached by two paths still gets two independent steps."""
+    """A `scope="call"` fixture reached by two paths gets two independent steps, unlike every
+    other scope."""
 
     @velox.fixture(scope="call")
     def d() -> object:
@@ -157,8 +155,7 @@ def test_plan_for_never_deduplicates_call_scope_even_in_a_diamond() -> None:
 
 
 def test_plan_for_rejects_a_session_fixture_depending_on_a_function_fixture() -> None:
-    """spec/04 §2's canonical scope-compatibility example, with both offending names checked in
-    the message — the diagnostic is useless without them."""
+    """Both offending fixture names appear in the error message."""
 
     @velox.fixture(name="narrow_fx")
     def narrow() -> int:
@@ -217,10 +214,9 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
 
 
 def test_fixture_with_a_missing_injection_is_rejected_at_decoration_time() -> None:
-    """Not just the test function: `_check_missing_injections` now runs the moment any `Fixture`
-    is built (`Fixture.__init__`), so a fixture with a required, non-injected parameter is caught
-    as soon as it's decorated — before any test ever reaches it via `Depends(...)`, and even if
-    no test ever does."""
+    """`_check_missing_injections` runs the moment any `Fixture` is built (`Fixture.__init__`),
+    so a required, non-injected parameter is caught at decoration time, before any test reaches
+    it via `Depends(...)`."""
     with pytest.raises(DIError, match="conn"):
 
         @velox.fixture()
@@ -239,9 +235,7 @@ def test_depends_on_a_positional_only_parameter_is_rejected_at_decoration_time()
             return x
 
 
-# ------------------------------------------------------------------------------------------
-# `_check_missing_injections` directly: the `co_varnames` slicing it relies on is subtle enough
-# to break silently under an edit, so each of its cases gets its own pin.
+# `_check_missing_injections` directly, one case per `co_varnames` slicing edge case.
 # ------------------------------------------------------------------------------------------
 
 

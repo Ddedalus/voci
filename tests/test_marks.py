@@ -1,4 +1,4 @@
-"""Regression tests for velox._marks (spec/01 §4)."""
+"""Tests for velox._marks: mark accumulation, `marks_of`, and `parametrize` validation."""
 
 from __future__ import annotations
 

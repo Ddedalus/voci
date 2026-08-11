@@ -1,9 +1,5 @@
-"""Regression tests for velox._di (spec/04 §4-6): the DI runtime, exercised directly against
-`ScopeStore`/`setup`/`teardown`/`_construct` rather than through the whole CLI/collect pipeline.
-
-There is no pytest-asyncio dependency in this project (see pyproject.toml) — every test here is a
-plain sync `def test_*` that drives its own async body through `asyncio.run(...)`, the same
-pattern `test_collect.py`'s rewrite-hook test already uses.
+"""Tests for the DI runtime: single-flight construction, refcounting, and teardown order,
+exercised directly against `ScopeStore`/`setup`/`teardown`/`_construct`.
 """
 
 from __future__ import annotations
@@ -23,15 +19,11 @@ def run(coro):  # small helper: every test body is `run(scenario())`
 
 
 #: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
-#: `BuiltinContext` it now also requires is never actually consulted by any of them — a fixed
-#: placeholder is as good as a per-test one here. `setup`/`teardown`'s own tests go through the
-#: real `test_id`/`module_path`-derived context instead, via `setup()` itself.
+#: `BuiltinContext` it requires is never actually consulted -- a fixed placeholder suffices.
 _DUMMY_CTX = BuiltinContext(test_id="dummy::test", module_path="dummy.py")
 
 
-# ------------------------------------------------------------------------------------------
-# ScopeStore.acquire / release: single-flight construction, refcounting, per-scope teardown
-# timing.
+# ScopeStore.acquire / release: single-flight construction, refcounting, per-scope teardown.
 # ------------------------------------------------------------------------------------------
 
 
@@ -58,10 +50,8 @@ def test_acquire_single_flight_construction_runs_body_once_sequentially() -> Non
 
 
 def test_acquire_single_flight_construction_runs_body_once_under_concurrency() -> None:
-    """Two concurrent `acquire`s racing for the same key: the dict-check-then-Future-creation
-    step is synchronous (module docstring's load-bearing invariant), so only one of them actually
-    builds — even though `build` itself yields control mid-construction via `asyncio.sleep(0)`,
-    giving the second waiter a real chance to race it."""
+    """Two concurrent `acquire`s racing for the same key: only one of them actually builds,
+    even though `build` itself yields control mid-construction via `asyncio.sleep(0)`."""
     calls: list[int] = []
 
     async def scenario() -> tuple[object, object]:
@@ -84,19 +74,9 @@ def test_acquire_single_flight_construction_runs_body_once_under_concurrency() -
 
 
 def test_acquire_reserves_the_waiters_refcount_before_the_constructor_can_release() -> None:
-    """The half of the concurrent race the two `build`-runs-once tests above don't touch:
-    refcount, not just single-flight construction. spec/04 §4's own pseudocode increments the
-    refcount *before* awaiting the future (`self._refcounts[key] += 1; return await fut`) — a
-    waiter parked on a still-pending future must already be counted, so the constructing task
-    cannot `acquire` -> `release` -> tear the instance down to zero while the waiter is still
-    suspended and about to receive that same instance.
-
-    The signal has to be "was the instance already torn down at the moment the waiter's own
-    `acquire` returns", checked from *inside* the waiter before it does anything else — a bare
-    "`release` didn't raise" isn't sensitive enough on its own, now that `release` is a deliberate
-    no-op for a key it no longer finds (see the tests above), which would otherwise silently
-    absorb exactly the orphaned-entry symptom this test exists to catch.
-    """
+    """A waiter parked on a still-pending future must already be counted in the refcount, so
+    the constructing task cannot `acquire` -> `release` -> tear the instance down to zero while
+    the waiter is still suspended and about to receive that same instance."""
     torn_down: list[str] = []
     still_alive_when_waiter_got_it: list[bool] = []
     build_started = asyncio.Event()
@@ -152,9 +132,7 @@ def test_acquire_reserves_the_waiters_refcount_before_the_constructor_can_releas
 
 @pytest.mark.parametrize("scope", ["function", "module", "call"])
 def test_non_session_scope_tears_down_when_refcount_reaches_zero(scope: str) -> None:
-    """Function/module/call scope all tear down through `release` once nothing holds them —
-    `_SCOPE_RANK` ranks `call` with `function` for exactly this lifetime reason (module docstring
-    of `_fixtures.py`)."""
+    """Function/module/call scope all tear down through `release` once nothing holds them."""
     scope_: Scope = cast("Scope", scope)
     torn_down: list[str] = []
 
@@ -212,10 +190,9 @@ def test_release_on_a_never_acquired_key_is_a_no_op() -> None:
 
 
 def test_release_after_a_failed_build_is_a_no_op_and_the_exception_stays_cached() -> None:
-    """The other half of `acquire`'s exception-caching contract: a key whose `build()` raised
-    must survive a stray `release()` call on it — no refcount corruption, no entry deletion — so
-    a later `acquire` for the *same* key still replays the identical exception object instead of
-    silently re-running (and re-failing) `build`."""
+    """A key whose `build()` raised must survive a stray `release()` call on it: a later
+    `acquire` for the same key replays the identical exception object rather than re-running
+    `build`."""
     calls: list[int] = []
 
     async def scenario() -> tuple[BaseException, BaseException]:
@@ -242,9 +219,7 @@ def test_release_after_a_failed_build_is_a_no_op_and_the_exception_stays_cached(
     assert len(calls) == 1  # `failing_build` only ever actually ran once
 
 
-# ------------------------------------------------------------------------------------------
-# Exception caching (spec/04 §4): a broken session fixture fails every dependent with the same
-# exception, and its body only runs once.
+# Exception caching: a broken session fixture fails every dependent with the same exception.
 # ------------------------------------------------------------------------------------------
 
 
@@ -277,8 +252,7 @@ def test_broken_session_fixture_fails_every_dependent_with_the_same_exception_bu
 
 
 # ------------------------------------------------------------------------------------------
-# Teardown ordering: dependents before dependencies, observed via an order list (not just "no
-# error").
+# Teardown ordering: dependents before dependencies.
 # ------------------------------------------------------------------------------------------
 
 
@@ -380,9 +354,7 @@ def test_async_generator_yielding_twice_raises_naming_the_fixture() -> None:
     run(scenario())
 
 
-# ------------------------------------------------------------------------------------------
-# All four fixture shapes (sync/async function, sync/async generator) construct and tear down
-# correctly through the full setup/teardown pipeline.
+# All four fixture shapes (sync/async function, sync/async generator) construct and tear down.
 # ------------------------------------------------------------------------------------------
 
 
@@ -427,9 +399,7 @@ def test_all_four_fixture_shapes_construct_and_tear_down() -> None:
     assert set(torn_down) == {"sync_gen", "async_gen"}
 
 
-# ------------------------------------------------------------------------------------------
-# "call" scope: never shared, even across two `Depends()` sites on the identical fixture in one
-# test.
+# "call" scope: never shared, even across two `Depends()` sites on the identical fixture.
 # ------------------------------------------------------------------------------------------
 
 
@@ -458,11 +428,7 @@ def test_call_scope_fixture_never_shares_an_instance_across_two_depends_sites() 
     assert len(built) == 2
 
 
-# ------------------------------------------------------------------------------------------
-# Three shapes `_construct` needs to handle correctly beyond the four "happy path" fixture
-# kinds above. (A `Depends(...)` on a positional-only parameter — the fourth shape that used to
-# be untested here — is now rejected at decoration time by `_fixtures.plan_of`, and is covered
-# next to that check in `tests/test_fixtures.py` instead of here.)
+# Edge cases beyond the four "happy path" fixture shapes above.
 # ------------------------------------------------------------------------------------------
 
 
@@ -487,11 +453,8 @@ def test_generator_teardown_failure_is_the_users_exception_not_masked_by_gen_clo
 
 
 def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
-    """A fixture whose body is a plain `def` but returns an awaitable (a class with `async def
-    __call__`, a sync wrapper delegating to an async body) is not `iscoroutinefunction` by
-    declaration, so it falls through `_construct`'s three `inspect` predicates — the value handed
-    to the test must still be the *resolved* value, not the un-awaited coroutine/awaitable
-    object."""
+    """A fixture whose body is a plain `def` but returns an awaitable: the value handed to the
+    test must be the *resolved* value, not the un-awaited coroutine/awaitable object."""
 
     async def _resolve() -> str:
         return "resolved"
@@ -509,9 +472,7 @@ def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
 
 
 def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() -> None:
-    """`key_for`'s own contract, isolated from the rest of the pipeline: two calls for the same
-    `(fixture, step_id)` never collide, which is what lets the same call-scope step be resolved
-    more than once (e.g. once per parametrized run of the same test) without colliding either."""
+    """Two `key_for` calls for the same `(fixture, step_id)` never collide."""
     fx: Fixture[object] = velox.fixture(scope="call")(lambda: object())
     k1 = key_for(fx, 0, test_id="t", module_path="m")
     k2 = key_for(fx, 0, test_id="t", module_path="m")

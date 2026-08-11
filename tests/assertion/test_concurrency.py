@@ -1,11 +1,6 @@
-"""spec/07 §4.1 — the one genuine concurrency blocker, and the proof it is gone.
-
-Upstream, `util._reprcompare`, `util._assertion_pass` and `util._config` are module globals
-that pytest saves and restores around each test item. velox runs tests as concurrent asyncio
-tasks in a single process, where that pattern is not merely racy but meaningless: two tests
-overlapping in time would need two different values of the same global.
-
-The fix is ContextVars, and these tests are what makes it a fix rather than a claim.
+"""Tests that the vendored assertion rewriter's per-test state -- `util._reprcompare`,
+`util._assertion_pass`, `util._config` -- is carried in ContextVars, isolated across
+concurrent asyncio tasks and threads.
 """
 
 from __future__ import annotations
@@ -21,10 +16,7 @@ from velox._vendor.assertion import util
 
 
 def test_vendored_util_reads_through_the_contextvars() -> None:
-    """The vendored rewriter says `util._reprcompare`; that must reach velox's ContextVar.
-
-    If this breaks, the module globals are back and nothing else here would notice.
-    """
+    """The vendored rewriter says `util._reprcompare`; that must reach velox's ContextVar."""
     assert "_reprcompare" in CONTEXT_GLOBALS
     assert util._reprcompare is None
 
@@ -37,8 +29,6 @@ def test_vendored_util_reads_through_the_contextvars() -> None:
 
 
 def test_the_globals_are_not_module_attributes() -> None:
-    """A real global would shadow the module `__getattr__` and silently restore the old,
-    unsafe behaviour — so assert they are genuinely absent from the module dict."""
     for name in CONTEXT_GLOBALS:
         assert name not in vars(util), f"{name} is a module global again"
 
@@ -65,12 +55,8 @@ def test_state_restores_on_exit() -> None:
 
 
 def test_concurrent_tasks_do_not_see_each_others_config() -> None:
-    """The property that matters: overlapping tests, each with its own assertion state.
-
-    Each task sets a distinct verbosity, yields control at a barrier so the tasks genuinely
-    interleave, then checks its own value is intact. Under module globals the last writer
-    would win and every task after the first would fail.
-    """
+    """Overlapping tasks, each with a distinct verbosity, each see only their own assertion
+    state."""
     task_count = 8
 
     async def one(verbosity: int) -> int:
@@ -90,8 +76,7 @@ def test_concurrent_tasks_do_not_see_each_others_config() -> None:
 
 
 def test_concurrent_tasks_get_their_own_reprcompare() -> None:
-    """The explanation hook is per-test too — that is what makes per-type custom explainers
-    (spec/07 §9) safe to add later."""
+    """The explanation hook is per-test too, not shared global state."""
 
     async def one(tag: str) -> str | None:
         with assertion_state(reprcompare=lambda op, left, right: tag):
@@ -109,8 +94,7 @@ def test_concurrent_tasks_get_their_own_reprcompare() -> None:
 
 
 def test_threads_get_their_own_context() -> None:
-    """ContextVars are per-thread as well as per-task, which the `--isolated` escape hatch
-    and any future thread-backed sync-test path will lean on."""
+    """ContextVars are per-thread as well as per-task."""
     seen: dict[int, int] = {}
     barrier = threading.Barrier(4)
 
@@ -131,11 +115,7 @@ def test_threads_get_their_own_context() -> None:
 
 
 def test_explanation_is_produced_under_concurrency(rewritten) -> None:
-    """End to end: concurrent failing asserts each get their own correct explanation.
-
-    The rewritten code itself is already concurrency-safe — every temp is a frame-local — so
-    this is really a test that the *explanation* path is too.
-    """
+    """End to end: concurrent failing asserts each get their own correct explanation."""
     mod = rewritten(
         """
         import asyncio

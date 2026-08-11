@@ -3,10 +3,9 @@ collects tests, runs them, and prints the report.
 
 Layers CLI flags over `[tool.velox]` config over built-in defaults (CLI wins), then
 wires the result through `_discovery`, `_collect`, `_run`, and `_report` in that order.
-`main` owns process-global setup (the assertion-rewrite import hook, `sys.path`,
-environment variables from config) and always restores it before returning, so
-repeated in-process calls -- this package's own test suite makes many -- never leak
-state between them.
+`main` owns the process-global setup a run needs -- the assertion-rewrite import hook,
+the rootdir entry on `sys.path`, environment variables from config -- and restores all
+of it before returning, on every exit path.
 """
 
 from __future__ import annotations
@@ -85,9 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         metavar="SECONDS",
-        help="Per-test setup+call budget, in seconds. A test that exceeds it is "
-        "reported as TIMEOUT rather than FAILED/ERROR. Must be positive and finite. "
-        "Default: no limit, or [tool.velox] timeout if set.",
+        help="Per-test setup+call budget, in seconds, overridable per test with "
+        "@velox.timeout(...). A test that exceeds its budget is reported as TIMEOUT "
+        "rather than FAILED/ERROR. Must be positive and finite. Default: no limit, or "
+        "[tool.velox] timeout if set.",
     )
     # stdout/stderr are routed through a per-test Sink by default and shown only for
     # failing tests. -s/--capture=no disables that buffering for a live pass-through,
@@ -152,7 +152,7 @@ def _invalid_path_argument(paths: list[str]) -> str | None:
     """
     for raw in paths:
         if "::" in raw:
-            return f"test ids are not implemented yet (M0): {raw!r}"
+            return f"test ids are not supported yet: {raw!r}"
         if not Path(raw).exists():
             return f"path does not exist: {raw!r}"
     return None
@@ -165,10 +165,10 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     `_capture._resolve_basetemp_root` does an unguarded `shutil.rmtree` on whatever
     this resolves to, so this catches the path shapes that would make an ordinary typo
     catastrophic: empty, the current directory or any ancestor, the home directory, or
-    the filesystem root. Deliberately conservative rather than exhaustive -- an
-    existing directory that isn't obviously dangerous but also doesn't look like a
-    previous velox basetemp is refused instead by `_capture.install`'s own marker-file
-    check, which has to exist there anyway for direct callers that skip `main`.
+    the filesystem root. Conservative rather than exhaustive -- an existing directory that isn't
+    obviously dangerous but also doesn't look like a previous velox basetemp is refused instead
+    by `_capture.install`'s own marker-file check, which has to exist there anyway for direct
+    callers that skip `main`.
     """
     if basetemp is None:
         return None
@@ -325,9 +325,9 @@ def main(argv: list[str] | None = None) -> int:
     # key env touches is restored to its pre-call value (or removed) on the way out,
     # so one main() call's config never leaks into the next.
     #
-    # Deliberately the first thing inside this try, ahead of _rewrite.install: putting
-    # the mutation inside the same try/finally that restores it means the restore
-    # fires even if _rewrite.install itself raises.
+    # The first thing inside this try, ahead of _rewrite.install: putting the mutation
+    # inside the same try/finally that restores it means the restore fires even if
+    # _rewrite.install itself raises.
     env_backup = {key: os.environ.get(key) for key in config.env}
     os.environ.update(config.env)
 
@@ -435,14 +435,20 @@ def main(argv: list[str] | None = None) -> int:
         failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
         errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
         timed_out = sum(1 for result in results if result.outcome is _run.Outcome.TIMEOUT)
+        xfailed = sum(1 for result in results if result.outcome is _run.Outcome.XFAILED)
+        xpassed = sum(1 for result in results if result.outcome is _run.Outcome.XPASSED)
         # `other` exists so this line can't silently stop adding up to len(results): a
         # future Outcome member reaching run_suite's results before this line is
         # updated for it shows up here as a nonzero "other" bucket instead of
         # vanishing from the total with nothing to say the count is now wrong.
-        other = len(results) - passed - failed - errored - timed_out
+        other = len(results) - passed - failed - errored - timed_out - xfailed - xpassed
         summary = f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored"
         if timed_out:
             summary += f", {timed_out} timed out"
+        if xfailed:
+            summary += f", {xfailed} xfailed"
+        if xpassed:
+            summary += f", {xpassed} xpassed"
         if other:
             summary += f", {other} other"
         summary += (
@@ -453,7 +459,9 @@ def main(argv: list[str] | None = None) -> int:
         # This line and reporter.finish's wall-vs-Σ line both use "failed" for
         # different sets on purpose: this one is the per-Outcome breakdown (FAILED
         # specifically, distinct from errored/timed_out); finish's is the coarser
-        # proof-of-value count (every non-PASSED outcome).
+        # proof-of-value count (every `_run.FAILING_OUTCOMES` result -- XFAILED and
+        # non-strict XPASSED don't count, since either means a test behaved exactly as
+        # its `xfail` mark said it would).
         reporter.finish(results, wall_clock=wall_clock, unattributed_output=unattributed)
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
