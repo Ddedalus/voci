@@ -3,7 +3,7 @@
 **Generated — do not edit.** Regenerate with `uv run python scripts/vendor_assertion.py`.
 
 - Upstream: <https://github.com/pytest-dev/pytest> at `9.2.0.dev0-165-g28e86a6c2`
-- Vendored: 2026-08-07
+- Vendored: 2026-08-11
 - Destination: `velox/_vendor/assertion/`
 
 Why vendored rather than reimplemented: see [spec/07](../../spec/07-assertions.md) §1.

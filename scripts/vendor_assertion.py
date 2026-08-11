@@ -322,7 +322,7 @@ def build_edits(v: Vendorer) -> None:
         "            yield from right._repr_compare(left)\n"
         "        elif isinstance(left, Approx):\n"
         "            yield from left._repr_compare(right)\n",
-        "        from velox._assertions import Approx\n"
+        "        from velox._approx import Approx\n"
         "\n"
         "        # Although the common order should be obtained == approx(...), allow both ways.\n"
         "        # velox: _repr_compare is optional; a scalar approx has no diff worth showing.\n"

@@ -5,6 +5,26 @@ Package: `velox/` (flat layout). Tests: `tests/`. Entrypoint: `velox.cli:main`.
 Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recipes
 (`sync`, `run`, `test`, `lint`, `fmt`, `typecheck`, `build`, `check`).
 
+## Refactor tools
+
+`justfile` also has AST-based recipes for splitting unrelated objects out of a file into their
+own module and repointing their imports:
+
+- `just summarize path` — list a file's top-level objects as `name:start,end` line ranges.
+- `just move source destination object...` — cut those objects out of `source`, append them to
+  `destination`, copy `source`'s whole import block along for the ride, then `ruff --fix` both
+  files so unused imports drop out and needed ones stay.
+- `just rewire object old.module new.module` — repoint every top-level `from old.module import
+  object` across the repo at `new.module`, preserving aliases, then `ruff --fix` the touched
+  files.
+
+Both rewire the mechanical parts of the move: line ranges (decorators included) and imports.
+They don't touch a moved object's docstring or `__all__` — add those by hand afterward, same as
+any other new module (see the Documentation section below). `rewire` only follows plain
+`from x import y` clauses (single- or multi-line); dotted `import x` usage and generated files
+(like `velox/_vendor/assertion/_compare_any.py`, whose stand-in import lives as a string literal
+in `scripts/vendor_assertion.py`) need a manual fix and a `just vendor` re-run.
+
 Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`.
 Git submodules for reference: `pytest/`, `fastapi/`.
 

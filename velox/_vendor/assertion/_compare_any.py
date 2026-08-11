@@ -63,7 +63,7 @@ def _compare_eq_any(
             truncation_budget,
         )
     else:
-        from velox._assertions import Approx
+        from velox._approx import Approx
 
         # Although the common order should be obtained == approx(...), allow both ways.
         # velox: _repr_compare is optional; a scalar approx has no diff worth showing.
