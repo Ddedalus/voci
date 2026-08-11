@@ -1,4 +1,4 @@
-"""Tests for `velox._report.Reporter`: per-file scrollback blocks, end-of-run sections
+"""Tests for `velox._report.terminal.Reporter`: per-file scrollback blocks, end-of-run sections
 (failure details, short summary, unattributed output, wall-vs-Σ), and path elision --
 exercised directly against hand-built `TestResult`s and a `StringIO` stream.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan
-from velox._report import Reporter, _elide_middle, _failure_reason
+from velox._report.terminal import Reporter, _elide_middle, _failure_reason
 from velox._run.run import Outcome
 from velox._run.run import TestResult as Result
 

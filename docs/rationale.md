@@ -298,7 +298,7 @@ file. Both guard the same catastrophe — an unguarded `rmtree` on a wrong path 
 subsumes the other, since only CLI callers reach the first and only the second protects callers
 that use `_capture`/`_run` directly.
 
-## `_report.py` — reporting
+## `_report/terminal.py` — reporting
 
 **The reporter counts records, it does not build a dict.** A factory-generated test can repeat its
 id, so two records may legitimately share one id within a file. Deriving per-file counts from a

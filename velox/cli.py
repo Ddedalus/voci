@@ -19,9 +19,10 @@ import time
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _capture, _config, _report, _rewrite
+from velox import __version__, _capture, _config, _rewrite
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
+from velox._report import terminal as _report
 from velox._run import run as _run
 
 
