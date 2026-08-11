@@ -86,6 +86,14 @@ class _FakeTTYStream(io.StringIO):
         return True
 
 
+def _reporter(
+    records: list[Record], *, capture_passthrough: bool = False
+) -> tuple[Reporter, io.StringIO]:
+    """A Reporter over a fresh StringIO, returned alongside it."""
+    stream = io.StringIO()
+    return Reporter(records=records, capture_passthrough=capture_passthrough, stream=stream), stream
+
+
 # ------------------------------------------------------------------------------------------
 # Per-file scrollback blocks (on_result)
 # ------------------------------------------------------------------------------------------
@@ -97,8 +105,7 @@ def test_file_block_only_prints_once_every_test_of_that_file_has_reported() -> N
         _test_record(f"{path}::test_a", path, index=0),
         _test_record(f"{path}::test_b", path, index=1),
     ]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(f"{path}::test_a", 0, duration=0.1))
     assert stream.getvalue() == ""  # not yet -- test_b hasn't reported
@@ -121,8 +128,7 @@ def test_file_block_reports_fail_and_failed_count_when_any_test_failed() -> None
         _test_record(f"{path}::test_b", path, index=1),
         _test_record(f"{path}::test_c", path, index=2),
     ]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(f"{path}::test_a", 0))
     reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.FAILED, failure="boom"))
@@ -144,8 +150,7 @@ def test_file_block_stays_pass_when_the_only_non_passed_results_are_xfail() -> N
         _test_record(f"{path}::test_b", path, index=1),
         _test_record(f"{path}::test_c", path, index=2),
     ]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(f"{path}::test_a", 0))
     reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom"))
@@ -165,8 +170,7 @@ def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
         _test_record(shared_id, path, index=0),
         _test_record(shared_id, path, index=1),
     ]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(shared_id, 0, outcome=Outcome.FAILED, failure="boom"))
     assert stream.getvalue() == ""  # only one of the two records has reported in
@@ -197,8 +201,7 @@ def test_blocks_flush_on_a_files_last_test_not_its_first() -> None:
         _test_record(f"{file_a}::test_2", file_a, index=1),
         _test_record(f"{file_b}::test_1", file_b, index=2),
     ]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(f"{file_a}::test_1", 0))
     assert stream.getvalue() == ""  # file_a still has test_2 outstanding
@@ -228,8 +231,7 @@ def test_finish_orders_by_the_results_argument_not_ids_natural_sort() -> None:
     result0 = _result(f"{path}::test_z", 0, outcome=Outcome.FAILED, failure="AssertionError: a")
     result1 = _result(f"{path}::test_a", 1, outcome=Outcome.FAILED, failure="AssertionError: b")
     records = [_test_record(result0.id, path, index=0), _test_record(result1.id, path, index=1)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     # `results` (the caller's authoritative, logical-order list) puts test_z before test_a --
     # opposite of what an id sort would produce.
@@ -248,8 +250,7 @@ def test_finish_omits_xfailed_and_xpassed_from_failure_details_and_short_summary
     xfailed = _result(f"{path}::test_b", 1, outcome=Outcome.XFAILED, failure="boom")
     xpassed = _result(f"{path}::test_c", 2, outcome=Outcome.XPASSED)
     records = [_test_record(r.id, path, index=i) for i, r in enumerate([passed, xfailed, xpassed])]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish([passed, xfailed, xpassed], wall_clock=1.0)
 
@@ -285,8 +286,7 @@ def test_finish_short_summary_line_matches_pytest_kept_verbatim_shape() -> None:
         failure_summary="AssertionError: assert 2 == 3",
     )
     records = [_test_record(result.id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -304,8 +304,7 @@ def test_finish_short_summary_line_for_timeout() -> None:
         failure_summary=_TIMEOUT_FAILURE,
     )
     records = [_test_record(result.id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -329,8 +328,7 @@ def test_captured_stdout_stderr_shown_when_not_passthrough() -> None:
         captured_stderr="hello from stderr",
     )
     records = [_test_record(result.id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -352,8 +350,7 @@ def test_captured_stdout_stderr_not_duplicated_under_passthrough() -> None:
         captured_stderr="hello from stderr",
     )
     records = [_test_record(result.id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=True, stream=stream)
+    reporter, stream = _reporter(records, capture_passthrough=True)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -372,8 +369,7 @@ def test_log_records_always_shown_regardless_of_passthrough() -> None:
     )
     records = [_test_record(result.id, path)]
     for passthrough in (True, False):
-        stream = io.StringIO()
-        reporter = Reporter(records=records, capture_passthrough=passthrough, stream=stream)
+        reporter, stream = _reporter(records, capture_passthrough=passthrough)
         reporter.finish([result], wall_clock=1.0)
         out = stream.getvalue()
         assert "--- captured log records ---" in out
@@ -389,8 +385,7 @@ def test_failure_text_trailing_newline_does_not_leave_a_stray_blank_line() -> No
         f"{path}::test_fail", 0, outcome=Outcome.FAILED, failure="boom\n", log_records=()
     )
     records = [_test_record(result.id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish([result], wall_clock=1.0)
 
@@ -406,19 +401,16 @@ def test_failure_text_trailing_newline_does_not_leave_a_stray_blank_line() -> No
 
 
 def test_unattributed_output_section_appears_only_when_non_empty() -> None:
-    stream = io.StringIO()
-    reporter = Reporter(records=[], capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter([])
 
     reporter.finish([], wall_clock=1.0, unattributed_output=None)
     assert "unattributed" not in stream.getvalue()
 
-    stream2 = io.StringIO()
-    reporter2 = Reporter(records=[], capture_passthrough=False, stream=stream2)
+    reporter2, stream2 = _reporter([])
     reporter2.finish([], wall_clock=1.0, unattributed_output=[])
     assert "unattributed" not in stream2.getvalue()
 
-    stream3 = io.StringIO()
-    reporter3 = Reporter(records=[], capture_passthrough=False, stream=stream3)
+    reporter3, stream3 = _reporter([])
     reporter3.finish([], wall_clock=1.0, unattributed_output=["stray output from a thread"])
     out3 = stream3.getvalue()
     assert "unattributed" in out3
@@ -437,8 +429,7 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
         _result(f"{path}::test_b", 1, duration=3.0),
     ]
     records = [_test_record(r.id, path, index=i) for i, r in enumerate(results)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     # Σ = 1.0 + 3.0 = 4.0; wall_clock = 2.0 -> ratio = 2.0x.
     reporter.finish(results, wall_clock=2.0)
@@ -453,8 +444,7 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
 
 def test_finish_with_zero_tests() -> None:
     """The shape `velox` prints on an empty directory, or any run with nothing collected."""
-    stream = io.StringIO()
-    reporter = Reporter(records=[], capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter([])
 
     reporter.finish([], wall_clock=0.001)
 
@@ -467,8 +457,7 @@ def test_wall_vs_sigma_line_guards_non_positive_wall_clock() -> None:
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=1.0)]
     records = [_test_record(results[0].id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish(results, wall_clock=0.0)
 
@@ -485,8 +474,7 @@ def test_wall_vs_sigma_line_takes_the_real_ratio_for_a_small_nonzero_wall_clock(
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=0.001)]
     records = [_test_record(results[0].id, path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.finish(results, wall_clock=0.001)
 
@@ -516,8 +504,7 @@ def test_elide_middle_keeps_both_ends_of_long_text() -> None:
 def test_file_block_path_column_is_elided_for_a_long_path() -> None:
     long_path = Path("tests/very/deeply/nested/package/test_billing_reconciliation.py")
     records = [_test_record(f"{long_path}::test_a", long_path)]
-    stream = io.StringIO()
-    reporter = Reporter(records=records, capture_passthrough=False, stream=stream)
+    reporter, stream = _reporter(records)
 
     reporter.on_result(_result(records[0].id, 0))
 
