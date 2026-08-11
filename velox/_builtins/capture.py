@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast, final
 
-from velox import _builtins
+from velox._builtins import fixtures as _builtins
 from velox._di.fixtures import BuiltinContext
 
 __all__ = [
@@ -542,7 +542,7 @@ def install(
         )
         if mismatched:
             raise RuntimeError(
-                f"velox._capture.install() was already called with passthrough="
+                f"velox._builtins.capture.install() was already called with passthrough="
                 f"{_installed.passthrough!r}, basetemp_root={_installed.basetemp_root!r} -- "
                 f"this call asked for passthrough={passthrough!r}"
                 + (f", basetemp={requested_basetemp!r}" if requested_basetemp is not None else "")
@@ -640,8 +640,8 @@ def _require_installed() -> CaptureSetup:
     """
     if _installed is None:
         raise RuntimeError(
-            "velox._capture.install() has not been called -- tmp_path/tmp_path_factory are "
-            "only usable while a suite is actually running (_run.run_suite calls install() "
+            "velox._builtins.capture.install() has not been called -- tmp_path/tmp_path_factory "
+            "are only usable while a suite is actually running (_run.run_suite calls install() "
             "before dispatching any test)"
         )
     return _installed

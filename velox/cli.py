@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _capture, _config, _rewrite
+from velox import __version__, _config, _rewrite
+from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
 from velox._report import terminal as _report
@@ -386,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
         collected = _collect.collect(files, rootdir=rootdir)
         capture_passthrough = args.capture == "no" or args.capture_s
-        # Populated by run_suite iff non-None -- see _capture.py's module docstring
+        # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
         # for what can land here. Empty in the common case. Rendered by
         # reporter.finish below, not printed here directly, keeping every "what got
         # printed and in what order" decision in one place.

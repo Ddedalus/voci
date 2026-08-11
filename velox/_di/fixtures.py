@@ -245,7 +245,7 @@ class Fixture[T]:
     def provider(self) -> BuiltinProvider | None:
         """`None` for every ordinary fixture. When set, `_di._construct` calls this instead of
         `func` — see `builtin_fixture`. Not settable via `velox.fixture()`; only this package's
-        own `_builtins.py` ever constructs a provider-backed `Fixture`."""
+        own `_builtins/fixtures.py` ever constructs a provider-backed `Fixture`."""
         return self._provider
 
     @property
@@ -339,8 +339,8 @@ def builtin_fixture(
     """Construct a `Fixture` whose value the velox runtime supplies directly, instead of by
     calling `func`. `func` is kept for its `__name__`, signature and return annotation, which
     display and typecheck call sites against; `_di._construct` checks `.provider` first, so
-    `func`'s own body never runs. Not exposed through `fixture()`; only `_builtins.py` calls
-    this.
+    `func`'s own body never runs. Not exposed through `fixture()`; only `_builtins/fixtures.py`
+    calls this.
     """
     return Fixture(func, scope=scope, name=name, provider=provider)
 

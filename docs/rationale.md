@@ -193,7 +193,7 @@ catches everything; and `ASGITransport` awaits the app in the calling task, so a
 the test's context. Swapping in a per-test app instance instead would break the first fact — routes
 point at *this* app, so a copy is a different app, not an isolated view of the same one.
 
-## `_builtins.py` — built-in fixtures
+## `_builtins/fixtures.py` — built-in fixtures
 
 **`set_level`'s concurrency hazard is asymmetric.** Logger levels are process-global. Raising a
 level can make a sibling capture more than it expected — benign for "this record is present",
@@ -201,11 +201,11 @@ harmful only for "nothing was logged". *Lowering* one, to silence a noisy depend
 sibling's own `set_level(DEBUG)` block capture nothing at all for a record it definitely emitted.
 Whether this API is "basically safe" depends on which direction the level moves.
 
-**The `_builtins`/`_capture` import cycle is deliberate.** The built-in fixture functions here are
-stubs; their real providers live in `_capture`, which imports the four result types back from this
-module. The cycle resolves only because the rewiring import sits at the *bottom* of `_builtins.py`,
-after every name `_capture` needs already exists. Move it up with the other imports and you get a
-partially-initialized-module `ImportError`.
+**The `_builtins/fixtures.py`/`_builtins/capture.py` import cycle is deliberate.** The built-in
+fixture functions here are stubs; their real providers live in `capture.py`, which imports the
+four result types back from this module. The cycle resolves only because the rewiring import sits
+at the *bottom* of `fixtures.py`, after every name `capture.py` needs already exists. Move it up
+with the other imports and you get a partially-initialized-module `ImportError`.
 
 ## `_run/run.py` — execution
 
@@ -247,7 +247,7 @@ before Future completed` — loop bookkeeping tripping over an exception-driven 
 leak. A plain `with asyncio.Runner()` reintroduces that noise on exactly the Ctrl-C path velox most
 needs to exit cleanly.
 
-## `_capture.py` — capture and routing
+## `_builtins/capture.py` — capture and routing
 
 **Output from an orphaned background task can vanish.** A task created with `create_task` and never
 awaited inherits the test's context, so it keeps writing into that test's sink after the test has

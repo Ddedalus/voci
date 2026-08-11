@@ -2,8 +2,8 @@
 
 `tmp_path`, `tmp_path_factory`, `capture`, `log_records` and `test_info` are declared here as
 ordinary `Fixture` objects carrying a `provider`: the runtime calls that provider instead of the
-decorated function, and the providers themselves live in `velox._capture`, wired in at the bottom
-of this module.
+decorated function, and the providers themselves live in `velox._builtins.capture`, wired in at
+the bottom of this module.
 
 The types those providers construct are defined here too — `Capture`, `LogRecords`,
 `TmpPathFactory` and `TestInfo` — each taking plain constructor arguments (a `Sink`-shaped
@@ -53,7 +53,7 @@ class TestInfo:
 
 class _CapturedText(Protocol):
     """The structural shape `Capture` needs from whatever holds the live captured text: a
-    `velox._capture.Sink`, in practice."""
+    `velox._builtins.capture.Sink`, in practice."""
 
     @property
     def out(self) -> str: ...
@@ -238,14 +238,15 @@ def test_info() -> TestInfo:
     raise NotImplementedError(_RUNTIME)
 
 
-# Rewire the five fixtures above onto `velox._capture`'s providers, turning each from a
+# Rewire the five fixtures above onto `velox._builtins.capture`'s providers, turning each from a
 # `func`-raises-`NotImplementedError` stub into a runtime-supplied builtin fixture.
 #
-# Imported here, at the bottom of the module, not at the top: `_capture` imports the classes
+# Imported here, at the bottom of the module, not at the top: `capture.py` imports the classes
 # above from this module, creating a genuine import cycle. It resolves cleanly because every name
-# `_capture.py` needs is already defined by the time control reaches this line — see
-# docs/rationale.md ("_builtins/_capture import cycle") for the full shape of it.
-from velox import _capture  # noqa: E402
+# `capture.py` needs is already defined by the time control reaches this line — see
+# docs/rationale.md ("_builtins/fixtures.py / _builtins/capture.py import cycle") for the full
+# shape of it.
+from velox._builtins import capture as _capture  # noqa: E402
 
 tmp_path = builtin_fixture(tmp_path.func, provider=_capture.tmp_path_provider, scope="function")
 tmp_path_factory = builtin_fixture(

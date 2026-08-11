@@ -7,7 +7,7 @@ dependency injection (`fixture`, `Depends`, `Scope`), marks for selecting and sh
 """
 
 from velox._approx import Approx, approx
-from velox._builtins import (
+from velox._builtins.fixtures import (
     Capture,
     LogRecords,
     TestInfo,

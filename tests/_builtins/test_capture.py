@@ -1,4 +1,4 @@
-"""Tests for velox._capture: Router/Sink attribution, logging, tmp_path, the
+"""Tests for velox._builtins.capture: Router/Sink attribution, logging, tmp_path, the
 context-propagating executor, and worker slots.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 import velox
-from velox import _capture
+from velox._builtins import capture as _capture
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._run.run import Outcome, run_suite
@@ -374,7 +374,7 @@ def test_set_level_is_not_isolated_under_concurrency_a_siblings_level_can_starve
     None
 ):
     """Logger levels are process-global (see `LogRecords.set_level`'s own docstring in
-    `_builtins.py`): a concurrent sibling lowering the same logger's level can make this
+    `_builtins/fixtures.py`): a concurrent sibling lowering the same logger's level can make this
     test's own `set_level(DEBUG)` block capture nothing at all."""
     logger_name = "velox_test_capture_hazard"
     barrier = asyncio.Barrier(2)

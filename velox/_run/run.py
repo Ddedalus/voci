@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from velox import _capture
+from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
 from velox._marks import XFail, marks_of
@@ -343,7 +343,7 @@ def run_suite(
     `module`-scope fixtures are released once every test of that module has finished,
     not as each test's own teardown runs, so a module fixture stays alive for its
     still-running siblings. `unattributed_output`, if given, is populated with whatever
-    output the session sink caught (see `_capture.py`'s module docstring). A
+    output the session sink caught (see `_builtins/capture.py`'s module docstring). A
     `KeyboardInterrupt`/`SystemExit` raised by any test aborts the whole call and
     nothing is returned.
     """
