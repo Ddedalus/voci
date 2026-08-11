@@ -159,13 +159,15 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
     assert "1 errored" in out
 
 
-def test_bad_concurrency_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("bad", ["--concurrency=0", "--concurrency=-4"])
+def test_bad_concurrency_value_is_a_usage_error(
+    bad: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     """`--concurrency` must be a positive integer -- `0`/negative is a usage error (exit 4)
     whose message interpolates the actual value given."""
-    for bad in ("--concurrency=0", "--concurrency=-4"):
-        status = main([bad])
-        assert status == 4
-        assert "--concurrency" in capsys.readouterr().err
+    status = main([bad])
+    assert status == 4
+    assert "--concurrency" in capsys.readouterr().err
 
 
 def test_main_runs_end_to_end_with_a_custom_concurrency(project: Project) -> None:
@@ -173,13 +175,13 @@ def test_main_runs_end_to_end_with_a_custom_concurrency(project: Project) -> Non
     assert main([str(project.root), "--concurrency=2"]) == 0
 
 
-def test_bad_timeout_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("bad", ["--timeout=0", "--timeout=-1", "--timeout=nan", "--timeout=inf"])
+def test_bad_timeout_value_is_a_usage_error(bad: str, capsys: pytest.CaptureFixture[str]) -> None:
     """`--timeout` must be a positive, finite number -- `0`, negative, `nan`, and `inf` are
     all usage errors (exit 4)."""
-    for bad in ("--timeout=0", "--timeout=-1", "--timeout=nan", "--timeout=inf"):
-        status = main([bad])
-        assert status == 4
-        assert "--timeout" in capsys.readouterr().err
+    status = main([bad])
+    assert status == 4
+    assert "--timeout" in capsys.readouterr().err
 
 
 def test_main_reports_a_timeout_as_its_own_outcome(

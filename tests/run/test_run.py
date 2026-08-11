@@ -750,16 +750,16 @@ def test_on_result_sees_captured_output_already_folded_on() -> None:
     assert "captured-before-callback" in seen[0].captured_stdout
 
 
-def test_run_suite_rejects_non_positive_concurrency() -> None:
-    for bad in (0, -1):
-        with pytest.raises(ValueError):
-            run_suite([_record(0, _passes, "test_passes")], concurrency=bad)
+@pytest.mark.parametrize("bad", [0, -1])
+def test_run_suite_rejects_non_positive_concurrency(bad: int) -> None:
+    with pytest.raises(ValueError):
+        run_suite([_record(0, _passes, "test_passes")], concurrency=bad)
 
 
-def test_run_suite_rejects_non_positive_or_non_finite_timeout() -> None:
-    for bad in (0, -1, -0.5, float("nan"), float("inf")):
-        with pytest.raises(ValueError):
-            run_suite([_record(0, _passes, "test_passes")], timeout=bad)
+@pytest.mark.parametrize("bad", [0, -1, -0.5, float("nan"), float("inf")])
+def test_run_suite_rejects_non_positive_or_non_finite_timeout(bad: float) -> None:
+    with pytest.raises(ValueError):
+        run_suite([_record(0, _passes, "test_passes")], timeout=bad)
 
 
 def test_keyboard_interrupt_among_several_concurrent_siblings_propagates_cleanly() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, cast
 
 import pytest
 import velox
@@ -10,6 +10,7 @@ from velox import Depends
 from velox._di.fixtures import (
     DIError,
     Injection,
+    Scope,
     _check_acyclic,
     _check_missing_injections,
     plan_for,
@@ -154,14 +155,17 @@ def test_plan_for_never_deduplicates_call_scope_even_in_a_diamond() -> None:
     assert len(plan.steps) == 4  # d, d, b, c
 
 
-def test_plan_for_rejects_a_session_fixture_depending_on_a_function_fixture() -> None:
+@pytest.mark.parametrize("wide_scope, narrow_scope", [("session", "function"), ("module", "call")])
+def test_plan_for_rejects_a_wide_scope_fixture_depending_on_a_narrower_one(
+    wide_scope: str, narrow_scope: str
+) -> None:
     """Both offending fixture names appear in the error message."""
 
-    @velox.fixture(name="narrow_fx")
+    @velox.fixture(scope=cast("Scope", narrow_scope), name="narrow_fx")
     def narrow() -> int:
         return 1
 
-    @velox.fixture(scope="session", name="wide_fx")
+    @velox.fixture(scope=cast("Scope", wide_scope), name="wide_fx")
     def wide(x: int = Depends(narrow)) -> int:
         return x
 
@@ -174,26 +178,6 @@ def test_plan_for_rejects_a_session_fixture_depending_on_a_function_fixture() ->
     message = str(excinfo.value)
     assert "narrow_fx" in message
     assert "wide_fx" in message
-
-
-def test_plan_for_rejects_a_module_fixture_depending_on_a_call_fixture() -> None:
-    @velox.fixture(scope="call", name="per_call")
-    def per_call() -> int:
-        return 1
-
-    @velox.fixture(scope="module", name="per_module")
-    def per_module(x: int = Depends(per_call)) -> int:
-        return x
-
-    async def test_func(w: int = Depends(per_module)) -> None:
-        pass
-
-    with pytest.raises(DIError) as excinfo:
-        plan_for(test_func)
-
-    message = str(excinfo.value)
-    assert "per_call" in message
-    assert "per_module" in message
 
 
 def test_plan_for_raises_on_a_missing_injection_naming_the_parameter() -> None:

@@ -7,28 +7,24 @@ import velox
 from velox._marks import marks_of
 
 
-def test_repeated_skip_raises_instead_of_overwriting() -> None:
-    @velox.skip("first")
+@pytest.mark.parametrize(
+    "mark_name, first_arg, second_arg",
+    [
+        ("skip", "first", "second"),
+        ("timeout", 10, 20),
+        ("xfail", "flaky", "flaky again"),
+    ],
+)
+def test_repeated_mark_raises_instead_of_overwriting(
+    mark_name: str, first_arg: object, second_arg: object
+) -> None:
+    mark = getattr(velox, mark_name)
+
+    @mark(first_arg)
     def target() -> None: ...
 
-    with pytest.raises(TypeError, match="skip"):
-        velox.skip("second")(target)
-
-
-def test_repeated_timeout_raises_instead_of_overwriting() -> None:
-    @velox.timeout(10)
-    def target() -> None: ...
-
-    with pytest.raises(TypeError, match="timeout"):
-        velox.timeout(20)(target)
-
-
-def test_repeated_xfail_raises_instead_of_overwriting() -> None:
-    @velox.xfail("flaky")
-    def target() -> None: ...
-
-    with pytest.raises(TypeError, match="xfail"):
-        velox.xfail("flaky again")(target)
+    with pytest.raises(TypeError, match=mark_name):
+        mark(second_arg)(target)
 
 
 def test_accumulating_marks_still_stack_freely() -> None:
