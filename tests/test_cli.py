@@ -224,6 +224,65 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
     assert "test_skipped SKIPPED (not ready)" in out
 
 
+def test_main_dash_m_runs_only_matching_tags_and_reports_the_rest_deselected(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "async def test_slow():\n"
+        "    pass\n\n"
+        "async def test_fast():\n"
+        "    pass\n",
+    )
+
+    status = main([str(project.root), "-m", "slow"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    (block_line,) = _lines_starting_with(out, "PASS ", "FAIL ")
+    assert "test_sample.py" in block_line
+    assert "1 tests" in block_line
+    assert "1 tests: 1 passed" in out
+    assert "1 deselected" in out
+
+
+def test_main_dash_m_matching_nothing_exits_five(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every test deselected reads the same as a genuinely empty suite: exit `5`."""
+    project.write_passing_test()
+
+    status = main([str(project.root), "-m", "slow"])
+
+    out = capsys.readouterr().out
+    assert status == 5
+    assert "1 deselected" in out
+
+
+def test_main_without_dash_m_never_deselects(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n\n@velox.tag('slow')\nasync def test_slow():\n    pass\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "deselected" not in out
+
+
+def test_main_rejects_an_invalid_dash_m_expression_as_a_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([str(tmp_path), "-m", "slow =="]) == 4
+    assert "invalid -m expression" in capsys.readouterr().err
+
+
 def test_main_prints_no_config_when_none_is_found(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

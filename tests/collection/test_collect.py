@@ -13,6 +13,7 @@ from _support import Project
 import pytest
 from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
+from velox._collection.tagexpr import compile_tag_expression
 
 
 def _write(path: Path, source: str) -> Path:
@@ -231,6 +232,76 @@ def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> 
 
     assert [record.qualname for record in result.records] == ["test_not_skipped"]
     assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_always_skipped"]
+
+
+def test_tag_expr_excludes_non_matching_tests_into_deselected(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "async def test_slow():\n"
+        "    pass\n\n"
+        "async def test_untagged():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("slow"))
+
+    assert [record.qualname for record in result.records] == ["test_slow"]
+    assert result.deselected == ["test_sample.py::test_untagged"]
+    assert result.skipped == []
+    assert result.errors == []
+
+
+def test_tag_expr_deselection_is_checked_ahead_of_skip(tmp_path: Path) -> None:
+    """A test excluded by `tag_expr` never reaches the skip check -- it lands in `deselected`,
+    not `skipped`, even when it also carries a skip mark."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "@velox.skip('unrelated reason')\n"
+        "async def test_slow_and_skipped():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
+
+    assert result.records == []
+    assert result.skipped == []
+    assert result.deselected == ["test_sample.py::test_slow_and_skipped"]
+
+
+def test_no_tag_expr_deselects_nothing(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n@velox.tag('slow')\nasync def test_it():\n    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert [record.qualname for record in result.records] == ["test_it"]
+    assert result.deselected == []
+
+
+def test_deselected_tests_do_not_consume_an_index(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "async def test_a():\n"
+        "    pass\n\n"
+        "@velox.tag('slow')\n"
+        "async def test_b():\n"
+        "    pass\n\n"
+        "async def test_c():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
+
+    assert [record.qualname for record in result.records] == ["test_a", "test_c"]
+    assert [record.index for record in result.records] == [0, 1]
+    assert result.deselected == ["test_sample.py::test_b"]
 
 
 def test_depends_defaulted_parameter_is_collected_with_a_real_resolution_plan(
