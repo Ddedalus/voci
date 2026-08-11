@@ -207,7 +207,7 @@ module. The cycle resolves only because the rewiring import sits at the *bottom*
 after every name `_capture` needs already exists. Move it up with the other imports and you get a
 partially-initialized-module `ImportError`.
 
-## `_run.py` — execution
+## `_run/run.py` — execution
 
 **A timeout is its own outcome, and it takes two checks to detect.** `TIMEOUT` is never folded into
 `FAILED` or `ERROR` because the remedy differs: raise the budget or find the blocking call, rather

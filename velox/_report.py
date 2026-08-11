@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TextIO
 
 from velox._collection.collect import TestRecord
-from velox._run import FAILING_OUTCOMES, TestResult
+from velox._run.run import FAILING_OUTCOMES, TestResult
 
 __all__ = ["Reporter"]
 

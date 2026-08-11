@@ -1,4 +1,4 @@
-"""Tests for velox._run: dispatch, setup/call/teardown, concurrency, timeouts, and reporting."""
+"""Tests for velox._run.run: dispatch, setup/call/teardown, concurrency, timeouts, reporting."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import velox
 from velox._collection.collect import CollectionError
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan, plan_for
-from velox._run import Outcome, exit_code_for, run_suite
-from velox._run import TestResult as Result  # same reason
+from velox._run.run import Outcome, exit_code_for, run_suite
+from velox._run.run import TestResult as Result
 
 #: A test with no `Depends(...)` at all still needs a plan (`_collect.py` gives every `TestRecord`
 #: one, uniformly) — this is the trivial one, shared by every test below that doesn't care about

@@ -13,8 +13,8 @@ import pytest
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan
 from velox._report import Reporter, _elide_middle, _failure_reason
-from velox._run import Outcome
-from velox._run import TestResult as Result
+from velox._run.run import Outcome
+from velox._run.run import TestResult as Result
 
 _EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
 
