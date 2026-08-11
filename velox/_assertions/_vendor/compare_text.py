@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion._typing import _AssertionTextDiffStyle
-from velox._vendor.assertion._typing import _HighlightFunc
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
-from velox._vendor.assertion.highlight import dummy_highlighter
-from velox._vendor.assertion._shim import assert_never
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor._typing import _AssertionTextDiffStyle
+from velox._assertions._vendor._typing import _HighlightFunc
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
+from velox._assertions._vendor.highlight import dummy_highlighter
+from velox._assertions._vendor._shim import assert_never
 
 
 def _compare_eq_text(

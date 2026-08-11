@@ -1,6 +1,6 @@
 """Installing assertion introspection: cache resolution, the import hook, the explanation hook.
 
-The rewriter itself is vendored in `velox/_vendor/assertion/`; this module is the glue that turns
+The rewriter itself is vendored in `velox/_assertions/_vendor/`; this module is the glue that turns
 it on. `install` resolves one pyc cache root and probes it once — an unwritable root prints a
 message on stderr and drops the run to `plain` mode — then installs the meta-path import hook and
 registers the explanation hook that renders a failed comparison as a diff.
@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from velox._assertion_state import assertion_state
-from velox._vendor.assertion import rewrite as _rewrite
-from velox._vendor.assertion import truncate as _truncate
-from velox._vendor.assertion import util as _util
-from velox._vendor.assertion._shim import AssertionState, Config, Stash, StashKey
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET, TruncationBudget
+from velox._assertions._vendor import rewrite as _rewrite
+from velox._assertions._vendor import truncate as _truncate
+from velox._assertions._vendor import util as _util
+from velox._assertions._vendor._shim import AssertionState, Config, Stash, StashKey
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET, TruncationBudget
+from velox._assertions.state import assertion_state
 
 __all__ = [
     "AssertMode",
@@ -44,7 +44,7 @@ __all__ = [
 ]
 
 #: `rewrite` is the default. `plain` keeps bare asserts and leans on the PEP 657 floor
-#: (`velox/_pep657.py`) for explanations.
+#: (`velox/_assertions/pep657.py`) for explanations.
 type AssertMode = Literal["rewrite", "plain"]
 
 ENV_CACHE_DIR = "VELOX_REWRITE_CACHE"

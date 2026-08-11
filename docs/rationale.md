@@ -109,7 +109,7 @@ velox vendors pytest's assertion rewriter rather than writing one. Assertion int
 mature, subtle, and the single feature users would most notice missing; there is nothing to gain
 from a second implementation.
 
-The vendored tree under `velox/_vendor/assertion/` is **generated** and kept byte-identical to
+The vendored tree under `velox/_assertions/_vendor/` is **generated** and kept byte-identical to
 upstream apart from a recorded edit list — the substantive one being that three module globals (the
 comparison hook, the pass hook, and the verbosity config) became `ContextVar`s, for the reason in
 the ContextVar section above. Upstream saves and restores them around each synchronously-run test;
@@ -271,7 +271,7 @@ so no rival task can interleave a step in between. The guarantee is about the ab
 suspension point, not about the operation being small — make any part of either path `async`, or
 move it off the loop thread, and it needs revisiting.
 
-## `_rewrite.py` — assertion introspection
+## `_assertions/rewrite.py` — assertion introspection
 
 **A fallback to `plain` is recorded as data, not just warned about.** When the pyc cache probe
 fails, `plan` prints to stderr *and* records the reason on `AssertionSetup`, which the report

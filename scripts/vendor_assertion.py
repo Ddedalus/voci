@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-vendor pytest's assertion subsystem into `velox/_vendor/assertion/`.
+"""Re-vendor pytest's assertion subsystem into `velox/_assertions/_vendor/`.
 
 Run this, not a manual copy. Re-vendoring is a deliberate act (spec/07 §1), and the whole
 argument for vendoring rather than reimplementing is that the diff stays small and mechanical:
@@ -7,7 +7,8 @@ this script *is* the coupling-point list, and it fails loudly when an edit no lo
 
     uv run python scripts/vendor_assertion.py
 
-Reads `pytest/` (the submodule), writes the vendored tree plus `velox/_vendor/VENDOR.md`.
+Reads `pytest/` (the submodule), writes the vendored tree plus
+`velox/_assertions/_vendor/VENDOR.md`.
 Vendored files are kept byte-identical to upstream apart from the edits recorded here
 (spec/07 Q17), so `diff` against a fresh pytest checkout stays readable.
 """
@@ -24,13 +25,14 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PYTEST_SRC = REPO / "pytest" / "src" / "_pytest"
-DST = REPO / "velox" / "_vendor" / "assertion"
-VENDOR_MD = REPO / "velox" / "_vendor" / "VENDOR.md"
+DST = REPO / "velox" / "_assertions" / "_vendor"
+VENDOR_MD = REPO / "velox" / "_assertions" / "VENDOR.md"
 
-VENDOR_PKG = "velox._vendor.assertion"
+VENDOR_PKG = "velox._assertions._vendor"
 
 # Upstream file -> vendored module name. `_pytest/assertion/__init__.py` is deliberately absent:
-# it is pytest's plugin glue (hooks, config wiring), which velox replaces with `velox/_rewrite.py`.
+# it is pytest's plugin glue (hooks, config wiring), which velox replaces with
+# `velox/_assertions/rewrite.py`.
 FILES = {
     "assertion/rewrite.py": "rewrite.py",
     "assertion/util.py": "util.py",
@@ -322,7 +324,7 @@ def build_edits(v: Vendorer) -> None:
         "            yield from right._repr_compare(left)\n"
         "        elif isinstance(left, Approx):\n"
         "            yield from left._repr_compare(right)\n",
-        "        from velox._approx import Approx\n"
+        "        from velox._assertions.approx import Approx\n"
         "\n"
         "        # Although the common order should be obtained == approx(...), allow both ways.\n"
         "        # velox: _repr_compare is optional; a scalar approx has no diff worth showing.\n"
@@ -399,7 +401,7 @@ class VeloxAssertRewriteWarning(UserWarning):
     """Warned when a module could not be rewritten, or an assert looks always-true."""
 
 
-#: Set by velox._rewrite once the cache root has been resolved and probed (spec/07 §5).
+#: Set by velox._assertions.rewrite once the cache root has been resolved and probed (spec/07 §5).
 #: None means "fall back to sys.pycache_prefix / __pycache__", i.e. upstream behaviour.
 _velox_cache_root: Path | None = None
 
@@ -435,8 +437,8 @@ UTIL_CONTEXTVAR_BLOCK = """\
 # concurrent asyncio tasks sharing a process (spec/07 §4.1). They are ContextVars now, read
 # through a PEP 562 module __getattr__ so the vendored rewriter's `util._reprcompare` lookups
 # are untouched. Do NOT assign to these names: a real global would shadow __getattr__ and
-# silently restore the old, unsafe behaviour. Use velox._assertion_state instead.
-from velox._assertion_state import CONTEXT_GLOBALS as _velox_context_globals
+# silently restore the old, unsafe behaviour. Use velox._assertions.state instead.
+from velox._assertions.state import CONTEXT_GLOBALS as _velox_context_globals
 
 
 def __getattr__(name: str) -> object:
@@ -559,7 +561,8 @@ def render_vendor_md(v: Vendorer, commit: str, generated: dict[str, str]) -> str
     lines += [
         "",
         "Not vendored: `_pytest/assertion/__init__.py` (pytest's plugin glue). velox's equivalent",
-        "is `velox/_rewrite.py`. Everything pytest-specific those files imported is replaced by",
+        "is `velox/_assertions/rewrite.py`. Everything pytest-specific those files imported is",
+        "replaced by",
         f"`{DST.relative_to(REPO)}/_shim.py` (~130 LOC, hand-written).",
         "",
         "## Applied edits",

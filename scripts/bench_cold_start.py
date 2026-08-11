@@ -27,8 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from velox._vendor.assertion import rewrite as vendored  # noqa: E402
-from velox._vendor.assertion._shim import Config  # noqa: E402
+from velox._assertions._vendor import rewrite as vendored  # noqa: E402
+from velox._assertions._vendor._shim import Config  # noqa: E402
 
 #: Warm load must be at least this many times faster than a cold rewrite. Measured at ~154x;
 #: an order of magnitude of headroom, because the claim being defended is "the cache is

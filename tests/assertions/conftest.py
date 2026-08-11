@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from velox import _rewrite
-from velox._rewrite import Config, explanation_lines
+from velox._assertions import rewrite as _rewrite
+from velox._assertions.rewrite import Config, explanation_lines
 
 
 def mock_config(

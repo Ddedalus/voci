@@ -7,10 +7,10 @@ diffed directly against `testing/test_assertion.py`.
 from __future__ import annotations
 
 import pytest
-from velox._vendor.assertion import util
-from velox._vendor.assertion._compare_any import _compare_eq_cls
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET, TruncationBudget
-from velox._vendor.assertion.compare_text import _compare_eq_text, _notin_text
+from velox._assertions._vendor import util
+from velox._assertions._vendor._compare_any import _compare_eq_cls
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET, TruncationBudget
+from velox._assertions._vendor.compare_text import _compare_eq_text, _notin_text
 
 from .conftest import callequal, callop
 

@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
-from velox._vendor.assertion._shim import running_on_ci
-from velox._vendor.assertion._shim import Config
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
+from velox._assertions._vendor._shim import running_on_ci
+from velox._assertions._vendor._shim import Config
 
 
 USAGE_MSG = "use '-vv' to show"

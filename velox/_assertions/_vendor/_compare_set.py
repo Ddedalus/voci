@@ -12,8 +12,8 @@ from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from typing import TypeAlias
 
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion._typing import _HighlightFunc
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor._typing import _HighlightFunc
 
 
 def _set_one_sided_diff(

@@ -12,7 +12,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from velox._pep657 import explain_assertion, source_at
+from velox._assertions.pep657 import explain_assertion, source_at
 
 
 @pytest.fixture

@@ -22,15 +22,15 @@ Both rewire the mechanical parts of the move: line ranges (decorators included) 
 They don't touch a moved object's docstring or `__all__` — add those by hand afterward, same as
 any other new module (see the Documentation section below). `rewire` only follows plain
 `from x import y` clauses (single- or multi-line); dotted `import x` usage and generated files
-(like `velox/_vendor/assertion/_compare_any.py`, whose stand-in import lives as a string literal
+(like `velox/_assertions/_vendor/_compare_any.py`, whose stand-in import lives as a string literal
 in `scripts/vendor_assertion.py`) need a manual fix and a `just vendor` re-run.
 
 Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`.
 Git submodules for reference: `pytest/`, `fastapi/`.
 
-`velox/_vendor/assertion/` is **generated** from the `pytest/` submodule — never edit it by
+`velox/_assertions/_vendor/` is **generated** from the `pytest/` submodule — never edit it by
 hand. Regenerate with `just vendor` (`scripts/vendor_assertion.py`, which records every edit
-in `velox/_vendor/VENDOR.md`); `just vendor-check` verifies the tree is current. It is kept
+in `velox/_assertions/VENDOR.md`); `just vendor-check` verifies the tree is current. It is kept
 byte-identical to upstream and excluded from ruff and pyrefly. The one hand-written file there
 is `_shim.py`.
 

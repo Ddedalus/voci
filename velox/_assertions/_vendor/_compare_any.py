@@ -11,24 +11,24 @@ from collections.abc import Iterator
 import dataclasses
 import pprint
 
-from velox._vendor.assertion._compare_mapping import _compare_eq_mapping
-from velox._vendor.assertion._compare_sequence import _compare_eq_iterable
-from velox._vendor.assertion._compare_sequence import _compare_eq_sequence
-from velox._vendor.assertion._compare_set import _compare_eq_set
-from velox._vendor.assertion._guards import has_default_eq
-from velox._vendor.assertion._guards import isattrs
-from velox._vendor.assertion._guards import isdatacls
-from velox._vendor.assertion._guards import isiterable
-from velox._vendor.assertion._guards import ismapping
-from velox._vendor.assertion._guards import isnamedtuple
-from velox._vendor.assertion._guards import issequence
-from velox._vendor.assertion._guards import isset
-from velox._vendor.assertion._guards import istext
-from velox._vendor.assertion._typing import _AssertionTextDiffStyle
-from velox._vendor.assertion._typing import _HighlightFunc
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
-from velox._vendor.assertion.compare_text import _compare_eq_text
+from velox._assertions._vendor._compare_mapping import _compare_eq_mapping
+from velox._assertions._vendor._compare_sequence import _compare_eq_iterable
+from velox._assertions._vendor._compare_sequence import _compare_eq_sequence
+from velox._assertions._vendor._compare_set import _compare_eq_set
+from velox._assertions._vendor._guards import has_default_eq
+from velox._assertions._vendor._guards import isattrs
+from velox._assertions._vendor._guards import isdatacls
+from velox._assertions._vendor._guards import isiterable
+from velox._assertions._vendor._guards import ismapping
+from velox._assertions._vendor._guards import isnamedtuple
+from velox._assertions._vendor._guards import issequence
+from velox._assertions._vendor._guards import isset
+from velox._assertions._vendor._guards import istext
+from velox._assertions._vendor._typing import _AssertionTextDiffStyle
+from velox._assertions._vendor._typing import _HighlightFunc
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
+from velox._assertions._vendor.compare_text import _compare_eq_text
 
 
 def _velox_approx_compare(approx: object, other: object) -> Iterator[str]:
@@ -63,7 +63,7 @@ def _compare_eq_any(
             truncation_budget,
         )
     else:
-        from velox._approx import Approx
+        from velox._assertions.approx import Approx
 
         # Although the common order should be obtained == approx(...), allow both ways.
         # velox: _repr_compare is optional; a scalar approx has no diff worth showing.

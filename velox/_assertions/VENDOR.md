@@ -4,7 +4,7 @@
 
 - Upstream: <https://github.com/pytest-dev/pytest> at `9.2.0.dev0-165-g28e86a6c2`
 - Vendored: 2026-08-11
-- Destination: `velox/_vendor/assertion/`
+- Destination: `velox/_assertions/_vendor/`
 
 Why vendored rather than reimplemented: see [spec/07](../../spec/07-assertions.md) §1.
 The 5.8k lines of upstream tests covering this feature are the asset; keeping the code
@@ -30,8 +30,9 @@ re-vendoring cheap.
 | `_pprint.py` | `_pytest/_io/pprint.py` | 705 |
 
 Not vendored: `_pytest/assertion/__init__.py` (pytest's plugin glue). velox's equivalent
-is `velox/_rewrite.py`. Everything pytest-specific those files imported is replaced by
-`velox/_vendor/assertion/_shim.py` (~130 LOC, hand-written).
+is `velox/_assertions/rewrite.py`. Everything pytest-specific those files imported is
+replaced by
+`velox/_assertions/_vendor/_shim.py` (~130 LOC, hand-written).
 
 ## Applied edits
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from velox import _rewrite
+from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
 
 

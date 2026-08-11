@@ -46,25 +46,25 @@ else:
     from importlib.resources.readers import FileReader
 
 
-from velox._vendor.assertion.saferepr import DEFAULT_REPR_MAX_SIZE
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion.saferepr import saferepr_unlimited
-from velox._vendor.assertion._shim import version
-from velox._vendor.assertion import util
-from velox._vendor.assertion._shim import Config
-from velox._vendor.assertion._shim import FixtureFunctionDefinition
-from velox._vendor.assertion._shim import Session
-from velox._vendor.assertion._shim import absolutepath
-from velox._vendor.assertion._shim import fnmatch_ex
-from velox._vendor.assertion._shim import StashKey
+from velox._assertions._vendor.saferepr import DEFAULT_REPR_MAX_SIZE
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor.saferepr import saferepr_unlimited
+from velox._assertions._vendor._shim import version
+from velox._assertions._vendor import util
+from velox._assertions._vendor._shim import Config
+from velox._assertions._vendor._shim import FixtureFunctionDefinition
+from velox._assertions._vendor._shim import Session
+from velox._assertions._vendor._shim import absolutepath
+from velox._assertions._vendor._shim import fnmatch_ex
+from velox._assertions._vendor._shim import StashKey
 
 
 # fmt: off
-from velox._vendor.assertion.util import format_explanation as _format_explanation  # noqa:F401, isort:skip
+from velox._assertions._vendor.util import format_explanation as _format_explanation  # noqa:F401, isort:skip
 # fmt:on
 
 if TYPE_CHECKING:
-    from velox._vendor.assertion._shim import AssertionState
+    from velox._assertions._vendor._shim import AssertionState
 
 
 class Sentinel:
@@ -85,7 +85,7 @@ class VeloxAssertRewriteWarning(UserWarning):
     """Warned when a module could not be rewritten, or an assert looks always-true."""
 
 
-#: Set by velox._rewrite once the cache root has been resolved and probed (spec/07 §5).
+#: Set by velox._assertions.rewrite once the cache root has been resolved and probed (spec/07 §5).
 #: None means "fall back to sys.pycache_prefix / __pycache__", i.e. upstream behaviour.
 _velox_cache_root: Path | None = None
 
@@ -766,7 +766,7 @@ class AssertionRewriter(ast.NodeVisitor):
         aliases = [
             ast.alias("builtins", "@py_builtins", lineno=lineno, col_offset=0),
             ast.alias(
-                "velox._vendor.assertion.rewrite",
+                "velox._assertions._vendor.rewrite",
                 "@pytest_ar",
                 lineno=lineno,
                 col_offset=0,

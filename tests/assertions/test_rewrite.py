@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from velox._rewrite import (
+from velox._assertions._vendor import rewrite as vendored
+from velox._assertions.rewrite import (
     Config,
     _discover_python_files,
     assertion_context,
@@ -18,7 +19,6 @@ from velox._rewrite import (
     plan,
     uninstall,
 )
-from velox._vendor.assertion import rewrite as vendored
 
 
 def test_comparison_gets_an_explanation(rewritten) -> None:
@@ -158,7 +158,7 @@ def test_non_test_module_under_the_root_is_rewritten(rewritten) -> None:
 
 def test_rewriter_temps_are_filtered_from_locals() -> None:
     """Without this, every failure shows a wall of `@py_assert*` bindings."""
-    from velox._rewrite import iter_user_locals, strip_rewriter_temps
+    from velox._assertions.rewrite import iter_user_locals, strip_rewriter_temps
 
     frame_locals = {
         "resp": object(),

@@ -11,12 +11,12 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Sequence
 
-from velox._vendor.assertion._pprint import PrettyPrinter
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion._typing import _HighlightFunc
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
-from velox._vendor.assertion._shim import running_on_ci
+from velox._assertions._vendor._pprint import PrettyPrinter
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor._typing import _HighlightFunc
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
+from velox._assertions._vendor._shim import running_on_ci
 
 
 def _compare_eq_iterable(

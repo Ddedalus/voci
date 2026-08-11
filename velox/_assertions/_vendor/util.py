@@ -15,21 +15,21 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from unicodedata import normalize
 
-from velox._vendor.assertion._shim import outcomes
-from velox._vendor.assertion._shim import repr_crash as _shim_repr_crash
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion.saferepr import saferepr_unlimited
-from velox._vendor.assertion._compare_any import _compare_eq_any
-from velox._vendor.assertion._compare_set import SET_COMPARISON_FUNCTIONS
-from velox._vendor.assertion._guards import isset
-from velox._vendor.assertion._guards import istext
-from velox._vendor.assertion._typing import _AssertionTextDiffStyle
-from velox._vendor.assertion._typing import _HighlightFunc
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
-from velox._vendor.assertion.compare_text import _notin_text
-from velox._vendor.assertion.highlight import dummy_highlighter as dummy_highlighter
-from velox._vendor.assertion._shim import Config
+from velox._assertions._vendor._shim import outcomes
+from velox._assertions._vendor._shim import repr_crash as _shim_repr_crash
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor.saferepr import saferepr_unlimited
+from velox._assertions._vendor._compare_any import _compare_eq_any
+from velox._assertions._vendor._compare_set import SET_COMPARISON_FUNCTIONS
+from velox._assertions._vendor._guards import isset
+from velox._assertions._vendor._guards import istext
+from velox._assertions._vendor._typing import _AssertionTextDiffStyle
+from velox._assertions._vendor._typing import _HighlightFunc
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
+from velox._assertions._vendor.compare_text import _notin_text
+from velox._assertions._vendor.highlight import dummy_highlighter as dummy_highlighter
+from velox._assertions._vendor._shim import Config
 
 
 # velox: upstream these were plain module globals that pytest save/restored around each test
@@ -37,8 +37,8 @@ from velox._vendor.assertion._shim import Config
 # concurrent asyncio tasks sharing a process (spec/07 §4.1). They are ContextVars now, read
 # through a PEP 562 module __getattr__ so the vendored rewriter's `util._reprcompare` lookups
 # are untouched. Do NOT assign to these names: a real global would shadow __getattr__ and
-# silently restore the old, unsafe behaviour. Use velox._assertion_state instead.
-from velox._assertion_state import CONTEXT_GLOBALS as _velox_context_globals
+# silently restore the old, unsafe behaviour. Use velox._assertions.state instead.
+from velox._assertions.state import CONTEXT_GLOBALS as _velox_context_globals
 
 
 def __getattr__(name: str) -> object:

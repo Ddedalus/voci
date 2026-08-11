@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _config, _rewrite
+from velox import __version__, _config
+from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery

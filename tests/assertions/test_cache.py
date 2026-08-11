@@ -15,9 +15,16 @@ import sys
 from pathlib import Path
 
 import pytest
-from velox import _rewrite
-from velox._rewrite import ENV_CACHE_DIR, Config, install, plan, resolve_cache_dir, uninstall
-from velox._vendor.assertion import rewrite as vendored
+from velox._assertions import rewrite as _rewrite
+from velox._assertions._vendor import rewrite as vendored
+from velox._assertions.rewrite import (
+    ENV_CACHE_DIR,
+    Config,
+    install,
+    plan,
+    resolve_cache_dir,
+    uninstall,
+)
 
 
 class TestCacheKey:

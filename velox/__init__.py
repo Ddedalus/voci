@@ -6,7 +6,8 @@ dependency injection (`fixture`, `Depends`, `Scope`), marks for selecting and sh
 `log_records`, `test_info`), and assertion helpers (`raises`, `approx`).
 """
 
-from velox._approx import Approx, approx
+from velox._assertions.approx import Approx, approx
+from velox._assertions.raises import ExceptionInfo, RaisesContext, raises
 from velox._builtins.fixtures import (
     Capture,
     LogRecords,
@@ -34,7 +35,6 @@ from velox._marks import (
     timeout,
     xfail,
 )
-from velox._raises import ExceptionInfo, RaisesContext, raises
 from velox._version import __version__
 
 # Grouped by purpose above (DI, marks, built-in fixtures, assertions) but sorted alphabetically

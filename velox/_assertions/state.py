@@ -4,7 +4,7 @@ The vendored explanation engine reads three values while building a failure mess
 comparison hook, the assertion-pass hook, and the config controlling verbosity and truncation.
 Each is a `ContextVar` here, so a value set for one test is invisible to its siblings.
 
-`velox/_vendor/assertion/util.py` exposes all three under their upstream names through a
+`velox/_assertions/_vendor/util.py` exposes all three under their upstream names through a
 module-level `__getattr__`, which is how the vendored code reaches them unchanged.
 """
 
@@ -16,7 +16,7 @@ from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
-    from velox._vendor.assertion._shim import Config
+    from velox._assertions._vendor._shim import Config
 
 __all__ = ["CONTEXT_GLOBALS", "assertion_state", "get_config", "set_config"]
 

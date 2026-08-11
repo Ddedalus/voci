@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-VENDOR_DIR = Path(__file__).resolve().parents[2] / "velox" / "_vendor" / "assertion"
+VENDOR_DIR = Path(__file__).resolve().parents[2] / "velox" / "_assertions" / "_vendor"
 REPO = Path(__file__).resolve().parents[2]
 #: The generated files only. `__init__.py` and `_shim.py` are velox's own, hand-written.
 VENDORED_SOURCES = sorted(
@@ -52,7 +52,7 @@ def test_pytest_is_not_imported_by_using_the_rewriter() -> None:
     with `_pytest` in `sys.modules`."""
     code = (
         "import sys, tempfile, pathlib\n"
-        "from velox._rewrite import install, uninstall, assertion_context, Config\n"
+        "from velox._assertions.rewrite import install, uninstall, assertion_context, Config\n"
         "d = pathlib.Path(tempfile.mkdtemp())\n"
         "(d / 'test_x.py').write_text('def f():\\n    assert [1] == [2]\\n')\n"
         "install([d], cache_dir=d / 'cache')\n"

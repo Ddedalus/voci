@@ -393,7 +393,7 @@ def test_main_env_is_restored_even_when_rewrite_install_fails_after_it_is_applie
     (tmp_path / "test_ok.py").write_text("async def test_ok():\n    pass\n")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "velox._rewrite.install",
+        "velox._assertions.rewrite.install",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated install failure")),
     )
 

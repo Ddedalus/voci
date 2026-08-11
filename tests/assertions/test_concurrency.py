@@ -10,9 +10,9 @@ import threading
 from collections.abc import Callable
 from typing import cast
 
-from velox._assertion_state import CONTEXT_GLOBALS, assertion_state, get_config
-from velox._rewrite import Config, assertion_context
-from velox._vendor.assertion import util
+from velox._assertions._vendor import util
+from velox._assertions.rewrite import Config, assertion_context
+from velox._assertions.state import CONTEXT_GLOBALS, assertion_state, get_config
 
 
 def test_vendored_util_reads_through_the_contextvars() -> None:

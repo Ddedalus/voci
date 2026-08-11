@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from velox import _rewrite
+from velox._assertions import rewrite as _rewrite
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 

@@ -13,11 +13,11 @@ from collections.abc import Mapping
 import heapq
 import pprint
 
-from velox._vendor.assertion._pprint import _safe_key
-from velox._vendor.assertion.saferepr import saferepr
-from velox._vendor.assertion._typing import _HighlightFunc
-from velox._vendor.assertion._typing import NO_TRUNCATION_BUDGET
-from velox._vendor.assertion._typing import TruncationBudget
+from velox._assertions._vendor._pprint import _safe_key
+from velox._assertions._vendor.saferepr import saferepr
+from velox._assertions._vendor._typing import _HighlightFunc
+from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET
+from velox._assertions._vendor._typing import TruncationBudget
 
 
 def _compare_eq_mapping(
