@@ -329,9 +329,17 @@ def _is_own_test_class(obj: object, module_name: str) -> bool:
 
 
 def _test_method_names(cls: type) -> list[str]:
-    """The `test_*`-named functions defined directly on `cls`, unsorted."""
-    return [
-        name
-        for name, member in vars(cls).items()
-        if inspect.isfunction(member) and name.startswith("test_")
-    ]
+    """The `test_*`-named methods defined directly on `cls`, unsorted.
+
+    `@staticmethod`/`@classmethod` wrap the function in a descriptor, so `vars(cls)` doesn't hand
+    back a plain `FunctionType` for those the way it does for an ordinary method -- unwrapped via
+    `__func__` before the `isfunction` check, so a `test_*` method under either decorator is still
+    caught rather than silently missed.
+    """
+    names = []
+    for name, member in vars(cls).items():
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if inspect.isfunction(member) and name.startswith("test_"):
+            names.append(name)
+    return names

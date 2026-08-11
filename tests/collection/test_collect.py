@@ -150,6 +150,32 @@ def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path:
     assert result.records == []
 
 
+def test_a_staticmethod_test_method_is_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n    @staticmethod\n    def test_method():\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "test_method" in result.errors[0].message
+
+
+def test_a_classmethod_test_method_is_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n    @classmethod\n    def test_method(cls):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "test_method" in result.errors[0].message
+
+
 def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
     tmp_path: Path,
 ) -> None:
