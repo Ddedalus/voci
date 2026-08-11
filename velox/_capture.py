@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO, cast, final
 
 from velox import _builtins
-from velox._fixtures import BuiltinContext
+from velox._di.fixtures import BuiltinContext
 
 __all__ = [
     "DEFAULT_BASETEMP_RETENTION",

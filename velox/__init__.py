@@ -18,7 +18,7 @@ from velox._builtins import (
     tmp_path,
     tmp_path_factory,
 )
-from velox._fixtures import Depends, Fixture, Injection, Scope, fixture
+from velox._di.fixtures import Depends, Fixture, Injection, Scope, fixture
 from velox._marks import (
     Marks,
     ParamSet,

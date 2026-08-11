@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from velox import _rewrite
-from velox._fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 
 __all__ = [

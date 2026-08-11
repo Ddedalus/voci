@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from velox._collect import TestRecord as Record  # `Test*` makes pytest try to collect it itself
-from velox._fixtures import ResolutionPlan
+from velox._di.fixtures import ResolutionPlan
 from velox._report import Reporter, _elide_middle, _failure_reason
 from velox._run import Outcome
 from velox._run import TestResult as Result

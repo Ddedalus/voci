@@ -11,7 +11,7 @@ import pytest
 import velox
 from velox._collect import CollectionError
 from velox._collect import TestRecord as Record  # `Test*` makes pytest try to collect it itself
-from velox._fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._run import Outcome, exit_code_for, run_suite
 from velox._run import TestResult as Result  # same reason
 

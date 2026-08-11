@@ -152,7 +152,7 @@ matter how it was installed. `_import_module` therefore asks the installed hook'
 directly before falling back. Remove that call and rewriting stops working for every test while the
 reported mode still says `rewrite` — no exception, no failing test, just worse assertion messages.
 
-## `_fixtures.py` / `_di.py` — dependency injection
+## `_di/fixtures.py` / `_di/runtime.py` — dependency injection
 
 **The refcount is reserved before the await, not after.** A waiter parked on a pending fixture
 future contributes nothing to the refcount until it wakes. If the increment happened after the

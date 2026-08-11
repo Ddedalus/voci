@@ -17,7 +17,7 @@ import pytest
 import velox
 from velox import _capture
 from velox._collect import TestRecord as Record
-from velox._fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._run import Outcome, run_suite
 
 #: Same trivial-plan convenience `test_run.py` defines, for tests that don't need `Depends(...)`.

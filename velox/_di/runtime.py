@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, final
 
-from velox._fixtures import BuiltinContext, Fixture, PlanStep, ResolutionPlan, Scope
+from velox._di.fixtures import BuiltinContext, Fixture, PlanStep, ResolutionPlan, Scope
 
 __all__ = ["ScopeStore", "setup", "teardown"]
 

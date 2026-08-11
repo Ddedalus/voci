@@ -10,8 +10,8 @@ from typing import cast
 import pytest
 import velox
 from velox import Depends
-from velox._di import ScopeStore, _construct, key_for, setup, teardown
-from velox._fixtures import BuiltinContext, Fixture, Scope, plan_for
+from velox._di.fixtures import BuiltinContext, Fixture, Scope, plan_for
+from velox._di.runtime import ScopeStore, _construct, key_for, setup, teardown
 
 
 def run(coro):  # small helper: every test body is `run(scenario())`

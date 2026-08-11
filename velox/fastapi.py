@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import State
 
-from velox._fixtures import Fixture, fixture
+from velox._di.fixtures import Fixture, fixture
 
 __all__ = ["client", "lifespan", "uninstall"]
 

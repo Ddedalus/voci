@@ -1,4 +1,4 @@
-"""Tests for velox._fixtures: injection scanning, cycle/scope validation, and `plan_for`."""
+"""Tests for velox._di.fixtures: injection scanning, cycle/scope validation, and `plan_for`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Annotated
 import pytest
 import velox
 from velox import Depends
-from velox._fixtures import (
+from velox._di.fixtures import (
     DIError,
     Injection,
     _check_acyclic,

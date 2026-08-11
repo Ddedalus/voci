@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, final
 
-from velox._fixtures import builtin_fixture, fixture
+from velox._di.fixtures import builtin_fixture, fixture
 
 __all__ = [
     "Capture",
