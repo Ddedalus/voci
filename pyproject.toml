@@ -83,3 +83,8 @@ addopts = "-ra"
 project-includes = ["velox/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
 # Vendored code is upstream's problem, checked by upstream's own CI.
 project-excludes = ["pytest/**", "research/**", "velox/_assertions/_vendor/**"]
+# `tests/` has no `__init__.py`, so pytest's own rootpath insertion puts it on `sys.path` and
+# `tests/_support.py` is reachable as a bare `import _support` from every test file, subpackage
+# or flat. Pyrefly doesn't replicate that rootpath algorithm on its own, so it needs the same
+# root spelled out explicitly here.
+search-path = ["tests"]

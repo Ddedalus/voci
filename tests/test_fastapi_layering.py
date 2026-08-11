@@ -7,11 +7,12 @@ singleton, the override is read per request, and the ASGI call happens in the ca
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from _support import run_async as run
 from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 
@@ -53,11 +54,6 @@ async def read_canaries(request: Request) -> dict[str, Any]:
 app.state.settings = "base-settings"
 
 
-def run(main: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
-    """One event loop per test. `asyncio.run` also gives each test a fresh context."""
-    return asyncio.run(main())
-
-
 async def flavor_seen_by(**kwargs: Any) -> str:
     async with velox_fastapi.client(app, **kwargs) as http:
         return (await http.get("/flavor")).json()["flavor"]
@@ -87,7 +83,7 @@ def test_concurrent_contexts_each_see_their_own_overrides() -> None:
         async with asyncio.timeout(10):
             return list(await asyncio.gather(overridden("a"), overridden("b"), untouched()))
 
-    assert run(main) == ["a", "b", "base"]
+    assert run(main()) == ["a", "b", "base"]
 
 
 def test_a_context_with_no_layer_sees_the_app_untouched() -> None:
@@ -98,7 +94,7 @@ def test_a_context_with_no_layer_sees_the_app_untouched() -> None:
         async with AsyncClient(transport=transport, base_url="http://testserver") as http:
             return (await http.get("/flavor")).json()["flavor"]
 
-    assert run(main) == "base"
+    assert run(main()) == "base"
 
 
 def test_layers_nest_innermost_first() -> None:
@@ -111,7 +107,7 @@ def test_layers_nest_innermost_first() -> None:
             after = (await outer.get("/flavor")).json()["flavor"]
         return first, inner_seen, after
 
-    assert run(main) == ("outer", "inner", "outer")
+    assert run(main()) == ("outer", "inner", "outer")
 
 
 def test_a_hand_written_override_stays_inside_the_test() -> None:
@@ -125,7 +121,7 @@ def test_a_hand_written_override_stays_inside_the_test() -> None:
             after_clear = (await http.get("/flavor")).json()["flavor"]
         return mine, after_clear
 
-    assert run(main) == ("by hand", "base")
+    assert run(main()) == ("by hand", "base")
     assert dict(velox_fastapi._install(app).overrides.base) == {}, "the app's own dict is untouched"
 
 
@@ -143,7 +139,7 @@ def test_overrides_read_as_a_mapping() -> None:
                 len(app.dependency_overrides.keys()),
             )
 
-    assert run(main) == (False, 1, True, True, 1)
+    assert run(main()) == (False, 1, True, True, 1)
 
 
 def test_deleting_an_override_this_test_did_not_set_is_refused() -> None:
@@ -156,7 +152,7 @@ def test_deleting_an_override_this_test_did_not_set_is_refused() -> None:
             with pytest.raises(RuntimeError, match=r"cannot `del app\.dependency_overrides"):
                 del other.dependency_overrides[flavor]
 
-    run(main)
+    run(main())
 
 
 # --------------------------------------------------------------------------------------
@@ -172,7 +168,7 @@ def test_concurrent_contexts_each_see_their_own_state() -> None:
 
         return list(await asyncio.gather(seen("left"), seen("right")))
 
-    assert run(main) == ["left", "right"]
+    assert run(main()) == ["left", "right"]
     assert app.state.settings == "base-settings", "the app's own state survives the layers"
 
 
@@ -183,7 +179,7 @@ def test_state_written_inside_a_layer_does_not_escape_it() -> None:
             assert app.state.extra == "scratch"
             return app.state.settings
 
-    assert run(main) == "mine"
+    assert run(main()) == "mine"
     assert not hasattr(app.state, "extra")
     assert app.state.settings == "base-settings"
 
@@ -196,7 +192,7 @@ def test_state_falls_through_to_the_app_for_keys_the_layer_lacks() -> None:
             async with velox_fastapi.client(app, state={"settings": "mine"}):
                 return app.state.shared, app.state["shared"]
 
-        assert run(main) == ("from the app", "from the app")
+        assert run(main()) == ("from the app", "from the app")
     finally:
         del app.state.shared
 
@@ -207,7 +203,7 @@ def test_state_reports_a_missing_key_as_an_attribute_error() -> None:
             with pytest.raises(AttributeError):
                 _ = app.state.nonexistent
 
-    run(main)
+    run(main())
 
 
 def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
@@ -226,7 +222,7 @@ def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
 
         return list(await asyncio.gather(write("a"), write("b")))
 
-    assert run(main) == ["a", "b"]
+    assert run(main()) == ["a", "b"]
     assert not hasattr(other.state, "cache"), "neither in-test write should have reached the app"
 
 
@@ -250,7 +246,7 @@ def test_copy_of_layered_state_is_a_plain_state_with_the_merged_view() -> None:
             copied = copy.copy(other.state)
             return copied.base_value, copied.layered, isinstance(copied, State)
 
-    base_value, layered, is_plain_state = run(main)
+    base_value, layered, is_plain_state = run(main())
     assert (base_value, layered) == ("from the app", "from the layer")
     assert is_plain_state
     assert type(copy.copy(other.state)) is State, "not the proxy — a plain State"
@@ -270,7 +266,7 @@ def test_deepcopy_of_layered_state_no_longer_raises() -> None:
             other.state.nested["count"] = 2  # mutate the original's dict after copying
             return copied.nested
 
-    assert run(main) == {"count": 1}, "the deep copy must not share the original's nested dict"
+    assert run(main()) == {"count": 1}, "the deep copy must not share the original's nested dict"
 
 
 def test_bare_new_state_reads_raise_attribute_error_not_recursion_error() -> None:
@@ -319,7 +315,7 @@ def test_fastapi_only_needs_truthiness_and_get() -> None:
         async with AsyncClient(transport=transport, base_url="http://testserver") as http:
             return (await http.get("/flavor")).json()["flavor"]
 
-    assert run(main) == "minimal"
+    assert run(main()) == "minimal"
 
 
 def test_app_state_is_one_object_delegating_to_one_dict() -> None:
@@ -336,7 +332,7 @@ def test_app_state_is_one_object_delegating_to_one_dict() -> None:
         async with AsyncClient(transport=transport, base_url="http://testserver") as http:
             await http.get("/flavor")
 
-    run(main)
+    run(main())
     assert other.state is before, "upstream never reassigns app.state, so a subclass survives"
 
 
@@ -351,7 +347,7 @@ def test_request_app_is_the_module_level_singleton() -> None:
         async with velox_fastapi.client(app) as http:
             return (await http.get("/canaries")).json()
 
-    assert run(main)["is_singleton"] is True
+    assert run(main())["is_singleton"] is True
 
 
 def test_the_handler_runs_in_the_callers_context() -> None:
@@ -365,7 +361,7 @@ def test_the_handler_runs_in_the_callers_context() -> None:
         async with velox_fastapi.client(app) as http:
             return (await http.get("/canaries")).json()
 
-    assert run(main)["marker"] == "set by the test"
+    assert run(main())["marker"] == "set by the test"
 
 
 def test_the_override_is_read_per_request_not_at_registration() -> None:
@@ -380,7 +376,7 @@ def test_the_override_is_read_per_request_not_at_registration() -> None:
                 second = (await http.get("/flavor")).json()["flavor"]
         return first, second
 
-    assert run(main) == ("first", "second")
+    assert run(main()) == ("first", "second")
 
 
 def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
@@ -407,7 +403,7 @@ def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
             await anext(agen)
         assert started == ["up", "down"]
 
-    run(main)
+    run(main())
     assert velox_fastapi.lifespan(other).scope == "session"
 
 
@@ -441,7 +437,7 @@ def test_installation_is_idempotent() -> None:
             pass
         assert other.dependency_overrides is installed
 
-    run(main)
+    run(main())
 
 
 def test_replacing_dependency_overrides_escalates() -> None:
@@ -456,7 +452,7 @@ def test_replacing_dependency_overrides_escalates() -> None:
             async with velox_fastapi.client(other):
                 pass
 
-    run(main)
+    run(main())
 
 
 def test_replacing_state_escalates() -> None:
@@ -472,7 +468,7 @@ def test_replacing_state_escalates() -> None:
             async with velox_fastapi.client(other, state={"a": 1}):
                 pass
 
-    run(main)
+    run(main())
 
 
 def test_uninstall_restores_the_objects_velox_replaced() -> None:
@@ -485,7 +481,7 @@ def test_uninstall_restores_the_objects_velox_replaced() -> None:
         async with velox_fastapi.client(other, overrides={flavor: lambda: "x"}, state={"a": 1}):
             pass
 
-    run(main)
+    run(main())
     original_state = velox_fastapi._install(other).original_state
     assert other.dependency_overrides is not original_overrides
     assert isinstance(other.state, velox_fastapi._LayeredState)
@@ -508,7 +504,7 @@ def test_uninstall_is_idempotent() -> None:
         async with velox_fastapi.client(other):
             pass
 
-    run(main)
+    run(main())
     velox_fastapi.uninstall(other)
     velox_fastapi.uninstall(other)  # must not raise the second time
 
@@ -526,7 +522,7 @@ def test_uninstall_then_client_reinstalls_cleanly() -> None:
         async with velox_fastapi.client(other, overrides=overrides) as http:
             return (await http.get("/flavor")).json()["flavor"]
 
-    assert run(main) == "after uninstall"
+    assert run(main()) == "after uninstall"
 
 
 def test_uninstall_drops_the_memoised_lifespan_fixture() -> None:
@@ -548,7 +544,7 @@ def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
         async with velox_fastapi.client(other):
             pass
 
-    run(main)
+    run(main())
     assert other.state is not before
     assert isinstance(other.state, velox_fastapi._LayeredState)
 

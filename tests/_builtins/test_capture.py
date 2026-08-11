@@ -13,34 +13,13 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from _support import make_record as _record
+
 import pytest
 import velox
 from velox._builtins import capture as _capture
-from velox._collection.collect import TestRecord as Record
-from velox._di.fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import plan_for
 from velox._run.run import Outcome, run_suite
-
-#: Same trivial-plan convenience `test_run.py` defines, for tests that don't need `Depends(...)`.
-_EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
-
-
-def _record(
-    index: int,
-    func: Callable[..., object],
-    qualname: str,
-    plan: ResolutionPlan = _EMPTY_PLAN,
-    path: Path = Path("mod.py"),
-) -> Record:
-    return Record(
-        id=f"{path}::{qualname}",
-        index=index,
-        path=path,
-        lineno=1,
-        qualname=qualname,
-        func=func,
-        plan=plan,
-    )
-
 
 # ------------------------------------------------------------------------------------------
 # Sink / _CappedBuffer: size cap, head+tail truncation.

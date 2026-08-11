@@ -7,16 +7,13 @@ from __future__ import annotations
 import asyncio
 from typing import cast
 
+from _support import run_async as run
+
 import pytest
 import velox
 from velox import Depends
 from velox._di.fixtures import BuiltinContext, Fixture, Scope, plan_for
 from velox._di.runtime import ScopeStore, _construct, key_for, setup, teardown
-
-
-def run(coro):  # small helper: every test body is `run(scenario())`
-    return asyncio.run(coro)
-
 
 #: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
 #: `BuiltinContext` it requires is never actually consulted -- a fixed placeholder suffices.

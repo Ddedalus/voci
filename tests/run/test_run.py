@@ -7,36 +7,14 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from _support import make_record as _record
+
 import pytest
 import velox
 from velox._collection.collect import CollectionError
-from velox._collection.collect import TestRecord as Record
-from velox._di.fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import plan_for
 from velox._run.run import Outcome, exit_code_for, run_suite
 from velox._run.run import TestResult as Result
-
-#: A test with no `Depends(...)` at all still needs a plan (`_collect.py` gives every `TestRecord`
-#: one, uniformly) — this is the trivial one, shared by every test below that doesn't care about
-#: DI at all.
-_EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
-
-
-def _record(
-    index: int,
-    func: Callable[..., object],
-    qualname: str,
-    plan: ResolutionPlan = _EMPTY_PLAN,
-    path: Path = Path("mod.py"),
-) -> Record:
-    return Record(
-        id=f"{path}::{qualname}",
-        index=index,
-        path=path,
-        lineno=1,
-        qualname=qualname,
-        func=func,
-        plan=plan,
-    )
 
 
 async def _passes() -> None:
@@ -1174,6 +1152,9 @@ def test_xfail_does_not_apply_to_a_timeout() -> None:
     assert result.outcome is Outcome.TIMEOUT
 
 
+# Deliberately not shared with report/test_terminal.py's `_result`: that one carries the full
+# Reporter surface (failure text, captured output, log records); this one only needs `outcome`
+# for `exit_code_for`.
 def _result(outcome: Outcome) -> Result:
     return Result(
         id="mod.py::t", index=0, outcome=outcome, duration=0.0, failure=None, failure_summary=None
