@@ -12,7 +12,7 @@ from velox._assertions._vendor._compare_any import _compare_eq_cls
 from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET, TruncationBudget
 from velox._assertions._vendor.compare_text import _compare_eq_text, _notin_text
 
-from .conftest import callequal, callop
+from ._support import callequal, callop
 
 
 class TestReprCompare:

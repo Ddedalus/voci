@@ -26,6 +26,8 @@ from velox._assertions.rewrite import (
     uninstall,
 )
 
+from ._support import imported_module
+
 
 class TestCacheKey:
     def test_tag_carries_the_rewriter_revision(self) -> None:
@@ -52,33 +54,19 @@ class TestCacheKey:
 
 class TestPycWriting:
     def test_pyc_is_written_and_reused(self, tmp_path: Path) -> None:
-        roots = tmp_path / "suite"
-        roots.mkdir()
-        (roots / "test_cached.py").write_text("def check():\n    assert 1 == 1\n")
         cache = tmp_path / "cache"
+        source = "def check():\n    assert 1 == 1\n"
 
-        try:
-            install([roots], cache_dir=cache)
-            sys.path.insert(0, str(roots))
-            __import__("test_cached")
-        finally:
-            uninstall()
-            sys.modules.pop("test_cached", None)
-            sys.path.remove(str(roots))
+        with imported_module(tmp_path, rewrite=True, cache_dir=cache) as build:
+            build(source, name="test_cached")
 
         pycs = list(cache.rglob("test_cached.*.pyc"))
         assert len(pycs) == 1, f"expected exactly one cached pyc, got {pycs}"
         first_mtime = pycs[0].stat().st_mtime_ns
 
         # Second import: the pyc must be loaded, not rewritten and rewritten again.
-        try:
-            install([roots], cache_dir=cache)
-            sys.path.insert(0, str(roots))
-            __import__("test_cached")
-        finally:
-            uninstall()
-            sys.modules.pop("test_cached", None)
-            sys.path.remove(str(roots))
+        with imported_module(tmp_path, rewrite=True, cache_dir=cache) as build:
+            build(source, name="test_cached")
 
         assert pycs[0].stat().st_mtime_ns == first_mtime
 

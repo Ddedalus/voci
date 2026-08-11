@@ -8,33 +8,9 @@ free, and without running user code a second time to re-evaluate the expression.
 from __future__ import annotations
 
 import linecache
-import textwrap
-from pathlib import Path
 
 import pytest
 from velox._assertions.pep657 import explain_assertion, source_at
-
-
-@pytest.fixture
-def unrewritten(tmp_path: Path):
-    """Import a module without the rewriting hook."""
-    import importlib.util
-    import sys
-
-    def build(source: str, name: str = "unrewritten_mod"):
-        path = tmp_path / f"{name}.py"
-        path.write_text(textwrap.dedent(source))
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        try:
-            spec.loader.exec_module(module)
-        finally:
-            sys.modules.pop(name, None)
-        return module
-
-    return build
 
 
 def _explain(fn, *args) -> str | None:
@@ -195,7 +171,7 @@ def test_source_at_reports_position(unrewritten) -> None:
         assert source is not None
         assert source.lineno == 2
         assert source.line == "assert a == b"
-        assert source.filename.endswith("unrewritten_mod.py")
+        assert source.filename.endswith("mod_under_test.py")
 
 
 def test_missing_source_is_not_an_error() -> None:
