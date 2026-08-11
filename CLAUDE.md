@@ -1,6 +1,11 @@
 # velox
 
-Package: `velox/` (flat layout). Tests: `tests/`. Entrypoint: `velox.cli:main`.
+Package: `velox/`, nested by subsystem (`_di/`, `_collection/`, `_run/`, `_report/`,
+`_builtins/`, `_assertions/`). `__init__.py`, `_version.py`, `cli.py`, `fastapi.py`, `_config.py`
+and `_marks.py` stay flat at the package root — `fastapi.py`'s import path (`velox.fastapi`) is
+public, and the rest have no roadmap growth pointing at a split. Tests: `tests/`, mirroring the
+package (`tests/di/`, `tests/collection/`, ...); a test file that only exercises the public
+`velox` surface, not a subpackage's internals, stays flat. Entrypoint: `velox.cli:main`.
 
 Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recipes
 (`sync`, `run`, `test`, `lint`, `fmt`, `typecheck`, `build`, `check`).
@@ -20,10 +25,31 @@ own module and repointing their imports:
 
 Both rewire the mechanical parts of the move: line ranges (decorators included) and imports.
 They don't touch a moved object's docstring or `__all__` — add those by hand afterward, same as
-any other new module (see the Documentation section below). `rewire` only follows plain
-`from x import y` clauses (single- or multi-line); dotted `import x` usage and generated files
-(like `velox/_assertions/_vendor/_compare_any.py`, whose stand-in import lives as a string literal
-in `scripts/vendor_assertion.py`) need a manual fix and a `just vendor` re-run.
+any other new module (see the Documentation section below).
+
+**Moving a whole file into a subpackage** (promoting `_x.py` to `_pkg/x.py`, nothing split) is
+`git mv`, not `just move` — `move` exists to split objects out of a multi-object file, and running
+it on an already-cohesive file re-emits it through ruff for no reason and loses git's rename
+tracking. Follow the `git mv` with `just rewire` for every name any other file imports from the
+old module. For a consumer that does `from velox import _x` and uses `_x.thing` throughout instead
+of `from velox._x import thing`, `rewire` won't touch it (it only follows `from module import
+name`) — change just the import line to `from velox._pkg import x as _x`, which rebinds the same
+local name so every `_x.thing` call site is untouched.
+
+`rewire` has three sharp edges, found while nesting `velox/`'s own subpackages:
+- It only scans a file's *top-level* statements, so an import nested inside `if TYPE_CHECKING:`
+  or inside a function body isn't found and needs a manual fix.
+- It regenerates the statement fresh rather than patching text in place, so a trailing `# noqa`
+  comment on the line gets dropped — check for one before running it on a line that has one.
+- Given `from pkg import name`, it can't tell "a submodule literally named `name`, aliased" from
+  "an object named `name`" apart — both are the same AST shape. If a subpackage's `__init__.py`
+  ever ends up with a real object sharing a name with one of its own submodules, a `rewire` call
+  for the object can rewrite the submodule-import line instead. Check the diff.
+
+`rewire` only follows plain `from x import y` clauses (single- or multi-line); dotted `import x`
+usage and generated files (like `velox/_assertions/_vendor/_compare_any.py`, whose stand-in
+import lives as a string literal in `scripts/vendor_assertion.py`) need a manual fix and a
+`just vendor` re-run.
 
 Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`.
 Git submodules for reference: `pytest/`, `fastapi/`.
