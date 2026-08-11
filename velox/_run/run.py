@@ -454,6 +454,14 @@ def run_suite(
         # uncaught KeyboardInterrupt/SystemExit. runner.close() is called explicitly
         # below inside contextlib.suppress(RuntimeError) instead.
         runner = asyncio.Runner()
+        # A KeyboardInterrupt/SystemExit raised by a test or fixture teardown escapes
+        # this runner's loop mid-flight (see the two comments below), which leaves the
+        # `run_all` task -- or one `asyncio.Runner.close()` resumes while cancelling
+        # leftovers -- holding an exception nothing ever calls `.exception()` on. Both
+        # exception types already propagate out of `run_suite` deliberately (that's the
+        # whole point of the two comments below); logging them again as "Task exception
+        # was never retrieved" is asyncio's bookkeeping noise, not a real error.
+        runner.get_loop().set_exception_handler(_ignore_retrieved_base_exceptions)
         try:
             try:
                 runner.run(run_all())
@@ -508,6 +516,18 @@ async def _teardown_module_scope(
     except BaseException:
         print(f"velox: error tearing down module-scope fixtures ({path}):", file=real_stderr)
         traceback.print_exc(file=real_stderr)
+
+
+def _ignore_retrieved_base_exceptions(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    """Suppress asyncio's default "exception was never retrieved" logging for a
+    `KeyboardInterrupt`/`SystemExit`, both of which `run_suite` always re-raises itself;
+    anything else still goes to `loop.default_exception_handler`.
+    """
+    if isinstance(context.get("exception"), (KeyboardInterrupt, SystemExit)):
+        return
+    loop.default_exception_handler(context)
 
 
 def _teardown_best_effort(
