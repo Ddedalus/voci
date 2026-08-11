@@ -84,12 +84,80 @@ def test_sync_def_test_star_is_collected_on_its_own(tmp_path: Path) -> None:
     assert [record.qualname for record in result.records] == ["test_sync"]
 
 
-def test_a_class_is_not_collected_even_when_named_like_a_test(tmp_path: Path) -> None:
-    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); `_is_own_test_function`
-    excludes it because a class isn't a `FunctionType`, not because of its name."""
+def test_a_class_test_method_becomes_a_collection_error(tmp_path: Path) -> None:
+    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); rather than collecting
+    nothing, `collect` reports the shape as a `CollectionError` naming the class and its
+    methods."""
     path = _write(
         tmp_path / "test_sample.py",
         "class TestSomething:\n    def test_method(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert result.errors[0].path == Path("test_sample.py")
+    assert "TestSomething" in result.errors[0].message
+    assert "test_method" in result.errors[0].message
+
+
+def test_a_class_test_error_does_not_stop_module_level_tests_in_the_same_file(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n"
+        "    def test_method(self):\n"
+        "        pass\n"
+        "\n"
+        "def test_ok():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert len(result.errors) == 1
+    assert [record.qualname for record in result.records] == ["test_ok"]
+
+
+def test_multiple_offending_classes_each_get_their_own_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestA:\n"
+        "    def test_a(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestB:\n"
+        "    def test_b(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert {error.message.split(":", 1)[0] for error in result.errors} == {"TestA", "TestB"}
+
+
+def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestHelper:\n    def helper(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
+    tmp_path: Path,
+) -> None:
+    """Only the `Test*` naming convention triggers the diagnostic; an ordinary helper class that
+    happens to define a `test_*`-named method is left alone, same as before."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Helper:\n    def test_method(self):\n        pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
