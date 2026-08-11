@@ -62,31 +62,63 @@ reading the bodies.
   one-line pointer.
 - **Docstrings are prose, not slide decks.** No bold-heading walls, no ASCII diagrams of code that
   is right there, no bulleted inventories of what a module contains.
-- **A docstring states what is in the file. Nothing else.** Not what the file *doesn't* contain,
-  not what other modules do instead, not why it was built this way, not what it replaces, not its
-  implementation status, and never how good it is. Defining a module by negation ("there is no X
-  here", "unlike the rest of the package") tells a reader nothing about what they're looking at.
-  If a sentence would still be true written on a different file, delete it.
+- **A docstring states what the thing is. Nothing else.** Not what it *doesn't* do, not what other
+  modules do instead, not why it was built this way, not what it replaces, not its implementation
+  status, and never how good it is. If a sentence would still be true written on a different file,
+  delete it.
 
-  ```python
-  # Bad — negation, status report, self-assessment, rhetoric:
-  """Assertion helpers.
+### Writing a docstring
 
-  The primary assertion mechanism is plain `assert`, rewritten for introspection. These two
-  cover what `assert` alone cannot express.
+Two parts, in order — and most docstrings need only the first:
 
-  Unlike the rest of the package, these are implemented rather than stubbed: they are pure,
-  they depend on nothing in the runtime, and having them work makes the examples readable.
-  """
+1. **What it is**, as a noun phrase, in one line. Not "This function returns…", not "Helper
+   for…", not "Handles…".
+2. **Only what a caller would otherwise get wrong**: an invariant, a lifetime, a live-vs-snapshot
+   distinction, an error it raises, an argument that isn't what it looks like. One or two
+   sentences. If there is nothing, stop after the first line.
 
-  # Good — what is in the file:
-  """`raises` and `approx`: the two assertion helpers velox provides.
+Verify before you write. A docstring is an assertion about behaviour, and a wrong one is worse
+than none — read the body, and check that anything it promises is actually enforced somewhere.
 
-  `raises` is an async context manager that captures an expected exception and exposes it as
-  `ExceptionInfo`, with optional type and message matching. `approx` wraps a number or a
-  collection of numbers for tolerant `==` comparison.
-  """
-  ```
+The register to match, taken from the current tree:
+
+```python
+"""Everything the collector needs to know about a test, read in one attribute lookup."""
+
+"""The marks attached to `fn`, or an empty record. Never raises."""
+
+"""The current test's captured stdout/stderr, live during the test.
+
+Holds a reference to the test's `Sink`, not a snapshot: `.out`/`.err` read straight through
+on every access, so text written after this fixture was injected is visible immediately.
+"""
+```
+
+The failure mode is inflating something unremarkable into a paragraph. This was the worst case,
+and every clause after the first line is padding — vague ("what `assert` alone cannot express"),
+a comparison to other modules, a status boast, and a justification:
+
+```python
+"""Assertion helpers.
+
+The primary assertion mechanism is plain `assert`, rewritten for introspection. These two
+cover what `assert` alone cannot express.
+
+Unlike the rest of the package, these are implemented rather than stubbed: they are pure,
+they depend on nothing in the runtime, and having them work makes the examples readable.
+"""
+```
+
+It became:
+
+```python
+"""`raises` and `approx`: the two assertion helpers velox provides.
+
+`raises` is a context manager that catches an expected exception and exposes it as
+`ExceptionInfo`, optionally matching the exception type and a regex against its message.
+`approx` wraps a number, or a collection of numbers, for tolerant `==` comparison.
+"""
+```
 
 `docs/M1-PLAN.md` is the internal build log — the one place where milestone vocabulary, commit
 pointers, and per-slice history belong. Nothing else links to it.
