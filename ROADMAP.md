@@ -24,9 +24,6 @@ concurrently by hand, or run with `--concurrency 1`.
 - `@velox.parametrize` — recorded, but not expanded at collection; a parametrized test currently
   fails collection because its extra parameter looks like a missing dependency.
 
-A `test_*` method on a `class Test*` is collected as *nothing at all*, with no error. Write tests
-as module-level functions until class-based collection lands.
-
 ## Next
 
 **Scheduling.** Exclusive-resource admission (all-or-nothing over a test's whole footprint), the
@@ -37,8 +34,7 @@ the largest single piece of remaining work.
 suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;
 Ctrl-C and `--maxfail` cancellation with time-boxed teardown.
 
-**Collection.** `@velox.parametrize` expansion, `class Test*` as pure namespacing, and a diagnostic
-for test shapes that currently collect as zero tests rather than as an error.
+**Collection.** `@velox.parametrize` expansion and `class Test*` as pure namespacing.
 
 **CLI.** `-k`/`-m` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
 `--serial`, `--durations`.

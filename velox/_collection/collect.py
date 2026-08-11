@@ -14,8 +14,8 @@ installed, is consulted explicitly (`_import_module`) — `spec_from_file_locati
 gives it the chance to run.
 
 Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
-ones on the context-propagating executor rather than inline. A `test_*` method on a `class Test*`
-is silently left uncollected.
+ones on the context-propagating executor rather than inline. A `class Test*` carrying a `test_*`
+method becomes a `CollectionError` naming the class, the same way a bad import does.
 """
 
 from __future__ import annotations
@@ -71,8 +71,8 @@ class TestRecord:
 
 @dataclass(frozen=True, slots=True)
 class CollectionError:
-    """An import failure attributed to one file, or a test whose dependency graph is malformed
-    (bad scope nesting, a missing injection)."""
+    """An import failure attributed to one file, a test whose dependency graph is malformed
+    (bad scope nesting, a missing injection), or a `class Test*` carrying `test_*` methods."""
 
     path: Path
     message: str
@@ -175,9 +175,10 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
        file.
     2. Within the imported module, find `test_*` functions *defined* in it — i.e.
        `getattr(obj, "__module__", None) == module.__name__`, so a `test_*` helper imported from
-       elsewhere isn't collected twice.
-    3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
-       order.
+       elsewhere isn't collected twice. A `class Test*` defined in the module and carrying its own
+       `test_*` method becomes a `CollectionError` naming the class and its methods, one per class.
+    3. Sort the functions by `func.__code__.co_firstlineno` — definition order, not `vars()`
+       iteration order.
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
        instead; a malformed DI graph excludes it into `errors` instead. Otherwise build one
        `TestRecord`, `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`, carrying
@@ -207,6 +208,20 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
             obj for obj in vars(module).values() if _is_own_test_function(obj, module_name)
         ]
         functions.sort(key=lambda func: func.__code__.co_firstlineno)
+
+        classes = [obj for obj in vars(module).values() if _is_own_test_class(obj, module_name)]
+        classes.sort(key=lambda cls: cls.__qualname__)
+        for cls in classes:
+            methods = ", ".join(sorted(_test_method_names(cls)))
+            errors.append(
+                CollectionError(
+                    path=display_path,
+                    message=(
+                        f"{cls.__qualname__}: class-based test collection isn't supported; move "
+                        f"{methods} to module-level functions (see ROADMAP.md)."
+                    ),
+                )
+            )
 
         for func in functions:
             test_id = f"{display_path}::{func.__qualname__}"
@@ -294,10 +309,37 @@ def _is_own_test_function(obj: object, module_name: str) -> bool:
     this module.
 
     `inspect.isfunction` covers both -- an `async def` is a plain `FunctionType` with a flag on
-    its code object, not a distinct type -- and, unlike `callable()`, excludes a `class Test*`
-    (see `ROADMAP.md`)."""
+    its code object, not a distinct type -- and, unlike `callable()`, excludes a class."""
     return (
         inspect.isfunction(obj)
         and getattr(obj, "__name__", "").startswith("test_")
         and getattr(obj, "__module__", None) == module_name
     )
+
+
+def _is_own_test_class(obj: object, module_name: str) -> bool:
+    """Whether `obj` is a `class Test*` defined in this module and carrying its own `test_*`
+    method — the shape `collect` reports as a `CollectionError` rather than collecting nothing."""
+    return (
+        inspect.isclass(obj)
+        and getattr(obj, "__name__", "").startswith("Test")
+        and getattr(obj, "__module__", None) == module_name
+        and bool(_test_method_names(obj))
+    )
+
+
+def _test_method_names(cls: type) -> list[str]:
+    """The `test_*`-named methods defined directly on `cls`, unsorted.
+
+    `@staticmethod`/`@classmethod` wrap the function in a descriptor, so `vars(cls)` doesn't hand
+    back a plain `FunctionType` for those the way it does for an ordinary method -- unwrapped via
+    `__func__` before the `isfunction` check, so a `test_*` method under either decorator is still
+    caught rather than silently missed.
+    """
+    names = []
+    for name, member in vars(cls).items():
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if inspect.isfunction(member) and name.startswith("test_"):
+            names.append(name)
+    return names
