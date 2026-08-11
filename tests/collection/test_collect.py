@@ -117,6 +117,21 @@ def test_import_error_becomes_a_collection_error_and_does_not_abort(tmp_path: Pa
     assert result.records[0].index == 0
 
 
+def test_a_spec_that_no_loader_can_be_built_for_becomes_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    """A path `spec_from_file_location` can't map to a loader (no rewrite hook installed, and
+    no recognized suffix) surfaces as a `CollectionError`, not an uncaught `ImportError`."""
+    path = _write(tmp_path / "test_sample.weird", "x = 1\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert result.errors[0].path == Path("test_sample.weird")
+    assert "cannot build an import spec" in result.errors[0].message
+
+
 def test_index_is_assigned_once_across_the_full_concatenation(tmp_path: Path) -> None:
     first = _write(tmp_path / "test_first.py", "async def test_one():\n    pass\n")
     second = _write(tmp_path / "test_second.py", "async def test_two():\n    pass\n")

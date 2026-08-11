@@ -315,6 +315,62 @@ def test_partial_setup_failure_releases_what_was_already_acquired_in_reverse_ord
 
 
 # ------------------------------------------------------------------------------------------
+# Multi-failure teardown: every broken closer surfaces, grouped, not just the first.
+# ------------------------------------------------------------------------------------------
+
+
+async def _build_a():
+    async def closer() -> None:
+        raise RuntimeError("a boom")
+
+    return "a", closer
+
+
+async def _build_b():
+    async def closer() -> None:
+        raise RuntimeError("b boom")
+
+    return "b", closer
+
+
+def test_teardown_raises_a_group_when_multiple_releases_fail() -> None:
+    """`teardown` collects every release failure rather than stopping at the first, so one
+    broken fixture doesn't hide leaks in the others."""
+
+    async def scenario() -> BaseExceptionGroup:
+        store = ScopeStore()
+        fx = velox.fixture()(lambda: None)
+        key_a, key_b = ("function", 1, "a"), ("function", 1, "b")
+        await store.acquire(key_a, "function", fx, _build_a)
+        await store.acquire(key_b, "function", fx, _build_b)
+
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            await teardown(store, [key_a, key_b])
+        return excinfo.value
+
+    group = run(scenario())
+    assert {str(exc) for exc in group.exceptions} == {"a boom", "b boom"}
+
+
+def test_aclose_raises_a_group_when_multiple_session_closers_fail() -> None:
+    """`aclose` force-tears-down every remaining entry regardless of scope; two closers failing
+    at once must both surface, not just the first."""
+
+    async def scenario() -> BaseExceptionGroup:
+        store = ScopeStore()
+        fx = velox.fixture(scope="session")(lambda: None)
+        await store.acquire(("session", 1), "session", fx, _build_a)
+        await store.acquire(("session", 2), "session", fx, _build_b)
+
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            await store.aclose()
+        return excinfo.value
+
+    group = run(scenario())
+    assert {str(exc) for exc in group.exceptions} == {"a boom", "b boom"}
+
+
+# ------------------------------------------------------------------------------------------
 # Generator arity violations: yielding twice raises, naming the offending fixture.
 # ------------------------------------------------------------------------------------------
 

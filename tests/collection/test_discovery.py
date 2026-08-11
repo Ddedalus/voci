@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from _support import Project
@@ -89,6 +90,67 @@ def test_symlink_loop_terminates_instead_of_recursing_forever(tmp_path: Path) ->
         loop.symlink_to(tmp_path, target_is_directory=True)
     except OSError:
         pytest.skip("platform/filesystem doesn't support directory symlinks")
+
+    found = discover_files([tmp_path])
+
+    assert [path.name for path in found] == ["test_top.py"]
+
+
+def test_self_referential_symlink_is_skipped_not_raised(tmp_path: Path) -> None:
+    """A symlink pointing at itself raises `OSError` (ELOOP) straight out of `is_dir()` -- the
+    entry is skipped rather than aborting the whole walk."""
+    _touch(tmp_path / "test_top.py")
+    link = tmp_path / "self_link"
+    try:
+        link.symlink_to(link)
+    except OSError:
+        pytest.skip("platform/filesystem doesn't support symlinks")
+
+    found = discover_files([tmp_path])
+
+    assert [path.name for path in found] == ["test_top.py"]
+
+
+def test_unstattable_subdirectory_is_skipped_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subdirectory whose `stat()` call fails (removed mid-walk, or a permission error) is
+    skipped rather than aborting the whole discovery walk."""
+    _touch(tmp_path / "test_top.py")
+    unstattable = tmp_path / "unstattable"
+    _touch(unstattable / "test_hidden.py")
+
+    original_stat = Path.stat
+
+    def fake_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if self == unstattable:
+            raise OSError("synthetic stat failure")
+        return original_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    found = discover_files([tmp_path])
+
+    assert [path.name for path in found] == ["test_top.py"]
+
+
+def test_unscannable_subdirectory_is_skipped_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subdirectory whose `scandir()` call fails (removed mid-walk, or a permission error) is
+    skipped rather than aborting the whole discovery walk."""
+    _touch(tmp_path / "test_top.py")
+    unscannable = tmp_path / "unscannable"
+    _touch(unscannable / "test_hidden.py")
+
+    original_scandir = os.scandir
+
+    def fake_scandir(path: object = None) -> object:
+        if Path(path) == unscannable:  # type: ignore[arg-type]
+            raise OSError("synthetic scandir failure")
+        return original_scandir(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "scandir", fake_scandir)
 
     found = discover_files([tmp_path])
 

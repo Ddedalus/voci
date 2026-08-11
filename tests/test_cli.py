@@ -370,9 +370,7 @@ def test_main_env_is_restored_even_when_rewrite_install_fails_after_it_is_applie
     exception from `_rewrite.install` itself must still be undone -- not leak `[tool.velox]
     env` into the process."""
     monkeypatch.delenv("VELOX_CONFIG_INSTALL_FAILS", raising=False)
-    chdir_project.write_pyproject(
-        "[tool.velox]\nenv = { VELOX_CONFIG_INSTALL_FAILS = 'leaked' }\n"
-    )
+    chdir_project.write_pyproject("[tool.velox]\nenv = { VELOX_CONFIG_INSTALL_FAILS = 'leaked' }\n")
     chdir_project.write_passing_test()
     monkeypatch.setattr(
         "velox._assertions.rewrite.install",

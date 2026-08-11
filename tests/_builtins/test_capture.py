@@ -634,6 +634,26 @@ def test_basetemp_retention_keeps_only_the_last_few_previous_roots(tmp_path: Pat
 
 
 # ------------------------------------------------------------------------------------------
+# _require_test_context / _require_installed: internal-error guards, checked independently.
+# ------------------------------------------------------------------------------------------
+
+
+def test_require_test_context_raises_outside_a_tests_envelope() -> None:
+    """Every provider that reads `current_test_context` runs only during `_di.setup`, which
+    `dispatch_one` always calls with it already set -- constructed with no test dispatch in
+    progress, this is a velox internal error, not a user mistake."""
+    assert _capture.current_test_context.get() is None
+    with pytest.raises(RuntimeError, match="outside any test's envelope"):
+        _capture._require_test_context()
+
+
+def test_require_installed_raises_when_install_has_not_been_called() -> None:
+    assert _capture.installed() is None
+    with pytest.raises(RuntimeError, match="has not been called"):
+        _capture._require_installed()
+
+
+# ------------------------------------------------------------------------------------------
 # install/uninstall: idempotency, restoring exactly what was replaced.
 # ------------------------------------------------------------------------------------------
 

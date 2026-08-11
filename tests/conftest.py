@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from _support import Project
+
+import pytest
 
 
 @pytest.fixture
