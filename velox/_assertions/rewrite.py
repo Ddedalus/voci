@@ -68,21 +68,42 @@ class AssertionSetup:
     def degraded(self) -> bool:
         return self.fallback_reason is not None
 
-    def header_line(self) -> str:
-        """One line for the report header. Always emitted, so `rewrite` is visibly the norm."""
+    def header_line(self) -> str | None:
+        """One line for the report header, or `None` when there's nothing worth saying.
+
+        `rewrite` succeeding at its default cache is the expected case -- every run
+        gets it unless told otherwise, so announcing it on every run would be reporting
+        the default as if it were news, and the cache path is an implementation detail
+        nobody needs to act on. A fallback to `plain` is always worth flagging (it can
+        silently change what a benchmark measured), and so is `plain` chosen on
+        purpose (`--assert=plain`): both are deviations from what the run would
+        otherwise do, which is exactly what this header exists to surface.
+        """
         if self.degraded:
             return f"assertions: {self.mode} (fallback: {self.fallback_reason})"
-        if self.cache_dir is None:
-            return f"assertions: {self.mode}"
-        return f"assertions: {self.mode}, cache {self.cache_dir}"
+        if self.mode == "plain":
+            return "assertions: plain"
+        return None
 
 
 # --------------------------------------------------------------------------- cache location
 
 
-def resolve_cache_dir(explicit: str | os.PathLike[str] | None = None) -> Path:
-    """Where rewritten pycs go: an explicit path, then `VELOX_REWRITE_CACHE`, then the platform's
-    cache directory, then the interpreter's own pycache prefix, then a `.velox_cache` under `cwd()`.
+def resolve_cache_dir(
+    explicit: str | os.PathLike[str] | None = None, *, rootdir: Path | None = None
+) -> Path:
+    """Where rewritten pycs go: an explicit path, then `VELOX_REWRITE_CACHE`, then
+    `rootdir/.velox_cache/rewrite`, then (only when no `rootdir` is given) the
+    platform's cache directory, then the interpreter's own pycache prefix, then a
+    `.velox_cache` under `cwd()`.
+
+    Project-local by default, not a machine-wide directory: a cache shared across
+    every project on the machine is a footgun the moment two projects rewrite the same
+    module path differently (a moved/renamed test, a changed Python version) --
+    per-project isolation costs nothing (`.gitignore` it, same as any other build
+    artifact) and a stale cache only ever affects the one project that made it stale.
+    `rootdir` is `None` only for callers with no project root to anchor to (direct
+    library use outside `cli.main`); the platform/pycache/cwd chain exists for them.
 
     Does not check writability — `_probe_writable` does that, separately, so a caller can
     report the path it tried even when the probe fails.
@@ -93,6 +114,9 @@ def resolve_cache_dir(explicit: str | os.PathLike[str] | None = None) -> Path:
     from_env = os.environ.get(ENV_CACHE_DIR)
     if from_env:
         return Path(from_env).expanduser()
+
+    if rootdir is not None:
+        return rootdir / ".velox_cache" / "rewrite"
 
     platform_cache = _platform_cache_dir()
     if platform_cache is not None:
@@ -225,13 +249,15 @@ def plan(
     *,
     mode: AssertMode = "rewrite",
     cache_dir: str | os.PathLike[str] | None = None,
+    rootdir: Path | None = None,
     warn: bool = True,
 ) -> AssertionSetup:
     """Decide what assertion introspection will do, without installing anything.
 
     Separated from `install` so the decision — including the cache probe and its warning — can
     be made and reported before a run commits to it, and so it can be tested without touching
-    `sys.meta_path`.
+    `sys.meta_path`. `rootdir` anchors the default cache location (see `resolve_cache_dir`);
+    it's ignored once `cache_dir` or `VELOX_REWRITE_CACHE` already says where to put it.
     """
     # `AssertMode` is a `Literal`, which covers argparse's `choices=` path (see `cli.py`) but not
     # a programmatic caller's typo or a config file read without going through argparse at all —
@@ -245,7 +271,7 @@ def plan(
     if mode == "plain":
         return AssertionSetup(mode="plain", cache_dir=None, rewritten_roots=root_paths)
 
-    resolved = resolve_cache_dir(cache_dir)
+    resolved = resolve_cache_dir(cache_dir, rootdir=rootdir)
     problem = _probe_writable(resolved)
     if problem is None:
         return AssertionSetup(mode="rewrite", cache_dir=resolved, rewritten_roots=root_paths)

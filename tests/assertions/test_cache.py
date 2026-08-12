@@ -86,7 +86,8 @@ class TestPycWriting:
 
 
 class TestCacheDirResolution:
-    """Resolution order: explicit flag, env var, platform cache dir, then pycache_prefix."""
+    """Resolution order: explicit flag, env var, rootdir (project-local), then -- only when no
+    rootdir is given -- the platform cache dir, then pycache_prefix."""
 
     def test_explicit_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_CACHE_DIR, str(tmp_path / "from-env"))
@@ -96,7 +97,19 @@ class TestCacheDirResolution:
         monkeypatch.setenv(ENV_CACHE_DIR, str(tmp_path / "from-env"))
         assert resolve_cache_dir() == tmp_path / "from-env"
 
+    def test_rootdir_is_project_local_and_wins_over_the_platform_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The default cache lives in the project, not the user's home directory -- a
+        machine-wide cache shared by every project is exactly the footgun a per-project
+        one avoids."""
+        monkeypatch.delenv(ENV_CACHE_DIR, raising=False)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "platform-cache"))
+        assert resolve_cache_dir(rootdir=tmp_path) == tmp_path / ".velox_cache" / "rewrite"
+
     def test_platform_cache_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No `rootdir` to hand (a direct library caller outside `cli.main`) falls back to the
+        platform cache dir, same as before rootdir-anchoring existed."""
         monkeypatch.delenv(ENV_CACHE_DIR, raising=False)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
         monkeypatch.setattr(sys, "platform", "linux")
@@ -168,9 +181,11 @@ class TestColdStartGuarantee:
         assert "plain" in header
         assert "fallback" in header
 
-    def test_header_names_the_cache_in_the_happy_path(self, tmp_path: Path) -> None:
+    def test_header_is_silent_in_the_happy_path(self, tmp_path: Path) -> None:
+        """`rewrite` succeeding is the expected outcome of every run, not news -- and the cache
+        path is an implementation detail nobody needs to see, let alone act on."""
         header = plan([], cache_dir=tmp_path / "cache").header_line()
-        assert header == f"assertions: rewrite, cache {tmp_path / 'cache'}"
+        assert header is None
 
     def test_plain_mode_is_not_degraded(self, tmp_path: Path) -> None:
         """Explicitly-chosen `plain` mode is not marked `degraded`, unlike a fallback into

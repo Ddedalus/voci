@@ -1,5 +1,5 @@
 """Tests for `velox._report.terminal.Reporter`: per-file scrollback blocks, end-of-run sections
-(failure details, short summary, unattributed output, wall-vs-Σ), and path elision --
+(failure details, short summary, unattributed output, wall-vs-concurrency), and path elision --
 exercised directly against hand-built `TestResult`s and a `StringIO` stream.
 """
 
@@ -419,7 +419,7 @@ def test_unattributed_output_section_appears_only_when_non_empty() -> None:
 
 
 # ------------------------------------------------------------------------------------------
-# Wall-vs-Σ final line
+# Wall-vs-concurrency final line
 # ------------------------------------------------------------------------------------------
 
 
@@ -432,15 +432,30 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
     records = [_test_record(r.id, path, index=i) for i, r in enumerate(results)]
     reporter, stream = _reporter(records)
 
-    # Σ = 1.0 + 3.0 = 4.0; wall_clock = 2.0 -> ratio = 2.0x.
+    # Σ = 1.0 + 3.0 = 4.0 (not printed, but drives the ratio); wall_clock = 2.0 -> 2.0x.
     reporter.finish(results, wall_clock=2.0)
 
     out = stream.getvalue()
     assert "2 tests" in out
     assert "0 failed" in out
     assert "2.00s wall" in out
-    assert "Σ 4.00s" in out
     assert "2.0x concurrency" in out
+    # Dropped deliberately: two numbers plus a ratio in one line was one number too many.
+    assert "Σ" not in out
+
+
+def test_finish_folds_skipped_into_the_leading_count() -> None:
+    """`skipped` never reaches `results` (skipped tests are never run), so it has to be passed
+    in separately for the final line's count to match `cli.main`'s own summary line."""
+    path = Path("f.py")
+    results = [_result(f"{path}::test_a", 0, duration=1.0)]
+    records = [_test_record(results[0].id, path)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish(results, wall_clock=1.0, skipped=2)
+
+    out = stream.getvalue()
+    assert "3 tests" in out
 
 
 def test_finish_with_zero_tests() -> None:
@@ -524,3 +539,31 @@ def test_is_tty_reflects_the_streams_own_isatty() -> None:
     with no such method at all."""
     assert Reporter(records=[], capture_passthrough=False, stream=io.StringIO()).is_tty is False
     assert Reporter(records=[], capture_passthrough=False, stream=_FakeTTYStream()).is_tty is True
+
+
+# ------------------------------------------------------------------------------------------
+# Color
+# ------------------------------------------------------------------------------------------
+
+
+def test_file_block_is_colored_on_a_tty_and_plain_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-tty stream (the common case: piped output, a captured test) gets plain text --
+    the same content either way, just without escape codes wrapping it."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    path = Path("f.py")
+    records = [_test_record(f"{path}::test_a", path)]
+
+    plain_reporter, plain_stream = _reporter(records)
+    plain_reporter.on_result(_result(f"{path}::test_a", 0))
+    assert "\x1b[" not in plain_stream.getvalue()
+
+    tty_stream = _FakeTTYStream()
+    tty_reporter = Reporter(records=records, capture_passthrough=False, stream=tty_stream)
+    tty_reporter.on_result(_result(f"{path}::test_a", 0))
+    colored = tty_stream.getvalue()
+    assert "\x1b[" in colored
+    # The escape codes are decoration, not a rename -- strip them and the line reads the
+    # same as the plain-stream case.
+    assert "PASS" in colored

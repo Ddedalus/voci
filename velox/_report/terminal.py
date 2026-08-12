@@ -6,7 +6,7 @@ prints the moment every one of its tests has finished, in real completion order,
 output starts appearing before the whole suite is done. `Reporter.finish` runs once,
 after `run_suite` returns, and prints everything that belongs in logical (collection)
 order instead: failure details, the short summary, unattributed output, and the
-wall-vs-sum-of-durations concurrency line.
+wall-vs-concurrency line.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TextIO
 
 from velox._collection.collect import TestRecord
+from velox._report import color as _color
 from velox._run.run import FAILING_OUTCOMES, TestResult
 
 __all__ = ["Reporter"]
@@ -42,6 +43,11 @@ class Reporter:
 
     #: Resolved once, at construction, rather than re-checked on every print.
     is_tty: bool = field(init=False)
+    #: Whether printed lines get ANSI color -- `is_tty` plus the `NO_COLOR` opt-out
+    #: (see `color.color_enabled`). Resolved once, alongside `is_tty`, for the same
+    #: reason: a stream's tty-ness and the user's color preference don't change
+    #: mid-run.
+    _color_enabled: bool = field(init=False)
     #: id -> path, seeded from `records` alongside `_remaining_by_path` below.
     _path_by_id: dict[str, Path] = field(init=False, default_factory=dict)
     #: path -> tests of that file not yet seen by `on_result`, seeded from `records`
@@ -56,6 +62,7 @@ class Reporter:
         """Seed per-file bookkeeping from `records`: an id->path lookup, each file's
         outstanding test count, and an empty results buffer."""
         self.is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._color_enabled = _color.color_enabled(self.stream)
         for record in self.records:
             self._path_by_id[record.id] = record.path
             self._remaining_by_path[record.path] = self._remaining_by_path.get(record.path, 0) + 1
@@ -94,12 +101,22 @@ class Reporter:
         # file took N seconds".
         duration = sum(result.duration for result in results)
         path_column = _elide_middle(str(path), _PATH_COLUMN_WIDTH)
+        # Padded to their column width first, colored after: an ANSI escape is
+        # invisible ink to a human but not to `str.format`'s width count, so coloring
+        # first would throw off every column to its right.
+        status_column = _color.paint(
+            f"{status:<5}", _color.GREEN if failed == 0 else _color.RED, enabled=self._color_enabled
+        )
         line = (
-            f"{status:<5} {path_column:<{_PATH_COLUMN_WIDTH}} "
-            f"{len(results):>4} tests   Σ {duration:.2f}s"
+            f"{status_column} {path_column:<{_PATH_COLUMN_WIDTH}} "
+            f"{len(results):>4} tests   "
+            f"{_color.paint(f'Σ {duration:.2f}s', _color.GRAY, enabled=self._color_enabled)}"
         )
         if failed:
-            line += f"   ({failed} failed)"
+            failed_suffix = _color.paint(
+                f"({failed} failed)", _color.RED, enabled=self._color_enabled
+            )
+            line += f"   {failed_suffix}"
         # flush=True: a tty's stdout is line-buffered, but piped to a file or a CI log
         # collector it's block-buffered, so nothing would surface a block until the
         # whole run ended -- defeating the point of streaming per file.
@@ -111,23 +128,29 @@ class Reporter:
         *,
         wall_clock: float,
         unattributed_output: list[str] | None = None,
+        skipped: int = 0,
     ) -> None:
         """Called once, after `_run.run_suite` returns. `results` is the caller's
         full, authoritative list, already in logical order -- not whatever
         `on_result` buffered internally. Prints, in order: failure details (one block
         per `FAILING_OUTCOMES` result, traceback plus captured sections), the short
         test summary (one line per `FAILING_OUTCOMES` result), unattributed output if
-        any, and the wall-vs-Σ concurrency line. `captured_stdout`/`captured_stderr`
+        any, and the final wall-vs-concurrency line. `captured_stdout`/`captured_stderr`
         are shown only when `capture_passthrough` is off, since passthrough already
         echoed them live; `log_records` are always shown, since they're never echoed
-        live.
+        live. `skipped` folds into the final line's leading count alongside `results`
+        -- caller-supplied because skipped tests never reach `results` themselves (see
+        `cli.main`'s own summary line, which the same count matches).
         """
         failing = [result for result in results if result.outcome in FAILING_OUTCOMES]
 
         if failing:
             print(file=self.stream)
             for result in failing:
-                print(f"{result.outcome.value.upper()} {result.id}", file=self.stream)
+                label = _color.paint(
+                    result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
+                )
+                print(f"{label} {result.id}", file=self.stream)
                 if result.failure:
                     # result.failure already ends in a newline (traceback.format_exc's
                     # own convention); a bare print would add a second and leave a
@@ -150,7 +173,10 @@ class Reporter:
             print("--- short test summary ---", file=self.stream)
             for result in failing:
                 reason = _failure_reason(result)
-                print(f"{result.outcome.value.upper()} {result.id} - {reason}", file=self.stream)
+                label = _color.paint(
+                    result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
+                )
+                print(f"{label} {result.id} - {reason}", file=self.stream)
 
         if unattributed_output:
             print(file=self.stream)
@@ -168,10 +194,19 @@ class Reporter:
             # Only reachable from a direct caller of finish that passes a
             # non-positive wall_clock -- cli.main's own measurement can't land here.
             concurrency = "n/a concurrency"
+        # Same total_tests reasoning as cli.main's mid-run summary: len(results) alone
+        # excludes skipped tests, which never reach run_suite to begin with.
+        total_tests = _color.paint(
+            str(len(results) + skipped), _color.PRIMARY, enabled=self._color_enabled
+        )
+        failed_count = _color.paint(
+            f"{len(failing)} failed",
+            _color.RED if failing else _color.GRAY,
+            enabled=self._color_enabled,
+        )
         print(file=self.stream)
         print(
-            f"{len(results)} tests · {len(failing)} failed · {wall_clock:.2f}s wall "
-            f"(Σ {total:.2f}s, {concurrency})",
+            f"{total_tests} tests · {failed_count} · {wall_clock:.2f}s wall ({concurrency})",
             file=self.stream,
         )
         self.stream.flush()
