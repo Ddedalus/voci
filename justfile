@@ -33,7 +33,7 @@ fmt-check:
 
 # Type-check with pyrefly
 typecheck *args:
-    uv run pyrefly check "$@"
+    uv run pyrefly check --progress-bar no "$@"
 
 # Build the package (sdist + wheel)
 build:
