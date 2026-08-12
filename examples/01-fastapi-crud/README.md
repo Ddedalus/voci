@@ -11,12 +11,9 @@ app/
   main.py         routes + the module-level `app = FastAPI(...)`, written for production only
 tests/
   fixtures.py     engine, session, api_client, alice, payment_sandbox
-  test_users.py   the baseline shape: fixtures, skip/skipif, marks
+  test_users.py   the baseline shape: fixtures, skip/skipif, marks, parametrize
   test_orders.py  per-node override via a sibling fixture, raises/approx, built-ins, exclusive
 ```
-
-Cases that would otherwise be one `@velox.parametrize`d test (`test_create_user_bob` and its
-neighbours in `test_users.py`) are written out as separate functions instead.
 
 ## Setup
 
@@ -67,3 +64,6 @@ tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is beh
   dependency swapped, for one test, without touching the shared graph everyone else uses.
 - **`tests/fixtures.py::payment_sandbox`** — `exclusive="payments-sandbox"` declared on the
   resource; every test that transitively depends on it inherits the token automatically.
+- **`test_users.py::test_create_user`** — one `@velox.parametrize`d test in place of three
+  near-identical functions; each case still gets its own id (`test_create_user[bob]`, `[tag-in-
+  local-part]`, `[subdomain]`) and runs concurrently with the rest of the suite.

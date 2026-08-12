@@ -22,27 +22,17 @@ async def test_health(client: AsyncClient = Depends(api_client)) -> None:
     assert response.json() == {"status": "ok"}
 
 
-async def _assert_user_created(client: AsyncClient, email: str) -> None:
+@velox.parametrize(
+    "email",
+    ["bob@example.com", "carol+tag@example.com", "dave@sub.example.com"],
+    ids=["bob", "tag-in-local-part", "subdomain"],
+)
+async def test_create_user(email: str, client: AsyncClient = Depends(api_client)) -> None:
     response = await client.post("/users", json={"email": email})
 
     assert response.status_code == 201
     assert response.json()["email"] == email
     assert response.json()["is_active"] is True
-
-
-# Each case is its own test function, sharing `_assert_user_created` above.
-async def test_create_user_bob(client: AsyncClient = Depends(api_client)) -> None:
-    await _assert_user_created(client, "bob@example.com")
-
-
-async def test_create_user_with_a_tag_in_the_local_part(
-    client: AsyncClient = Depends(api_client),
-) -> None:
-    await _assert_user_created(client, "carol+tag@example.com")
-
-
-async def test_create_user_with_a_subdomain(client: AsyncClient = Depends(api_client)) -> None:
-    await _assert_user_created(client, "dave@sub.example.com")
 
 
 async def test_create_user_rejects_duplicate_email(
