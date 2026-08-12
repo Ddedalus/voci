@@ -37,7 +37,7 @@ __all__ = [
 
 #: Bumped whenever the vendored codegen changes. Baked into the pyc cache tag (spec/07 §4.2),
 #: so bumping it invalidates every cached rewritten module.
-VELOX_REWRITER_REVISION = 1
+VELOX_REWRITER_REVISION = 2
 
 #: What `rewrite.py` interpolates into its pyc tag. Deliberately not velox's package version:
 #: a velox release that does not touch the rewriter should not throw away everyone's cache.
