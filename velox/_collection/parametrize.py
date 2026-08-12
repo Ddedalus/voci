@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import itertools
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from velox._marks import ParamSet
@@ -59,14 +59,16 @@ def cases_for(parametrizations: tuple[ParamSet, ...]) -> tuple[Case, ...]:
         return ()
 
     per_set = [_case_options(param_set) for param_set in parametrizations]
-    cases = [
-        Case(
-            params={k: v for values, _ in combo for k, v in values.items()},
-            id="-".join(case_id for _, case_id in combo),
-        )
-        for combo in itertools.product(*per_set)
-    ]
-    return _dedupe(cases)
+    return _dedupe(_merge(combo) for combo in itertools.product(*per_set))
+
+
+def _merge(combo: tuple[tuple[dict[str, object], str], ...]) -> Case:
+    """One product tuple -- one `(values, case_id)` pair per stacked parametrization -- flattened
+    into a single `Case`."""
+    params: dict[str, object] = {}
+    for values, _ in combo:
+        params.update(values)
+    return Case(params=params, id="-".join(case_id for _, case_id in combo))
 
 
 def _case_options(param_set: ParamSet) -> tuple[tuple[dict[str, object], str], ...]:
@@ -113,17 +115,31 @@ def _auto_id(value: object, argname: str, index: int) -> str:
     return f"{argname}{index}"
 
 
-def _dedupe(cases: Sequence[Case]) -> tuple[Case, ...]:
-    """Disambiguate cases whose generated ids collide: every case sharing a duplicated id gets
-    its zero-based occurrence count appended."""
+def _dedupe(cases: Iterable[Case]) -> tuple[Case, ...]:
+    """Disambiguate cases whose generated ids collide.
+
+    Every id that occurs exactly once is reserved as-is, up front, before any renaming happens.
+    Each case sharing a duplicated id then gets the lowest `f"{id}{n}"` not already reserved --
+    checked against every id reserved so far, not just the ids in its own collision group, so a
+    renamed id can never land on one either already unique or already claimed by an earlier
+    rename. Without that cross-check, `@parametrize("x", [1, 1, "10"])` would rename its two `1`s
+    to `10`/`11` and collide with the third case's already-unique `"10"`.
+    """
+    cases = tuple(cases)
     counts = Counter(case.id for case in cases)
-    seen: dict[str, int] = {}
+    used = {id_ for id_, count in counts.items() if count == 1}
+    next_occurrence: dict[str, int] = {}
     result: list[Case] = []
     for case in cases:
-        if counts[case.id] > 1:
-            occurrence = seen.get(case.id, 0)
-            seen[case.id] = occurrence + 1
-            result.append(Case(params=case.params, id=f"{case.id}{occurrence}"))
-        else:
+        if counts[case.id] == 1:
             result.append(case)
+            continue
+        occurrence = next_occurrence.get(case.id, 0)
+        candidate = f"{case.id}{occurrence}"
+        while candidate in used:
+            occurrence += 1
+            candidate = f"{case.id}{occurrence}"
+        next_occurrence[case.id] = occurrence + 1
+        used.add(candidate)
+        result.append(Case(params=case.params, id=candidate))
     return tuple(result)

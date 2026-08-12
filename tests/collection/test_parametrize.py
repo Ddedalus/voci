@@ -104,3 +104,14 @@ def test_colliding_generated_ids_are_disambiguated_with_an_occurrence_count() ->
     param_sets = (ParamSet(("n",), ((1,), (2,), (3,)), ids=lambda v: "same"),)
     cases = cases_for(param_sets)
     assert [case.id for case in cases] == ["same0", "same1", "same2"]
+
+
+def test_dedupe_never_renames_into_an_id_another_case_already_uses() -> None:
+    """`1, 1, "10"` auto-ids to `"1", "1", "10"`. Renaming the duplicate `"1"`s naively to
+    `"10"`/`"11"` would collide with the third case's already-unique `"10"` -- the fix checks
+    every rename against every id used so far, not just its own collision group."""
+    param_sets = (ParamSet(("n",), ((1,), (1,), ("10",))),)
+    cases = cases_for(param_sets)
+    ids = [case.id for case in cases]
+    assert ids == ["11", "12", "10"]
+    assert len(set(ids)) == len(ids), f"duplicate id among {ids!r}"

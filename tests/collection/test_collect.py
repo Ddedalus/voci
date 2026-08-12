@@ -401,6 +401,60 @@ def test_a_skipped_parametrized_test_is_reported_skipped_once_without_case_expan
     assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_skipped"]
 
 
+def test_an_empty_argvalues_is_a_collection_error_not_a_silently_vanished_test(
+    tmp_path: Path,
+) -> None:
+    """`@velox.parametrize` rejects an empty `argvalues` at decoration time (module-import time,
+    from collection's point of view) rather than expanding into zero records with nothing to
+    show for it."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n@velox.parametrize('n', [])\nasync def test_never_runs(n):\n    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert result.skipped == []
+    assert len(result.errors) == 1
+    assert "no argvalues" in result.errors[0].message
+
+
+def test_a_parametrize_name_with_no_matching_parameter_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    """A typo'd `@velox.parametrize` argument name -- one that doesn't match any parameter of the
+    test it decorates -- is refused at collection instead of expanding cleanly and then failing
+    every case at call time with a bare `TypeError`."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n@velox.parametrize('typo', [1, 2])\nasync def test_x():\n    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "typo" in result.errors[0].message
+
+
+def test_a_parametrize_name_is_allowed_when_the_test_takes_star_kwargs(tmp_path: Path) -> None:
+    """`**kwargs` absorbs any keyword, so a parametrize name with no same-named parameter is
+    exactly as valid there as it would be calling the function by hand."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, 2])\n"
+        "async def test_x(**kwargs):\n"
+        "    assert kwargs['n'] in (1, 2)\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert len(result.records) == 2
+
+
 def test_a_malformed_di_graph_is_still_a_collection_error(tmp_path: Path) -> None:
     """A test whose fixture graph fails `plan_for`'s static validation (here: a session-scoped
     fixture depending on a function-scoped one) is refused exactly like a broken import —

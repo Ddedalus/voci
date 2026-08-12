@@ -71,6 +71,14 @@ def test_parametrize_rejects_duplicate_names() -> None:
         velox.parametrize("a,a", [(1, 2)])
 
 
+def test_parametrize_rejects_empty_argvalues() -> None:
+    """A `@parametrize` that contributes zero cases would otherwise expand into zero records --
+    the test silently vanishing from the suite with no error, no skip, and nothing collected in
+    its place."""
+    with pytest.raises(ValueError, match="no argvalues"):
+        velox.parametrize("n", [])
+
+
 def test_parametrize_rejects_a_stale_ids_length() -> None:
     with pytest.raises(ValueError, match="id"):
         velox.parametrize("n", [1, 2, 3], ids=["one", "two"])

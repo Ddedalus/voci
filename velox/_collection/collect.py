@@ -234,6 +234,9 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 continue
 
             try:
+                # `known_params` must be computed before `plan_for`, which reads it to keep a
+                # parametrized argument from reading as a missing injection -- and `cases_for`
+                # only needs to run after, to build this same function's expanded call kwargs.
                 known_params = known_params_of(marks.parametrizations)
                 plan = plan_for(func, known_params=known_params)
                 cases = cases_for(marks.parametrizations) if marks.parametrizations else None
@@ -246,6 +249,10 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
+            # `cases` is `None` for a test with no `@velox.parametrize` mark, one un-suffixed
+            # record; otherwise `@velox.parametrize` already rejects an empty `argvalues` at
+            # decoration time, so `cases` is a non-empty tuple, one `[case.id]`-suffixed record
+            # each.
             entries = (
                 [(test_id, None)]
                 if cases is None

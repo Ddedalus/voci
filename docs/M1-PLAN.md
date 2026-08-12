@@ -197,7 +197,7 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   `known_params` through `_fixtures.plan_for`/`_check_missing_injections` so a parametrized
   argument stops reading as a missing injection; `collect.py` now expands one `TestRecord` per
   case, all sharing the one plan built for the function, and `_run.py` merges each case's
-  `params` into its call kwargs. — `0c7a67f`
+  `params` into its call kwargs. — `8d0a432`, review `81604e8`
 - [ ] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
   ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Not
   implemented: `_collect.collect` only looks for module-level `async def test_*` (`vars(module)

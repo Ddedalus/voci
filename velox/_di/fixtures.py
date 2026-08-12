@@ -20,6 +20,7 @@ DI system, with `_di.py` as the dynamic half.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
@@ -404,11 +405,10 @@ def plan_for(
     Cycles and `Depends()` on a non-`Fixture` are caught earlier, at `Fixture.__init__` and at
     `Depends()`'s own call site.
 
-    `known_params` names parameters some other mechanism supplies at call time —
-    `@velox.parametrize`'s argnames, currently the only source — so the missing-injection check
-    doesn't mistake them for an unsatisfiable `Depends()` site. They never become part of the
-    plan itself: expansion hands each case's values straight to `func`, alongside this plan's own
-    kwargs.
+    `known_params` names parameters `@velox.parametrize`'s argnames supply at call time, so the
+    missing-injection check doesn't mistake them for an unsatisfiable `Depends()` site. They never
+    become part of the plan itself: expansion hands each case's values straight to `func`,
+    alongside this plan's own kwargs.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
@@ -453,6 +453,14 @@ def plan_for(
     return ResolutionPlan(steps=tuple(steps), root_args=root_args)
 
 
+def _reject_known_params(name: str, offenders: frozenset[str], message: str) -> None:
+    """Raise `DIError` naming `offenders`, sorted, iff there are any. Shared by every
+    `known_params` sanity check in `_check_missing_injections` below -- each just supplies the
+    offending set and its own explanation of what's wrong with it."""
+    if offenders:
+        raise DIError(f"{name}: parameter(s) {', '.join(sorted(offenders))} {message}")
+
+
 def _check_missing_injections(
     func: Callable[..., Any],
     injections: tuple[Injection, ...],
@@ -464,9 +472,10 @@ def _check_missing_injections(
 
     Reads `__code__`/`__defaults__`, the same way `plan_of` does, keeping the two code paths
     consistent. Also rejects a `known_params` name that collides with an actual `Depends(...)`
-    injection, or that falls before the signature's `/` — both bind by keyword at call time
-    (`_di.setup`'s and expansion's kwargs alike), so a positional-only one could never actually
-    receive its value.
+    injection, that falls before the signature's `/` (both bind by keyword at call time --
+    `_di.setup`'s and expansion's kwargs alike -- so a positional-only one could never actually
+    receive its value), or that matches none of `func`'s parameters at all (unless `func` takes
+    `**kwargs`, which would absorb it same as a real call would).
     """
     code = getattr(func, "__code__", None)
     if code is None:
@@ -474,22 +483,31 @@ def _check_missing_injections(
     injected = {injection.param for injection in injections}
     name = getattr(func, "__name__", repr(func))
 
-    overlap = known_params & injected
-    if overlap:
-        params = ", ".join(sorted(overlap))
-        raise DIError(
-            f"{name}: parameter(s) {params} are both Depends(...)-injected and supplied "
-            f"externally (e.g. by @velox.parametrize) -- pick one source per parameter."
-        )
+    _reject_known_params(
+        name,
+        known_params & injected,
+        "are both Depends(...)-injected and supplied externally (e.g. by @velox.parametrize) "
+        "-- pick one source per parameter.",
+    )
 
     positional = code.co_varnames[: code.co_argcount]
-    posonly_conflict = known_params & set(positional[: code.co_posonlyargcount])
-    if posonly_conflict:
-        params = ", ".join(sorted(posonly_conflict))
-        raise DIError(
-            f"{name}: parameter(s) {params} are supplied externally (e.g. by "
-            f"@velox.parametrize) on a positional-only parameter (before '/') -- velox always "
-            f"calls a test function by keyword. Move {params} after the '/'."
+    kwonly = code.co_varnames[code.co_argcount : code.co_argcount + code.co_kwonlyargcount]
+
+    _reject_known_params(
+        name,
+        known_params & set(positional[: code.co_posonlyargcount]),
+        "are supplied externally (e.g. by @velox.parametrize) on a positional-only parameter "
+        "(before '/') -- velox always calls a test function by keyword. Move it after the '/'.",
+    )
+
+    # `code.co_flags`, not `inspect.signature` -- consistent with the rest of this module reading
+    # `__code__` directly. `inspect.CO_VARKEYWORDS` is just the flag-bit constant.
+    if not (code.co_flags & inspect.CO_VARKEYWORDS):
+        _reject_known_params(
+            name,
+            known_params - set(positional) - set(kwonly),
+            "are supplied externally (e.g. by @velox.parametrize) but match none of this "
+            "function's parameters -- check for a typo.",
         )
 
     n_defaulted = len(func.__defaults__ or ())
@@ -500,7 +518,6 @@ def _check_missing_injections(
         if p not in injected and p not in known_params and p != "self"
     ]
 
-    kwonly = code.co_varnames[code.co_argcount : code.co_argcount + code.co_kwonlyargcount]
     kwdefaults = func.__kwdefaults__ or {}
     missing += [
         p for p in kwonly if p not in kwdefaults and p not in injected and p not in known_params

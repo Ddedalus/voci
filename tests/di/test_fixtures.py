@@ -318,3 +318,22 @@ def test_known_params_on_a_positional_only_parameter_is_rejected() -> None:
 
     with pytest.raises(DIError, match="n"):
         _check_missing_injections(t, (), known_params=frozenset({"n"}))
+
+
+def test_a_known_param_matching_no_real_parameter_is_rejected() -> None:
+    """A typo'd `@velox.parametrize` argument name -- one that matches nothing in the
+    signature -- is caught here instead of surfacing as a confusing runtime `TypeError` once
+    expansion tries to call the function with it."""
+
+    def t(n: int) -> None:
+        pass
+
+    with pytest.raises(DIError, match="typo"):
+        _check_missing_injections(t, (), known_params=frozenset({"n", "typo"}))
+
+
+def test_a_known_param_matching_no_parameter_is_allowed_with_star_kwargs() -> None:
+    def t(**kwargs: object) -> None:
+        pass
+
+    _check_missing_injections(t, (), known_params=frozenset({"anything"}))  # must not raise

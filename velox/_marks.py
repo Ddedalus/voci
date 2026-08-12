@@ -203,8 +203,7 @@ def parametrize[F: Callable[..., Any]](
     """Record a `parametrize` mark. `argnames` is `"a,b"` or `["a", "b"]`; with one name, each
     entry of `argvalues` is that value, with several, each entry is a tuple aligned to the
     names. Stacked decorators combine in a stable, defined order: outermost varies slowest.
-
-    Not yet expanded at collection; see `ROADMAP.md`.
+    Expanded into one test per case at collection (`_collection.parametrize.cases_for`).
     """
     # Validated here, at decoration time: failing in the collector instead points the traceback
     # elsewhere, and a stale `ids` list would silently mislabel every later case instead of
@@ -215,6 +214,11 @@ def parametrize[F: Callable[..., Any]](
     if len(set(names)) != len(names):
         raise ValueError(f"parametrize({argnames!r}): duplicate argument name")
     cases = tuple(_case(v, len(names)) for v in argvalues)
+    if not cases:
+        # Caught here rather than left to expand into zero records: a `@parametrize` that
+        # contributes no cases would otherwise make the test vanish from the suite with no
+        # `CollectionError`, no `Skipped` entry, and no count discrepancy visible at a glance.
+        raise ValueError(f"parametrize({argnames!r}): no argvalues given")
     for case in cases:
         if len(case) != len(names):
             raise ValueError(
