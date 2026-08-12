@@ -8,12 +8,13 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 from _support import make_record as _record
+from _support import run_async
 
 import pytest
 import velox
 from velox._collection.collect import CollectionError
 from velox._di.fixtures import plan_for
-from velox._run.run import Outcome, exit_code_for, run_suite
+from velox._run.run import AdmissionGate, Outcome, exit_code_for, run_suite
 from velox._run.run import TestResult as Result
 
 
@@ -570,15 +571,15 @@ def test_session_scope_teardown_failure_is_reported_to_stderr_and_does_not_fail_
     assert "session teardown boom" in capsys.readouterr().err
 
 
-# Concurrency: tests dispatch as concurrent `asyncio.Task`s under a shared
-# `asyncio.Semaphore(concurrency)`, inside one `asyncio.TaskGroup`.
+# Concurrency: tests dispatch as concurrent `asyncio.Task`s admitted by a shared
+# `AdmissionGate(concurrency)`, inside one `asyncio.TaskGroup`.
 # ------------------------------------------------------------------------------------------
 
 
 def test_concurrency_bounds_the_number_of_tests_in_flight_at_once() -> None:
-    """The semaphore genuinely bounds how many tests are inside their call phase at once, not
+    """The gate genuinely bounds how many tests are inside their call phase at once, not
     just how many `asyncio.Task`s exist -- tracked via the actual concurrent-entry count from
-    inside the test body. `> 1` also rules out the semaphore accidentally serializing
+    inside the test body. `> 1` also rules out the gate accidentally serializing
     everything, which `peak <= concurrency` alone would not catch."""
     in_flight = 0
     peak = 0
@@ -600,7 +601,7 @@ def test_concurrency_bounds_the_number_of_tests_in_flight_at_once() -> None:
 
 
 def test_concurrency_bounds_module_scope_teardown_too() -> None:
-    """Module-scope teardown runs *inside* `async with semaphore`, so it is concurrency-bounded
+    """Module-scope teardown runs *inside* the gate's admission, so it is concurrency-bounded
     too -- four independent single-test modules, each with an async `scope="module"` fixture
     whose own teardown awaits, at `concurrency=2`, must never show more than 2 concurrently
     in-flight teardowns."""
@@ -668,7 +669,7 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
     ]
 
 
-# `ExclusionGate`: `exclusive=` fixture admission and `@velox.solo`.
+# `AdmissionGate`: `exclusive=` fixture admission and `@velox.solo`.
 # ------------------------------------------------------------------------------------------
 
 
@@ -816,7 +817,7 @@ def test_solo_test_never_overlaps_with_anything_else() -> None:
 
 def test_ordinary_tests_still_overlap_around_an_unrelated_exclusive_fixture() -> None:
     """A test with no `exclusive=` fixtures and no `@velox.solo` mark is unaffected by another
-    test's unrelated exclusive resource -- `ExclusionGate` never over-serializes the whole suite
+    test's unrelated exclusive resource -- `AdmissionGate` never over-serializes the whole suite
     for one contended fixture."""
     enter, leave, peak = _overlap_tracker()
 
@@ -839,6 +840,69 @@ def test_ordinary_tests_still_overlap_around_an_unrelated_exclusive_fixture() ->
 
     assert [r.outcome for r in results] == [Outcome.PASSED] * 5
     assert peak() > 1
+
+
+def test_piled_up_exclusive_contenders_never_take_a_concurrency_slot_from_others() -> None:
+    """Many tests contending for the same `exclusive=` token pile up waiting on the gate, not on
+    a concurrency slot -- an unrelated test is still admitted and runs concurrently with whichever
+    contender currently holds the token, exactly as if the pile-up weren't there. Gating
+    concurrency and exclusivity as two separate layers (a semaphore, then a gate behind it) would
+    let a waiter hold its slot idle while it waits, so enough same-token contenders could fill
+    every slot and starve this unrelated test out of the suite entirely."""
+    enter, leave, peak = _overlap_tracker()
+
+    @velox.fixture(exclusive="db")
+    async def db() -> AsyncIterator[None]:
+        yield None
+
+    async def uses_db(x: None = velox.Depends(db)) -> None:
+        enter()
+        await asyncio.sleep(0.05)
+        leave()
+
+    async def plain() -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    records = [_record(i, uses_db, f"test_uses_db_{i}", plan=plan_for(uses_db)) for i in range(3)]
+    records.append(_record(3, plain, "test_plain"))
+
+    results = run_suite(records, concurrency=3)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 4
+    assert peak() > 1
+
+
+def test_admission_gate_release_survives_cancellation_while_waiting_for_its_lock() -> None:
+    """`AdmissionGate.release` is shielded: a cancellation delivered while it's still waiting to
+    acquire the gate's own lock must not skip the bookkeeping it's about to do -- that would leave
+    `_running`/`_running_tokens` stuck, deadlocking every other test still waiting on the gate for
+    the rest of the run."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=4)
+        await gate.acquire(frozenset({"db"}), solo=False)
+
+        # Hold the gate's own lock so the `release()` call below is forced to actually suspend
+        # waiting for it, instead of taking the uncontended (and so uncancellable) fast path.
+        await gate._condition.acquire()
+        try:
+            release_task = asyncio.ensure_future(gate.release(frozenset({"db"}), solo=False))
+            await asyncio.sleep(0.01)  # let it start waiting on the lock
+            release_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await release_task
+        finally:
+            gate._condition.release()
+
+        # The shielded release keeps running in the background even though the caller above
+        # was cancelled -- give it a tick to finish.
+        await asyncio.sleep(0.01)
+        assert gate._running == 0
+        assert gate._running_tokens == set()
+
+    run_async(scenario())
 
 
 def test_concurrency_one_serializes_module_scope_teardown_before_the_next_test_starts() -> None:
@@ -1184,11 +1248,11 @@ def test_timeout_survives_the_body_substituting_a_different_exception() -> None:
     assert "cleanup did something else instead" in result.failure
 
 
-def test_timeout_clock_starts_after_the_semaphore_is_acquired_not_at_dispatch() -> None:
+def test_timeout_clock_starts_after_admission_not_at_dispatch() -> None:
     """Each test's `--timeout` budget is a fresh `asyncio.timeout` entered only once `_run_one`
-    actually starts running (inside the semaphore), not a shared deadline counted from when
-    `run_suite` was first called. At `concurrency=1`, four tests that each sleep 0.05s (0.2s of
-    total queued time) but each carry a 0.1s *per-test* budget all pass."""
+    actually starts running (after `AdmissionGate.acquire`), not a shared deadline counted from
+    when `run_suite` was first called. At `concurrency=1`, four tests that each sleep 0.05s (0.2s
+    of total queued time) but each carry a 0.1s *per-test* budget all pass."""
 
     async def _sleeps() -> None:
         await asyncio.sleep(0.05)

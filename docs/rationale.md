@@ -256,16 +256,38 @@ before Future completed` — loop bookkeeping tripping over an exception-driven 
 leak. A plain `with asyncio.Runner()` reintroduces that noise on exactly the Ctrl-C path velox most
 needs to exit cleanly.
 
-**`ExclusionGate` admission happens after the semaphore, not before.** A test acquires its
-concurrency slot first and only then asks the gate for admission, so what the gate tracks is
-genuinely-running tests, never ones still queued for a slot. Gating first would make `_active`
-count every dispatched-but-not-yet-running task — for a suite bigger than `concurrency`, that's
-effectively the whole remaining suite, so a `@velox.solo` test would wait for the entire run to
-drain rather than for whatever is actually executing right now. The cost is a test that loses the
-gate race holding its concurrency slot idle until its turn — an efficiency loss, not a correctness
-one, and the same trade `--concurrency 1` already makes by design. A test's exclusive-token set is
-acquired and released as one atomic step, for its whole footprint at once, never one token at a
-time: two tests can then never deadlock each holding a token the other is waiting for.
+**`AdmissionGate` decides concurrency, `exclusive=`, and `solo` together, not as three layered
+gates.** Bounding concurrency with a plain semaphore and admitting exclusivity/solo through a
+second gate behind it would put the wrong thing in `_running`: a test piled up waiting on a
+contended token or a solo lock would already hold a concurrency slot while it waits, so enough
+same-token tests could fill every slot with waiters and starve every *unrelated* test out of the
+suite too — the opposite failure from the one solo admission has to avoid. Deciding all three in
+one `wait_for` predicate means a waiting test holds nothing: it isn't counted in `_running` and
+doesn't occupy a slot, so unrelated tests are admitted around it exactly as if it didn't exist. A
+test's exclusive-token set is acquired and released as one atomic step, for its whole footprint at
+once, never one token at a time, so two tests can never deadlock each holding a token the other is
+waiting for.
+
+**`AdmissionGate.release` is shielded from cancellation.** Every other per-test cleanup step in
+`dispatch_one` (worker-slot release, `current_test_context.reset`, module-scope teardown) is either
+synchronous or already swallows a collateral `CancelledError` into an `ERROR` result rather than
+letting it escape — `run_suite`'s own invariant is that nothing but `KeyboardInterrupt`/
+`SystemExit` ever leaves a dispatched task. `release`'s state update requires acquiring the gate's
+lock first, and that `await` is exactly where a collateral cancellation (a sibling's interrupt
+propagating through `asyncio.TaskGroup`, or `on_result` raising) can land, before the
+decrement/notify ever runs. Skipping that update, unlike skipping some other cleanup, doesn't just
+affect the one test: it leaves `_running`/`_running_tokens` permanently wrong, which can deadlock
+every other test still waiting on the same gate for the rest of the run. `asyncio.shield` lets the
+cancellation reach the caller immediately while the update finishes in the background, so the
+caller's own cancellation semantics are unchanged but the gate's bookkeeping can't be left
+half-done.
+
+**A test's `--timeout`/`@velox.timeout(...)` budget starts inside `_run_one`, after admission, not
+at dispatch.** Time spent waiting for `AdmissionGate.acquire` — behind a `@velox.solo` test, or
+behind another test holding the same `exclusive=` token — is not counted against it. Starting the
+clock at dispatch would turn "this test's setup/call/teardown took too long" and "this test waited
+behind a contended resource" into the same `TIMEOUT` outcome, though they point at unrelated fixes:
+raise the budget or find the blocking call, versus reduce contention or accept the wait.
 
 ## `_builtins/capture.py` — capture and routing
 

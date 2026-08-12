@@ -198,7 +198,7 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
     assert plan.root_args == ()
 
 
-# `exclusive_tokens_of`: the resource-token set `_run.ExclusionGate` admits tests against.
+# `exclusive_tokens_of`: the resource-token set `_run.AdmissionGate` admits tests against.
 # ------------------------------------------------------------------------------------------
 
 
