@@ -11,6 +11,15 @@ import pytest
 from ._support import imported_module
 
 
+@pytest.fixture(autouse=True)
+def _no_ci_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explanation truncation reads `CI`/`BUILD_NUMBER` (see `_vendor._shim.running_on_ci`);
+    strip them so these tests don't flip behavior depending on where they're run.
+    """
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("BUILD_NUMBER", raising=False)
+
+
 @pytest.fixture
 def rewritten(tmp_path: Path) -> Iterator[Callable[..., Any]]:
     """Write a module, import it through the rewriting hook, and hand back the module.
