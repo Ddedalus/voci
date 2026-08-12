@@ -29,3 +29,14 @@ plus only what a caller would get wrong otherwise. No counterfactuals ("doesn't 
 "instead of"), no milestone/spec vocabulary outside `spec/`, no status boasts. See the
 `velox-docs` skill for the full layer table, rules, and worked examples before writing or
 editing any doc, docstring, or comment.
+
+# Worktree workflow
+
+This is a prototype repo not yet published. We're working alone locally. There is no human code review, just fast AI iteration. When asked to do work in a session:
+1. Create a worktree off main
+2. Do the work. Commit.
+3. Spawn /code-review (default: medium, hard for very complex changes)
+4. Address all findings. Commit.
+5. Merge into main. Delete the worktree.
+
+When asked to implement roadmap item, delete its entry from ROADMAP.md as part of the worktree.
