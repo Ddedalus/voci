@@ -65,5 +65,6 @@ tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is beh
 - **`tests/fixtures.py::payment_sandbox`** — `exclusive="payments-sandbox"` declared on the
   resource; every test that transitively depends on it inherits the token automatically.
 - **`test_users.py::test_create_user`** — one `@velox.parametrize`d test in place of three
-  near-identical functions; each case still gets its own id (`test_create_user[bob]`, `[tag-in-
-  local-part]`, `[subdomain]`) and runs concurrently with the rest of the suite.
+  near-identical functions; each case still gets its own id (`test_create_user[bob]`,
+  `test_create_user[tag-in-local-part]`, `test_create_user[subdomain]`) and runs concurrently with
+  the rest of the suite.
