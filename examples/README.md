@@ -16,11 +16,12 @@ the commands to run it and what to look at in the source.
 
 ```bash
 cd examples/01-fastapi-crud
-uv venv && uv pip install -r requirements.txt -e ../..
+uv sync
 velox
 ```
 
-`02-async-library` and `03-shared-resources` need no `requirements.txt`:
+`02-async-library` and `03-shared-resources` have no application dependencies beyond velox itself, so
+there's no lock file to sync:
 
 ```bash
 cd examples/02-async-library

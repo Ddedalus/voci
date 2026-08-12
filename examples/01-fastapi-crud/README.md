@@ -21,8 +21,7 @@ neighbours in `test_users.py`) are written out as separate functions instead.
 ## Setup
 
 ```bash
-uv venv
-uv pip install -r requirements.txt -e ../..
+uv sync
 ```
 
 `pyproject.toml` sets `extend-immutable-calls = ["velox.Depends"]` under
