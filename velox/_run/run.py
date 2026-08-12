@@ -1,9 +1,11 @@
 """Runs collected tests concurrently and reports each one's pass/fail/error/timeout/xfail/xpass
 outcome.
 
-Tests are dispatched as concurrent `asyncio` tasks under a shared `asyncio.Semaphore`
-that bounds how many run at once; each gets a real setup -> call -> teardown envelope,
-plus an optional per-test `asyncio.timeout` budget -- the suite-wide `--timeout`, or a
+Tests are dispatched as concurrent `asyncio` tasks, admitted by a shared `AdmissionGate` that
+bounds how many run at once and, within that bound, withholds a test whose `exclusive=` fixtures
+claim a resource another running test already holds, or that is running while a `@velox.solo`
+test holds the whole gate to itself. Each admitted test gets a real setup -> call -> teardown
+envelope, plus an optional per-test `asyncio.timeout` budget -- the suite-wide `--timeout`, or a
 `@velox.timeout(...)` mark overriding it for that test alone. An `async def` test's call phase is
 awaited directly; a sync `def` one runs on the context-propagating executor
 (`_capture.ContextPropagatingExecutor`) instead, so a blocking call inside it holds only
@@ -28,14 +30,22 @@ import traceback
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO, cast
+from typing import Any, TextIO, cast, final
 
 from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
+from velox._di.fixtures import exclusive_tokens_of
 from velox._marks import XFail, marks_of
 
-__all__ = ["FAILING_OUTCOMES", "Outcome", "TestResult", "exit_code_for", "run_suite"]
+__all__ = [
+    "FAILING_OUTCOMES",
+    "AdmissionGate",
+    "Outcome",
+    "TestResult",
+    "exit_code_for",
+    "run_suite",
+]
 
 #: Much larger than a typical core count: most suites are bound by a downstream
 #: service's latency, not by CPU.
@@ -323,6 +333,65 @@ async def _run_one(
     return result, module_keys
 
 
+@final
+class AdmissionGate:
+    """The single point every dispatched test is admitted through: bounds how many run at once,
+    and, within that bound, coordinates `exclusive=` fixtures and `@velox.solo`.
+
+    Concurrency, `exclusive=`, and `solo` are one decision, not three layered ones -- a test
+    piled up waiting on a contended token or a solo lock holds no concurrency slot while it
+    waits, so it can never starve an unrelated test out of one. A test with no exclusive tokens
+    and no `solo` mark is admitted as soon as a slot is free and no solo test is running. A test
+    with exclusive tokens additionally needs none of them to overlap what's already running --
+    acquired for its whole token set in one step, never one token at a time, so two tests can
+    never deadlock each holding a token the other needs. A `solo` test is admitted only once
+    nothing else is running, and blocks every other admission until it releases. Waiters have no
+    fairness guarantee (`ROADMAP.md`).
+    """
+
+    def __init__(self, concurrency: int) -> None:
+        self._condition = asyncio.Condition()
+        self._concurrency = concurrency
+        self._running = 0
+        self._running_tokens: set[object] = set()
+        self._solo_active = False
+
+    async def acquire(self, tokens: frozenset[object], *, solo: bool) -> None:
+        async with self._condition:
+            if solo:
+                await self._condition.wait_for(lambda: self._running == 0)
+                self._solo_active = True
+            else:
+                await self._condition.wait_for(
+                    lambda: (
+                        self._running < self._concurrency
+                        and not self._solo_active
+                        and self._running_tokens.isdisjoint(tokens)
+                    )
+                )
+                self._running_tokens |= tokens
+            self._running += 1
+
+    async def release(self, tokens: frozenset[object], *, solo: bool) -> None:
+        # Shielded: the caller (`dispatch_one`'s own outer `finally`) may already have a
+        # cancellation pending -- a sibling's KeyboardInterrupt/SystemExit propagating through
+        # `asyncio.TaskGroup`, or `on_result` raising. Letting that interrupt the wait for
+        # `_condition`'s lock before the bookkeeping below ran would leave `_running`/
+        # `_running_tokens` permanently stuck, deadlocking every other test still waiting on
+        # this gate for the rest of the run. `shield` lets that cancellation reach the caller
+        # immediately while this still finishes in the background.
+        await asyncio.shield(self._release(tokens, solo=solo))
+
+    async def _release(self, tokens: frozenset[object], *, solo: bool) -> None:
+        async with self._condition:
+            self._running -= 1
+            if solo:
+                self._solo_active = False
+            else:
+                self._running_tokens -= tokens
+            self._condition.notify_all()
+
+
 def run_suite(
     records: list[TestRecord],
     *,
@@ -334,8 +403,10 @@ def run_suite(
     on_result: Callable[[TestResult], None] | None = None,
 ) -> list[TestResult]:
     """Run every record concurrently on one `asyncio.Runner`, admitting at most
-    `concurrency` tests into their setup/call/teardown envelope at a time.
-    `concurrency=1` fully serializes, in collection order.
+    `concurrency` tests into their setup/call/teardown envelope at a time via `AdmissionGate`,
+    which also withholds a test whose `exclusive=` fixtures contend with one already running,
+    and any test at all while a `@velox.solo` test is running. `concurrency=1` fully
+    serializes, in collection order.
 
     `on_result`, if given, is called once per test, synchronously, in real completion
     order, immediately before that test's result is written into the returned list --
@@ -367,20 +438,22 @@ def run_suite(
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
     try:
         worker_slots = _capture.WorkerSlots(concurrency)
+        gate = AdmissionGate(concurrency)
 
         remaining_by_module: dict[Path, int] = {}
         for record in records:
             remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
         pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
 
-        async def dispatch_one(
-            index: int, record: TestRecord, semaphore: asyncio.Semaphore
-        ) -> None:
-            # The whole body lives inside `async with semaphore:`, including the
-            # module-scope flush below, so concurrency=1 is a genuine exact-serial
-            # mode: the next test cannot start until this one's slot -- module
-            # teardown included -- is released.
-            async with semaphore:
+        async def dispatch_one(index: int, record: TestRecord) -> None:
+            # The whole body lives between `gate.acquire()` and `gate.release()`, including
+            # the module-scope flush below, so concurrency=1 is a genuine exact-serial mode:
+            # the next test cannot start until this one's admission -- module teardown
+            # included -- is released.
+            marks = marks_of(record.func)
+            tokens = exclusive_tokens_of(record.plan)
+            await gate.acquire(tokens, solo=marks.solo)
+            try:
                 # A fresh Sink and TestContext for this one test, published via
                 # current_test_context.set() for the duration of everything below --
                 # not just _run_one, but this test's own module-scope-fixture flush
@@ -391,7 +464,6 @@ def run_suite(
                 # does, transitively, to this test.
                 slot = worker_slots.acquire()
                 sink = _capture.Sink(label=record.id)
-                marks = marks_of(record.func)
                 # A `@velox.timeout(...)` mark overrides the suite-wide budget for this
                 # test alone; `marks.timeout is None` is the common case of "no override",
                 # not "no limit" -- that's what the bare `timeout` parameter already means.
@@ -426,21 +498,23 @@ def run_suite(
                     # including, for the module's last test, that module's own fixture
                     # teardown -- could still write into sink.
                     _capture.current_test_context.reset(token)
+            finally:
+                await gate.release(tokens, solo=marks.solo)
 
-                # Captured output is only worth keeping for a failing result.
-                if result.outcome in FAILING_OUTCOMES:
-                    result = dataclasses.replace(
-                        result,
-                        captured_stdout=sink.out,
-                        captured_stderr=sink.err,
-                        log_records=tuple(sink.log_records),
-                    )
-                # Fired in real completion order, before the logical-order results slot
-                # below is written, so a streaming reporter never sees a filled slot
-                # for a test it hasn't been told about yet.
-                if on_result is not None:
-                    on_result(result)
-                results[index] = result
+            # Captured output is only worth keeping for a failing result.
+            if result.outcome in FAILING_OUTCOMES:
+                result = dataclasses.replace(
+                    result,
+                    captured_stdout=sink.out,
+                    captured_stderr=sink.err,
+                    log_records=tuple(sink.log_records),
+                )
+            # Fired in real completion order, before the logical-order results slot
+            # below is written, so a streaming reporter never sees a filled slot
+            # for a test it hasn't been told about yet.
+            if on_result is not None:
+                on_result(result)
+            results[index] = result
 
         # Constructed synchronously, outside the loop, so the finally below can shut
         # this down directly without going through the loop at all.
@@ -448,10 +522,9 @@ def run_suite(
 
         async def run_all() -> None:
             asyncio.get_running_loop().set_default_executor(executor)
-            semaphore = asyncio.Semaphore(concurrency)
             async with asyncio.TaskGroup() as tg:
                 for index, record in enumerate(records):
-                    tg.create_task(dispatch_one(index, record, semaphore))
+                    tg.create_task(dispatch_one(index, record))
 
         # Not `with asyncio.Runner() as runner:` -- Runner.close()'s own automatic
         # executor shutdown can raise RuntimeError when a custom default executor was

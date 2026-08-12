@@ -13,6 +13,7 @@ from velox._di.fixtures import (
     Scope,
     _check_acyclic,
     _check_missing_injections,
+    exclusive_tokens_of,
     plan_for,
 )
 
@@ -195,6 +196,88 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
     plan = plan_for(test_func)
     assert plan.steps == ()
     assert plan.root_args == ()
+
+
+# `exclusive_tokens_of`: the resource-token set `_run.AdmissionGate` admits tests against.
+# ------------------------------------------------------------------------------------------
+
+
+def test_exclusive_tokens_of_is_empty_with_no_exclusive_fixtures() -> None:
+    async def test_func(x: int = Depends(alpha)) -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_func)) == frozenset()
+
+
+def test_exclusive_tokens_of_collects_true_and_string_tokens() -> None:
+    @velox.fixture(exclusive=True)
+    def private() -> int:
+        return 1
+
+    @velox.fixture(exclusive="db")
+    def shared() -> int:
+        return 2
+
+    async def test_func(a: int = Depends(private), b: int = Depends(shared)) -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_func)) == {private, "db"}
+
+
+def test_exclusive_true_is_a_token_private_to_its_own_fixture() -> None:
+    """Two different `exclusive=True` fixtures never share a token -- only two tests depending on
+    the very same fixture object do."""
+
+    @velox.fixture(exclusive=True)
+    def res_a() -> int:
+        return 1
+
+    @velox.fixture(exclusive=True)
+    def res_b() -> int:
+        return 2
+
+    async def test_one(x: int = Depends(res_a)) -> None:
+        pass
+
+    async def test_two(x: int = Depends(res_b)) -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_one)).isdisjoint(
+        exclusive_tokens_of(plan_for(test_two))
+    )
+
+
+def test_exclusive_string_token_is_shared_across_different_fixtures() -> None:
+    @velox.fixture(exclusive="db")
+    def conn_a() -> int:
+        return 1
+
+    @velox.fixture(exclusive="db")
+    def conn_b() -> int:
+        return 2
+
+    async def test_one(x: int = Depends(conn_a)) -> None:
+        pass
+
+    async def test_two(x: int = Depends(conn_b)) -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_one)) == exclusive_tokens_of(plan_for(test_two))
+
+
+def test_exclusive_tokens_of_reaches_a_transitive_dependency() -> None:
+    @velox.fixture(exclusive="db")
+    def db() -> int:
+        return 1
+
+    @velox.fixture()
+    def wrapper(x: int = Depends(db)) -> int:
+        return x
+
+    async def test_func(y: int = Depends(wrapper)) -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_func)) == {"db"}
 
 
 def test_fixture_with_a_missing_injection_is_rejected_at_decoration_time() -> None:

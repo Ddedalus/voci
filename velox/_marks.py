@@ -180,7 +180,8 @@ def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
 def solo[F: Callable[..., Any]](fn: F) -> F:
     """Mark this test to run alone, with nothing else scheduled alongside it.
 
-    Applied bare, with no parentheses. Not yet enforced; see `ROADMAP.md`.
+    Applied bare, with no parentheses. `_run.AdmissionGate` admits it only once nothing else is
+    running, and blocks every other test's admission until it finishes.
     """
     return _amend(fn, solo=True)
 
