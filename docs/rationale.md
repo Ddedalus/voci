@@ -256,6 +256,17 @@ before Future completed` — loop bookkeeping tripping over an exception-driven 
 leak. A plain `with asyncio.Runner()` reintroduces that noise on exactly the Ctrl-C path velox most
 needs to exit cleanly.
 
+**`ExclusionGate` admission happens after the semaphore, not before.** A test acquires its
+concurrency slot first and only then asks the gate for admission, so what the gate tracks is
+genuinely-running tests, never ones still queued for a slot. Gating first would make `_active`
+count every dispatched-but-not-yet-running task — for a suite bigger than `concurrency`, that's
+effectively the whole remaining suite, so a `@velox.solo` test would wait for the entire run to
+drain rather than for whatever is actually executing right now. The cost is a test that loses the
+gate race holding its concurrency slot idle until its turn — an efficiency loss, not a correctness
+one, and the same trade `--concurrency 1` already makes by design. A test's exclusive-token set is
+acquired and released as one atomic step, for its whole footprint at once, never one token at a
+time: two tests can then never deadlock each holding a token the other is waiting for.
+
 ## `_builtins/capture.py` — capture and routing
 
 **Output from an orphaned background task can vanish.** A task created with `create_task` and never

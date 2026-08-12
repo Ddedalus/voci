@@ -7,7 +7,8 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 
 Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
-with per-test timeouts, overridable with `@velox.timeout(...)` · `skip`/`skipif`/`xfail` ·
+with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
+`@velox.solo`, admission-controlled against everything else running · `skip`/`skipif`/`xfail` ·
 `@velox.parametrize`, including stacked decorators · `@velox.tag` selection with `-m` ·
 assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` ·
 the reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
@@ -18,15 +19,13 @@ These marks exist in the API and are accepted today, but nothing acts on them ye
 relies on them for safety will race.** Until they land, keep conflicting tests from running
 concurrently by hand, or run with `--concurrency 1`.
 
-- `exclusive=` on a fixture, and `@velox.solo` — no admission control and no suite-wide write
-  lock, so a test that declares a shared resource still runs alongside everything else.
 - `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
 
 ## Next
 
-**Scheduling.** Exclusive-resource admission (all-or-nothing over a test's whole footprint), the
-solo write lock, and starvation-aware ordering. This is what makes the marks above real, and it is
-the largest single piece of remaining work.
+**Starvation-aware scheduling.** `exclusive=`/`@velox.solo` admission has no fairness guarantee: a
+steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
+seeing an opening.
 
 **Runtime safety.** A loop-starvation watchdog that names the blocking call instead of letting the
 suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;

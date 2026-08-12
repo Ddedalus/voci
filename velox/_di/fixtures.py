@@ -36,6 +36,7 @@ __all__ = [
     "ResolutionPlan",
     "Scope",
     "builtin_fixture",
+    "exclusive_tokens_of",
     "fixture",
     "plan_for",
     "plan_of",
@@ -451,6 +452,21 @@ def plan_for(
         for injection in root_injections
     )
     return ResolutionPlan(steps=tuple(steps), root_args=root_args)
+
+
+def exclusive_tokens_of(plan: ResolutionPlan) -> frozenset[object]:
+    """The exclusive-resource tokens `plan`'s fixtures collectively hold.
+
+    One token per `exclusive=`-marked fixture reachable in `plan.steps`: the `Fixture` object
+    itself for `exclusive=True` (private to that one fixture), or the string for
+    `exclusive="name"` (shared with every other fixture naming the same string). Two tests whose
+    token sets intersect declare the same contended resource and must never run concurrently.
+    """
+    return frozenset(
+        step.fixture if step.fixture.exclusive is True else step.fixture.exclusive
+        for step in plan.steps
+        if step.fixture.exclusive is not False
+    )
 
 
 def _reject_known_params(name: str, offenders: frozenset[str], message: str) -> None:

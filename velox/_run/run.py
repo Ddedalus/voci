@@ -7,10 +7,13 @@ plus an optional per-test `asyncio.timeout` budget -- the suite-wide `--timeout`
 `@velox.timeout(...)` mark overriding it for that test alone. An `async def` test's call phase is
 awaited directly; a sync `def` one runs on the context-propagating executor
 (`_capture.ContextPropagatingExecutor`) instead, so a blocking call inside it holds only
-its own concurrency slot rather than the shared event loop. Results are collected back
-into logical (collection) order regardless of the order tests actually finish in, so a
-run's output is reproducible independent of scheduling. This module also derives the
-process exit code from the collected results and collection errors.
+its own concurrency slot rather than the shared event loop. Past the semaphore, `ExclusionGate`
+admits each test's own setup -> call -> teardown envelope: `exclusive=` fixtures never run
+alongside another test claiming the same resource, and `@velox.solo` never runs alongside
+anything else. Results are collected back into logical (collection) order regardless of the
+order tests actually finish in, so a run's output is reproducible independent of scheduling.
+This module also derives the process exit code from the collected results and collection
+errors.
 """
 
 from __future__ import annotations
@@ -28,14 +31,22 @@ import traceback
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO, cast
+from typing import Any, TextIO, cast, final
 
 from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
+from velox._di.fixtures import exclusive_tokens_of
 from velox._marks import XFail, marks_of
 
-__all__ = ["FAILING_OUTCOMES", "Outcome", "TestResult", "exit_code_for", "run_suite"]
+__all__ = [
+    "FAILING_OUTCOMES",
+    "ExclusionGate",
+    "Outcome",
+    "TestResult",
+    "exit_code_for",
+    "run_suite",
+]
 
 #: Much larger than a typical core count: most suites are bound by a downstream
 #: service's latency, not by CPU.
@@ -323,6 +334,50 @@ async def _run_one(
     return result, module_keys
 
 
+@final
+class ExclusionGate:
+    """Admission control for `exclusive=` fixtures and `@velox.solo`, shared by one run.
+
+    Every dispatched test passes through `acquire`/`release` once it already holds a concurrency
+    slot, so what this gate tracks is genuinely-running tests, not merely-dispatched ones. A test
+    with no exclusive tokens and no `solo` mark is admitted immediately unless a solo test is
+    currently running. A test with exclusive tokens is admitted only once none of them overlap
+    what's currently running -- acquired for its whole token set in one step, never one token at
+    a time, so two tests can never deadlock each holding a token the other needs. A `solo` test is
+    admitted only once nothing else is running, and blocks every other admission until it
+    releases. Fairness between waiters isn't guaranteed: a steady stream of ordinary tests can
+    keep a waiting `solo`/exclusive test from ever seeing an opening (see `ROADMAP.md`,
+    starvation-aware ordering).
+    """
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._running_tokens: set[object] = set()
+        self._solo_active = False
+        self._active = 0
+
+    async def acquire(self, tokens: frozenset[object], *, solo: bool) -> None:
+        async with self._condition:
+            if solo:
+                await self._condition.wait_for(lambda: self._active == 0)
+                self._solo_active = True
+            else:
+                await self._condition.wait_for(
+                    lambda: not self._solo_active and self._running_tokens.isdisjoint(tokens)
+                )
+                self._running_tokens |= tokens
+            self._active += 1
+
+    async def release(self, tokens: frozenset[object], *, solo: bool) -> None:
+        async with self._condition:
+            self._active -= 1
+            if solo:
+                self._solo_active = False
+            else:
+                self._running_tokens -= tokens
+            self._condition.notify_all()
+
+
 def run_suite(
     records: list[TestRecord],
     *,
@@ -335,7 +390,10 @@ def run_suite(
 ) -> list[TestResult]:
     """Run every record concurrently on one `asyncio.Runner`, admitting at most
     `concurrency` tests into their setup/call/teardown envelope at a time.
-    `concurrency=1` fully serializes, in collection order.
+    `concurrency=1` fully serializes, in collection order. Past that bound, an
+    `ExclusionGate` further withholds admission from a test whose `exclusive=` fixtures
+    contend with one already running, and from any test at all while a `@velox.solo`
+    test is running.
 
     `on_result`, if given, is called once per test, synchronously, in real completion
     order, immediately before that test's result is written into the returned list --
@@ -367,6 +425,7 @@ def run_suite(
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
     try:
         worker_slots = _capture.WorkerSlots(concurrency)
+        gate = ExclusionGate()
 
         remaining_by_module: dict[Path, int] = {}
         for record in records:
@@ -381,51 +440,63 @@ def run_suite(
             # mode: the next test cannot start until this one's slot -- module
             # teardown included -- is released.
             async with semaphore:
-                # A fresh Sink and TestContext for this one test, published via
-                # current_test_context.set() for the duration of everything below --
-                # not just _run_one, but this test's own module-scope-fixture flush
-                # too, if it turns out to be the module's last test. _run_one itself
-                # never references _capture at all; every builtin-fixture provider and
-                # the installed Router/log handler read current_test_context for
-                # themselves, so wrapping the call is enough to attribute everything it
-                # does, transitively, to this test.
-                slot = worker_slots.acquire()
-                sink = _capture.Sink(label=record.id)
                 marks = marks_of(record.func)
-                # A `@velox.timeout(...)` mark overrides the suite-wide budget for this
-                # test alone; `marks.timeout is None` is the common case of "no override",
-                # not "no limit" -- that's what the bare `timeout` parameter already means.
-                test_timeout = marks.timeout if marks.timeout is not None else timeout
-                test_context = _capture.TestContext(
-                    sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
-                )
-                token = _capture.current_test_context.set(test_context)
+                tokens = exclusive_tokens_of(record.plan)
+                # Admission happens after the semaphore (bounding how many tests can be
+                # *waiting* here at once to `concurrency`) but before anything below runs, so
+                # `gate` only ever tracks genuinely in-flight envelopes -- never tasks still
+                # queued for a semaphore slot, which would make a solo test wait for the whole
+                # suite to drain rather than just what's actually running.
+                await gate.acquire(tokens, solo=marks.solo)
                 try:
+                    # A fresh Sink and TestContext for this one test, published via
+                    # current_test_context.set() for the duration of everything below --
+                    # not just _run_one, but this test's own module-scope-fixture flush
+                    # too, if it turns out to be the module's last test. _run_one itself
+                    # never references _capture at all; every builtin-fixture provider and
+                    # the installed Router/log handler read current_test_context for
+                    # themselves, so wrapping the call is enough to attribute everything it
+                    # does, transitively, to this test.
+                    slot = worker_slots.acquire()
+                    sink = _capture.Sink(label=record.id)
+                    # A `@velox.timeout(...)` mark overrides the suite-wide budget for this
+                    # test alone; `marks.timeout is None` is the common case of "no override",
+                    # not "no limit" -- that's what the bare `timeout` parameter already means.
+                    test_timeout = marks.timeout if marks.timeout is not None else timeout
+                    test_context = _capture.TestContext(
+                        sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
+                    )
+                    token = _capture.current_test_context.set(test_context)
                     try:
-                        result, module_keys = await _run_one(record, store, timeout=test_timeout)
-                    finally:
-                        worker_slots.release(slot)
-
-                    if module_keys:
-                        pending_module_keys.setdefault(record.path, []).extend(module_keys)
-                    remaining_by_module[record.path] -= 1
-                    if remaining_by_module[record.path] == 0:
-                        keys = pending_module_keys.pop(record.path, None)
-                        if keys:
-                            # Inside this test's current_test_context: this test is
-                            # the module's last, so a module-scope fixture's own
-                            # teardown print is attributed to it.
-                            await _teardown_module_scope(
-                                store,
-                                keys,
-                                path=record.path,
-                                real_stderr=capture_setup.real_stderr,
+                        try:
+                            result, module_keys = await _run_one(
+                                record, store, timeout=test_timeout
                             )
+                        finally:
+                            worker_slots.release(slot)
+
+                        if module_keys:
+                            pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                        remaining_by_module[record.path] -= 1
+                        if remaining_by_module[record.path] == 0:
+                            keys = pending_module_keys.pop(record.path, None)
+                            if keys:
+                                # Inside this test's current_test_context: this test is
+                                # the module's last, so a module-scope fixture's own
+                                # teardown print is attributed to it.
+                                await _teardown_module_scope(
+                                    store,
+                                    keys,
+                                    path=record.path,
+                                    real_stderr=capture_setup.real_stderr,
+                                )
+                    finally:
+                        # Reset only now that nothing else this test's envelope owns --
+                        # including, for the module's last test, that module's own fixture
+                        # teardown -- could still write into sink.
+                        _capture.current_test_context.reset(token)
                 finally:
-                    # Reset only now that nothing else this test's envelope owns --
-                    # including, for the module's last test, that module's own fixture
-                    # teardown -- could still write into sink.
-                    _capture.current_test_context.reset(token)
+                    await gate.release(tokens, solo=marks.solo)
 
                 # Captured output is only worth keeping for a failing result.
                 if result.outcome in FAILING_OUTCOMES:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 from _support import make_record as _record
@@ -666,6 +666,179 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
         "start-3",
         "end-3",
     ]
+
+
+# `ExclusionGate`: `exclusive=` fixture admission and `@velox.solo`.
+# ------------------------------------------------------------------------------------------
+
+
+def _overlap_tracker() -> tuple[Callable[[], None], Callable[[], None], Callable[[], int]]:
+    """A shared in-flight counter, as `enter`/`exit`/`peak`, for pinning real overlap (or its
+    absence) between two or more concurrently-dispatched test bodies."""
+    in_flight = 0
+    peak = 0
+
+    def enter() -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+
+    def leave() -> None:
+        nonlocal in_flight
+        in_flight -= 1
+
+    return enter, leave, lambda: peak
+
+
+def test_exclusive_string_token_never_lets_two_tests_run_concurrently() -> None:
+    """Two fixtures naming the same `exclusive="db"` token contend, even though nothing else
+    would stop their tests running at once at `concurrency=4`."""
+    enter, leave, peak = _overlap_tracker()
+
+    @velox.fixture(exclusive="db")
+    async def conn_a() -> AsyncIterator[None]:
+        yield None
+
+    @velox.fixture(exclusive="db")
+    async def conn_b() -> AsyncIterator[None]:
+        yield None
+
+    async def test_one(x: None = velox.Depends(conn_a)) -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    async def test_two(x: None = velox.Depends(conn_b)) -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    records = [
+        _record(0, test_one, "test_one", plan=plan_for(test_one)),
+        _record(1, test_two, "test_two", plan=plan_for(test_two)),
+    ]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert peak() == 1
+
+
+def test_exclusive_true_only_contends_with_its_own_fixture() -> None:
+    """`exclusive=True` is a token private to that one fixture -- two *different* `exclusive=True`
+    fixtures never contend with each other, so their tests genuinely overlap."""
+    enter, leave, peak = _overlap_tracker()
+
+    @velox.fixture(exclusive=True)
+    async def res_a() -> AsyncIterator[None]:
+        yield None
+
+    @velox.fixture(exclusive=True)
+    async def res_b() -> AsyncIterator[None]:
+        yield None
+
+    async def test_one(x: None = velox.Depends(res_a)) -> None:
+        enter()
+        await asyncio.sleep(0.03)
+        leave()
+
+    async def test_two(x: None = velox.Depends(res_b)) -> None:
+        enter()
+        await asyncio.sleep(0.03)
+        leave()
+
+    records = [
+        _record(0, test_one, "test_one", plan=plan_for(test_one)),
+        _record(1, test_two, "test_two", plan=plan_for(test_two)),
+    ]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert peak() == 2
+
+
+def test_exclusive_true_serializes_two_tests_sharing_the_same_fixture() -> None:
+    enter, leave, peak = _overlap_tracker()
+
+    @velox.fixture(exclusive=True)
+    async def shared() -> AsyncIterator[None]:
+        yield None
+
+    async def test_one(x: None = velox.Depends(shared)) -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    async def test_two(x: None = velox.Depends(shared)) -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    records = [
+        _record(0, test_one, "test_one", plan=plan_for(test_one)),
+        _record(1, test_two, "test_two", plan=plan_for(test_two)),
+    ]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert peak() == 1
+
+
+def test_solo_test_never_overlaps_with_anything_else() -> None:
+    """A `@velox.solo` test is never admitted alongside another test, ordinary or exclusive, and
+    blocks every other admission for as long as it runs -- a suite-wide write lock. Ordinary
+    tests are still free to overlap with *each other*, so a bare "nothing ever overlaps"
+    assertion would pass for the wrong reason -- this checks specifically for `"solo"` sharing
+    `active` with anything else."""
+    active: set[str] = set()
+    solo_violations: list[frozenset[str]] = []
+
+    def _make(name: str, *, solo: bool = False) -> Callable[[], object]:
+        async def test_func() -> None:
+            active.add(name)
+            if "solo" in active and active != {"solo"}:
+                solo_violations.append(frozenset(active))
+            await asyncio.sleep(0.02)
+            active.discard(name)
+
+        return velox.solo(test_func) if solo else test_func
+
+    records = [_record(0, _make("solo", solo=True), "test_solo")]
+    records += [_record(i, _make(f"ordinary_{i}"), f"test_ordinary_{i}") for i in range(1, 6)]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 6
+    assert solo_violations == []
+
+
+def test_ordinary_tests_still_overlap_around_an_unrelated_exclusive_fixture() -> None:
+    """A test with no `exclusive=` fixtures and no `@velox.solo` mark is unaffected by another
+    test's unrelated exclusive resource -- `ExclusionGate` never over-serializes the whole suite
+    for one contended fixture."""
+    enter, leave, peak = _overlap_tracker()
+
+    @velox.fixture(exclusive="db")
+    async def db() -> AsyncIterator[None]:
+        yield None
+
+    async def uses_db(x: None = velox.Depends(db)) -> None:
+        await asyncio.sleep(0.05)
+
+    async def plain() -> None:
+        enter()
+        await asyncio.sleep(0.02)
+        leave()
+
+    records = [_record(0, uses_db, "test_uses_db", plan=plan_for(uses_db))]
+    records += [_record(i, plain, f"test_plain_{i}") for i in range(1, 5)]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 5
+    assert peak() > 1
 
 
 def test_concurrency_one_serializes_module_scope_teardown_before_the_next_test_starts() -> None:
