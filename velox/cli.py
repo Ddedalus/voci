@@ -24,6 +24,7 @@ from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
+from velox._collection import tagexpr as _tagexpr
 from velox._report import terminal as _report
 from velox._run import run as _run
 
@@ -42,6 +43,17 @@ def build_parser() -> argparse.ArgumentParser:
         "paths",
         nargs="*",
         help="Files or directories to run. Defaults to the configured testpaths, else the rootdir.",
+    )
+    parser.add_argument(
+        "-m",
+        dest="markexpr",
+        metavar="EXPR",
+        default=None,
+        help="Run only tests whose @velox.tag(...) names satisfy this boolean expression, e.g. "
+        "'slow and not flaky'. A tag name that isn't a bare identifier (has a dash or a dot) "
+        "must be quoted, e.g. \"'smoke.fast'\". Tags not mentioned in EXPR count as absent. A "
+        "test that doesn't match is deselected, not skipped; a skip-marked test is always "
+        "skipped, regardless of EXPR.",
     )
     # --assert and --rewrite-cache below both affect real behavior, not just help text.
     parser.add_argument(
@@ -251,6 +263,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"velox: {problem}", file=sys.stderr)
         return 4
 
+    # Compiled up front, before collection does any real work, so a malformed -m expression
+    # fails fast with a usage error rather than surfacing mid-collection.
+    markexpr = None
+    if args.markexpr is not None:
+        try:
+            markexpr = _tagexpr.compile_tag_expression(args.markexpr)
+        except _tagexpr.TagExpressionError as exc:
+            print(f"velox: {exc}", file=sys.stderr)
+            return 4
+
     # [tool.velox]-anchored upward search, stopping at the git root -- see
     # _config.resolve's own docstring for exactly where it starts and stops. A
     # malformed pyproject.toml/[tool.velox] table is always a usage error: never
@@ -386,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             else _discovery.DEFAULT_IGNORE_DIRS
         )
         files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
-        collected = _collect.collect(files, rootdir=rootdir)
+        collected = _collect.collect(files, rootdir=rootdir, tag_expr=markexpr)
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
         # for what can land here. Empty in the common case. Rendered by
@@ -460,6 +482,11 @@ def main(argv: list[str] | None = None) -> int:
         summary += (
             f", {len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
         )
+        # Shown whenever -m was given, including a 0 count -- same always-shown treatment as
+        # skipped/errors, so the line reliably says whether -m was in effect rather than looking
+        # identical to a run without it.
+        if markexpr is not None:
+            summary += f", {len(collected.deselected)} deselected"
         print(summary)
 
         # This line and reporter.finish's wall-vs-Σ line both use "failed" for

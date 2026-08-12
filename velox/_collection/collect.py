@@ -5,7 +5,9 @@
 function object and excluded from `records` into `skipped` instead of running for real; a
 `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`, and a malformed DI graph
 (bad scope nesting, a missing injection) becomes a `CollectionError`, the same way a bad import
-does.
+does. A `tag_expr` (see `tagexpr.py`) whose expression a test's `@velox.tag(...)` names don't
+satisfy excludes it into `deselected` instead -- checked after the skip check, so a skip-marked
+test is always `skipped`, never reclassified as deselected depending on `-m`.
 
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
@@ -27,10 +29,11 @@ import re
 import sys
 import traceback
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from velox._assertions import rewrite as _rewrite
+from velox._collection.tagexpr import TagExpression
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 
@@ -94,6 +97,9 @@ class CollectionResult:
     records: list[TestRecord]
     errors: list[CollectionError]
     skipped: list[Skipped]
+    deselected: list[str] = field(default_factory=list)
+    """Ids of tests excluded by `tag_expr`, not `skipped`: these passed the skip check (they
+    would otherwise run) but never reached the DI checks."""
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -164,7 +170,9 @@ def _skip_reason(marks: Marks) -> str | None:
     return None
 
 
-def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
+def collect(
+    files: Iterable[Path], *, rootdir: Path, tag_expr: TagExpression | None = None
+) -> CollectionResult:
     """Import each file and build its records; `index` assigned once over the whole result.
 
     Per file, in the order given:
@@ -180,16 +188,19 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
     3. Sort the functions by `func.__code__.co_firstlineno` — definition order, not `vars()`
        iteration order.
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
-       instead; a malformed DI graph excludes it into `errors` instead. Otherwise build one
-       `TestRecord`, `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`, carrying
-       the `ResolutionPlan` `plan_for` built.
+       instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
+       don't satisfy it into `deselected`. Otherwise a malformed DI graph excludes it into
+       `errors` instead. Otherwise build one `TestRecord`, `id` as `"{path}::{qualname}"` with
+       `path` relative to `rootdir`, carrying the `ResolutionPlan` `plan_for` built.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
-    you both); `index` is assigned across the concatenation of all files' records, in that order.
+    you both); `index` is assigned across the concatenation of all files' records, in that order
+    -- deselected tests never consume an index.
     """
     records: list[TestRecord] = []
     errors: list[CollectionError] = []
     skipped: list[Skipped] = []
+    deselected: list[str] = []
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
@@ -225,8 +236,10 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
 
         for func in functions:
             test_id = f"{display_path}::{func.__qualname__}"
+            marks = marks_of(func)
+
             try:
-                reason = _skip_reason(marks_of(func))
+                reason = _skip_reason(marks)
             except Exception:
                 # One test's malformed marks must not abort the file's remaining tests any more
                 # than a broken import aborts the remaining files.
@@ -234,7 +247,14 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 continue
 
             if reason is not None:
+                # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
+                # regardless of -m -- @velox.skip is never silently reclassified as deselected
+                # depending on which tags happen to be in play.
                 skipped.append(Skipped(id=test_id, reason=reason))
+                continue
+
+            if tag_expr is not None and not tag_expr.matches(marks.tags):
+                deselected.append(test_id)
                 continue
 
             try:
@@ -242,7 +262,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
             except Exception:
                 # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
                 # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata. Both
-                # are attributed to this test and collection continues, same as the `marks_of`
+                # are attributed to this test and collection continues, same as the `_skip_reason`
                 # catch above.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
@@ -260,7 +280,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
             )
             index += 1
 
-    return CollectionResult(records=records, errors=errors, skipped=skipped)
+    return CollectionResult(records=records, errors=errors, skipped=skipped, deselected=deselected)
 
 
 def _import_module(path: Path, module_name: str) -> object:
