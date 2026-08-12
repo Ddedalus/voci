@@ -157,8 +157,7 @@ def xfail[F: Callable[..., Any]](
 
 
 def tag[F: Callable[..., Any]](*names: str) -> Callable[[F], F]:
-    """Attach selection tags to a test, exposed as `TestInfo.tags`. Not yet selectable via `-m`;
-    see `ROADMAP.md`."""
+    """Attach selection tags to a test, exposed as `TestInfo.tags` and selectable with `-m`."""
 
     def decorate(fn: F) -> F:
         return _amend(fn, tags=(*marks_of(fn).tags, *names))

@@ -3,11 +3,14 @@
 `TestRecord` carries what the runner needs to execute a test: `id`, `path`, `lineno`, `qualname`,
 `func`, its `params` (if `@velox.parametrize`d), and its resolved `plan`. A test marked
 `@velox.skip`/`@velox.skipif` is read off the function object and excluded from `records` into
-`skipped` instead of running for real; a `Depends(...)`-defaulted parameter is resolved via
-`_fixtures.plan_for`, and a malformed DI graph (bad scope nesting, a missing injection) becomes a
-`CollectionError`, the same way a bad import does. A `@velox.parametrize`d test expands into one
-record per case (`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function
-— parametrize values are call kwargs, not part of the DI graph.
+`skipped` instead of running for real; a `tag_expr` (see `tagexpr.py`) whose expression a test's
+`@velox.tag(...)` names don't satisfy excludes it into `deselected` instead -- checked after the
+skip check, so a skip-marked test is always `skipped`, never reclassified as deselected depending
+on `-m`. A `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`, and a malformed
+DI graph (bad scope nesting, a missing injection) becomes a `CollectionError`, the same way a bad
+import does. A `@velox.parametrize`d test expands into one record per case
+(`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function — parametrize
+values are call kwargs, not part of the DI graph.
 
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
@@ -16,8 +19,8 @@ installed, is consulted explicitly (`_import_module`) — `spec_from_file_locati
 gives it the chance to run.
 
 Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
-ones on the context-propagating executor rather than inline. A `test_*` method on a `class Test*`
-is silently left uncollected.
+ones on the context-propagating executor rather than inline. A `class Test*` carrying a `test_*`
+method becomes a `CollectionError` naming the class, the same way a bad import does.
 """
 
 from __future__ import annotations
@@ -29,11 +32,12 @@ import re
 import sys
 import traceback
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from velox._assertions import rewrite as _rewrite
 from velox._collection.parametrize import cases_for, known_params_of
+from velox._collection.tagexpr import TagExpression
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 
@@ -79,8 +83,8 @@ class TestRecord:
 
 @dataclass(frozen=True, slots=True)
 class CollectionError:
-    """An import failure attributed to one file, or a test whose dependency graph is malformed
-    (bad scope nesting, a missing injection)."""
+    """An import failure attributed to one file, a test whose dependency graph is malformed
+    (bad scope nesting, a missing injection), or a `class Test*` carrying `test_*` methods."""
 
     path: Path
     message: str
@@ -102,6 +106,9 @@ class CollectionResult:
     records: list[TestRecord]
     errors: list[CollectionError]
     skipped: list[Skipped]
+    deselected: list[str] = field(default_factory=list)
+    """Ids of tests excluded by `tag_expr`, not `skipped`: these passed the skip check (they
+    would otherwise run) but never reached the DI checks."""
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -172,7 +179,9 @@ def _skip_reason(marks: Marks) -> str | None:
     return None
 
 
-def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
+def collect(
+    files: Iterable[Path], *, rootdir: Path, tag_expr: TagExpression | None = None
+) -> CollectionResult:
     """Import each file and build its records; `index` assigned once over the whole result.
 
     Per file, in the order given:
@@ -183,22 +192,27 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
        file.
     2. Within the imported module, find `test_*` functions *defined* in it — i.e.
        `getattr(obj, "__module__", None) == module.__name__`, so a `test_*` helper imported from
-       elsewhere isn't collected twice.
-    3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
-       order.
+       elsewhere isn't collected twice. A `class Test*` defined in the module and carrying its own
+       `test_*` method becomes a `CollectionError` naming the class and its methods, one per class.
+    3. Sort the functions by `func.__code__.co_firstlineno` — definition order, not `vars()`
+       iteration order.
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
-       instead; a malformed DI graph, or a name collision between stacked `@parametrize`s,
-       excludes it into `errors` instead. Otherwise build one `TestRecord` per expanded case (one,
-       for a function with no `@velox.parametrize` mark), `id` as `"{path}::{qualname}"`, or
-       `"{path}::{qualname}[{case_id}]"` when parametrized, with `path` relative to `rootdir`, all
-       cases sharing the one `ResolutionPlan` `plan_for` built for the function.
+       instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
+       don't satisfy it into `deselected`. Otherwise a malformed DI graph, or a name collision
+       between stacked `@parametrize`s, excludes it into `errors` instead. Otherwise build one
+       `TestRecord` per expanded case (one, for a function with no `@velox.parametrize` mark),
+       `id` as `"{path}::{qualname}"`, or `"{path}::{qualname}[{case_id}]"` when parametrized,
+       with `path` relative to `rootdir`, all cases sharing the one `ResolutionPlan` `plan_for`
+       built for the function.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
-    you both); `index` is assigned across the concatenation of all files' records, in that order.
+    you both); `index` is assigned across the concatenation of all files' records, in that order
+    -- deselected tests never consume an index.
     """
     records: list[TestRecord] = []
     errors: list[CollectionError] = []
     skipped: list[Skipped] = []
+    deselected: list[str] = []
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
@@ -218,6 +232,20 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
         ]
         functions.sort(key=lambda func: func.__code__.co_firstlineno)
 
+        classes = [obj for obj in vars(module).values() if _is_own_test_class(obj, module_name)]
+        classes.sort(key=lambda cls: cls.__qualname__)
+        for cls in classes:
+            methods = ", ".join(sorted(_test_method_names(cls)))
+            errors.append(
+                CollectionError(
+                    path=display_path,
+                    message=(
+                        f"{cls.__qualname__}: class-based test collection isn't supported; move "
+                        f"{methods} to module-level functions (see ROADMAP.md)."
+                    ),
+                )
+            )
+
         for func in functions:
             test_id = f"{display_path}::{func.__qualname__}"
             marks = marks_of(func)
@@ -230,7 +258,14 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 continue
 
             if reason is not None:
+                # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
+                # regardless of -m -- @velox.skip is never silently reclassified as deselected
+                # depending on which tags happen to be in play.
                 skipped.append(Skipped(id=test_id, reason=reason))
+                continue
+
+            if tag_expr is not None and not tag_expr.matches(marks.tags):
+                deselected.append(test_id)
                 continue
 
             try:
@@ -245,7 +280,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata;
                 # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
                 # both claim. All are attributed to this test and collection continues, same as
-                # the `marks_of` catch above.
+                # the `_skip_reason` catch above.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
@@ -273,7 +308,7 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 )
                 index += 1
 
-    return CollectionResult(records=records, errors=errors, skipped=skipped)
+    return CollectionResult(records=records, errors=errors, skipped=skipped, deselected=deselected)
 
 
 def _import_module(path: Path, module_name: str) -> object:
@@ -322,10 +357,37 @@ def _is_own_test_function(obj: object, module_name: str) -> bool:
     this module.
 
     `inspect.isfunction` covers both -- an `async def` is a plain `FunctionType` with a flag on
-    its code object, not a distinct type -- and, unlike `callable()`, excludes a `class Test*`
-    (see `ROADMAP.md`)."""
+    its code object, not a distinct type -- and, unlike `callable()`, excludes a class."""
     return (
         inspect.isfunction(obj)
         and getattr(obj, "__name__", "").startswith("test_")
         and getattr(obj, "__module__", None) == module_name
     )
+
+
+def _is_own_test_class(obj: object, module_name: str) -> bool:
+    """Whether `obj` is a `class Test*` defined in this module and carrying its own `test_*`
+    method — the shape `collect` reports as a `CollectionError` rather than collecting nothing."""
+    return (
+        inspect.isclass(obj)
+        and getattr(obj, "__name__", "").startswith("Test")
+        and getattr(obj, "__module__", None) == module_name
+        and bool(_test_method_names(obj))
+    )
+
+
+def _test_method_names(cls: type) -> list[str]:
+    """The `test_*`-named methods defined directly on `cls`, unsorted.
+
+    `@staticmethod`/`@classmethod` wrap the function in a descriptor, so `vars(cls)` doesn't hand
+    back a plain `FunctionType` for those the way it does for an ordinary method -- unwrapped via
+    `__func__` before the `isfunction` check, so a `test_*` method under either decorator is still
+    caught rather than silently missed.
+    """
+    names = []
+    for name, member in vars(cls).items():
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if inspect.isfunction(member) and name.startswith("test_"):
+            names.append(name)
+    return names

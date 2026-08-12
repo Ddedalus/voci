@@ -8,9 +8,9 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `skip`/`skipif`/`xfail` ·
-`@velox.parametrize`, including stacked decorators · assertion introspection with comparison diffs
-· stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
-`velox.fastapi` per-test dependency overrides.
+`@velox.parametrize`, including stacked decorators · `@velox.tag` selection with `-m` ·
+assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` ·
+the reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Declared but not enforced
 
@@ -21,10 +21,6 @@ concurrently by hand, or run with `--concurrency 1`.
 - `exclusive=` on a fixture, and `@velox.solo` — no admission control and no suite-wide write
   lock, so a test that declares a shared resource still runs alongside everything else.
 - `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
-- `@velox.tag` — recorded and exposed as `TestInfo.tags`, but there is no `-m` to select on it.
-
-A `test_*` method on a `class Test*` is collected as *nothing at all*, with no error. Write tests
-as module-level functions until class-based collection lands.
 
 ## Next
 
@@ -39,7 +35,7 @@ Ctrl-C and `--maxfail` cancellation with time-boxed teardown.
 **Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
 collect as zero tests rather than as an error.
 
-**CLI.** `-k`/`-m` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
+**CLI.** `-k` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
 `--serial`, `--durations`.
 
 **Mocking tiers.** Detecting stock `unittest.mock` patching and scheduling those tests solo, with

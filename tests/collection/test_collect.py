@@ -13,6 +13,7 @@ from _support import Project
 import pytest
 from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
+from velox._collection.tagexpr import compile_tag_expression
 
 
 def _write(path: Path, source: str) -> Path:
@@ -84,12 +85,106 @@ def test_sync_def_test_star_is_collected_on_its_own(tmp_path: Path) -> None:
     assert [record.qualname for record in result.records] == ["test_sync"]
 
 
-def test_a_class_is_not_collected_even_when_named_like_a_test(tmp_path: Path) -> None:
-    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); `_is_own_test_function`
-    excludes it because a class isn't a `FunctionType`, not because of its name."""
+def test_a_class_test_method_becomes_a_collection_error(tmp_path: Path) -> None:
+    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); rather than collecting
+    nothing, `collect` reports the shape as a `CollectionError` naming the class and its
+    methods."""
     path = _write(
         tmp_path / "test_sample.py",
         "class TestSomething:\n    def test_method(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert result.errors[0].path == Path("test_sample.py")
+    assert "TestSomething" in result.errors[0].message
+    assert "test_method" in result.errors[0].message
+
+
+def test_a_class_test_error_does_not_stop_module_level_tests_in_the_same_file(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n"
+        "    def test_method(self):\n"
+        "        pass\n"
+        "\n"
+        "def test_ok():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert len(result.errors) == 1
+    assert [record.qualname for record in result.records] == ["test_ok"]
+
+
+def test_multiple_offending_classes_each_get_their_own_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestA:\n"
+        "    def test_a(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestB:\n"
+        "    def test_b(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert {error.message.split(":", 1)[0] for error in result.errors} == {"TestA", "TestB"}
+
+
+def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestHelper:\n    def helper(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_staticmethod_test_method_is_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n    @staticmethod\n    def test_method():\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "test_method" in result.errors[0].message
+
+
+def test_a_classmethod_test_method_is_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n    @classmethod\n    def test_method(cls):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "test_method" in result.errors[0].message
+
+
+def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
+    tmp_path: Path,
+) -> None:
+    """Only the `Test*` naming convention triggers the diagnostic; an ordinary helper class that
+    happens to define a `test_*`-named method is left alone, same as before."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Helper:\n    def test_method(self):\n        pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
@@ -231,6 +326,77 @@ def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> 
 
     assert [record.qualname for record in result.records] == ["test_not_skipped"]
     assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_always_skipped"]
+
+
+def test_tag_expr_excludes_non_matching_tests_into_deselected(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "async def test_slow():\n"
+        "    pass\n\n"
+        "async def test_untagged():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("slow"))
+
+    assert [record.qualname for record in result.records] == ["test_slow"]
+    assert result.deselected == ["test_sample.py::test_untagged"]
+    assert result.skipped == []
+    assert result.errors == []
+
+
+def test_skip_takes_priority_over_tag_expr_deselection(tmp_path: Path) -> None:
+    """A skip-marked test is always `skipped`, never `deselected`, regardless of `-m` -- a
+    test's skip status must not flip depending on which tags happen to be selected."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "@velox.skip('unrelated reason')\n"
+        "async def test_slow_and_skipped():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
+
+    assert result.records == []
+    assert result.deselected == []
+    assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_slow_and_skipped"]
+    assert result.skipped[0].reason == "unrelated reason"
+
+
+def test_no_tag_expr_deselects_nothing(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n@velox.tag('slow')\nasync def test_it():\n    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert [record.qualname for record in result.records] == ["test_it"]
+    assert result.deselected == []
+
+
+def test_deselected_tests_do_not_consume_an_index(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "async def test_a():\n"
+        "    pass\n\n"
+        "@velox.tag('slow')\n"
+        "async def test_b():\n"
+        "    pass\n\n"
+        "async def test_c():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
+
+    assert [record.qualname for record in result.records] == ["test_a", "test_c"]
+    assert [record.index for record in result.records] == [0, 1]
+    assert result.deselected == ["test_sample.py::test_b"]
 
 
 def test_depends_defaulted_parameter_is_collected_with_a_real_resolution_plan(
