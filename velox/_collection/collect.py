@@ -1,11 +1,13 @@
 """Collection: import test modules and build the flat list of test records.
 
 `TestRecord` carries what the runner needs to execute a test: `id`, `path`, `lineno`, `qualname`,
-`func`, and its resolved `plan`. A test marked `@velox.skip`/`@velox.skipif` is read off the
-function object and excluded from `records` into `skipped` instead of running for real; a
-`Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`, and a malformed DI graph
-(bad scope nesting, a missing injection) becomes a `CollectionError`, the same way a bad import
-does.
+`func`, its `params` (if `@velox.parametrize`d), and its resolved `plan`. A test marked
+`@velox.skip`/`@velox.skipif` is read off the function object and excluded from `records` into
+`skipped` instead of running for real; a `Depends(...)`-defaulted parameter is resolved via
+`_fixtures.plan_for`, and a malformed DI graph (bad scope nesting, a missing injection) becomes a
+`CollectionError`, the same way a bad import does. A `@velox.parametrize`d test expands into one
+record per case (`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function
+— parametrize values are call kwargs, not part of the DI graph.
 
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
@@ -26,11 +28,12 @@ import inspect
 import re
 import sys
 import traceback
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from velox._assertions import rewrite as _rewrite
+from velox._collection.parametrize import cases_for, known_params_of
 from velox._di.fixtures import ResolutionPlan, plan_for
 from velox._marks import Marks, marks_of
 
@@ -62,11 +65,16 @@ class TestRecord:
     lineno: int
     qualname: str
     func: Callable[..., object]
+    params: Mapping[str, object] | None
+    """This case's `@velox.parametrize` values, keyed by argument name — passed to `func` as
+    extra kwargs alongside `plan`'s injected ones. `None` for a test with no `parametrize` mark;
+    an empty dict never occurs (`@velox.parametrize` rejects an empty `argnames`)."""
     plan: ResolutionPlan
     """This test function's whole transitive fixture graph, already resolved. Every record
     carries one, even a test with no `Depends(...)` at all (`steps=()`, `root_args=()`) —
     uniformity here is what keeps the runner a single code path instead of an "if it has
-    fixtures" branch."""
+    fixtures" branch. Shared across every case of the same parametrized function: parametrize
+    values are call kwargs, not part of the DI graph, so the plan doesn't vary by case."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,9 +187,11 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
     3. Sort those by `func.__code__.co_firstlineno` — definition order, not `vars()` iteration
        order.
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
-       instead; a malformed DI graph excludes it into `errors` instead. Otherwise build one
-       `TestRecord`, `id` as `"{path}::{qualname}"` with `path` relative to `rootdir`, carrying
-       the `ResolutionPlan` `plan_for` built.
+       instead; a malformed DI graph, or a name collision between stacked `@parametrize`s,
+       excludes it into `errors` instead. Otherwise build one `TestRecord` per expanded case (one,
+       for a function with no `@velox.parametrize` mark), `id` as `"{path}::{qualname}"`, or
+       `"{path}::{qualname}[{case_id}]"` when parametrized, with `path` relative to `rootdir`, all
+       cases sharing the one `ResolutionPlan` `plan_for` built for the function.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order.
@@ -210,8 +220,9 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
 
         for func in functions:
             test_id = f"{display_path}::{func.__qualname__}"
+            marks = marks_of(func)
             try:
-                reason = _skip_reason(marks_of(func))
+                reason = _skip_reason(marks)
             except Exception:
                 # One test's malformed marks must not abort the file's remaining tests any more
                 # than a broken import aborts the remaining files.
@@ -223,27 +234,37 @@ def collect(files: Iterable[Path], *, rootdir: Path) -> CollectionResult:
                 continue
 
             try:
-                plan = plan_for(func)
+                known_params = known_params_of(marks.parametrizations)
+                plan = plan_for(func, known_params=known_params)
+                cases = cases_for(marks.parametrizations) if marks.parametrizations else None
             except Exception:
                 # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
-                # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata. Both
-                # are attributed to this test and collection continues, same as the `marks_of`
-                # catch above.
+                # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata;
+                # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
+                # both claim. All are attributed to this test and collection continues, same as
+                # the `marks_of` catch above.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
-            records.append(
-                TestRecord(
-                    id=test_id,
-                    index=index,
-                    path=display_path,
-                    lineno=func.__code__.co_firstlineno,
-                    qualname=func.__qualname__,
-                    func=func,
-                    plan=plan,
-                )
+            entries = (
+                [(test_id, None)]
+                if cases is None
+                else [(f"{test_id}[{case.id}]", case.params) for case in cases]
             )
-            index += 1
+            for record_id, params in entries:
+                records.append(
+                    TestRecord(
+                        id=record_id,
+                        index=index,
+                        path=display_path,
+                        lineno=func.__code__.co_firstlineno,
+                        qualname=func.__qualname__,
+                        func=func,
+                        params=params,
+                        plan=plan,
+                    )
+                )
+                index += 1
 
     return CollectionResult(records=records, errors=errors, skipped=skipped)
 

@@ -8,8 +8,9 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `skip`/`skipif`/`xfail` ·
-assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` · the
-reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
+`@velox.parametrize`, including stacked decorators · assertion introspection with comparison diffs
+· stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
+`velox.fastapi` per-test dependency overrides.
 
 ## Declared but not enforced
 
@@ -21,8 +22,6 @@ concurrently by hand, or run with `--concurrency 1`.
   lock, so a test that declares a shared resource still runs alongside everything else.
 - `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
 - `@velox.tag` — recorded and exposed as `TestInfo.tags`, but there is no `-m` to select on it.
-- `@velox.parametrize` — recorded, but not expanded at collection; a parametrized test currently
-  fails collection because its extra parameter looks like a missing dependency.
 
 A `test_*` method on a `class Test*` is collected as *nothing at all*, with no error. Write tests
 as module-level functions until class-based collection lands.
@@ -37,8 +36,8 @@ the largest single piece of remaining work.
 suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;
 Ctrl-C and `--maxfail` cancellation with time-boxed teardown.
 
-**Collection.** `@velox.parametrize` expansion, `class Test*` as pure namespacing, and a diagnostic
-for test shapes that currently collect as zero tests rather than as an error.
+**Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
+collect as zero tests rather than as an error.
 
 **CLI.** `-k`/`-m` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
 `--serial`, `--durations`.

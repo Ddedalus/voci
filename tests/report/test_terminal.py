@@ -33,6 +33,7 @@ def _test_record(id: str, path: Path, index: int = 0) -> Record:
         lineno=1,
         qualname=id.rsplit("::", 1)[-1],
         func=_noop,
+        params=None,
         plan=_EMPTY_PLAN,
     )
 

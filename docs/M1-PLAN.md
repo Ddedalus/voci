@@ -185,14 +185,19 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   invocation syntax in spec/02 §1 but not part of M1's DI/concurrency/assertions/capture/reporter
   bullet, and nothing above depends on it. Pick up opportunistically or fold into whichever M2 CLI
   slice touches `-k`/`-m` selection.
-- [ ] **`@velox.parametrize` expansion** — `ParamSet` is recorded on a function's marks
-  (`_marks.py`) the moment the decorator is applied, but `_collect.collect` never reads it: a
-  parametrized test collects as a single record with its extra parameter treated as a missing
-  `Depends()` injection, which `_fixtures.plan_for` rejects with a `DIError` (`parameter(s) ...
+- [x] **`@velox.parametrize` expansion** — `ParamSet` was recorded on a function's marks
+  (`_marks.py`) the moment the decorator was applied, but `_collect.collect` never read it: a
+  parametrized test collected as a single record with its extra parameter treated as a missing
+  `Depends()` injection, which `_fixtures.plan_for` rejected with a `DIError` (`parameter(s) ...
   have no default and are not injected via Depends(...)`) — a collection error, not a graceful
   "not implemented" message, and not the "multiple passing tests" spec/01 §9 documents as MVP.
   Found dogfooding `examples/01-fastapi-crud` (see above); worked around there by writing the
-  parametrized cases out as separate functions.
+  parametrized cases out as separate functions. Fixed by a new `_collection/parametrize.py`
+  (`known_params_of`/`cases_for`, the cartesian-product and id-generation logic) and threading
+  `known_params` through `_fixtures.plan_for`/`_check_missing_injections` so a parametrized
+  argument stops reading as a missing injection; `collect.py` now expands one `TestRecord` per
+  case, all sharing the one plan built for the function, and `_run.py` merges each case's
+  `params` into its call kwargs. — `0c7a67f`
 - [ ] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
   ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Not
   implemented: `_collect.collect` only looks for module-level `async def test_*` (`vars(module)

@@ -152,6 +152,15 @@ matter how it was installed. `_import_module` therefore asks the installed hook'
 directly before falling back. Remove that call and rewriting stops working for every test while the
 reported mode still says `rewrite` — no exception, no failing test, just worse assertion messages.
 
+**`@velox.parametrize` shares one resolution plan across every expanded case.** `plan_for` runs
+once per test function, not once per case: a parametrized value is a call kwarg, not a DI graph
+node, so building the plan per case would repeat identical work for nothing. `parametrize.
+known_params_of` computes what names parametrize supplies before that one `plan_for` call, so
+`_check_missing_injections` doesn't mistake a case's own arguments for uninjected fixtures — and
+the same pass rejects a name two stacked `@parametrize`s both claim, or one that collides with an
+actual `Depends(...)` injection, since either would otherwise fail confusingly later, at call time,
+once two sources tried to supply the same keyword.
+
 ## `_di/fixtures.py` / `_di/runtime.py` — dependency injection
 
 **The refcount is reserved before the await, not after.** A waiter parked on a pending fixture

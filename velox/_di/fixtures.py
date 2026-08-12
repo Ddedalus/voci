@@ -393,7 +393,9 @@ class ResolutionPlan:
     """The test function's own `Depends(...)` sites, resolved the same way as `PlanStep.args`."""
 
 
-def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
+def plan_for(
+    func: Callable[..., Any], *, known_params: frozenset[str] = frozenset()
+) -> ResolutionPlan:
     """Build `func`'s `ResolutionPlan`: a topological walk over its `Depends(...)` graph.
 
     `func` is a test function; an already-decorated `Fixture` never needs this, since its
@@ -401,12 +403,18 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
     compatibility and missing injections — the two checks the graph shape alone can decide.
     Cycles and `Depends()` on a non-`Fixture` are caught earlier, at `Fixture.__init__` and at
     `Depends()`'s own call site.
+
+    `known_params` names parameters some other mechanism supplies at call time —
+    `@velox.parametrize`'s argnames, currently the only source — so the missing-injection check
+    doesn't mistake them for an unsatisfiable `Depends()` site. They never become part of the
+    plan itself: expansion hands each case's values straight to `func`, alongside this plan's own
+    kwargs.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
     # below reaches already had its own body checked at `Fixture.__init__` time, independent of
     # who depends on it.
-    _check_missing_injections(func, root_injections)
+    _check_missing_injections(func, root_injections, known_params=known_params)
 
     steps: list[PlanStep] = []
     #: `id(fixture) -> step_id`, non-`"call"` scopes only — the memo that turns a diamond into
@@ -445,28 +453,60 @@ def plan_for(func: Callable[..., Any]) -> ResolutionPlan:
     return ResolutionPlan(steps=tuple(steps), root_args=root_args)
 
 
-def _check_missing_injections(func: Callable[..., Any], injections: tuple[Injection, ...]) -> None:
-    """Raise `DIError` naming any parameter with no default that isn't `self` and isn't injected.
+def _check_missing_injections(
+    func: Callable[..., Any],
+    injections: tuple[Injection, ...],
+    *,
+    known_params: frozenset[str] = frozenset(),
+) -> None:
+    """Raise `DIError` naming any parameter with no default that isn't `self`, isn't injected,
+    and isn't in `known_params`.
 
     Reads `__code__`/`__defaults__`, the same way `plan_of` does, keeping the two code paths
-    consistent.
+    consistent. Also rejects a `known_params` name that collides with an actual `Depends(...)`
+    injection, or that falls before the signature's `/` — both bind by keyword at call time
+    (`_di.setup`'s and expansion's kwargs alike), so a positional-only one could never actually
+    receive its value.
     """
     code = getattr(func, "__code__", None)
     if code is None:
         return
     injected = {injection.param for injection in injections}
+    name = getattr(func, "__name__", repr(func))
+
+    overlap = known_params & injected
+    if overlap:
+        params = ", ".join(sorted(overlap))
+        raise DIError(
+            f"{name}: parameter(s) {params} are both Depends(...)-injected and supplied "
+            f"externally (e.g. by @velox.parametrize) -- pick one source per parameter."
+        )
 
     positional = code.co_varnames[: code.co_argcount]
+    posonly_conflict = known_params & set(positional[: code.co_posonlyargcount])
+    if posonly_conflict:
+        params = ", ".join(sorted(posonly_conflict))
+        raise DIError(
+            f"{name}: parameter(s) {params} are supplied externally (e.g. by "
+            f"@velox.parametrize) on a positional-only parameter (before '/') -- velox always "
+            f"calls a test function by keyword. Move {params} after the '/'."
+        )
+
     n_defaulted = len(func.__defaults__ or ())
     required_positional = positional[: len(positional) - n_defaulted]
-    missing = [p for p in required_positional if p not in injected and p != "self"]
+    missing = [
+        p
+        for p in required_positional
+        if p not in injected and p not in known_params and p != "self"
+    ]
 
     kwonly = code.co_varnames[code.co_argcount : code.co_argcount + code.co_kwonlyargcount]
     kwdefaults = func.__kwdefaults__ or {}
-    missing += [p for p in kwonly if p not in kwdefaults and p not in injected]
+    missing += [
+        p for p in kwonly if p not in kwdefaults and p not in injected and p not in known_params
+    ]
 
     if missing:
-        name = getattr(func, "__name__", repr(func))
         params = ", ".join(missing)
         raise DIError(
             f"{name}: parameter(s) {params} have no default and are not injected via "

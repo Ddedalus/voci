@@ -190,9 +190,14 @@ async def _run_one(
                 setup_summary = _summarize_exception(exc)
 
             if setup_failure is None:
+                # `record.params` first, `kwargs` (this case's DI plan) second: collection
+                # already rejects any name both `@velox.parametrize` and `Depends(...)` claim
+                # (`_di._check_missing_injections`), so the two never actually overlap -- this
+                # ordering is only a tie-breaker that can't be exercised.
+                call_kwargs = {**(record.params or {}), **kwargs}
                 try:
                     if inspect.iscoroutinefunction(record.func):
-                        coro = cast("Coroutine[Any, Any, object]", record.func(**kwargs))
+                        coro = cast("Coroutine[Any, Any, object]", record.func(**call_kwargs))
                         await coro
                     else:
                         # A sync `def test_*`: dispatched to the loop's default executor
@@ -201,7 +206,7 @@ async def _run_one(
                         # only this test's own concurrency slot instead of the shared loop
                         # every other concurrently-dispatched test also runs on.
                         await asyncio.get_running_loop().run_in_executor(
-                            None, functools.partial(record.func, **kwargs)
+                            None, functools.partial(record.func, **call_kwargs)
                         )
                 except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                     raise

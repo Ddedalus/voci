@@ -5,7 +5,7 @@ helper used by DI and FastAPI-layering tests. No pytest fixtures live here — s
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ def make_record(
     qualname: str,
     plan: ResolutionPlan = EMPTY_PLAN,
     path: Path = Path("mod.py"),
+    params: Mapping[str, object] | None = None,
 ) -> Record:
     return Record(
         id=f"{path}::{qualname}",
@@ -32,6 +33,7 @@ def make_record(
         lineno=1,
         qualname=qualname,
         func=func,
+        params=params,
         plan=plan,
     )
 

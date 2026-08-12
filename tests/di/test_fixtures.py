@@ -264,3 +264,57 @@ def test_check_missing_injections_skips_self_only_in_positional_position() -> No
 
     with pytest.raises(DIError, match="self"):
         _check_missing_injections(keyword_only_self, ())
+
+
+# `known_params` -- the names `@velox.parametrize` supplies, threaded through from `plan_for`.
+# ------------------------------------------------------------------------------------------
+
+
+def test_known_params_are_not_reported_missing() -> None:
+    def t(n: int, expected: int) -> None:
+        pass
+
+    _check_missing_injections(t, (), known_params=frozenset({"n", "expected"}))  # must not raise
+
+
+def test_known_params_do_not_excuse_a_parameter_they_do_not_cover() -> None:
+    def t(n: int, other: int) -> None:
+        pass
+
+    with pytest.raises(DIError, match="other"):
+        _check_missing_injections(t, (), known_params=frozenset({"n"}))
+
+
+def test_known_params_work_for_a_keyword_only_parameter_too() -> None:
+    def t(*, n: int) -> None:
+        pass
+
+    _check_missing_injections(t, (), known_params=frozenset({"n"}))  # must not raise
+
+
+def test_plan_for_expands_around_a_parametrize_name_alongside_depends() -> None:
+    """The exact shape of the bug this closes: a parametrized extra parameter must not read as a
+    missing `Depends(...)` injection, and a real injection alongside it still resolves."""
+
+    async def test_func(n: int, value: int = Depends(alpha)) -> None:
+        pass
+
+    plan = plan_for(test_func, known_params=frozenset({"n"}))
+    assert [step.fixture.name for step in plan.steps] == ["alpha"]
+    assert plan.root_args == (("value", 0, False),)
+
+
+def test_known_params_colliding_with_an_injected_name_is_rejected() -> None:
+    async def test_func(value: int = Depends(alpha)) -> None:
+        pass
+
+    with pytest.raises(DIError, match="value"):
+        plan_for(test_func, known_params=frozenset({"value"}))
+
+
+def test_known_params_on_a_positional_only_parameter_is_rejected() -> None:
+    def t(n: int, /) -> None:
+        pass
+
+    with pytest.raises(DIError, match="n"):
+        _check_missing_injections(t, (), known_params=frozenset({"n"}))

@@ -104,6 +104,41 @@ def test_sync_test_with_a_fixture_is_injected_with_a_working_value() -> None:
     assert result.failure is None
 
 
+def test_parametrized_case_receives_its_own_values_as_kwargs() -> None:
+    """`record.params` -- the values `@velox.parametrize` expansion assigned this case -- are
+    passed to `func` as extra kwargs, alongside `plan`'s own (empty, here)."""
+
+    async def test_func(n: int, expected: int) -> None:
+        assert n * 2 == expected
+
+    records = [
+        _record(0, test_func, "test_func[1-2]", params={"n": 1, "expected": 2}),
+        _record(1, test_func, "test_func[2-5]", params={"n": 2, "expected": 5}),
+    ]
+
+    results = run_suite(records)
+
+    assert [result.outcome for result in results] == [Outcome.PASSED, Outcome.FAILED]
+
+
+def test_parametrized_case_kwargs_combine_with_an_actual_dependency() -> None:
+    @velox.fixture()
+    def answer() -> int:
+        return 42
+
+    def test_func(n: int, x: int = velox.Depends(answer)) -> None:
+        assert n == 1
+        assert x == 42
+
+    plan = plan_for(test_func, known_params=frozenset({"n"}))
+    record = _record(0, test_func, "test_func[1]", plan=plan, params={"n": 1})
+
+    (result,) = run_suite([record])
+
+    assert result.outcome is Outcome.PASSED
+    assert result.failure is None
+
+
 def test_sync_test_does_not_stall_a_concurrently_dispatched_async_test() -> None:
     """A blocking `time.sleep` in a sync test's body must not hold up the shared event loop
     that a sibling async test's own `asyncio.sleep` is scheduled on. Serial execution of the

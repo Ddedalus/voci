@@ -271,6 +271,134 @@ def test_a_test_with_no_dependencies_still_gets_a_trivial_resolution_plan(
     assert len(result.records) == 1
     assert result.records[0].plan.steps == ()
     assert result.records[0].plan.root_args == ()
+    assert result.records[0].params is None
+
+
+def test_a_parametrized_test_expands_into_one_record_per_case(tmp_path: Path) -> None:
+    """The exact bug this closes: `n`/`expected` used to read as missing `Depends(...)`
+    injections and fail collection outright."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n, expected', [(1, 2), (2, 4)])\n"
+        "async def test_double(n, expected):\n"
+        "    assert n * 2 == expected\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::test_double[1-2]",
+        "test_sample.py::test_double[2-4]",
+    ]
+    assert [record.params for record in result.records] == [
+        {"n": 1, "expected": 2},
+        {"n": 2, "expected": 4},
+    ]
+    assert [record.index for record in result.records] == [0, 1]
+    # Both cases share one function -> one resolution plan.
+    assert result.records[0].plan is result.records[1].plan
+
+
+def test_a_parametrized_test_shares_its_plan_with_an_actual_dependency(tmp_path: Path) -> None:
+    """A parametrized argument and a `Depends(...)` injection on the same test coexist: the
+    former becomes `params`, the latter is resolved through `plan` exactly as usual."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 10\n\n"
+        "@velox.parametrize('n', [1, 2])\n"
+        "async def test_uses_both(n, value: int = velox.Depends(db)):\n"
+        "    assert value == 10\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.params for record in result.records] == [{"n": 1}, {"n": 2}]
+    for record in result.records:
+        assert record.plan.steps[0].fixture.name == "db"
+
+
+def test_stacked_parametrize_expands_the_full_cartesian_product(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('outer', [1, 2])\n"
+        "@velox.parametrize('inner', ['a', 'b'])\n"
+        "async def test_grid(outer, inner):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id.rsplit("[", 1)[-1] for record in result.records] == [
+        "1-a]",
+        "1-b]",
+        "2-a]",
+        "2-b]",
+    ]
+
+
+def test_a_name_reused_across_stacked_parametrizes_is_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, 2])\n"
+        "@velox.parametrize('n', [3, 4])\n"
+        "async def test_conflict(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "n" in result.errors[0].message
+
+
+def test_a_parametrize_name_colliding_with_a_real_injection_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def value():\n"
+        "    return 1\n\n"
+        "@velox.parametrize('value', [1, 2])\n"
+        "async def test_conflict(value: int = velox.Depends(value)):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "value" in result.errors[0].message
+
+
+def test_a_skipped_parametrized_test_is_reported_skipped_once_without_case_expansion(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('not ready')\n"
+        "@velox.parametrize('n', [1, 2])\n"
+        "async def test_skipped(n):\n"
+        "    raise AssertionError('must not run')\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert result.errors == []
+    assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_skipped"]
 
 
 def test_a_malformed_di_graph_is_still_a_collection_error(tmp_path: Path) -> None:
