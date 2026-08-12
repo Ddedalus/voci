@@ -187,9 +187,12 @@ def solo[F: Callable[..., Any]](fn: F) -> F:
 
 
 def isolated[F: Callable[..., Any]](fn: F) -> F:
-    """Mark this test to run in a subprocess on a fresh loop.
+    """Mark this test to run alone in a subprocess, on its own fresh interpreter and loop.
 
-    Applied bare, with no parentheses. Not yet enforced; see `ROADMAP.md`.
+    Applied bare, with no parentheses. Still admitted through the same concurrency/`exclusive=`/
+    `solo` gate as every other test (`_run.AdmissionGate`) -- the subprocess is what's fresh, not
+    the scheduling. A module-scope fixture this test shares with in-process siblings is set up
+    and torn down separately inside the subprocess, not shared with them.
     """
     return _amend(fn, isolated=True)
 

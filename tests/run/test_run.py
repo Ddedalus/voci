@@ -1034,6 +1034,19 @@ def test_run_suite_rejects_non_positive_or_non_finite_timeout(bad: float) -> Non
         run_suite([_record(0, _passes, "test_passes")], timeout=bad)
 
 
+def test_run_suite_rejects_an_isolated_record_without_isolated_config() -> None:
+    """`@velox.isolated`'s subprocess needs a rootdir to re-collect from -- run_suite refuses to
+    silently run it in-process instead of raising, which is exactly the bug this mark used to
+    have (ROADMAP.md, before the subprocess tier existed)."""
+
+    @velox.isolated
+    async def test_func() -> None:
+        pass
+
+    with pytest.raises(ValueError, match=r"@velox\.isolated"):
+        run_suite([_record(0, test_func, "test_func")])
+
+
 def test_keyboard_interrupt_among_several_concurrent_siblings_propagates_cleanly() -> None:
     """When one test among several genuinely-concurrent siblings raises `KeyboardInterrupt`,
     it must come out of `run_suite` as a bare `KeyboardInterrupt`, not a `BaseExceptionGroup`."""

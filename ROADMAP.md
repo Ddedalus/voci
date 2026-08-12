@@ -8,18 +8,11 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
-`@velox.solo`, admission-controlled against everything else running · `skip`/`skipif`/`xfail` ·
+`@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
+per-test subprocess tier · `skip`/`skipif`/`xfail` ·
 `@velox.parametrize`, including stacked decorators · `@velox.tag` selection with `-m` ·
 assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` ·
 the reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
-
-## Declared but not enforced
-
-These marks exist in the API and are accepted today, but nothing acts on them yet. **A suite that
-relies on them for safety will race.** Until they land, keep conflicting tests from running
-concurrently by hand, or run with `--concurrency 1`.
-
-- `@velox.isolated` — the per-test subprocess tier. Runs in-process like any other test.
 
 ## Next
 

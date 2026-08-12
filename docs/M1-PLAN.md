@@ -222,22 +222,21 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   spec/00 §7's MVP table (`-k`/`-m` explicitly "Deferred"); grouped here as one item since they're
   naturally one CLI slice's worth of work. Bare paths (a file or a directory, no `::`) already
   work today and aren't part of this item.
-- [ ] **`exclusive=`/`@velox.solo` admission, and `@velox.isolated`'s subprocess tier** — all three
-  are recorded on a function's/fixture's marks (`Marks.solo`, `Marks.isolated`, `Fixture.exclusive`
-  already exist), but `_run.py`'s own module docstring says outright that "exclusive-resource
-  admission, the solo write-lock tier, aging... [are] still deliberately not built this slice
-  (spec/06, a separate scheduler session)" — a test carrying any of the three marks runs exactly
-  like one that doesn't: fully concurrent, no suite-wide lock, no subprocess. Where the marked
-  resource is genuinely shared and mutable, this isn't just unfinished, it's actively unsafe: found
-  dogfooding `examples/02-async-library` (two `mock.patch` calls on the same module-global target,
-  verified colliding 2000/2000 adversarial trials) and `examples/03-shared-resources` (a fixed TCP
-  port, `OSError: address already in use`, reproduced deterministically every run; a shared feature
-  flag registry, verified colliding 3000/3000 adversarial trials). Worked around in both examples
-  by not running the conflicting shape concurrently — merging separately-dispatched tests into one
-  sequential test, or `@velox.skip` — rather than leaving it to race. Spec/00 §7's MVP table lists
-  "Solo tier" as MVP (In-MVP column) but "Exclusive-resource admission... beyond the basic rule" as
-  Deferred, an inconsistency with `_run.py`'s own docstring worth reconciling before this is
-  scoped as a slice.
+- [x] **`exclusive=`/`@velox.solo` admission, and `@velox.isolated`'s subprocess tier** — all three
+  were recorded on a function's/fixture's marks (`Marks.solo`, `Marks.isolated`, `Fixture.exclusive`)
+  with nothing acting on them: a test carrying any of the three ran exactly like one that doesn't —
+  fully concurrent, no suite-wide lock, no subprocess. Where the marked resource is genuinely shared
+  and mutable, this wasn't just unfinished, it was actively unsafe: found dogfooding
+  `examples/02-async-library` (two `mock.patch` calls on the same module-global target, verified
+  colliding 2000/2000 adversarial trials) and `examples/03-shared-resources` (a fixed TCP port,
+  `OSError: address already in use`, reproduced deterministically every run; a shared feature flag
+  registry, verified colliding 3000/3000 adversarial trials). `exclusive=`/`solo` were fixed first,
+  by `AdmissionGate` (`_run.run_suite`): concurrency, `exclusive=` token contention, and `solo` are
+  one admission decision, not three layered gates (`docs/rationale.md`). `@velox.isolated` was
+  fixed by `_run/isolated.py`: a marked test is still admitted through the same gate, then
+  dispatched to a fresh `python -m velox._run._isolated_worker` subprocess, which re-collects the
+  one file naming it and runs it through this package's own `run_suite` a second time, on that
+  process's own loop; the result crosses back as JSON.
 - [ ] **`@mock.patch`-decorated tests silently skip DI, not just solo scheduling** — a sharper
   version of the item above, found dogfooding `examples/02-async-library`:
   `_fixtures.plan_for`/`plan_of` read `func.__code__`/`func.__defaults__` directly (deliberately,

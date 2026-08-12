@@ -26,6 +26,7 @@ from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
 from velox._collection import tagexpr as _tagexpr
 from velox._report import terminal as _report
+from velox._run import isolated as _isolated
 from velox._run import run as _run
 
 
@@ -446,6 +447,16 @@ def main(argv: list[str] | None = None) -> int:
             basetemp=args.basetemp,
             unattributed_output=unattributed,
             on_result=reporter.on_result,
+            # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
+            # isolated test's subprocess must reproduce what this run actually decided
+            # (a --assert=rewrite request can still fall back to plain), not re-derive
+            # and re-warn about it once per isolated test.
+            isolated=_isolated.IsolatedConfig(
+                rootdir=rootdir,
+                assert_mode=setup.mode,
+                assert_cache_dir=setup.cache_dir,
+                rewrite_roots=tuple(roots),
+            ),
         )
         wall_clock = time.monotonic() - wall_start
 

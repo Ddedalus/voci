@@ -9,10 +9,12 @@ envelope, plus an optional per-test `asyncio.timeout` budget -- the suite-wide `
 `@velox.timeout(...)` mark overriding it for that test alone. An `async def` test's call phase is
 awaited directly; a sync `def` one runs on the context-propagating executor
 (`_capture.ContextPropagatingExecutor`) instead, so a blocking call inside it holds only
-its own concurrency slot rather than the shared event loop. Results are collected back
-into logical (collection) order regardless of the order tests actually finish in, so a
-run's output is reproducible independent of scheduling. This module also derives the
-process exit code from the collected results and collection errors.
+its own concurrency slot rather than the shared event loop. A `@velox.isolated`-marked test is
+admitted through the same gate but dispatched to a fresh subprocess instead (`isolated.py`),
+re-collected there from its own source file and run alone on that process's own loop. Results
+are collected back into logical (collection) order regardless of the order tests actually
+finish in, so a run's output is reproducible independent of scheduling. This module also
+derives the process exit code from the collected results and collection errors.
 """
 
 from __future__ import annotations
@@ -37,15 +39,22 @@ from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
 from velox._di.fixtures import exclusive_tokens_of
 from velox._marks import XFail, marks_of
+from velox._run import isolated as _isolated
 
 __all__ = [
     "FAILING_OUTCOMES",
     "AdmissionGate",
+    "IsolatedConfig",
     "Outcome",
     "TestResult",
     "exit_code_for",
     "run_suite",
 ]
+
+#: Re-exported so a caller only needs `from velox._run import run` to build the one argument
+#: `run_suite` needs for `@velox.isolated` -- see `isolated.py`'s own docstring for why that
+#: module can't import this one back.
+IsolatedConfig = _isolated.IsolatedConfig
 
 #: Much larger than a typical core count: most suites are bound by a downstream
 #: service's latency, not by CPU.
@@ -401,12 +410,21 @@ def run_suite(
     basetemp: Path | None = None,
     unattributed_output: list[str] | None = None,
     on_result: Callable[[TestResult], None] | None = None,
+    isolated: IsolatedConfig | None = None,
+    already_isolated: bool = False,
 ) -> list[TestResult]:
     """Run every record concurrently on one `asyncio.Runner`, admitting at most
     `concurrency` tests into their setup/call/teardown envelope at a time via `AdmissionGate`,
     which also withholds a test whose `exclusive=` fixtures contend with one already running,
     and any test at all while a `@velox.solo` test is running. `concurrency=1` fully
     serializes, in collection order.
+
+    `isolated`, required whenever any record carries a `@velox.isolated` mark, is that test's
+    subprocess dispatch config (`isolated.IsolatedConfig`) -- rootdir and the parent's own
+    assertion-rewrite decision, so its subprocess re-collects the same way the parent did.
+    `already_isolated`, set only by `_isolated_worker`'s own call, runs every record in-process
+    regardless of its `isolated` mark -- this call already *is* the dedicated subprocess that
+    mark asked for, so honoring it again here would spawn a subprocess from a subprocess forever.
 
     `on_result`, if given, is called once per test, synchronously, in real completion
     order, immediately before that test's result is written into the returned list --
@@ -427,6 +445,14 @@ def run_suite(
         raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
         raise ValueError(f"timeout must be a positive, finite number of seconds, got {timeout}")
+    if isolated is None and not already_isolated:
+        needs_isolation = next((r for r in records if marks_of(r.func).isolated), None)
+        if needs_isolation is not None:
+            raise ValueError(
+                f"{needs_isolation.id!r} is marked @velox.isolated but run_suite was not given "
+                f"isolated=IsolatedConfig(...) -- its subprocess needs rootdir (and the parent's "
+                f"own assertion-rewrite decision) to re-collect it"
+            )
 
     results: list[TestResult | None] = [None] * len(records)
     store = _di.ScopeStore()
@@ -453,62 +479,99 @@ def run_suite(
             marks = marks_of(record.func)
             tokens = exclusive_tokens_of(record.plan)
             await gate.acquire(tokens, solo=marks.solo)
+            # A `@velox.timeout(...)` mark overrides the suite-wide budget for this test
+            # alone; `marks.timeout is None` is the common case of "no override", not "no
+            # limit" -- that's what the bare `timeout` parameter already means.
+            test_timeout = marks.timeout if marks.timeout is not None else timeout
             try:
-                # A fresh Sink and TestContext for this one test, published via
-                # current_test_context.set() for the duration of everything below --
-                # not just _run_one, but this test's own module-scope-fixture flush
-                # too, if it turns out to be the module's last test. _run_one itself
-                # never references _capture at all; every builtin-fixture provider and
-                # the installed Router/log handler read current_test_context for
-                # themselves, so wrapping the call is enough to attribute everything it
-                # does, transitively, to this test.
-                slot = worker_slots.acquire()
-                sink = _capture.Sink(label=record.id)
-                # A `@velox.timeout(...)` mark overrides the suite-wide budget for this
-                # test alone; `marks.timeout is None` is the common case of "no override",
-                # not "no limit" -- that's what the bare `timeout` parameter already means.
-                test_timeout = marks.timeout if marks.timeout is not None else timeout
-                test_context = _capture.TestContext(
-                    sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
-                )
-                token = _capture.current_test_context.set(test_context)
-                try:
-                    try:
-                        result, module_keys = await _run_one(record, store, timeout=test_timeout)
-                    finally:
-                        worker_slots.release(slot)
-
-                    if module_keys:
-                        pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                if marks.isolated and not already_isolated:
+                    if isolated is None:
+                        # Unreachable: run_suite checks this for every isolated-marked
+                        # record before any test is dispatched.
+                        raise RuntimeError(
+                            f"{record.id!r} is marked @velox.isolated with no IsolatedConfig -- "
+                            f"run_suite's own upfront check should have caught this"
+                        )
+                    # No Sink/TestContext here -- this test's whole setup/call/teardown
+                    # envelope, capture included, runs inside the subprocess's own
+                    # run_suite call and comes back already resolved.
+                    result = _result_from_json(
+                        await _isolated.run_isolated(
+                            record,
+                            config=isolated,
+                            timeout=test_timeout,
+                            basetemp_root=capture_setup.basetemp_root,
+                            scratch_dir=capture_setup.basetemp_root / ".velox-isolated",
+                        )
+                    )
                     remaining_by_module[record.path] -= 1
                     if remaining_by_module[record.path] == 0:
                         keys = pending_module_keys.pop(record.path, None)
                         if keys:
-                            # Inside this test's current_test_context: this test is
-                            # the module's last, so a module-scope fixture's own
-                            # teardown print is attributed to it.
+                            # No current_test_context to attribute this to -- it falls
+                            # back to the session sink, same as any output with no test
+                            # actively running would.
                             await _teardown_module_scope(
                                 store,
                                 keys,
                                 path=record.path,
                                 real_stderr=capture_setup.real_stderr,
                             )
-                finally:
-                    # Reset only now that nothing else this test's envelope owns --
-                    # including, for the module's last test, that module's own fixture
-                    # teardown -- could still write into sink.
-                    _capture.current_test_context.reset(token)
+                else:
+                    # A fresh Sink and TestContext for this one test, published via
+                    # current_test_context.set() for the duration of everything below --
+                    # not just _run_one, but this test's own module-scope-fixture flush
+                    # too, if it turns out to be the module's last test. _run_one itself
+                    # never references _capture at all; every builtin-fixture provider and
+                    # the installed Router/log handler read current_test_context for
+                    # themselves, so wrapping the call is enough to attribute everything it
+                    # does, transitively, to this test.
+                    slot = worker_slots.acquire()
+                    sink = _capture.Sink(label=record.id)
+                    test_context = _capture.TestContext(
+                        sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
+                    )
+                    token = _capture.current_test_context.set(test_context)
+                    try:
+                        try:
+                            result, module_keys = await _run_one(
+                                record, store, timeout=test_timeout
+                            )
+                        finally:
+                            worker_slots.release(slot)
+
+                        if module_keys:
+                            pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                        remaining_by_module[record.path] -= 1
+                        if remaining_by_module[record.path] == 0:
+                            keys = pending_module_keys.pop(record.path, None)
+                            if keys:
+                                # Inside this test's current_test_context: this test is
+                                # the module's last, so a module-scope fixture's own
+                                # teardown print is attributed to it.
+                                await _teardown_module_scope(
+                                    store,
+                                    keys,
+                                    path=record.path,
+                                    real_stderr=capture_setup.real_stderr,
+                                )
+                    finally:
+                        # Reset only now that nothing else this test's envelope owns --
+                        # including, for the module's last test, that module's own fixture
+                        # teardown -- could still write into sink.
+                        _capture.current_test_context.reset(token)
+
+                    # Captured output is only worth keeping for a failing result.
+                    if result.outcome in FAILING_OUTCOMES:
+                        result = dataclasses.replace(
+                            result,
+                            captured_stdout=sink.out,
+                            captured_stderr=sink.err,
+                            log_records=tuple(sink.log_records),
+                        )
             finally:
                 await gate.release(tokens, solo=marks.solo)
 
-            # Captured output is only worth keeping for a failing result.
-            if result.outcome in FAILING_OUTCOMES:
-                result = dataclasses.replace(
-                    result,
-                    captured_stdout=sink.out,
-                    captured_stderr=sink.err,
-                    log_records=tuple(sink.log_records),
-                )
             # Fired in real completion order, before the logical-order results slot
             # below is written, so a streaming reporter never sees a filled slot
             # for a test it hasn't been told about yet.
@@ -578,6 +641,30 @@ def run_suite(
     # anything but KeyboardInterrupt/SystemExit, so a None surviving to here would mean
     # that contract was violated, not a gap in this function's own exception handling.
     return cast(list[TestResult], results)
+
+
+def _result_from_json(data: dict[str, Any]) -> TestResult:
+    """The inverse of `isolated.result_to_json`: the dict an isolated test's subprocess wrote
+    back, as a real `TestResult`. `log_records` are reconstructed via `logging.makeLogRecord`
+    from just the three fields that crossed the process boundary -- `name`/`levelname`/the
+    already-rendered message -- which is everything `_report.terminal` ever reads off one.
+    """
+    return TestResult(
+        id=data["id"],
+        index=data["index"],
+        outcome=Outcome(data["outcome"]),
+        duration=data["duration"],
+        failure=data["failure"],
+        failure_summary=data["failure_summary"],
+        captured_stdout=data["captured_stdout"],
+        captured_stderr=data["captured_stderr"],
+        log_records=tuple(
+            logging.makeLogRecord(
+                {"name": rec["name"], "levelname": rec["levelname"], "msg": rec["message"]}
+            )
+            for rec in data["log_records"]
+        ),
+    )
 
 
 async def _teardown_module_scope(

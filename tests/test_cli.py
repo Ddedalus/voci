@@ -611,3 +611,112 @@ def test_main_does_not_disturb_a_preexisting_sys_path_entry_for_rootdir(
 
     assert main([]) == 0
     assert rootdir_str in sys.path
+
+
+# @velox.isolated: the per-test subprocess tier, end to end (each of these actually spawns a
+# subprocess -- slower than the rest of this file by construction, not a bug).
+# -----------------------------------------------------------------------------------------
+
+
+def test_main_runs_a_passing_isolated_test(project: Project) -> None:
+    project.write(
+        "test_iso.py",
+        "import velox\n\n@velox.isolated\nasync def test_ok():\n    assert 1 + 1 == 2\n",
+    )
+    assert main([str(project.root)]) == 0
+
+
+def test_isolated_test_runs_in_a_different_process(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of the mark: the test body observes a different `os.getpid()` than the
+    process running `main()`. `PARENT_PID` is read from an env var, not computed at module import
+    time -- the subprocess re-imports this file fresh, so a module-level `os.getpid()` would just
+    read back the subprocess's own pid and pass either way.
+    """
+    monkeypatch.setenv("ISO_TEST_PARENT_PID", str(os.getpid()))
+    project.write(
+        "test_iso.py",
+        "import os\nimport velox\n\n"
+        "@velox.isolated\n"
+        "async def test_elsewhere():\n"
+        "    assert os.getpid() != int(os.environ['ISO_TEST_PARENT_PID'])\n",
+    )
+    assert main([str(project.root)]) == 0
+
+
+def test_main_reports_a_failing_isolated_test_with_assertion_introspection(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_iso.py",
+        "import velox\n\n"
+        "@velox.isolated\n"
+        "async def test_bad():\n"
+        "    x = 2\n"
+        "    y = 3\n"
+        "    assert x == y\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "::test_bad" in out
+    # Same proof as the in-process case: only the AST rewrite ever produces this exact text.
+    assert "assert 2 == 3" in out
+
+
+def test_main_shows_captured_output_for_a_failing_isolated_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_iso.py",
+        "import velox\n\n"
+        "@velox.isolated\n"
+        "async def test_bad():\n"
+        "    print('from the subprocess')\n"
+        "    assert False\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "from the subprocess" in out
+
+
+def test_isolated_test_gets_a_working_tmp_path(project: Project) -> None:
+    project.write(
+        "test_iso.py",
+        "from pathlib import Path\n"
+        "import velox\n\n"
+        "@velox.isolated\n"
+        "async def test_writes_a_file(tmp_path: Path = velox.Depends(velox.tmp_path)):\n"
+        "    (tmp_path / 'f.txt').write_text('hi')\n"
+        "    assert (tmp_path / 'f.txt').read_text() == 'hi'\n",
+    )
+    assert main([str(project.root)]) == 0
+
+
+def test_main_mixes_isolated_and_in_process_tests_in_one_run(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_mixed.py",
+        "import velox\n\n"
+        "async def test_in_process_pass():\n    pass\n\n"
+        "async def test_in_process_fail():\n    assert False\n\n"
+        "@velox.isolated\n"
+        "async def test_isolated_pass():\n    pass\n\n"
+        "@velox.isolated\n"
+        "async def test_isolated_fail():\n    assert False\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "4 tests: 2 passed, 2 failed" in out
+    assert "::test_in_process_fail" in out
+    assert "::test_isolated_fail" in out
