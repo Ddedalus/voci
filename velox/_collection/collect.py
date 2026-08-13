@@ -40,7 +40,7 @@ from pathlib import Path
 
 from velox._assertions import rewrite as _rewrite
 from velox._collection.parametrize import cases_for, known_params_of
-from velox._collection.requires import requires_of
+from velox._collection.requires import REQUIRES_ATTR, requires_of
 from velox._collection.tagexpr import TagExpression
 from velox._di.fixtures import ResolutionPlan, expand_cases, plan_for
 from velox._marks import Marks, marks_of
@@ -214,6 +214,11 @@ def collect(
        axis contributes, with `path` relative to `rootdir` and each record carrying the
        `ResolutionPlan` specialized for its own fixture-case combination.
 
+    A module's `velox.use(...)` declarations are validated once, before its tests: a malformed
+    declared graph is one `CollectionError` for the file, which then contributes no records.
+    Once every file is done, a `velox.use(...)` call left on a module that isn't a collected test
+    file becomes a `CollectionError` of its own (`_misplaced_declarations`).
+
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order
     -- deselected tests never consume an index.
@@ -225,7 +230,10 @@ def collect(
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
+    collected_files: set[Path] = set()
+
     for path in files:
+        collected_files.add(Path(path).resolve())
         display_path = _display_path(path, resolved_rootdir)
         module_name = module_name_for(path, rootdir)
         try:
@@ -237,6 +245,15 @@ def collect(
             continue
 
         implicit = requires_of(module)
+        if implicit:
+            try:
+                # Validated once against a stand-in body rather than per test: the declared graph
+                # is the same for all of them, so the alternative is one identical traceback per
+                # test in the file.
+                plan_for(_no_dependencies, implicit=implicit)
+            except Exception:
+                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+                continue
 
         functions = [
             obj for obj in vars(module).values() if _is_own_test_function(obj, module_name)
@@ -326,7 +343,43 @@ def collect(
                 )
                 index += 1
 
+    errors.extend(_misplaced_declarations(collected_files))
     return CollectionResult(records=records, errors=errors, skipped=skipped, deselected=deselected)
+
+
+def _misplaced_declarations(collected_files: set[Path]) -> list[CollectionError]:
+    """`velox.use(...)` declarations on modules that aren't test files velox collected.
+
+    A declaration is read back off the test module velox imported it from, so a call in a shared
+    helper module is never seen and the fixtures it names never run. Reported rather than left as
+    a missing side effect. A collected test module reaches `sys.modules` only when something else
+    imported it under its real name too, hence the `collected_files` exemption; velox's own import
+    drops it again (`_import_module`).
+    """
+    misplaced: list[CollectionError] = []
+    for name, module in list(sys.modules.items()):
+        namespace = getattr(module, "__dict__", None)
+        if namespace is None or not namespace.get(REQUIRES_ATTR):
+            continue
+        file = getattr(module, "__file__", None)
+        if file is not None and Path(file).resolve() in collected_files:
+            continue
+        misplaced.append(
+            CollectionError(
+                path=Path(file) if file else Path(name),
+                message=(
+                    f"{name}: velox.use(...) applies to the tests in the module that calls it, "
+                    f"and this module isn't one velox collects. Move the call into each test "
+                    f"module that needs those fixtures."
+                ),
+            )
+        )
+    return misplaced
+
+
+def _no_dependencies() -> None:
+    """Stand-in test body: a function whose plan is whatever `velox.use(...)` declared and
+    nothing else."""
 
 
 def _import_module(path: Path, module_name: str) -> object:

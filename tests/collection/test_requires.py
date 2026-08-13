@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from _support import Project
@@ -156,9 +157,10 @@ async def test_one(x=velox.Depends(asked_for)):
     assert _step_names(record) == ["declared", "asked_for"]
 
 
-def test_a_malformed_declared_graph_becomes_a_collection_error(tmp_path: Path) -> None:
-    """A session-scoped declared fixture depending on a function-scoped one is the same
-    `DIError` a `Depends()` site would raise, attributed to each test it applies to."""
+def test_a_malformed_declared_graph_is_one_error_for_the_file(tmp_path: Path) -> None:
+    """A session-scoped declared fixture depending on a function-scoped one is the same `DIError`
+    a `Depends()` site would raise. The declared graph is shared by the whole module, so it is
+    reported once rather than once per test it applies to."""
     path = _write(
         tmp_path / "test_sample.py",
         """
@@ -176,6 +178,12 @@ velox.use(wide)
 
 async def test_one():
     pass
+
+async def test_two():
+    pass
+
+async def test_three():
+    pass
 """,
     )
 
@@ -184,6 +192,44 @@ async def test_one():
     assert result.records == []
     assert len(result.errors) == 1
     assert "wide" in result.errors[0].message
+
+
+def test_a_declaration_on_a_module_holding_no_tests_is_reported(tmp_path: Path) -> None:
+    """A `velox.use(...)` in a shared helper module is never read back, so the fixtures it names
+    would silently never run."""
+    _write(
+        tmp_path / "shared_helpers.py",
+        """
+import velox
+
+@velox.fixture()
+def declared():
+    return 1
+
+velox.use(declared)
+""",
+    )
+    path = _write(
+        tmp_path / "test_sample.py",
+        f"""
+import sys
+sys.path.insert(0, {str(tmp_path)!r})
+import shared_helpers
+
+async def test_one():
+    pass
+""",
+    )
+
+    try:
+        result = collect([path], rootdir=tmp_path)
+    finally:
+        sys.modules.pop("shared_helpers", None)
+        sys.path.remove(str(tmp_path))
+
+    assert [record.qualname for record in result.records] == ["test_one"]
+    assert len(result.errors) == 1
+    assert "shared_helpers" in result.errors[0].message
 
 
 def test_a_declared_parametrized_fixture_fans_the_module_out_by_case(tmp_path: Path) -> None:
