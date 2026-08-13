@@ -185,6 +185,22 @@ this method.
 lifetime, and both tear down at end of test. Ranking `"call"` lower would reject valid graphs over a
 caching distinction the check was never meant to police.
 
+**A parametrized fixture's case value has no `request` object to travel through.** velox never
+grows one (`_check_missing_injections` has no name-based fallback to hang it off), so `params=`
+reuses the convention `@velox.parametrize` already established: the value arrives as an ordinary
+argument, name-matched at collection time rather than injected. Fixing that name to `param`
+instead of letting it be configured per fixture keeps a parametrized fixture's body readable
+without a decorator argument to cross-reference, and keeps `expand_cases` from needing to carry a
+name alongside every case value.
+
+**A specialized plan's cache key covers a step's actual parametrized ancestors, not every case in
+play.** `expand_cases` could have folded the whole chosen combination into every downstream step's
+key uniformly; instead each `PlanStep.param_ancestors`, computed once during `plan_for`'s own
+graph walk, tracks exactly which parametrized fixtures that step's own construction transitively
+reaches. Two fixtures parametrized independently of each other therefore still share a downstream
+step's cache entry across whichever axis it doesn't depend on, rather than needlessly rebuilding it
+once per combination of both.
+
 ## `fastapi.py` — per-test dependency overrides
 
 **The app stays a singleton; the *view* of it becomes per-test.** `dependency_overrides` and
