@@ -10,7 +10,9 @@ on `-m`. A `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_fo
 DI graph (bad scope nesting, a missing injection) becomes a `CollectionError`, the same way a bad
 import does. A `@velox.parametrize`d test expands into one record per case
 (`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function — parametrize
-values are call kwargs, not part of the DI graph.
+values are call kwargs, not part of the DI graph. A test transitively depending on a fixture built
+with `params=` expands the same way, on the DI graph instead (`_fixtures.expand_cases`); the two
+axes cross freely, so both together multiply.
 
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
@@ -38,7 +40,7 @@ from pathlib import Path
 from velox._assertions import rewrite as _rewrite
 from velox._collection.parametrize import cases_for, known_params_of
 from velox._collection.tagexpr import TagExpression
-from velox._di.fixtures import ResolutionPlan, plan_for
+from velox._di.fixtures import ResolutionPlan, expand_cases, plan_for
 from velox._marks import Marks, marks_of
 
 __all__ = [
@@ -77,8 +79,10 @@ class TestRecord:
     """This test function's whole transitive fixture graph, already resolved. Every record
     carries one, even a test with no `Depends(...)` at all (`steps=()`, `root_args=()`) —
     uniformity here is what keeps the runner a single code path instead of an "if it has
-    fixtures" branch. Shared across every case of the same parametrized function: parametrize
-    values are call kwargs, not part of the DI graph, so the plan doesn't vary by case."""
+    fixtures" branch. Identical (the same object) across every `@velox.parametrize` case of the
+    same function, since parametrize values are call kwargs, not part of the DI graph — but
+    distinct per fixture-case combination for a function depending on a `params=` fixture, since
+    that's what specializes each fixture's construction and cache key to its chosen case."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,10 +204,11 @@ def collect(
        instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
        don't satisfy it into `deselected`. Otherwise a malformed DI graph, or a name collision
        between stacked `@parametrize`s, excludes it into `errors` instead. Otherwise build one
-       `TestRecord` per expanded case (one, for a function with no `@velox.parametrize` mark),
-       `id` as `"{path}::{qualname}"`, or `"{path}::{qualname}[{case_id}]"` when parametrized,
-       with `path` relative to `rootdir`, all cases sharing the one `ResolutionPlan` `plan_for`
-       built for the function.
+       `TestRecord` per case in the cartesian product of `@velox.parametrize`'s cases and the
+       fixture graph's own parametrized-fixture cases (one of each, for a function using
+       neither), `id` as `"{path}::{qualname}"`, or `"{path}::{qualname}[{case_id}]"` when either
+       axis contributes, with `path` relative to `rootdir` and each record carrying the
+       `ResolutionPlan` specialized for its own fixture-case combination.
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order
@@ -275,6 +280,7 @@ def collect(
                 known_params = known_params_of(marks.parametrizations)
                 plan = plan_for(func, known_params=known_params)
                 cases = cases_for(marks.parametrizations) if marks.parametrizations else None
+                expansions = expand_cases(plan)
             except Exception:
                 # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
                 # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata;
@@ -284,26 +290,32 @@ def collect(
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
-            # `cases` is `None` for a test with no `@velox.parametrize` mark, one un-suffixed
-            # record; otherwise `@velox.parametrize` already rejects an empty `argvalues` at
-            # decoration time, so `cases` is a non-empty tuple, one `[case.id]`-suffixed record
-            # each.
-            entries = (
-                [(test_id, None)]
-                if cases is None
-                else [(f"{test_id}[{case.id}]", case.params) for case in cases]
-            )
-            for record_id, params in entries:
+            # `cases` is `None` for a test with no `@velox.parametrize` mark; `expansions` always
+            # has at least one entry, `case_id=None` when the test depends on no parametrized
+            # fixture. The two axes are independent and cross freely: a test with neither gets one
+            # un-suffixed record, exactly as before either axis existed.
+            entries = [
+                (
+                    "-".join(
+                        part for part in (expansion.case_id, case.id if case else None) if part
+                    ),
+                    case.params if case else None,
+                    expansion.plan,
+                )
+                for expansion in expansions
+                for case in (cases if cases is not None else (None,))
+            ]
+            for case_id, params, record_plan in entries:
                 records.append(
                     TestRecord(
-                        id=record_id,
+                        id=f"{test_id}[{case_id}]" if case_id else test_id,
                         index=index,
                         path=display_path,
                         lineno=func.__code__.co_firstlineno,
                         qualname=func.__qualname__,
                         func=func,
                         params=params,
-                        plan=plan,
+                        plan=record_plan,
                     )
                 )
                 index += 1

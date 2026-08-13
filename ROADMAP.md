@@ -10,9 +10,10 @@ scopes, single-flight construction and inverted teardown · concurrent execution
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
 per-test subprocess tier · `skip`/`skipif`/`xfail` ·
-`@velox.parametrize`, including stacked decorators · `@velox.tag` selection with `-m` ·
-assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` ·
-the reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
+`@velox.parametrize`, including stacked decorators · parametrized fixtures (`params=` on
+`@velox.fixture`) · `@velox.tag` selection with `-m` · assertion introspection with comparison
+diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
+`velox.fastapi` per-test dependency overrides.
 
 ## Next
 
@@ -20,10 +21,11 @@ Fast-tracked: the pytest migration codegen (see
 [docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
 five items, roughly in the order the codegen needs them.
 
-**Injection ergonomics.** Parametrized fixtures, and lazy or optional dependencies. Without these,
-conftest overrides and `@pytest.fixture(params=...)` each force the migration tool to duplicate a
-fixture object per param value plus its whole downstream chain — the single largest source of
-hand edits a migrated suite would otherwise carry.
+**Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
+of tests without duplicating everything downstream of it by hand. Without these, a conftest-style
+override still forces the migration tool to generate a whole specialized fixture chain per
+override scope — the largest remaining source of hand edits a migrated suite would otherwise
+carry (see `docs/migration-problem-statement.md` §4.2).
 
 **Mocking tiers.** Detecting stock `unittest.mock` patching and scheduling those tests solo, with
 the cost reported in the run summary. Related: a `@mock.patch`-decorated test hides its real

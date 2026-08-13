@@ -12,7 +12,7 @@ from _support import run_async as run
 import pytest
 import velox
 from velox import Depends
-from velox._di.fixtures import BuiltinContext, Fixture, Scope, plan_for
+from velox._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for
 from velox._di.runtime import ScopeStore, _construct, key_for, setup, teardown
 
 #: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
@@ -530,3 +530,95 @@ def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() ->
     k1 = key_for(fx, 0, test_id="t", module_path="m")
     k2 = key_for(fx, 0, test_id="t", module_path="m")
     assert k1 != k2
+
+
+# `params=`: `setup` passes each case's value through, and cache keys stay per-case.
+# ------------------------------------------------------------------------------------------
+
+
+def test_setup_passes_the_chosen_case_value_as_the_param_kwarg() -> None:
+    @velox.fixture(params=["sqlite", "postgres"])
+    def backend(param: str) -> str:
+        return f"backend={param}"
+
+    async def test_func(x: str = Depends(backend)) -> None:
+        pass
+
+    async def scenario() -> list[str]:
+        store = ScopeStore()
+        plan = plan_for(test_func)
+        values: list[str] = []
+        for expansion in expand_cases(plan):
+            kwargs, keys = await setup(expansion.plan, store, test_id="t", module_path="m")
+            values.append(kwargs["x"])
+            await teardown(store, keys)
+        return values
+
+    assert run(scenario()) == ["backend=sqlite", "backend=postgres"]
+
+
+def test_setup_builds_a_distinct_module_scope_instance_per_case() -> None:
+    """A `module`-scope fixture parametrized by `params=` gets one instance per case, shared by
+    every test in the module that picks the same case -- not one shared instance across cases."""
+    built: list[str] = []
+
+    @velox.fixture(scope="module", params=["a", "b"])
+    def backend(param: str) -> str:
+        built.append(param)
+        return param
+
+    async def test_func(x: str = Depends(backend)) -> None:
+        pass
+
+    async def scenario() -> None:
+        store = ScopeStore()
+        plan = plan_for(test_func)
+        expansions = expand_cases(plan)
+        # Two tests both picking the "a" case, one picking "b", all three still "in flight"
+        # together (module scope is only shared while at least one holder is still live) -- module
+        # scope shares within a case, still varies across cases.
+        all_keys = []
+        for expansion in (expansions[0], expansions[0], expansions[1]):
+            _kwargs, keys = await setup(expansion.plan, store, test_id="t", module_path="m.py")
+            all_keys.append(keys)
+        for keys in all_keys:
+            await teardown(store, keys)
+
+    run(scenario())
+    assert sorted(built) == ["a", "b"]  # `backend` only actually ran once per distinct case
+
+
+def test_setup_never_shares_a_construction_across_two_independent_parametrized_fixtures() -> None:
+    """A step downstream of two independently-parametrized fixtures gets a distinct instance per
+    combination of their cases."""
+    built: list[tuple[str, int]] = []
+
+    @velox.fixture(scope="module", params=["a", "b"])
+    def left(param: str) -> str:
+        return param
+
+    @velox.fixture(scope="module", params=[1, 2])
+    def right(param: int) -> int:
+        return param
+
+    @velox.fixture(scope="module")
+    def combined(x: str = Depends(left), y: int = Depends(right)) -> str:
+        built.append((x, y))
+        return f"{x}-{y}"
+
+    async def test_func(c: str = Depends(combined)) -> None:
+        pass
+
+    async def scenario() -> list[str]:
+        store = ScopeStore()
+        plan = plan_for(test_func)
+        values: list[str] = []
+        for expansion in expand_cases(plan):
+            kwargs, keys = await setup(expansion.plan, store, test_id="t", module_path="m.py")
+            values.append(kwargs["c"])
+            await teardown(store, keys)
+        return values
+
+    values = run(scenario())
+    assert sorted(values) == ["a-1", "a-2", "b-1", "b-2"]
+    assert len(built) == 4  # one construction per combination, never shared

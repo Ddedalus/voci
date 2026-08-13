@@ -75,17 +75,19 @@ Everything the codegen can target, grouped by what it can rely on.
 
 **Available today, 1:1 or nearly.** `@pytest.fixture` (`scope`, `name`, yield-teardown, sync and
 async, sync- and async-generator bodies) → `@velox.fixture()`; `parametrize` → `@velox.parametrize`
-(with `ids`); `skip`/`skipif`/`xfail` marks; custom marks → `@velox.tag(...)`, selectable with `-m`;
-`tmp_path`/`tmp_path_factory`; `capsys` → `velox.capture`; `caplog` → `velox.log_records`;
-`pytest.raises` (including `match=` semantics, `re.search`, same escaping gotcha);
-`pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` marks and `event_loop` fixtures →
-deleted; `pytest-timeout` → `@velox.timeout(...)`.
+(with `ids`); `@pytest.fixture(params=...)` → `@velox.fixture(params=...)`, `request.param` → the
+fixture body's own `param` argument; `skip`/`skipif`/`xfail` marks; custom marks →
+`@velox.tag(...)`, selectable with `-m`; `tmp_path`/`tmp_path_factory`; `capsys` → `velox.capture`;
+`caplog` → `velox.log_records`; `pytest.raises` (including `match=` semantics, `re.search`, same
+escaping gotcha); `pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` marks and
+`event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`.
 
 **On the roadmap, and worth designing against rather than around.** `-k` selection and
-`path.py::test_name` ids (CI invocations depend on both); `class Test*` as namespacing; parametrized
-fixtures and lazy/optional dependencies (see §4.2 — the single largest source of hand edits if they
-never land); `@mock.patch` detection and automatic solo scheduling; the fix for patch-decorated
-tests losing their DI; JUnit XML and `--report-json` (CI consumers depend on these).
+`path.py::test_name` ids (CI invocations depend on both); `class Test*` as namespacing; lazy or
+optional dependencies and overriding one fixture for a subtree of tests without hand-duplicating
+its whole downstream chain (see §4.2 — the single largest source of hand edits if it never lands);
+`@mock.patch` detection and automatic solo scheduling; the fix for patch-decorated tests losing
+their DI; JUnit XML and `--report-json` (CI consumers depend on these).
 
 **Never.** `conftest.py`, name-based lookup, `autouse`, `request`, hooks (`pytest_configure`,
 `pytest_collection_modifyitems`, `pytest_addoption`, …), plugin entry points, `monkeypatch`,
@@ -117,12 +119,12 @@ Constraints worth stating up front:
 - Whatever answers it, the answer must be *per test*, not per name: the same parameter name can
   resolve to different fixtures in two directories, which is §4.2.
 
-### 4.2 Graph specialization: overrides, parametrized fixtures, indirect
+### 4.2 Graph specialization: overrides and indirect parametrization
 
 velox's dependency edges are hard-wired at import time: `Depends(session)` names one object,
-forever. pytest's edges are resolved per test, late. Three extremely common patterns exploit the
-difference, and all three collapse into the same problem — **one pytest fixture corresponds to N
-velox fixture objects, and every fixture transitively downstream of it must be duplicated too**.
+forever. pytest's edges are resolved per test, late. Two common patterns exploit the difference,
+and both collapse into the same problem — **one pytest fixture corresponds to N velox fixture
+objects, and every fixture transitively downstream of it must be duplicated too**.
 
 1. **Conftest override / shadowing.** `tests/conftest.py` defines `settings`; `tests/integration/
    conftest.py` redefines `settings`; every fixture that depends on `settings` — `engine`,
@@ -130,17 +132,15 @@ velox fixture objects, and every fixture transitively downstream of it must be d
    under `integration/`. In velox, redefining the leaf changes nothing for its dependents. Correct
    translation requires generating a specialized *chain* per override scope, and the diff has to
    stay comprehensible while doing it.
-2. **Parametrized fixtures.** `@pytest.fixture(params=["sqlite", "postgres"])` multiplies every test
-   that transitively depends on it, and `request.param` inside the body is the value. velox has no
-   parametrized fixtures today (roadmap). Expressing this without them means, again, one fixture
-   object per param value plus a duplicated downstream chain, plus a `@velox.parametrize` on each
-   affected test to choose between them — an expansion that composes multiplicatively with itself
-   and with case 1.
-3. **`indirect=True` parametrization.** Same shape, chosen per test rather than per fixture.
+2. **`indirect=True` parametrization.** `@pytest.mark.parametrize("backend", [...], indirect=True)`
+   chooses a fixture's case per test rather than per fixture — the same multiplication as
+   `@pytest.fixture(params=...)`, which maps directly onto `@velox.fixture(params=...)` (§3), but
+   selected at the call site instead of the fixture's own declaration, so it still needs a
+   generated fixture object per value used.
 
-This is the problem most likely to be underestimated. It decides whether migrating a
-medium-sized suite produces a 400-line diff or a 40,000-line one, and it is the strongest argument
-for parametrized fixtures moving up the roadmap.
+Case 1 is the problem most likely to be underestimated. Unlike a plain `@pytest.fixture(params=...)`
+call, which has a direct target, a conftest override has none: it decides whether migrating a
+medium-sized suite produces a 400-line diff or a 40,000-line one.
 
 ### 4.3 `autouse`
 
@@ -165,7 +165,8 @@ edge explicit.
 
 `request` is pytest's escape hatch and has no velox counterpart. Each use is a different problem:
 
-- `request.param` → the parametrized value (see §4.2).
+- `request.param` → the fixture body's own `param` argument (see §3), unless the fixture is
+  parametrized `indirect=True` from the test rather than declared with `params=` itself (§4.2).
 - `request.getfixturevalue("name")` → an explicit `Depends()` when the name is a literal and
   statically resolvable; unresolvable when it is computed, which happens in exactly the
   fixture-factory code that uses it most.
@@ -326,7 +327,7 @@ Properties to design toward, stated as requirements rather than as a design:
    barrier for suites that only collect inside a container or against live infrastructure.
 2. **Preserve the conftest layout, or consolidate into one fixture module?** (§4.5)
 3. **How far does §4.2's chain specialization go before it is better to fail loudly?** Is there a
-   duplication budget past which the tool should stop and ask for parametrized fixtures?
+   duplication budget past which the tool should stop and ask for a DI seam instead?
 4. **What is the `autouse` naming convention** at the call site, given it will appear thousands of
    times? (§4.3)
 5. **Should the tool ever propose a DI seam** — rewriting a patched module global into an injected

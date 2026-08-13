@@ -13,7 +13,10 @@ from velox._di.fixtures import (
     Scope,
     _check_acyclic,
     _check_missing_injections,
+    case_value_id,
+    dedupe_case_ids,
     exclusive_tokens_of,
+    expand_cases,
     plan_for,
 )
 
@@ -420,3 +423,242 @@ def test_a_known_param_matching_no_parameter_is_allowed_with_star_kwargs() -> No
         pass
 
     _check_missing_injections(t, (), known_params=frozenset({"anything"}))  # must not raise
+
+
+# `@velox.fixture(params=...)`: validation and id generation.
+# ------------------------------------------------------------------------------------------
+
+
+def test_fixture_params_default_ids_use_the_literal_for_common_types() -> None:
+    @velox.fixture(params=["sqlite", "postgres"])
+    def backend(param: str) -> str:
+        return param
+
+    assert backend.params == ("sqlite", "postgres")
+    assert backend.case_ids == ("sqlite", "postgres")
+
+
+def test_fixture_params_explicit_ids_are_used_verbatim() -> None:
+    @velox.fixture(params=[1, 2], ids=["one", "two"])
+    def n(param: int) -> int:
+        return param
+
+    assert n.case_ids == ("one", "two")
+
+
+def test_fixture_params_ids_callable_falls_back_to_auto_id_on_none() -> None:
+    @velox.fixture(params=[1, "x"], ids=lambda v: f"custom-{v}" if isinstance(v, int) else None)
+    def mixed(param: object) -> object:
+        return param
+
+    assert mixed.case_ids == ("custom-1", "x")
+
+
+def test_fixture_params_ids_are_deduped_on_collision() -> None:
+    """Exercises the same cross-check `_collection.parametrize._dedupe` documents: a naive
+    rename of the two colliding `1`s to `10`/`11` would collide with the third case's already-
+    unique `"10"`, so both land past it instead."""
+
+    @velox.fixture(params=[1, 1, "10"])
+    def dup(param: object) -> object:
+        return param
+
+    assert dup.case_ids == ("11", "12", "10")
+
+
+def test_fixture_with_no_params_is_not_parametrized() -> None:
+    @velox.fixture()
+    def plain() -> int:
+        return 1
+
+    assert plain.params == ()
+    assert plain.case_ids == ()
+
+
+def test_fixture_params_empty_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no values given"):
+
+        @velox.fixture(params=())
+        def bad(param: object) -> object:
+            return param
+
+
+def test_fixture_ids_without_params_is_rejected() -> None:
+    with pytest.raises(ValueError, match="ids="):
+
+        @velox.fixture(ids=["a"])
+        def bad() -> int:
+            return 1
+
+
+def test_fixture_ids_length_mismatch_is_rejected() -> None:
+    with pytest.raises(ValueError, match="id"):
+
+        @velox.fixture(params=[1, 2], ids=["only-one"])
+        def bad(param: int) -> int:
+            return param
+
+
+def test_fixture_missing_the_param_argument_is_rejected_at_decoration_time() -> None:
+    with pytest.raises(DIError, match="param"):
+
+        @velox.fixture(params=[1, 2])
+        def bad(other: int) -> int:
+            return other
+
+
+def test_fixture_param_argument_cannot_also_be_depends_injected() -> None:
+    with pytest.raises(DIError, match="param"):
+
+        @velox.fixture(params=[1, 2])
+        def bad(param: int = Depends(alpha)) -> int:
+            return param
+
+
+def test_case_value_id_and_dedupe_case_ids_match_parametrizes_own_rules() -> None:
+    assert case_value_id(True, "param", 0) == "True"
+    assert case_value_id({"a": 1}, "param", 3) == "param3"
+    assert dedupe_case_ids(["x", "x", "y"]) == ("x0", "x1", "y")
+
+
+# `plan_for`/`expand_cases`: fanning a test out across a parametrized fixture's cases.
+# ------------------------------------------------------------------------------------------
+
+
+def test_plan_for_records_no_param_ancestors_without_any_parametrized_fixture() -> None:
+    async def test_func(x: int = Depends(alpha)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    assert plan.param_ancestors == ()
+    assert all(step.param_ancestors == () for step in plan.steps)
+
+
+def test_plan_for_records_the_fixtures_own_id_as_its_ancestor() -> None:
+    @velox.fixture(params=["a", "b"])
+    def backend(param: str) -> str:
+        return param
+
+    async def test_func(x: str = Depends(backend)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    assert plan.param_ancestors == (id(backend),)
+    assert plan.steps[0].param_ancestors == (id(backend),)
+
+
+def test_plan_for_propagates_param_ancestors_to_a_dependent_fixture() -> None:
+    @velox.fixture(params=["a", "b"])
+    def backend(param: str) -> str:
+        return param
+
+    @velox.fixture()
+    def engine(b: str = Depends(backend)) -> str:
+        return f"engine+{b}"
+
+    async def test_func(x: str = Depends(engine)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    steps_by_name = {step.fixture.name: step for step in plan.steps}
+    assert steps_by_name["backend"].param_ancestors == (id(backend),)
+    assert steps_by_name["engine"].param_ancestors == (id(backend),)
+    assert plan.param_ancestors == (id(backend),)
+
+
+def test_expand_cases_passes_through_the_same_plan_object_when_unparametrized() -> None:
+    async def test_func(x: int = Depends(alpha)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    (expansion,) = expand_cases(plan)
+    assert expansion.plan is plan
+    assert expansion.case_id is None
+
+
+def test_expand_cases_produces_one_plan_per_case() -> None:
+    @velox.fixture(params=["sqlite", "postgres"])
+    def backend(param: str) -> str:
+        return param
+
+    async def test_func(x: str = Depends(backend)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    expansions = expand_cases(plan)
+
+    assert [e.case_id for e in expansions] == ["sqlite", "postgres"]
+    assert [e.plan.steps[0].param_value for e in expansions] == ["sqlite", "postgres"]
+    # Distinct plan objects, with distinct cache-key material per case.
+    assert expansions[0].plan is not expansions[1].plan
+    assert expansions[0].plan.steps[0].case_key != expansions[1].plan.steps[0].case_key
+
+
+def test_expand_cases_propagates_the_chosen_case_key_to_a_dependent_step() -> None:
+    @velox.fixture(params=["a", "b"])
+    def backend(param: str) -> str:
+        return param
+
+    @velox.fixture()
+    def engine(b: str = Depends(backend)) -> str:
+        return f"engine+{b}"
+
+    async def test_func(x: str = Depends(engine)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    expansions = expand_cases(plan)
+
+    for expansion in expansions:
+        backend_step = next(s for s in expansion.plan.steps if s.fixture is backend)
+        engine_step = next(s for s in expansion.plan.steps if s.fixture is engine)
+        assert engine_step.case_key == backend_step.case_key
+
+
+def test_expand_cases_cross_multiplies_two_independent_parametrized_fixtures() -> None:
+    @velox.fixture(params=["a", "b"])
+    def left(param: str) -> str:
+        return param
+
+    @velox.fixture(params=[1, 2])
+    def right(param: int) -> int:
+        return param
+
+    async def test_func(x: str = Depends(left), y: int = Depends(right)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    expansions = expand_cases(plan)
+
+    assert [e.case_id for e in expansions] == ["a-1", "a-2", "b-1", "b-2"]
+
+
+def test_expand_cases_case_key_only_reflects_a_steps_actual_ancestors() -> None:
+    """A step depending on only one of two independent parametrized fixtures must not fragment
+    its cache key over the other one's cases too."""
+
+    @velox.fixture(params=["a", "b"])
+    def left(param: str) -> str:
+        return param
+
+    @velox.fixture(params=[1, 2])
+    def right(param: int) -> int:
+        return param
+
+    @velox.fixture()
+    def left_only(x: str = Depends(left)) -> str:
+        return x
+
+    async def test_func(a: str = Depends(left_only), b: int = Depends(right)) -> None:
+        pass
+
+    plan = plan_for(test_func)
+    expansions = expand_cases(plan)
+
+    left_only_case_keys = {
+        next(s for s in expansion.plan.steps if s.fixture is left_only).case_key
+        for expansion in expansions
+    }
+    # Only two distinct case_keys for `left_only` across all four combos -- one per `left` case,
+    # not one per combo -- since it never depends on `right`.
+    assert len(left_only_case_keys) == 2

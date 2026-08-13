@@ -45,8 +45,10 @@ def key_for(
     `step_id` only matters for `"call"` scope; it's threaded through unconditionally rather than
     branched on so callers never need to know which scopes care.
 
-    `param_key` is appended to every shape below and defaults to `None`, reserving the slot for a
-    parametrized fixture's case value.
+    `param_key` is appended to every shape below and defaults to `None` for a step untouched by
+    any parametrized fixture. Otherwise it's `PlanStep.case_key`: `(id(fixture), case index)` for
+    every parametrized fixture in this step's own ancestry, which is what keeps two specialized
+    plans that chose different cases from ever sharing a construction, at whatever scope.
     """
     match fixture.scope:
         case "session":
@@ -213,7 +215,13 @@ async def setup(
     acquired: list[CacheKey] = []
     try:
         for step in plan.steps:
-            key = key_for(step.fixture, step.step_id, test_id=test_id, module_path=module_path)
+            key = key_for(
+                step.fixture,
+                step.step_id,
+                test_id=test_id,
+                module_path=module_path,
+                param_key=step.case_key or None,
+            )
 
             async def build(step: PlanStep = step) -> tuple[Any, Closer | None]:
                 # `step.args`' `keyword_only` element is unused here: everything binds by keyword,
@@ -222,6 +230,8 @@ async def setup(
                 # `Injection`/`PlanStep` as a diagnostic field, not because construction branches
                 # on it.
                 kwargs = {name: values[source] for name, source, _ in step.args}
+                if step.fixture.params:
+                    kwargs["param"] = step.param_value
                 return await _construct(step.fixture, kwargs, ctx)
 
             values[step.step_id] = await store.acquire(key, step.fixture.scope, step.fixture, build)

@@ -661,6 +661,122 @@ def test_a_missing_injection_is_still_a_collection_error(tmp_path: Path) -> None
     assert "value" in result.errors[0].message
 
 
+def test_a_test_depending_on_a_parametrized_fixture_expands_into_one_record_per_case(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture(params=['sqlite', 'postgres'])\n"
+        "async def backend(param):\n"
+        "    return param\n\n"
+        "async def test_uses_backend(value: str = velox.Depends(backend)):\n"
+        "    assert value in ('sqlite', 'postgres')\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::test_uses_backend[sqlite]",
+        "test_sample.py::test_uses_backend[postgres]",
+    ]
+    # Each case gets its own specialized plan, not a shared one -- unlike @velox.parametrize.
+    assert result.records[0].plan is not result.records[1].plan
+    assert [record.params for record in result.records] == [None, None]
+
+
+def test_a_parametrized_fixture_expands_a_transitive_dependent_too(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture(params=['a', 'b'])\n"
+        "async def backend(param):\n"
+        "    return param\n\n"
+        "@velox.fixture()\n"
+        "async def engine(b: str = velox.Depends(backend)):\n"
+        "    return f'engine+{b}'\n\n"
+        "async def test_uses_engine(value: str = velox.Depends(engine)):\n"
+        "    assert value.startswith('engine+')\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::test_uses_engine[a]",
+        "test_sample.py::test_uses_engine[b]",
+    ]
+
+
+def test_fixture_params_and_test_level_parametrize_cross_multiply(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture(params=['a', 'b'])\n"
+        "async def backend(param):\n"
+        "    return param\n\n"
+        "@velox.parametrize('n', [1, 2])\n"
+        "async def test_both(n, value: str = velox.Depends(backend)):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id.rsplit("[", 1)[-1] for record in result.records] == [
+        "a-1]",
+        "a-2]",
+        "b-1]",
+        "b-2]",
+    ]
+    assert [record.params for record in result.records] == [
+        {"n": 1},
+        {"n": 2},
+        {"n": 1},
+        {"n": 2},
+    ]
+
+
+def test_a_test_unrelated_to_a_parametrized_fixture_is_not_expanded(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture(params=['a', 'b'])\n"
+        "async def backend(param):\n"
+        "    return param\n\n"
+        "async def test_plain():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == ["test_sample.py::test_plain"]
+
+
+def test_a_fixture_parametrized_with_no_param_argument_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    """`@velox.fixture(params=...)` is validated at decoration time -- a broken fixture module
+    surfaces as a whole-file `CollectionError`, the same way any other bad decoration would."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.fixture(params=['a', 'b'])\n"
+        "async def backend():\n"
+        "    return 1\n\n"
+        "async def test_never_collected():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "param" in result.errors[0].message
+
+
 def test_assertion_rewrite_hook_is_consulted_when_installed(tmp_path: Path) -> None:
     """End-to-end proof that `_import_module` actually gives the installed hook a chance,
     rather than bypassing `sys.meta_path` via a bare `spec_from_file_location`: a rewritten

@@ -8,12 +8,11 @@ argument names parametrize supplies (so `_di.plan_for` stops treating them as mi
 
 from __future__ import annotations
 
-import enum
 import itertools
-from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from velox._di.fixtures import case_value_id, dedupe_case_ids
 from velox._marks import ParamSet
 
 __all__ = ["Case", "cases_for", "known_params_of"]
@@ -85,61 +84,22 @@ def _case_ids(param_set: ParamSet) -> tuple[str, ...]:
     idfn = param_set.ids if callable(param_set.ids) else None
     return tuple(
         "-".join(
-            _value_id(value, argname, index, idfn)
+            case_value_id(value, argname, index, idfn)
             for argname, value in zip(param_set.argnames, case, strict=True)
         )
         for index, case in enumerate(param_set.argvalues)
     )
 
 
-def _value_id(
-    value: object, argname: str, index: int, idfn: Callable[[object], str | None] | None
-) -> str:
-    if idfn is not None:
-        try:
-            generated = idfn(value)
-        except Exception:  # a broken id callable must not abort collection -- fall back instead
-            generated = None
-        if isinstance(generated, str):
-            return generated
-    return _auto_id(value, argname, index)
-
-
-def _auto_id(value: object, argname: str, index: int) -> str:
-    # `bool` before `int`: `isinstance(True, int)` is true, and `str(True)` ("True") is the
-    # readable id -- landing in a combined `int`/`str`/`bool` branch first would give "1" instead.
-    if isinstance(value, bool | str | int) or value is None:
-        return str(value)
-    if isinstance(value, enum.Enum):
-        return str(value.name)
-    return f"{argname}{index}"
-
-
 def _dedupe(cases: Iterable[Case]) -> tuple[Case, ...]:
-    """Disambiguate cases whose generated ids collide.
-
-    Every id that occurs exactly once is reserved as-is, up front, before any renaming happens.
-    Each case sharing a duplicated id then gets the lowest `f"{id}{n}"` not already reserved --
-    checked against every id reserved so far, not just the ids in its own collision group, so a
-    renamed id can never land on one either already unique or already claimed by an earlier
-    rename. Without that cross-check, `@parametrize("x", [1, 1, "10"])` would rename its two `1`s
-    to `10`/`11` and collide with the third case's already-unique `"10"`.
+    """Disambiguate cases whose generated ids collide, via `_di.fixtures.dedupe_case_ids` --
+    same rule a parametrized fixture's own `case_ids` uses. Without it, `@parametrize("x", [1, 1,
+    "10"])` would rename its two `1`s to `10`/`11` and collide with the third case's already-
+    unique `"10"`.
     """
     cases = tuple(cases)
-    counts = Counter(case.id for case in cases)
-    used = {id_ for id_, count in counts.items() if count == 1}
-    next_occurrence: dict[str, int] = {}
-    result: list[Case] = []
-    for case in cases:
-        if counts[case.id] == 1:
-            result.append(case)
-            continue
-        occurrence = next_occurrence.get(case.id, 0)
-        candidate = f"{case.id}{occurrence}"
-        while candidate in used:
-            occurrence += 1
-            candidate = f"{case.id}{occurrence}"
-        next_occurrence[case.id] = occurrence + 1
-        used.add(candidate)
-        result.append(Case(params=case.params, id=candidate))
-    return tuple(result)
+    deduped_ids = dedupe_case_ids([case.id for case in cases])
+    return tuple(
+        Case(params=case.params, id=deduped_id)
+        for case, deduped_id in zip(cases, deduped_ids, strict=True)
+    )
