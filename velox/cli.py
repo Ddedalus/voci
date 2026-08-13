@@ -25,6 +25,7 @@ from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
 from velox._collection import tagexpr as _tagexpr
+from velox._report import color as _color
 from velox._report import terminal as _report
 from velox._run import isolated as _isolated
 from velox._run import run as _run
@@ -163,6 +164,24 @@ def _default_test_roots(rootdir: Path | None = None) -> list[Path]:
     return [base]
 
 
+def _friendly_path(path: Path, *, max_up_hops: int = 2) -> str:
+    """`path` relative to `cwd()` when that's reasonably close, else the absolute path.
+
+    "Close" means at most `max_up_hops` `..` segments -- climbing out of cwd more than
+    a couple of levels stops reading as "nearby" and starts reading as noise, where an
+    absolute path at least tells the reader where they actually are. A path *under*
+    cwd is always shown relative regardless of depth: it's still the same project tree.
+    """
+    try:
+        rel = os.path.relpath(path, Path.cwd())
+    except ValueError:
+        # Windows: relpath can't cross drives, e.g. C:\ vs D:\.
+        return str(path)
+    if sum(1 for part in Path(rel).parts if part == "..") <= max_up_hops:
+        return rel
+    return str(path)
+
+
 def _invalid_path_argument(paths: list[str]) -> str | None:
     """The first usage error in an explicit `PATHS` list, or `None` if they all look
     usable: a test id (`path.py::test_name`, not implemented yet) or a path that
@@ -234,6 +253,15 @@ def _resolve_layered(cli_value, config_value, default=None):
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Started as the first thing main() does, not around run_suite alone: argument
+    # parsing, config resolution, discovery, and collection (importing every test
+    # module) all happen before a single test runs, and a run that spends its time
+    # there rather than executing should say so, not report a "wall" time that only
+    # covers the fast part. This is the closest velox's own process can get to what
+    # `time velox` reports -- the remaining gap is interpreter/`uv` startup before
+    # this line ever executes, which no timer inside the process can see.
+    wall_start = time.monotonic()
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -338,14 +366,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolved and probed up front so a silent fallback to plain mode is visible
     # before a run commits to it -- a benchmark that silently fell back would be a
-    # corrupted one. plan warns on stderr; the header line goes to stdout with the
-    # report.
-    setup = _rewrite.plan(roots, mode=args.assert_mode, cache_dir=args.rewrite_cache)
-    print(setup.header_line())
+    # corrupted one. plan warns on stderr; the header line (when there is one -- see
+    # AssertionSetup.header_line) goes to stdout with the report. rootdir, not roots:
+    # the cache is a project-wide thing, not tied to whichever subset of it this run
+    # happens to be testing.
+    setup = _rewrite.plan(
+        roots, mode=args.assert_mode, cache_dir=args.rewrite_cache, rootdir=config.rootdir
+    )
+    header = setup.header_line()
+    if header is not None:
+        print(header)
     # Same transparency plan's own header line gives the assertion-rewrite decision --
     # a run silently picking up config the user forgot was there is exactly the kind
-    # of surprise this avoids.
-    print(f"config: {config.source}" if config.source is not None else "config: none")
+    # of surprise this avoids. _friendly_path: this is usually a couple of directories
+    # under cwd (or cwd itself), and the absolute form is just noise at that distance.
+    if config.source is not None:
+        print(f"config: {_friendly_path(config.source)}")
+    else:
+        print("config: none")
 
     rootdir = config.rootdir
 
@@ -428,17 +466,12 @@ def main(argv: list[str] | None = None) -> int:
             capture_passthrough=capture_passthrough,
             stream=sys.stdout,
         )
+        # Shared with reporter's own coloring (it resolves the same thing internally
+        # for its own prints) so the SKIPPED/COLLECTION ERROR/summary lines below,
+        # which main prints itself rather than through reporter, match its file
+        # blocks instead of being colored by a different rule.
+        color_enabled = _color.color_enabled(sys.stdout)
 
-        # Wall clock around the whole run_suite call, not derived from summing
-        # per-test durations afterwards -- reporter.finish's wall-vs-Σ line is exactly
-        # the comparison between this real elapsed time and that sum, so the two must
-        # be measured independently for the ratio to mean anything.
-        #
-        # Known gap: this window is wider than pure execution -- it brackets the
-        # whole run_suite call, which does real non-execution work at both ends
-        # (basetemp setup/teardown), and excludes discovery/import/collection
-        # entirely, so this "Ns wall" is not the number `time velox` would report.
-        wall_start = time.monotonic()
         results = _run.run_suite(
             collected.records,
             concurrency=effective_concurrency,
@@ -461,13 +494,15 @@ def main(argv: list[str] | None = None) -> int:
         wall_clock = time.monotonic() - wall_start
 
         # reporter.finish(...) is called last, after every other end-of-run section
-        # below, so its wall-vs-Σ "final line" claim is actually true of cli.main's
-        # output.
+        # below, so its "final line" claim is actually true of cli.main's output.
+        skipped_word = _color.paint("SKIPPED", _color.YELLOW, enabled=color_enabled)
         for skipped in collected.skipped:
-            print(f"{skipped.id} SKIPPED ({skipped.reason})")
+            reason = _color.paint(f"({skipped.reason})", _color.GRAY, enabled=color_enabled)
+            print(f"{skipped.id} {skipped_word} {reason}")
 
+        error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
         for error in collected.errors:
-            print(f"{error.path} COLLECTION ERROR")
+            print(f"{error.path} {error_word}")
             print(error.message)
 
         passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
@@ -479,34 +514,63 @@ def main(argv: list[str] | None = None) -> int:
         # `other` exists so this line can't silently stop adding up to len(results): a
         # future Outcome member reaching run_suite's results before this line is
         # updated for it shows up here as a nonzero "other" bucket instead of
-        # vanishing from the total with nothing to say the count is now wrong.
+        # vanishing from the total with nothing to say the count is now wrong. This is
+        # checked against len(results) specifically (tests that were actually run),
+        # not the leading count below (which also folds in skipped tests -- they never
+        # reach run_suite, so they can't contribute an Outcome to account for here).
         other = len(results) - passed - failed - errored - timed_out - xfailed - xpassed
-        summary = f"{len(results)} tests: {passed} passed, {failed} failed, {errored} errored"
+        # Leading count is every test collection found, whether it ran or not --
+        # len(results) alone would undercount by len(collected.skipped), making "N
+        # tests: ..., K skipped" read like K is already part of N when it's additive.
+        total_tests = len(results) + len(collected.skipped)
+
+        # count(): a category's semantic color only when it actually has something to
+        # say (n > 0); a zero count fades to gray rather than, say, "0 failed" in red
+        # crying wolf on every clean run. Categories that are only ever appended when
+        # already nonzero (timed_out/xfailed/xpassed/other below) always take `color`
+        # through this same path, not a special case.
+        def count(n: int, label: str, color: str) -> str:
+            return _color.paint(f"{n} {label}", color if n else _color.GRAY, enabled=color_enabled)
+
+        summary = (
+            f"{_color.paint(str(total_tests), _color.PRIMARY, enabled=color_enabled)} tests: "
+            f"{count(passed, 'passed', _color.GREEN)}, "
+            f"{count(failed, 'failed', _color.RED)}, "
+            f"{count(errored, 'errored', _color.RED)}"
+        )
         if timed_out:
-            summary += f", {timed_out} timed out"
+            summary += f", {count(timed_out, 'timed out', _color.RED)}"
         if xfailed:
-            summary += f", {xfailed} xfailed"
+            summary += f", {count(xfailed, 'xfailed', _color.GRAY)}"
         if xpassed:
-            summary += f", {xpassed} xpassed"
+            summary += f", {count(xpassed, 'xpassed', _color.YELLOW)}"
         if other:
-            summary += f", {other} other"
+            summary += f", {count(other, 'other', _color.RED)}"
         summary += (
-            f", {len(collected.skipped)} skipped, {len(collected.errors)} collection error(s)"
+            f", {count(len(collected.skipped), 'skipped', _color.YELLOW)}"
+            f", {count(len(collected.errors), 'collection error(s)', _color.RED)}"
         )
         # Shown whenever -m was given, including a 0 count -- same always-shown treatment as
         # skipped/errors, so the line reliably says whether -m was in effect rather than looking
-        # identical to a run without it.
+        # identical to a run without it. Always gray: deselection is the user's own filter, not
+        # an outcome, so it never earns an alarm color regardless of count.
         if markexpr is not None:
-            summary += f", {len(collected.deselected)} deselected"
+            summary += f", {count(len(collected.deselected), 'deselected', _color.GRAY)}"
         print(summary)
 
-        # This line and reporter.finish's wall-vs-Σ line both use "failed" for
-        # different sets on purpose: this one is the per-Outcome breakdown (FAILED
-        # specifically, distinct from errored/timed_out); finish's is the coarser
-        # proof-of-value count (every `_run.FAILING_OUTCOMES` result -- XFAILED and
-        # non-strict XPASSED don't count, since either means a test behaved exactly as
-        # its `xfail` mark said it would).
-        reporter.finish(results, wall_clock=wall_clock, unattributed_output=unattributed)
+        # This line and reporter.finish's final line both use "failed" for different
+        # sets on purpose: this one is the per-Outcome breakdown (FAILED specifically,
+        # distinct from errored/timed_out); finish's is the coarser proof-of-value
+        # count (every `_run.FAILING_OUTCOMES` result -- XFAILED and non-strict
+        # XPASSED don't count, since either means a test behaved exactly as its
+        # `xfail` mark said it would). skipped is passed through so finish's leading
+        # count matches this line's total_tests instead of quietly disagreeing with it.
+        reporter.finish(
+            results,
+            wall_clock=wall_clock,
+            unattributed_output=unattributed,
+            skipped=len(collected.skipped),
+        )
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
     finally:

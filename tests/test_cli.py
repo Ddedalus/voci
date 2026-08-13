@@ -12,7 +12,7 @@ from _support import Project
 
 import pytest
 from velox import __version__
-from velox.cli import _default_test_roots, build_parser, main
+from velox.cli import _default_test_roots, _friendly_path, build_parser, main
 
 
 def _lines_starting_with(out: str, *prefixes: str, exclude_summary: bool = True) -> list[str]:
@@ -224,6 +224,50 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
     assert "test_skipped SKIPPED (not ready)" in out
 
 
+def test_main_leading_test_count_includes_skipped(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The leading `N tests` count is everything collection found, not just what ran --
+    `len(results)` alone would undercount by the skipped tests it never sees."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('not ready')\n"
+        "async def test_skipped():\n"
+        "    raise AssertionError('must not run')\n\n"
+        "async def test_runs():\n"
+        "    pass\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    # 1 ran + 1 skipped = 2, not the 1 that len(results) alone would say.
+    assert "2 tests: 1 passed, 0 failed, 0 errored, 1 skipped" in out
+
+
+def test_main_colors_output_on_a_tty_and_stays_plain_off_one(
+    project: Project, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`capsys`'s captured stdout isn't a tty, so the default run (below) is already the
+    plain-output proof; this pins the affirmative case, and that `NO_COLOR` overrides a
+    tty right back to plain."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    project.write_passing_test()
+
+    assert main([str(project.root)]) == 0
+    assert "\x1b[" not in capsys.readouterr().out
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    assert main([str(project.root)]) == 0
+    assert "\x1b[" in capsys.readouterr().out
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert main([str(project.root)]) == 0
+    assert "\x1b[" not in capsys.readouterr().out
+
+
 def test_main_dash_m_runs_only_matching_tags_and_reports_the_rest_deselected(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -322,6 +366,26 @@ def test_main_rejects_an_invalid_dash_m_expression_as_a_usage_error(
     assert "invalid -m expression" in capsys.readouterr().err
 
 
+def test_main_says_nothing_about_assertions_in_the_default_happy_path(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`rewrite` succeeding is what every run does unless told otherwise -- announcing it
+    would be reporting the default as news."""
+    project.write_passing_test()
+
+    assert main([str(project.root)]) == 0
+    assert "assertions:" not in capsys.readouterr().out
+
+
+def test_main_announces_assert_plain_when_chosen_on_purpose(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_passing_test()
+
+    assert main([str(project.root), "--assert=plain"]) == 0
+    assert "assertions: plain" in capsys.readouterr().out
+
+
 def test_main_prints_no_config_when_none_is_found(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -329,6 +393,43 @@ def test_main_prints_no_config_when_none_is_found(
 
     assert main([str(project.root)]) == 0
     assert "config: none" in capsys.readouterr().out
+
+
+def test_main_prints_the_config_path_relative_to_cwd(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The absolute form is noise when the file is right there under cwd."""
+    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write_passing_test()
+
+    assert main([]) == 0
+    assert "config: pyproject.toml" in capsys.readouterr().out
+
+
+def test_friendly_path_stays_relative_a_couple_of_hops_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    nested = tmp_path / "examples" / "01-fastapi-crud" / "pyproject.toml"
+    assert _friendly_path(nested) == str(Path("examples") / "01-fastapi-crud" / "pyproject.toml")
+
+
+def test_friendly_path_stays_relative_within_the_up_hop_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "a" / "b")
+    assert _friendly_path(tmp_path / "config.toml") == str(Path("..") / ".." / "config.toml")
+
+
+def test_friendly_path_goes_absolute_past_the_up_hop_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    far = tmp_path / "elsewhere" / "config.toml"
+    assert _friendly_path(far) == str(far)
 
 
 def test_main_applies_tool_velox_env_before_the_first_test_import(
@@ -561,10 +662,12 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
     (summary_line,) = [line for line in lines if "test_broken -" in line]
     assert summary_line.endswith("AssertionError: widget count")
 
-    # Wall-vs-Σ is the run's proof-of-value metric, and must be genuinely the *last* line --
-    # after the skip list, collection-error tracebacks, and the `N tests: ...` summary.
+    # The wall-vs-concurrency line is the run's proof-of-value metric, and must be genuinely
+    # the *last* line -- after the skip list, collection-error tracebacks, and the
+    # `N tests: ...` summary.
     assert "tests ·" in non_empty_lines[-1]
-    assert "wall (Σ" in non_empty_lines[-1]
+    assert "wall (" in non_empty_lines[-1]
+    assert "concurrency)" in non_empty_lines[-1]
 
 
 def test_main_prepends_rootdir_to_sys_path_for_absolute_imports(chdir_project: Project) -> None:

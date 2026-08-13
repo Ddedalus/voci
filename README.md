@@ -51,11 +51,11 @@ PASS  tests/test_users.py                10 tests   Σ 3.84s
 PASS  tests/test_orders.py               12 tests   Σ 7.29s
 22 tests: 22 passed, 0 failed, 0 errored, 0 skipped, 0 collection error(s)
 
-22 tests · 0 failed · 1.14s wall (Σ 11.13s, 9.8x concurrency)
+22 tests · 0 failed · 1.14s wall (9.8x concurrency)
 ```
 
-The last line is the one to watch: `Σ` is what the suite would have cost serially, and the
-multiplier is what the concurrency bought you.
+The last line is the one to watch: the multiplier is what running concurrently bought you over
+the sum of every test's own duration (each file's `Σ`, above).
 
 ## Install
 
