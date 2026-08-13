@@ -178,6 +178,7 @@ class TestColdStartGuarantee:
             readonly.chmod(0o755)
 
         header = setup.header_line()
+        assert header is not None
         assert "plain" in header
         assert "fallback" in header
 
