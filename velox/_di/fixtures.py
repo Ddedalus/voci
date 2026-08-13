@@ -679,7 +679,13 @@ def expand_cases(plan: ResolutionPlan) -> tuple[ExpandedPlan, ...]:
     for combo in itertools.product(*axes):
         chosen: dict[int, int] = dict(zip(plan.param_ancestors, combo, strict=True))
         new_steps = tuple(
-            dataclasses.replace(
+            # A step with no parametrized ancestor at all gets back the exact `case_key=()`/
+            # `param_value=_NO_PARAM` it already has -- reused as-is rather than replaced, so a
+            # plan with one parametrized leaf among many unrelated fixtures doesn't reallocate
+            # every unrelated step once per case combination.
+            step
+            if not step.param_ancestors
+            else dataclasses.replace(
                 step,
                 case_key=tuple((fid, chosen[fid]) for fid in step.param_ancestors),
                 param_value=(
