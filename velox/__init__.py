@@ -1,7 +1,7 @@
 """velox: a fast, concurrent test runner for fully-async Python codebases.
 
 This is the whole public surface — everything else is private and may move. It exports
-dependency injection (`fixture`, `Depends`, `Scope`), marks for selecting and shaping tests
+dependency injection (`fixture`, `Depends`, `Scope`, `use`), marks for selecting and shaping tests
 (`skip`, `xfail`, `parametrize`, `tag`, ...), built-in fixtures (`tmp_path`, `capture`,
 `log_records`, `test_info`), and assertion helpers (`raises`, `approx`).
 """
@@ -19,6 +19,7 @@ from velox._builtins.fixtures import (
     tmp_path,
     tmp_path_factory,
 )
+from velox._collection.requires import use
 from velox._di.fixtures import Depends, Fixture, Injection, Scope, fixture
 from velox._marks import (
     Marks,
@@ -72,5 +73,6 @@ __all__ = [
     "timeout",
     "tmp_path",
     "tmp_path_factory",
+    "use",
     "xfail",
 ]

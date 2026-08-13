@@ -558,15 +558,21 @@ class ResolutionPlan:
 
     steps: tuple[PlanStep, ...]
     root_args: tuple[tuple[str, int, bool], ...]
-    """The test function's own `Depends(...)` sites, resolved the same way as `PlanStep.args`."""
+    """The test function's own `Depends(...)` sites, resolved the same way as `PlanStep.args`. A
+    step nothing here points at came from a `velox.use(...)` declaration: built, cached and torn
+    down with the rest, its value never reaching the test."""
     param_ancestors: tuple[int, ...] = ()
-    """Union, in canonical order, of every directly-`Depends()`ed step's own `param_ancestors` —
-    the parametrized fixtures this test transitively depends on. Empty for a plan `expand_cases`
-    passes through unchanged."""
+    """Union, in canonical order, of the `param_ancestors` of every step this test reaches
+    directly — through a `Depends(...)` site or a `velox.use(...)` declaration — i.e. the
+    parametrized fixtures it transitively depends on. Empty for a plan `expand_cases` passes
+    through unchanged."""
 
 
 def plan_for(
-    func: Callable[..., Any], *, known_params: frozenset[str] = frozenset()
+    func: Callable[..., Any],
+    *,
+    known_params: frozenset[str] = frozenset(),
+    implicit: Sequence[Fixture[Any]] = (),
 ) -> ResolutionPlan:
     """Build `func`'s `ResolutionPlan`: a topological walk over its `Depends(...)` graph.
 
@@ -580,6 +586,12 @@ def plan_for(
     missing-injection check doesn't mistake them for an unsatisfiable `Depends()` site. They never
     become part of the plan itself: expansion hands each case's values straight to `func`,
     alongside this plan's own kwargs.
+
+    `implicit` names fixtures `func`'s containers declared with `velox.use(...)`, in the order they
+    apply. Each gets a step and is constructed like any other, but binds to no parameter: it is
+    absent from `root_args`, so `func` never sees its value. They are walked before `func`'s own
+    `Depends(...)` sites, which is what puts them earliest in `steps` and therefore first to
+    construct and last to tear down.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
@@ -623,12 +635,17 @@ def plan_for(
             memo[id(source)] = step_id
         return step_id
 
+    implicit_step_ids = [visit(source, None) for source in implicit]
     root_args = tuple(
         (injection.param, visit(injection.source, None), injection.keyword_only)
         for injection in root_injections
     )
+    # Implicit steps count towards `param_ancestors` exactly like a directly-`Depends()`ed one: a
+    # `params=` fixture reached only through `velox.use(...)` still has to fan the test out into
+    # one case each, and its step still needs `expand_cases` to hand it a `param_value`.
     param_ancestors = _ordered_union(
-        *(steps[step_id].param_ancestors for _, step_id, _ in root_args)
+        *(steps[step_id].param_ancestors for step_id in implicit_step_ids),
+        *(steps[step_id].param_ancestors for _, step_id, _ in root_args),
     )
     return ResolutionPlan(steps=tuple(steps), root_args=root_args, param_ancestors=param_ancestors)
 
