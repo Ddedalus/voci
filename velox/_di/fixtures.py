@@ -16,12 +16,22 @@ a diamond-shaped graph produces one step per fixture rather than one per path to
 needs its own step and its own cache key. Construction, caching, and teardown are `_di.py`'s job;
 this module only decides *what* needs building and *in what order* — the declarative half of the
 DI system, with `_di.py` as the dynamic half.
+
+A fixture built with `params=` multiplies every test transitively depending on it: `plan_for`
+walks the graph once, tagging each step with the parametrized fixtures in its own ancestry, and
+`expand_cases` turns that one plan into one specialized `ResolutionPlan` per combination of their
+cases, mirroring `@velox.parametrize`'s own case expansion for the fixture graph instead of a
+test's own arguments.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import enum
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+import itertools
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
 
@@ -30,13 +40,17 @@ __all__ = [
     "BuiltinProvider",
     "DIError",
     "Depends",
+    "ExpandedPlan",
     "Fixture",
     "Injection",
     "PlanStep",
     "ResolutionPlan",
     "Scope",
     "builtin_fixture",
+    "case_value_id",
+    "dedupe_case_ids",
     "exclusive_tokens_of",
+    "expand_cases",
     "fixture",
     "plan_for",
     "plan_of",
@@ -192,6 +206,104 @@ every other fixture kind, so nothing downstream of construction (caching, refcou
 needs to know the difference. See `builtin_fixture` below."""
 
 
+#: The name a parametrized fixture's own function must accept its case value through — velox has
+#: no `request` object, so `params=` reuses the same name-based convention `@velox.parametrize`
+#: already uses for its own call kwargs, fixed to one name since a fixture (unlike a test) only
+#: ever has one `params=` axis.
+_PARAM_NAME = "param"
+
+
+def case_value_id(
+    value: object, argname: str, index: int, idfn: Callable[[object], str | None] | None = None
+) -> str:
+    """The display id for one parametrized value: `idfn(value)` when it returns a `str`,
+    otherwise the literal for `bool`/`str`/`int`/`None`/`enum.Enum`, otherwise
+    `f"{argname}{index}"`. Shared by `@velox.parametrize`'s own id generation
+    (`_collection.parametrize`) and by a parametrized fixture's `case_ids`.
+    """
+    if idfn is not None:
+        try:
+            generated = idfn(value)
+        except Exception:  # a broken id callable must not abort collection -- fall back instead
+            generated = None
+        if isinstance(generated, str):
+            return generated
+    # `bool` before `int`: `isinstance(True, int)` is true, and `str(True)` ("True") is the
+    # readable id -- landing in a combined `int`/`str`/`bool` branch first would give "1" instead.
+    if isinstance(value, bool | str | int) or value is None:
+        return str(value)
+    if isinstance(value, enum.Enum):
+        return str(value.name)
+    return f"{argname}{index}"
+
+
+def dedupe_case_ids(ids: Sequence[str]) -> tuple[str, ...]:
+    """Disambiguate a sequence of generated ids that may collide.
+
+    Every id that occurs exactly once is reserved as-is. Each id sharing a duplicate then gets
+    the lowest `f"{id}{n}"` not already reserved -- checked against every id reserved so far, not
+    just its own collision group, so a renamed id can never land on one either already unique or
+    already claimed by an earlier rename. Shared by `@velox.parametrize`'s own case expansion
+    (`_collection.parametrize`) and by a parametrized fixture's `case_ids`.
+    """
+    ids = tuple(ids)
+    counts = Counter(ids)
+    used = {id_ for id_, count in counts.items() if count == 1}
+    next_occurrence: dict[str, int] = {}
+    result: list[str] = []
+    for id_ in ids:
+        if counts[id_] == 1:
+            result.append(id_)
+            continue
+        occurrence = next_occurrence.get(id_, 0)
+        candidate = f"{id_}{occurrence}"
+        while candidate in used:
+            occurrence += 1
+            candidate = f"{id_}{occurrence}"
+        next_occurrence[id_] = occurrence + 1
+        used.add(candidate)
+        result.append(candidate)
+    return tuple(result)
+
+
+def _normalize_params(
+    fixture_name: str,
+    params: Sequence[object] | None,
+    ids: Sequence[str] | Callable[[object], str | None] | None,
+) -> tuple[tuple[object, ...], tuple[str, ...]]:
+    """`(params, ids)` as given to `fixture()`, validated and turned into `Fixture._params`/
+    `Fixture._case_ids`. `params=None` (the default, "not parametrized") returns `((), ())`.
+    """
+    if params is None:
+        if ids is not None:
+            raise ValueError(
+                f"fixture {fixture_name!r}: ids= given without params= -- there is nothing for "
+                f"it to label"
+            )
+        return (), ()
+    values = tuple(params)
+    if not values:
+        # Caught here rather than left to expand into zero cases: a `params=()` fixture would
+        # otherwise vanish every test depending on it from the suite with no CollectionError and
+        # no count discrepancy visible at a glance -- the same failure mode `@velox.parametrize`
+        # guards against for an empty `argvalues`.
+        raise ValueError(f"fixture {fixture_name!r}: params=() -- no values given")
+    fixed_ids = ids if ids is None or callable(ids) else tuple(ids)
+    if isinstance(fixed_ids, tuple) and len(fixed_ids) != len(values):
+        raise ValueError(
+            f"fixture {fixture_name!r}: {len(fixed_ids)} id(s) for {len(values)} params value(s)"
+        )
+    raw_ids = (
+        fixed_ids
+        if isinstance(fixed_ids, tuple)
+        else tuple(
+            case_value_id(value, _PARAM_NAME, index, fixed_ids)
+            for index, value in enumerate(values)
+        )
+    )
+    return values, dedupe_case_ids(raw_ids)
+
+
 @final
 class Fixture[T]:
     """A fixture: the callable, plus everything the scheduler needs to know statically.
@@ -199,7 +311,16 @@ class Fixture[T]:
     Constructed by `@velox.fixture()`. Immutable.
     """
 
-    __slots__ = ("_exclusive", "_func", "_name", "_plan", "_provider", "_scope")
+    __slots__ = (
+        "_case_ids",
+        "_exclusive",
+        "_func",
+        "_name",
+        "_params",
+        "_plan",
+        "_provider",
+        "_scope",
+    )
 
     def __init__(
         self,
@@ -209,11 +330,14 @@ class Fixture[T]:
         exclusive: Exclusive = False,
         name: str | None = None,
         provider: BuiltinProvider | None = None,
+        params: Sequence[object] | None = None,
+        ids: Sequence[str] | Callable[[object], str | None] | None = None,
     ) -> None:
         self._func = func
         self._scope: Scope = scope
         self._exclusive: Exclusive = exclusive
         self._name = name if name is not None else getattr(func, "__name__", repr(func))
+        self._params, self._case_ids = _normalize_params(self._name, params, ids)
         self._plan = plan_of(func)
         self._provider = provider
         # Checked here rather than only when some test's `plan_for` walk reaches this fixture: a
@@ -221,8 +345,11 @@ class Fixture[T]:
         # name-based lookup to fall back on), so a required, non-injected parameter is broken by
         # construction regardless of who depends on it. Checking at build time means it fires once
         # per fixture, not once per path a diamond graph reaches it by, and fires even for a
-        # fixture no collected test currently uses.
-        _check_missing_injections(func, self._plan)
+        # fixture no collected test currently uses. `_PARAM_NAME` is threaded through the same
+        # `known_params` mechanism `@velox.parametrize` uses on a test, so a parametrized
+        # fixture's `param` argument reads as supplied rather than missing.
+        known_params: frozenset[str] = frozenset({_PARAM_NAME}) if self._params else frozenset()
+        _check_missing_injections(func, self._plan, known_params=known_params)
         _check_acyclic(self)
 
     @property
@@ -254,6 +381,17 @@ class Fixture[T]:
     def plan(self) -> tuple[Injection, ...]:
         """This fixture's own `Depends(...)` sites."""
         return self._plan
+
+    @property
+    def params(self) -> tuple[object, ...]:
+        """Case values from `params=`, empty for a fixture that isn't parametrized."""
+        return self._params
+
+    @property
+    def case_ids(self) -> tuple[str, ...]:
+        """Display id for each of `params`, same length and same order -- generated the same way
+        `@velox.parametrize`'s are."""
+        return self._case_ids
 
     @property
     def dependencies(self) -> tuple[Fixture[Any], ...]:
@@ -316,6 +454,8 @@ def fixture(
     scope: Scope = "function",
     exclusive: Exclusive = False,
     name: str | None = None,
+    params: Sequence[object] | None = None,
+    ids: Sequence[str] | Callable[[object], str | None] | None = None,
 ) -> FixtureDecorator:
     """Declare a fixture. Parentheses are always required, even with no arguments.
 
@@ -323,10 +463,17 @@ def fixture(
     :param exclusive: `True`, or a string token naming a contended resource. Tests transitively
         depending on it never run concurrently with each other.
     :param name: display name in errors, reports, and `--durations`. Defaults to `fn.__name__`.
+    :param params: case values that multiply every test transitively depending on this fixture,
+        one collected test per value. The decorated function receives each case through a
+        parameter literally named `param` -- velox has no `request` object, so this is the same
+        name-based convention `@velox.parametrize` uses for its own call kwargs.
+    :param ids: display id per `params` entry: a same-length sequence of strings, or a callable
+        taking one value and returning a `str` (or `None`, to fall back to the automatic id for
+        that value). Only valid alongside `params`.
     """
 
     def decorate(fn: Callable[..., Any], /) -> Fixture[Any]:
-        return Fixture(fn, scope=scope, exclusive=exclusive, name=name)
+        return Fixture(fn, scope=scope, exclusive=exclusive, name=name, params=params, ids=ids)
 
     return cast(FixtureDecorator, decorate)
 
@@ -362,6 +509,11 @@ class DIError(Exception):
 _SCOPE_RANK: dict[Scope, int] = {"session": 3, "module": 2, "function": 1, "call": 1}
 
 
+#: `PlanStep.param_value`'s value when this step's own fixture isn't parametrized, or hasn't yet
+#: been specialized by `expand_cases` -- never a real case value, so `is _NO_PARAM` is unambiguous.
+_NO_PARAM = object()
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class PlanStep:
@@ -375,6 +527,20 @@ class PlanStep:
     fixture: Fixture[Any]
     args: tuple[tuple[str, int, bool], ...]
     """`(param, source step_id, keyword_only)` per `Depends(...)` site on this fixture."""
+    param_ancestors: tuple[int, ...] = ()
+    """`id(fixture)` of every parametrized fixture in this step's own transitive dependency
+    closure, including itself when its own fixture is parametrized — in canonical
+    (first-discovered) order. Empty when this step's construction never varies with any
+    parametrized fixture's case. Set by `plan_for`; consumed only by `expand_cases`, which turns
+    it into `case_key`/`param_value` below and is meaningless afterward."""
+    case_key: tuple[tuple[int, int], ...] = ()
+    """`(id(fixture), chosen case index)` for every fixture named in `param_ancestors`, in the
+    same order — folded into this step's `runtime.key_for` cache key so two specialized plans
+    that chose different cases never share a construction. Set by `expand_cases`; empty on a step
+    it never touched (nothing upstream is parametrized) or on `plan_for`'s own un-expanded plan."""
+    param_value: object = _NO_PARAM
+    """The chosen case value, passed to this step's fixture body as its `param` argument, iff
+    `fixture.params` is non-empty. Set by `expand_cases`; `_NO_PARAM` otherwise."""
 
 
 @final
@@ -393,6 +559,10 @@ class ResolutionPlan:
     steps: tuple[PlanStep, ...]
     root_args: tuple[tuple[str, int, bool], ...]
     """The test function's own `Depends(...)` sites, resolved the same way as `PlanStep.args`."""
+    param_ancestors: tuple[int, ...] = ()
+    """Union, in canonical order, of every directly-`Depends()`ed step's own `param_ancestors` —
+    the parametrized fixtures this test transitively depends on. Empty for a plan `expand_cases`
+    passes through unchanged."""
 
 
 def plan_for(
@@ -441,8 +611,14 @@ def plan_for(
             (injection.param, visit(injection.source, source), injection.keyword_only)
             for injection in source.plan
         )
+        ancestors = _ordered_union(
+            *(steps[dep_step_id].param_ancestors for _, dep_step_id, _ in args),
+            (id(source),) if source.params else (),
+        )
         step_id = len(steps)
-        steps.append(PlanStep(step_id=step_id, fixture=source, args=args))
+        steps.append(
+            PlanStep(step_id=step_id, fixture=source, args=args, param_ancestors=ancestors)
+        )
         if source.scope != "call":
             memo[id(source)] = step_id
         return step_id
@@ -451,7 +627,81 @@ def plan_for(
         (injection.param, visit(injection.source, None), injection.keyword_only)
         for injection in root_injections
     )
-    return ResolutionPlan(steps=tuple(steps), root_args=root_args)
+    param_ancestors = _ordered_union(
+        *(steps[step_id].param_ancestors for _, step_id, _ in root_args)
+    )
+    return ResolutionPlan(steps=tuple(steps), root_args=root_args, param_ancestors=param_ancestors)
+
+
+def _ordered_union(*sequences: tuple[int, ...]) -> tuple[int, ...]:
+    """Every item across `sequences`, deduplicated, in first-seen order — an ordered-set union.
+    `dict.setdefault` rather than a plain `set`: iteration order over a `set` of `id()` values is
+    hash-bucket order, not insertion order, and `plan_for`'s canonical param-ancestor order needs
+    to be deterministic given the same graph."""
+    seen: dict[int, None] = {}
+    for sequence in sequences:
+        for item in sequence:
+            seen.setdefault(item, None)
+    return tuple(seen)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class ExpandedPlan:
+    """One `ResolutionPlan.param_ancestors`-driven specialization of a `plan_for` plan: every
+    parametrized fixture it transitively depends on baked to one chosen case each.
+    """
+
+    plan: ResolutionPlan
+    case_id: str | None
+    """Each parametrized fixture's chosen `Fixture.case_ids` entry, joined with `-` in
+    `param_ancestors` order. `None` for the one `ExpandedPlan` a plan with no parametrized
+    ancestor produces."""
+
+
+def expand_cases(plan: ResolutionPlan) -> tuple[ExpandedPlan, ...]:
+    """Fan `plan` out into one specialized `ResolutionPlan` per combination of cases across every
+    parametrized fixture it transitively depends on (`plan.param_ancestors`) — the cartesian
+    product, same idea as `_collection.parametrize.cases_for` but for fixture-level `params=`
+    instead of `@velox.parametrize`.
+
+    A plan with no parametrized ancestor returns exactly `(ExpandedPlan(plan, None),)` — `plan`
+    itself, unchanged and uncopied, so a caller comparing plan identity across un-parametrized
+    cases (e.g. two `@velox.parametrize` cases of the same function) still sees the same object.
+    """
+    if not plan.param_ancestors:
+        return (ExpandedPlan(plan=plan, case_id=None),)
+
+    by_id: dict[int, Fixture[Any]] = {id(step.fixture): step.fixture for step in plan.steps}
+    axes = [range(len(by_id[fixture_id].params)) for fixture_id in plan.param_ancestors]
+
+    expansions: list[ExpandedPlan] = []
+    for combo in itertools.product(*axes):
+        chosen: dict[int, int] = dict(zip(plan.param_ancestors, combo, strict=True))
+        new_steps = tuple(
+            dataclasses.replace(
+                step,
+                case_key=tuple((fid, chosen[fid]) for fid in step.param_ancestors),
+                param_value=(
+                    step.fixture.params[chosen[id(step.fixture)]]
+                    if step.fixture.params
+                    else _NO_PARAM
+                ),
+            )
+            for step in plan.steps
+        )
+        case_id = "-".join(
+            by_id[fixture_id].case_ids[chosen[fixture_id]] for fixture_id in plan.param_ancestors
+        )
+        expansions.append(
+            ExpandedPlan(
+                plan=ResolutionPlan(
+                    steps=new_steps, root_args=plan.root_args, param_ancestors=plan.param_ancestors
+                ),
+                case_id=case_id,
+            )
+        )
+    return tuple(expansions)
 
 
 def exclusive_tokens_of(plan: ResolutionPlan) -> frozenset[object]:

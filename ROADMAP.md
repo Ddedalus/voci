@@ -10,20 +10,34 @@ scopes, single-flight construction and inverted teardown · concurrent execution
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
 per-test subprocess tier · `skip`/`skipif`/`xfail` ·
-`@velox.parametrize`, including stacked decorators · `@velox.tag` selection with `-m` ·
-assertion introspection with comparison diffs · stdout/stderr/logging capture and `tmp_path` ·
-the reporter · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
+`@velox.parametrize`, including stacked decorators · parametrized fixtures (`params=` on
+`@velox.fixture`) · `@velox.tag` selection with `-m` · assertion introspection with comparison
+diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
+`velox.fastapi` per-test dependency overrides.
 
 ## Next
 
-### 01-fastapi-crud example improvements
-Audience of the example is new user. Narrator of the example is velox creator.
-Remind yourself good quality narrative documentation like FastAPI's - it ought to be friendly and pleasant to read.
+Fast-tracked: the pytest migration codegen (see
+[docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
+five items, roughly in the order the codegen needs them.
 
-1. Apply our docstring best practice to the example. Remove all hectoring and tirrades about what not. An example speaks by the code primarily + simple comments like 'note that we took care of making app.dependency_overrides concurrency-safe for you - it just works' 
-2. The entire SQLAlchemy setup is too complicated - it should be hidden in a helper file/class and just imported with a brief comment.
-3. I understand SQLite is used for simplicity, which causes some issues; again, hide them in helper file and just add a brief comment stating this is a simplification
+**Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
+of tests without duplicating everything downstream of it by hand. Without these, a conftest-style
+override still forces the migration tool to generate a whole specialized fixture chain per
+override scope — the largest remaining source of hand edits a migrated suite would otherwise
+carry (see `docs/migration-problem-statement.md` §4.2).
 
+**Mocking tiers.** Detecting stock `unittest.mock` patching and scheduling those tests solo, with
+the cost reported in the run summary. Related: a `@mock.patch`-decorated test hides its real
+signature, so its `Depends()` defaults are silently not injected — that needs fixing regardless.
+
+**Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
+collect as zero tests rather than as an error.
+
+**CLI.** `-k` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
+`--serial`, `--durations`.
+
+**Reporting.** A live footer, JUnit XML, `--report-json`, and GitHub annotations.
 
 **Starvation-aware scheduling.** `exclusive=`/`@velox.solo` admission has no fairness guarantee: a
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
@@ -33,17 +47,13 @@ seeing an opening.
 suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;
 Ctrl-C and `--maxfail` cancellation with time-boxed teardown.
 
-**Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
-collect as zero tests rather than as an error.
+### 01-fastapi-crud example improvements
+Audience of the example is new user. Narrator of the example is velox creator.
+Remind yourself good quality narrative documentation like FastAPI's - it ought to be friendly and pleasant to read.
 
-**CLI.** `-k` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
-`--serial`, `--durations`.
-
-**Mocking tiers.** Detecting stock `unittest.mock` patching and scheduling those tests solo, with
-the cost reported in the run summary. Related: a `@mock.patch`-decorated test hides its real
-signature, so its `Depends()` defaults are silently not injected — that needs fixing regardless.
-
-**Reporting.** A live footer, JUnit XML, `--report-json`, and GitHub annotations.
+1. Apply our docstring best practice to the example. Remove all hectoring and tirrades about what not. An example speaks by the code primarily + simple comments like 'note that we took care of making app.dependency_overrides concurrency-safe for you - it just works' 
+2. The entire SQLAlchemy setup is too complicated - it should be hidden in a helper file/class and just imported with a brief comment.
+3. I understand SQLite is used for simplicity, which causes some issues; again, hide them in helper file and just add a brief comment stating this is a simplification
 
 ## Later
 
@@ -52,8 +62,6 @@ This is the difference between velox being adoptable and being greenfield-only.
 
 **Performance.** A persistent collection cache, `--lf`/`--ff`, and a published, reproducible
 benchmark against pytest and `pytest-xdist` on a real suite.
-
-**Injection ergonomics.** Parametrized fixtures, and lazy or optional dependencies.
 
 ## Not planned
 

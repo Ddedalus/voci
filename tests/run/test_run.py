@@ -13,7 +13,7 @@ from _support import run_async
 import pytest
 import velox
 from velox._collection.collect import CollectionError
-from velox._di.fixtures import plan_for
+from velox._di.fixtures import expand_cases, plan_for
 from velox._run.run import AdmissionGate, Outcome, exit_code_for, run_suite
 from velox._run.run import TestResult as Result
 
@@ -291,6 +291,34 @@ def test_module_scope_fixture_is_shared_and_torn_down_once_across_tests_in_one_m
     # twice.
     assert len(builds) == 1
     assert torn_down == ["closed"]
+
+
+def test_run_suite_end_to_end_with_a_parametrized_fixture() -> None:
+    """Full pipeline proof, one level above `_di`'s own tests: `expand_cases`'s specialized plans
+    dispatched through `run_suite` each pass their own case's value through to the test, and a
+    `module`-scope fixture still builds only once per case."""
+    builds: list[str] = []
+    seen: list[str] = []
+
+    @velox.fixture(scope="module", params=["sqlite", "postgres"])
+    def backend(param: str) -> str:
+        builds.append(param)
+        return param
+
+    async def test_uses_backend(value: str = velox.Depends(backend)) -> None:
+        seen.append(value)
+
+    expansions = expand_cases(plan_for(test_uses_backend))
+    records = [
+        _record(i, test_uses_backend, f"test_uses_backend[{e.case_id}]", plan=e.plan)
+        for i, e in enumerate(expansions)
+    ]
+
+    results = run_suite(records)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert sorted(seen) == ["postgres", "sqlite"]
+    assert sorted(builds) == ["postgres", "sqlite"]  # one construction per case, not two
 
 
 def test_module_scope_fixture_is_not_shared_across_different_modules() -> None:
