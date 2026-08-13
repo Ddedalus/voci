@@ -66,11 +66,24 @@ never by unwrapping `__wrapped__`. That keeps collection fast and predictable, a
 known sharp edge: a decorator that replaces a test's signature with `(*args, **kwargs)` hides its
 `Depends()` defaults from collection entirely.
 
-There is also no `autouse`. Adding a name-based fallback "for convenience" would undo the thing
-that makes the static half of the DI system possible: a test's dependencies would stop being
-readable from its own signature, and the resolution plan built from `__defaults__` would no longer
-describe the whole graph, because something could arrive through the back door. Treat `autouse` as
-a different feature with a different cost, not a small addition to this one.
+The line is drawn at name-based resolution, not at where a dependency is declared. A module can
+declare fixtures on behalf of every test it defines, with `velox.use(...)`:
+
+```python
+velox.use(db_reset)
+```
+
+The fixture is still an imported object, named at a site you can jump to; the declaration lives on
+the module rather than in each signature, and its value is discarded. FastAPI draws the same line
+with `APIRouter(dependencies=[Depends(...)])`. What a reader gives up is that a test's dependencies
+are readable from its signature *plus its module header* rather than its signature alone; what the
+DI system keeps is everything the static half rests on — no lookup that can fail at run time, no
+shadowing rule, and a `ResolutionPlan` that still describes the whole graph, since a declared
+fixture becomes a step like any other, just one nothing in `root_args` points at.
+
+Declarations accumulate rather than override. There is no proximity rule by which one can replace
+another, which is the machinery that makes a conftest chain hard to read; a test that should not
+have a fixture goes in a module that does not declare it.
 
 ## Logical order governs all output
 

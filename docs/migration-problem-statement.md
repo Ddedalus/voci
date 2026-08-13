@@ -10,8 +10,8 @@ implementation. It is written against velox as it exists in this tree, plus the 
 ## 1. What migration has to achieve
 
 velox has no runtime pytest compatibility layer and will not grow one: no `conftest.py`, no
-name-based fixture lookup, no hook protocol, no `pytest` import shim, no `autouse`. That is what
-keeps the runner small and the hot path free of a node tree and hook dispatch. The consequence is
+name-based fixture lookup, no hook protocol, no `pytest` import shim. That is what keeps the runner
+small and the hot path free of a node tree and hook dispatch. The consequence is
 that the *entire* compatibility budget is spent once, in a source-to-source rewrite.
 
 - **Input**: a pytest suite that currently collects and passes, plus its pytest configuration and
@@ -80,16 +80,20 @@ fixture body's own `param` argument; `skip`/`skipif`/`xfail` marks; custom marks
 `@velox.tag(...)`, selectable with `-m`; `tmp_path`/`tmp_path_factory`; `capsys` → `velox.capture`;
 `caplog` → `velox.log_records`; `pytest.raises` (including `match=` semantics, `re.search`, same
 escaping gotcha); `pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` marks and
-`event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`.
+`event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`;
+`@pytest.fixture(autouse=True)` and `@pytest.mark.usefixtures(...)` → `velox.use(...)` in each
+affected test module (see §4.3).
 
 **On the roadmap, and worth designing against rather than around.** `-k` selection and
-`path.py::test_name` ids (CI invocations depend on both); `class Test*` as namespacing; lazy or
+`path.py::test_name` ids (CI invocations depend on both); a `velox.use(...)` declaration on a
+package `__init__.py`, which is what turns a conftest `autouse` into one line per *directory*
+rather than one per module (§4.3); `class Test*` as namespacing; lazy or
 optional dependencies and overriding one fixture for a subtree of tests without hand-duplicating
 its whole downstream chain (see §4.2 — the single largest source of hand edits if it never lands);
 `@mock.patch` detection and automatic solo scheduling; the fix for patch-decorated tests losing
 their DI; JUnit XML and `--report-json` (CI consumers depend on these).
 
-**Never.** `conftest.py`, name-based lookup, `autouse`, `request`, hooks (`pytest_configure`,
+**Never.** `conftest.py`, name-based lookup, `request`, hooks (`pytest_configure`,
 `pytest_collection_modifyitems`, `pytest_addoption`, …), plugin entry points, `monkeypatch`,
 `pytest.warns`/`recwarn`, imperative `pytest.skip()`/`fail()`/`xfail()`/`importorskip()`, fd-level
 capture (`capfd` — velox replaces `sys.stdout`/`sys.stderr`, so a C extension or subprocess writing
@@ -145,21 +149,23 @@ medium-sized suite produces a 400-line diff or a 40,000-line one.
 ### 4.3 `autouse`
 
 An `autouse` fixture applies to every test in its visibility scope with nothing written at the call
-site. velox has no equivalent by design — a test's dependencies must be readable from its own
-signature. Expansion into an explicit `Depends()` on every affected test is the only faithful
-translation, and for the common cases (an autouse DB reset, an autouse env setup, an autouse
-`freeze_time`) that means touching every test in the suite.
+site. `velox.use(...)` is the counterpart: a declaration on the container rather than on each test,
+with the fixture imported and named, so the translation is one line per affected module instead of
+one `Depends()` parameter per test. Two of the three things that made this hard fall out of that.
+There is no parameter name to invent, because a declared fixture binds to nothing. And ordering
+holds: pytest orders autouse fixtures before others at the same scope, and `velox.use` puts its
+fixtures earliest in the resolution plan, so they construct first and tear down last.
 
-Two things follow. First, the diff size is not a defect, it is an honest measurement of how much
-implicit wiring the suite carried — but the tool has to present it that way or the user will read it
-as the tool malfunctioning. Second, `autouse` fixtures with no return value need a parameter name
-that reads as intentional at hundreds of call sites; naming is a real design decision here, not
-cosmetics.
+What is left is a visibility mismatch. `autouse` in a `conftest.py` covers a whole directory tree,
+while a module declaration covers one file — so a conftest-level autouse expands to a `velox.use(...)`
+in every test module beneath that conftest. That is a per-module diff rather than a per-test one,
+and it collapses to a single line once declarations on a package `__init__.py` land (see
+[ROADMAP.md](../ROADMAP.md)). The tool should present the expansion as a measurement of how much
+implicit wiring the suite carried, not as a defect.
 
-Ordering is a live sub-problem: pytest orders autouse fixtures before others at the same scope, and
-suites do depend on it. velox orders by the topological walk of the declared graph, so an autouse
-fixture that was implicitly "first" becomes just another node unless the tool makes the ordering
-edge explicit.
+The remaining decision is placement: the same fixture object has to be importable from every module
+that declares it, which is the same question §4.5 asks about where translated conftest fixtures
+live.
 
 ### 4.4 Eliminating `request`
 
@@ -204,7 +210,7 @@ The ~80% that is a lookup table — with the traps that make a naive identifier 
 | `@pytest.mark.parametrize(...)` | `@velox.parametrize(...)` | `pytest.param(v, marks=..., id=...)` has no velox spelling: per-case marks do not exist. A per-case `xfail` must become a separate test or a body-level branch. Generated ids differ (velox renders `bool`/`str`/`int`/`None`/enum, else `argname{index}`; floats, bytes, tuples diverge). |
 | `@pytest.mark.skipif(cond, reason=)` | `@velox.skipif(cond, reason=)` | velox takes a `bool` or a zero-arg callable; pytest also accepts a *string expression*. Conditions that read module state at import time change meaning if wrapped in a callable (velox evaluates callables at run time, not collection). |
 | `@pytest.mark.xfail(...)` | `@velox.xfail(reason, strict=, raises=)` | pytest's `condition` first argument and `run=False` have no equivalent; `run=False` must become a skip. `xfail_strict` from ini has to be materialized per mark. |
-| `@pytest.mark.usefixtures("a","b")` | `Depends()` params | Needs invented parameter names, same problem as §4.3. |
+| `@pytest.mark.usefixtures("a","b")` | `velox.use(a, b)` | Applies to the whole module, so a mark on one test in a file of many needs the others checked, or the fixture moved to its own module. |
 | `pytest.raises(E, match=)` | `velox.raises(E, match=)` | velox refuses to catch `asyncio.CancelledError` (it is the timeout mechanism). The legacy call form `pytest.raises(E, fn, *args)` has no equivalent. |
 | `pytest.approx(x)` | `velox.approx(x)` | **Scalars only.** Sequence/dict/numpy comparisons have no equivalent and must be flagged, not rewritten. |
 | `capsys.readouterr()` | `velox.capture` | **Semantics differ.** `readouterr()` returns a snapshot *and clears the buffer*; `Capture.out`/`.err` are live, cumulative, never cleared. Any test calling `readouterr()` twice changes meaning under a rename. `capfd`/binary variants have no equivalent at all. |
@@ -328,8 +334,8 @@ Properties to design toward, stated as requirements rather than as a design:
 2. **Preserve the conftest layout, or consolidate into one fixture module?** (§4.5)
 3. **How far does §4.2's chain specialization go before it is better to fail loudly?** Is there a
    duplication budget past which the tool should stop and ask for a DI seam instead?
-4. **What is the `autouse` naming convention** at the call site, given it will appear thousands of
-   times? (§4.3)
+4. **Where do the fixtures a `velox.use(...)` line names live**, given every module under a
+   translated `conftest.py` has to import them? (§4.3, §4.5)
 5. **Should the tool ever propose a DI seam** — rewriting a patched module global into an injected
    dependency — or only report the opportunity? The idiomatic result needs it; the reviewable diff
    argues against doing it in the same pass.

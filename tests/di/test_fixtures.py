@@ -201,6 +201,127 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
     assert plan.root_args == ()
 
 
+# `implicit=` -- the fixtures a container declares with `velox.use(...)`, which get a step each
+# but bind to no parameter.
+# ------------------------------------------------------------------------------------------
+
+
+def test_implicit_fixtures_get_a_step_but_never_a_root_arg() -> None:
+    @velox.fixture()
+    def side_effect() -> None:
+        return None
+
+    async def test_func() -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[side_effect])
+
+    assert [step.fixture.name for step in plan.steps] == ["side_effect"]
+    assert plan.root_args == ()
+
+
+def test_implicit_fixtures_are_built_before_the_tests_own_dependencies() -> None:
+    """Lowest `step_id`s, so `_di.setup` constructs them first and `_di.teardown`, walking
+    `steps` backwards, releases them last."""
+
+    @velox.fixture()
+    def declared() -> str:
+        return "declared"
+
+    @velox.fixture()
+    def asked_for() -> str:
+        return "asked_for"
+
+    async def test_func(x: str = Depends(asked_for)) -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[declared])
+
+    assert [step.fixture.name for step in plan.steps] == ["declared", "asked_for"]
+    assert plan.root_args == (("x", 1, False),)
+
+
+def test_implicit_fixtures_apply_in_the_order_they_were_declared() -> None:
+    @velox.fixture()
+    def first() -> int:
+        return 1
+
+    @velox.fixture()
+    def second() -> int:
+        return 2
+
+    async def test_func() -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[first, second])
+
+    assert [step.fixture.name for step in plan.steps] == ["first", "second"]
+
+
+def test_a_fixture_both_declared_and_depended_on_is_built_once_and_still_bound() -> None:
+    """The `plan_for` memo covers implicit roots too, so declaring a fixture a test also wants
+    the value of doesn't construct it twice."""
+
+    @velox.fixture()
+    def shared() -> str:
+        return "shared"
+
+    async def test_func(x: str = Depends(shared)) -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[shared])
+
+    assert [step.fixture.name for step in plan.steps] == ["shared"]
+    assert plan.root_args == (("x", 0, False),)
+
+
+def test_implicit_fixtures_pull_in_their_own_transitive_dependencies() -> None:
+    @velox.fixture()
+    def leaf() -> str:
+        return "leaf"
+
+    @velox.fixture()
+    def declared(x: str = Depends(leaf)) -> str:
+        return x
+
+    async def test_func() -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[declared])
+
+    assert [step.fixture.name for step in plan.steps] == ["leaf", "declared"]
+    assert plan.steps[1].args == (("x", 0, False),)
+
+
+def test_an_implicit_fixture_narrower_than_the_test_is_rejected() -> None:
+    """Same scope-compatibility rule as a direct `Depends()` site, same error text."""
+
+    @velox.fixture(scope="call", name="narrow_fx")
+    def narrow() -> int:
+        return 1
+
+    @velox.fixture(scope="session", name="wide_fx")
+    def wide(x: int = Depends(narrow)) -> int:
+        return x
+
+    async def test_func() -> None:
+        pass
+
+    with pytest.raises(DIError, match="wide_fx"):
+        plan_for(test_func, implicit=[wide])
+
+
+def test_an_implicit_fixtures_exclusive_token_reaches_the_admission_gate() -> None:
+    @velox.fixture(exclusive="database")
+    def declared() -> None:
+        return None
+
+    async def test_func() -> None:
+        pass
+
+    assert exclusive_tokens_of(plan_for(test_func, implicit=[declared])) == {"database"}
+
+
 # `exclusive_tokens_of`: the resource-token set `_run.AdmissionGate` admits tests against.
 # ------------------------------------------------------------------------------------------
 
@@ -564,6 +685,23 @@ def test_plan_for_propagates_param_ancestors_to_a_dependent_fixture() -> None:
     assert steps_by_name["backend"].param_ancestors == (id(backend),)
     assert steps_by_name["engine"].param_ancestors == (id(backend),)
     assert plan.param_ancestors == (id(backend),)
+
+
+def test_plan_for_records_param_ancestors_reached_only_through_an_implicit_fixture() -> None:
+    """A `params=` fixture a container declared still fans its tests out one case each, so it
+    has to reach `ResolutionPlan.param_ancestors` the same way a directly-depended one does."""
+
+    @velox.fixture(params=["a", "b"])
+    def backend(param: str) -> str:
+        return param
+
+    async def test_func() -> None:
+        pass
+
+    plan = plan_for(test_func, implicit=[backend])
+
+    assert plan.param_ancestors == (id(backend),)
+    assert [e.plan.steps[0].param_value for e in expand_cases(plan)] == ["a", "b"]
 
 
 def test_expand_cases_passes_through_the_same_plan_object_when_unparametrized() -> None:

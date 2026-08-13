@@ -11,7 +11,8 @@ with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` o
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
 per-test subprocess tier · `skip`/`skipif`/`xfail` ·
 `@velox.parametrize`, including stacked decorators · parametrized fixtures (`params=` on
-`@velox.fixture`) · `@velox.tag` selection with `-m` · assertion introspection with comparison
+`@velox.fixture`) · `velox.use(...)` module-level fixture declarations ·
+`@velox.tag` selection with `-m` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
 `velox.fastapi` per-test dependency overrides.
 
@@ -19,7 +20,12 @@ diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.
 
 Fast-tracked: the pytest migration codegen (see
 [docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
-five items, roughly in the order the codegen needs them.
+six items, roughly in the order the codegen needs them.
+
+**Container declarations.** `velox.use(...)` on a package `__init__.py`, applying to every test in
+that directory and below, and in a `class Test*` body once classes collect. Without the directory
+form, translating one `autouse` fixture out of a `conftest.py` writes a line into every test module
+underneath it rather than one line in one place.
 
 **Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
 of tests without duplicating everything downstream of it by hand. Without these, a conftest-style

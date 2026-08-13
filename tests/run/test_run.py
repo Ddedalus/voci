@@ -416,6 +416,106 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
     assert "teardown boom" in result.failure
 
 
+# Fixtures a container declared with `velox.use(...)`: constructed and torn down like any
+# other, with nothing passed to the test.
+# ------------------------------------------------------------------------------------------
+
+
+def test_a_declared_fixtures_side_effect_runs_and_its_value_is_discarded() -> None:
+    events: list[str] = []
+
+    @velox.fixture()
+    def declared():
+        events.append("setup")
+        yield "never seen"
+        events.append("teardown")
+
+    async def test_func() -> None:
+        events.append("call")
+
+    plan = plan_for(test_func, implicit=[declared])
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan)])
+
+    assert result.outcome is Outcome.PASSED
+    assert events == ["setup", "call", "teardown"]
+
+
+def test_a_declared_fixture_wraps_the_tests_own_dependency() -> None:
+    """Declared fixtures set up first and tear down last, so an outer resource is live for the
+    whole of an inner one's lifetime."""
+    events: list[str] = []
+
+    @velox.fixture()
+    def declared():
+        events.append("declared setup")
+        yield None
+        events.append("declared teardown")
+
+    @velox.fixture()
+    def asked_for():
+        events.append("asked_for setup")
+        yield None
+        events.append("asked_for teardown")
+
+    async def test_func(x: object = velox.Depends(asked_for)) -> None:
+        events.append("call")
+
+    plan = plan_for(test_func, implicit=[declared])
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan)])
+
+    assert result.outcome is Outcome.PASSED
+    assert events == [
+        "declared setup",
+        "asked_for setup",
+        "call",
+        "asked_for teardown",
+        "declared teardown",
+    ]
+
+
+def test_a_failing_declared_fixture_errors_the_test_and_names_itself() -> None:
+    @velox.fixture()
+    def declared():
+        raise RuntimeError("declared boom")
+
+    async def test_func() -> None:
+        raise AssertionError("must never run: setup already failed")
+
+    plan = plan_for(test_func, implicit=[declared])
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan)])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure is not None
+    assert "declared boom" in result.failure
+    assert "declared" in result.failure
+
+
+def test_a_declared_exclusive_fixture_serializes_every_test_that_holds_it() -> None:
+    """`exclusive_tokens_of` reads the whole plan, so a declared fixture's token gates admission
+    exactly as a directly-depended one's does."""
+    in_flight = 0
+    peak = 0
+
+    @velox.fixture(exclusive="database")
+    def declared():
+        return None
+
+    async def test_func() -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.02)
+        in_flight -= 1
+
+    plan = plan_for(test_func, implicit=[declared])
+    records = [_record(i, test_func, f"test_{i}", plan=plan) for i in range(4)]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 4
+    assert peak == 1
+
+
 # TestResult.failure_summary: a short, exception-object-based summary captured directly at
 # each of `_run_one`'s catch sites, not parsed back out of `failure`'s rendered traceback text.
 # ------------------------------------------------------------------------------------------
