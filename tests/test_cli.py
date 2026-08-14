@@ -976,8 +976,8 @@ def test_main_an_id_leaves_a_skipped_test_it_does_not_name_out_of_the_run(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "1 tests: 1 passed" in out
-    assert "SKIPPED" not in out
+    assert "1 test · 1 passed" in out
+    assert "skipped" not in out
 
 
 def test_main_k_leaves_a_skipped_test_it_does_not_match_out_of_the_run(
@@ -995,8 +995,8 @@ def test_main_k_leaves_a_skipped_test_it_does_not_match_out_of_the_run(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "1 tests: 1 passed" in out
-    assert "SKIPPED" not in out
+    assert "1 test · 1 passed" in out
+    assert "skipped" not in out
 
 
 def test_main_an_id_naming_a_case_of_a_skipped_test_reports_the_skip(
@@ -1016,7 +1016,7 @@ def test_main_an_id_naming_a_case_of_a_skipped_test_reports_the_skip(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "test_role SKIPPED (later)" in captured.out
+    assert "1 test · 1 skipped" in captured.out
     assert "no test matches" not in captured.err
 
 
@@ -1034,9 +1034,9 @@ def test_main_k_matches_a_skipped_test_by_the_id_it_has(
     )
 
     assert main([str(project.root), "-k", "role"]) == 0
-    assert "test_role SKIPPED (later)" in capsys.readouterr().out
+    assert "1 test · 1 skipped" in capsys.readouterr().out
     assert main([str(project.root), "-k", "admin"]) == 5
-    assert "SKIPPED" not in capsys.readouterr().out
+    assert "skipped" not in capsys.readouterr().out
 
 
 def test_main_an_id_naming_a_case_of_a_test_dash_m_excluded_is_an_empty_run(
@@ -1205,7 +1205,7 @@ def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "1 tests: 1 passed" in out
+    assert "1 test · 1 passed" in out
 
 
 def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table(
