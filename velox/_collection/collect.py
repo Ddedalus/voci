@@ -272,10 +272,10 @@ def collect(
         module_name = module_name_for(path, rootdir)
         try:
             module = _import_module(path, module_name)
-        except Exception:
+        except Exception as error:
             # Attributed to the file, not raised: one broken test module must not take the
             # rest of the suite down with it.
-            errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+            errors.append(CollectionError(path=display_path, message=_import_failure(error, path)))
             continue
 
         implicit = combined(inherited, requires_of(module))
@@ -414,12 +414,12 @@ def _package_declarations(
         if init not in cache:
             try:
                 cache[init] = requires_of(_import_module(init, module_name_for(init, rootdir)))
-            except Exception:
+            except Exception as error:
                 cache[init] = None
                 errors.append(
                     CollectionError(
                         path=_display_path(init, Path(rootdir).resolve()),
-                        message=traceback.format_exc(),
+                        message=_import_failure(error, init),
                     )
                 )
         package = cache[init]
@@ -459,6 +459,24 @@ def _misplaced_declarations(declaring_files: set[Path]) -> list[CollectionError]
             )
         )
     return misplaced
+
+
+def _import_failure(error: Exception, path: Path) -> str:
+    """The traceback for a failed import, plus what to do about the one failure mode velox's own
+    import machinery causes.
+
+    A file is imported by path under a synthetic `velox_tests.*` name with no real package behind
+    it, so a relative import inside one resolves against nothing and fails naming `velox_tests` --
+    a name the suite never wrote and can do nothing with.
+    """
+    message = traceback.format_exc()
+    if isinstance(error, ModuleNotFoundError) and (error.name or "").startswith(_MODULE_PREFIX):
+        message += (
+            f"\nvelox imports {path} by its path rather than through its package, so a relative "
+            f"import in it has nothing to resolve against. Import what it needs by absolute "
+            f"module path instead.\n"
+        )
+    return message
 
 
 def _no_dependencies() -> None:

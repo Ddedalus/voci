@@ -59,15 +59,20 @@ def package_inits(path: Path, rootdir: Path) -> tuple[Path, ...]:
 
     Walks up from `path`'s own directory and stops at the first directory without an
     `__init__.py`, so the result is the unbroken package chain a Python import would traverse.
-    `rootdir` is the far end of the walk: a directory above it is never read, however the packages
-    there are laid out. Returns resolved, absolute paths that exist.
+    `rootdir` is the far end of the walk, and nothing outside it is ever read: a `path` that isn't
+    under `rootdir` at all contributes at most the package it sits in directly. `path` itself is
+    never in the result, so naming an `__init__.py` as a test file reads its declarations once,
+    off the module, rather than a second time as its own container. Returns resolved, absolute
+    paths that exist.
     """
-    directory = Path(path).resolve().parent
+    path = Path(path).resolve()
+    directory = path.parent
     rootdir = Path(rootdir).resolve()
     inits: list[Path] = []
     while (init := directory / "__init__.py").is_file():
-        inits.append(init)
-        if directory == rootdir or directory.parent == directory:
+        if init != path:
+            inits.append(init)
+        if directory == rootdir or rootdir not in directory.parents:
             break
         directory = directory.parent
     inits.reverse()

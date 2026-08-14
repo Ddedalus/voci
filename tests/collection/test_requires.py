@@ -385,6 +385,47 @@ def test_a_package_that_fails_to_import_is_one_error_and_no_records(tmp_path: Pa
     assert result.errors[0].path == Path("pkg/__init__.py")
 
 
+def test_a_package_named_as_a_test_file_declares_for_itself_once(tmp_path: Path) -> None:
+    """It is its own container, so its declarations are read off the module — reading them again
+    from the package chain would import the file twice and build the fixture twice."""
+    path = _write(
+        tmp_path / "pkg" / "__init__.py",
+        _DECLARING_PACKAGE + "\nasync def test_one():\n    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == ["from_package"]
+
+
+def test_the_walk_never_leaves_rootdir(tmp_path: Path) -> None:
+    """A file outside `rootdir` — an explicitly named path elsewhere on disk — reads the package
+    it sits in and nothing above it."""
+    _write(tmp_path / "elsewhere" / "__init__.py", _DECLARING_PACKAGE)
+    _write(tmp_path / "elsewhere" / "deep" / "__init__.py", "")
+    path = _write(tmp_path / "elsewhere" / "deep" / "test_sample.py", _PLAIN_TEST)
+    (tmp_path / "proj").mkdir()
+
+    result = collect([path], rootdir=tmp_path / "proj")
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == []
+
+
+def test_a_relative_import_in_a_package_says_what_to_do_about_it(tmp_path: Path) -> None:
+    """velox imports by path, so the traceback names `velox_tests` — a package the suite never
+    wrote."""
+    _write(tmp_path / "pkg" / "helpers.py", "value = 1\n")
+    _write(tmp_path / "pkg" / "__init__.py", "from .helpers import value\n")
+    path = _write(tmp_path / "pkg" / "test_sample.py", _PLAIN_TEST)
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert "absolute module path" in result.errors[0].message
+
+
 def test_a_package_is_not_left_in_sys_modules(tmp_path: Path) -> None:
     _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
     path = _write(tmp_path / "pkg" / "test_sample.py", _PLAIN_TEST)
