@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from velox._collection.collect import Skipped
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan
 from velox._report.terminal import Reporter, _elide_middle, _failure_reason
@@ -88,9 +89,14 @@ class _FakeTTYStream(io.StringIO):
         return True
 
 
+def _skipped(id: str, path: Path, reason: str = "not ready") -> Skipped:
+    return Skipped(id=id, reason=reason, path=path)
+
+
 def _reporter(
     records: list[Record],
     *,
+    skipped: list[Skipped] | None = None,
     capture_passthrough: bool = False,
     verbosity: int = 0,
     durations: int = 0,
@@ -100,6 +106,7 @@ def _reporter(
     return (
         Reporter(
             records=records,
+            skipped=skipped or [],
             capture_passthrough=capture_passthrough,
             stream=stream,
             verbosity=verbosity,
@@ -174,6 +181,50 @@ def test_file_block_stays_pass_when_the_only_non_passed_results_are_xfail() -> N
     out = stream.getvalue()
     assert "PASS" in out
     assert "FAIL" not in out
+
+
+def test_file_block_counts_its_skipped_tests_rather_than_listing_them() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(
+        records, skipped=[_skipped(f"{path}::test_b", path, reason="not ready")]
+    )
+
+    reporter.on_result(_result(f"{path}::test_a", 0))
+
+    out = stream.getvalue()
+    assert "PASS" in out
+    assert "2 tests" in out  # the file's own total, whether each test ran or not
+    assert "(1 skipped)" in out
+    assert "not ready" not in out
+
+
+def test_a_wholly_skipped_file_gets_a_skip_block_from_flush_pending() -> None:
+    """No test of the file ever reports in, so `on_result` never reaches its block -- without
+    `flush_pending` printing it, the file would vanish from the run's output entirely."""
+    path = Path("tests/test_sample.py")
+    reporter, stream = _reporter(
+        [], skipped=[_skipped(f"{path}::test_a", path), _skipped(f"{path}::test_b", path)]
+    )
+    assert stream.getvalue() == ""
+
+    reporter.flush_pending()
+
+    line = stream.getvalue().strip()
+    assert line.startswith("SKIP")
+    assert "2 tests" in line
+    # `SKIP` has already said it: the suffix is there to qualify a mixed file.
+    assert "skipped)" not in line
+
+
+def test_flush_pending_prints_a_skip_only_file_once() -> None:
+    path = Path("tests/test_sample.py")
+    reporter, stream = _reporter([], skipped=[_skipped(f"{path}::test_a", path)])
+
+    reporter.flush_pending()
+    reporter.flush_pending()
+
+    assert stream.getvalue().count("SKIP") == 1
 
 
 def test_duplicate_ids_across_records_are_each_counted_not_collapsed() -> None:
@@ -272,7 +323,7 @@ def test_finish_omits_xfailed_and_xpassed_from_failure_details_and_short_summary
     out = stream.getvalue()
     assert "--- short test summary ---" not in out
     assert "boom" not in out
-    assert "3 tests · 0 failed" in out
+    assert "3 tests · 1 passed · 1 xfailed · 1 xpassed · 1.00s wall" in out
 
 
 # Short-summary "reason" extraction: a direct read of `TestResult.failure_summary`.
@@ -450,26 +501,70 @@ def test_wall_vs_sigma_line_arithmetic() -> None:
     reporter.finish(results, wall_clock=2.0)
 
     out = stream.getvalue()
-    assert "2 tests" in out
-    assert "0 failed" in out
-    assert "2.00s wall" in out
-    assert "2.0x concurrency" in out
+    assert "2 tests · 2 passed · 2.00s wall (2.0x concurrency)" in out
     # Dropped deliberately: two numbers plus a ratio in one line was one number too many.
     assert "Σ" not in out
 
 
-def test_finish_folds_skipped_into_the_leading_count() -> None:
-    """`skipped` never reaches `results` (skipped tests are never run), so it has to be passed
-    in separately for the final line's count to match `cli.main`'s own summary line."""
+def test_totals_line_omits_every_category_with_nothing_to_report() -> None:
+    """A clean run's one line carries what that run found and nothing else -- no zero counts,
+    and no failure line above it."""
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=1.0)]
     records = [_test_record(results[0].id, path)]
     reporter, stream = _reporter(records)
 
-    reporter.finish(results, wall_clock=1.0, skipped=2)
+    reporter.finish(results, wall_clock=1.0)
+
+    tail = stream.getvalue().strip().splitlines()
+    assert tail[-1] == "1 test · 1 passed · 1.00s wall (1.0x concurrency)"
+    assert len(tail) == 1
+
+
+def test_failures_get_their_own_line_above_the_totals() -> None:
+    path = Path("f.py")
+    results = [
+        _result(f"{path}::test_a", 0, duration=1.0),
+        _result(f"{path}::test_b", 1, outcome=Outcome.FAILED, duration=1.0),
+        _result(f"{path}::test_c", 2, outcome=Outcome.ERROR, duration=1.0),
+        _result(f"{path}::test_d", 3, outcome=Outcome.TIMEOUT, duration=1.0),
+    ]
+    records = [_test_record(r.id, path, index=i) for i, r in enumerate(results)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish(results, wall_clock=2.0, collection_errors=1)
+
+    tail = stream.getvalue().strip().splitlines()
+    assert tail[-2] == "1 failed · 1 errored · 1 timed out · 1 collection error"
+    assert tail[-1] == "4 tests · 1 passed · 2.00s wall (2.0x concurrency)"
+
+
+def test_finish_folds_skipped_into_the_leading_count() -> None:
+    """Skipped tests never reach `results` -- they are never run -- so the leading count reads
+    them off the reporter's own `skipped`, which is also what the file blocks counted."""
+    path = Path("f.py")
+    results = [_result(f"{path}::test_a", 0, duration=1.0)]
+    records = [_test_record(results[0].id, path)]
+    reporter, stream = _reporter(
+        records, skipped=[_skipped(f"{path}::test_b", path), _skipped(f"{path}::test_c", path)]
+    )
+
+    reporter.finish(results, wall_clock=1.0)
 
     out = stream.getvalue()
-    assert "3 tests" in out
+    assert "3 tests · 1 passed · 2 skipped" in out
+
+
+def test_finish_counts_deselected_and_not_run_tests() -> None:
+    path = Path("f.py")
+    results = [_result(f"{path}::test_a", 0, duration=1.0)]
+    records = [_test_record(results[0].id, path)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish(results, wall_clock=1.0, not_run=2, deselected=3)
+
+    out = stream.getvalue()
+    assert "3 tests · 1 passed · 3 deselected · 2 not run (--maxfail)" in out
 
 
 def test_finish_with_zero_tests() -> None:
@@ -479,8 +574,7 @@ def test_finish_with_zero_tests() -> None:
     reporter.finish([], wall_clock=0.001)
 
     out = stream.getvalue()
-    assert "0 tests" in out
-    assert "0 failed" in out
+    assert "0 tests · 0.00s wall" in out
 
 
 def test_wall_vs_sigma_line_guards_non_positive_wall_clock() -> None:
@@ -531,8 +625,10 @@ def test_elide_middle_keeps_both_ends_of_long_text() -> None:
     assert "..." in elided
 
 
-def test_file_block_path_column_is_elided_for_a_long_path() -> None:
-    long_path = Path("tests/very/deeply/nested/package/test_billing_reconciliation.py")
+def test_file_block_path_column_is_elided_past_the_ceiling() -> None:
+    long_path = Path(
+        "tests/very/deeply/nested/package/of/an/enterprise/tree/test_billing_reconciliation.py"
+    )
     records = [_test_record(f"{long_path}::test_a", long_path)]
     reporter, stream = _reporter(records)
 
@@ -541,6 +637,21 @@ def test_file_block_path_column_is_elided_for_a_long_path() -> None:
     out = stream.getvalue()
     assert "..." in out
     assert str(long_path) not in out
+
+
+def test_file_block_path_column_widens_to_the_longest_path_collected() -> None:
+    """Sized once, from every path the run collected, so a deep tree's blocks line their
+    counts up in one column instead of each pushing them right by a different amount."""
+    short, long = Path("tests/test_a.py"), Path("tests/api/v2/billing/test_reconciliation.py")
+    records = [_test_record(f"{short}::test_a", short), _test_record(f"{long}::test_b", long)]
+    reporter, stream = _reporter(records)
+
+    reporter.on_result(_result(records[0].id, 0))
+    reporter.on_result(_result(records[1].id, 1))
+
+    first, second = stream.getvalue().splitlines()
+    assert str(long) in second  # in full: under the ceiling, nothing is elided
+    assert first.index("1 test") == second.index("1 test")
 
 
 # ------------------------------------------------------------------------------------------
@@ -629,6 +740,45 @@ def test_quiet_prints_one_character_per_file() -> None:
     assert stream.getvalue() == ".F"
 
 
+def test_quiet_marks_a_wholly_skipped_file_with_an_s() -> None:
+    first, second = Path("tests/test_a.py"), Path("tests/test_b.py")
+    records = [_test_record(f"{first}::test_a", first)]
+    reporter, stream = _reporter(
+        records, skipped=[_skipped(f"{second}::test_b", second)], verbosity=-1
+    )
+
+    reporter.on_result(_result(f"{first}::test_a", 0))
+    reporter.flush_pending()
+
+    assert stream.getvalue() == ".s\n"
+
+
+def test_verbose_lists_every_skip_with_its_reason() -> None:
+    path = Path("tests/test_a.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    skipped = [_skipped(f"{path}::test_b", path, reason="pagination is not implemented yet")]
+    reporter, stream = _reporter(records, skipped=skipped, verbosity=1)
+
+    reporter.finish([_result(f"{path}::test_a", 0)], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "--- skipped 1 test ---" in out
+    assert f"{path}::test_b - pagination is not implemented yet" in out
+
+
+def test_the_default_verbosity_counts_skips_without_their_reasons() -> None:
+    path = Path("tests/test_a.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    skipped = [_skipped(f"{path}::test_b", path, reason="pagination is not implemented yet")]
+    reporter, stream = _reporter(records, skipped=skipped)
+
+    reporter.finish([_result(f"{path}::test_a", 0)], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "pagination is not implemented yet" not in out
+    assert "1 skipped" in out
+
+
 def test_quiet_closes_its_progress_line_before_anything_else_prints() -> None:
     path = Path("tests/test_a.py")
     records = [_test_record(f"{path}::test_a", path)]
@@ -680,7 +830,7 @@ def test_flush_pending_prints_the_block_of_a_file_that_never_finished() -> None:
 
     block_line = stream.getvalue().splitlines()[0]
     assert block_line.startswith("FAIL")
-    assert "1 tests" in block_line
+    assert "1 test " in block_line
 
 
 def test_finish_folds_not_run_into_the_leading_count() -> None:
@@ -691,7 +841,7 @@ def test_finish_folds_not_run_into_the_leading_count() -> None:
 
     reporter.finish([result], wall_clock=1.0, not_run=2)
 
-    assert "3 tests · 1 failed" in stream.getvalue()
+    assert "3 tests · 2 not run (--maxfail)" in stream.getvalue()
 
 
 def test_durations_lists_the_slowest_tests_in_order() -> None:

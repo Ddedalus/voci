@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import TextIO
 
-__all__ = ["GRAY", "GREEN", "PRIMARY", "RED", "YELLOW", "color_enabled", "paint"]
+__all__ = ["GRAY", "GREEN", "PRIMARY", "RED", "YELLOW", "color_enabled", "counts", "paint"]
 
 _RESET = "\x1b[0m"
 
@@ -47,3 +47,11 @@ def paint(text: str, code: str, *, enabled: bool) -> str:
     if not enabled:
         return text
     return f"{code}{text}{_RESET}"
+
+
+def counts(*fields: tuple[int, str, str], enabled: bool) -> str:
+    """`(count, label, color)` triples joined into `2 skipped · 1 deselected`, dropping every
+    zero count. Empty when they were all zero."""
+    return " · ".join(
+        paint(f"{count} {label}", color, enabled=enabled) for count, label, color in fields if count
+    )

@@ -221,7 +221,25 @@ def test_main_reports_a_skipped_test_and_still_exits_zero(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "test_skipped SKIPPED (not ready)" in out
+    assert "1 test · 1 skipped" in out
+
+
+def test_main_reports_a_skipped_tests_reason_under_dash_v(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('not ready')\n"
+        "async def test_skipped():\n"
+        "    raise AssertionError('must not run')\n",
+    )
+
+    status = main([str(project.root), "-v"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_sample.py::test_skipped - not ready" in out
 
 
 def test_main_leading_test_count_includes_skipped(
@@ -243,8 +261,12 @@ def test_main_leading_test_count_includes_skipped(
 
     out = capsys.readouterr().out
     assert status == 0
-    # 1 ran + 1 skipped = 2, not the 1 that len(results) alone would say.
-    assert "2 tests: 1 passed, 0 failed, 0 errored, 1 skipped" in out
+    # 1 ran + 1 skipped = 2, not the 1 that len(results) alone would say. The skip is counted
+    # against its own file's block too, rather than spending a line of its own on the reason.
+    assert "2 tests · 1 passed · 1 skipped" in out
+    (block_line,) = _lines_starting_with(out, "PASS ", "FAIL ")
+    assert "(1 skipped)" in block_line
+    assert "not ready" not in out
 
 
 def test_main_colors_output_on_a_tty_and_stays_plain_off_one(
@@ -287,9 +309,8 @@ def test_main_dash_m_runs_only_matching_tags_and_reports_the_rest_deselected(
     assert status == 0
     (block_line,) = _lines_starting_with(out, "PASS ", "FAIL ")
     assert "test_sample.py" in block_line
-    assert "1 tests" in block_line
-    assert "1 tests: 1 passed" in out
-    assert "1 deselected" in out
+    assert "1 test " in block_line
+    assert "1 test · 1 passed · 1 deselected" in out
 
 
 def test_main_dash_m_matching_nothing_exits_five(
@@ -305,25 +326,25 @@ def test_main_dash_m_matching_nothing_exits_five(
     assert "1 deselected" in out
 
 
-def test_main_shows_zero_deselected_when_dash_m_is_given_but_matches_everything(
+def test_main_omits_deselected_when_dash_m_matches_everything(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`-m` is always shown in the summary once given, even when it deselects nothing --
-    unlike a run with no `-m` at all, where `deselected` never appears."""
+    """A category with nothing to report is left out of the summary entirely, `-m` in effect
+    or not: `0 deselected` is one more number to read past on a line that had nothing to say."""
     project.write_passing_test()
 
     status = main([str(project.root), "-m", "not slow"])
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "0 deselected" in out
+    assert "deselected" not in out
 
 
 def test_main_dash_m_never_reclassifies_a_skip_marked_test_as_deselected(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A test that is both skip-marked and tag-excluded by `-m` must stay `SKIPPED` -- and the
-    exit code must not depend on whether `-m` happened to also exclude it."""
+    """A test that is both skip-marked and tag-excluded by `-m` must stay counted as skipped --
+    and the exit code must not depend on whether `-m` happened to also exclude it."""
     project.write(
         "test_sample.py",
         "import velox\n\n"
@@ -339,8 +360,8 @@ def test_main_dash_m_never_reclassifies_a_skip_marked_test_as_deselected(
     out_with_m = capsys.readouterr().out
 
     assert without_m == with_m == 0
-    assert "test_skipped SKIPPED (not ready)" in out_without_m
-    assert "test_skipped SKIPPED (not ready)" in out_with_m
+    assert "1 test · 1 skipped" in out_without_m
+    assert "1 test · 1 skipped" in out_with_m
     assert "deselected" not in out_without_m
 
 
@@ -648,7 +669,7 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
     assert "test_a.py" in pass_line
     assert "2 tests" in pass_line
     assert "test_b.py" in fail_line
-    assert "1 tests" in fail_line
+    assert "1 test " in fail_line
     assert "(1 failed)" in fail_line
 
     # Failure details + short test summary, in logical order. The failure-details header ("FAILED
@@ -662,10 +683,10 @@ def test_main_prints_jest_style_per_file_blocks_end_to_end(
     (summary_line,) = [line for line in lines if "test_broken -" in line]
     assert summary_line.endswith("AssertionError: widget count")
 
-    # The wall-vs-concurrency line is the run's proof-of-value metric, and must be genuinely
-    # the *last* line -- after the skip list, collection-error tracebacks, and the
-    # `N tests: ...` summary.
-    assert "tests ·" in non_empty_lines[-1]
+    # The run ends on its totals, after every detail section, with what went wrong on the one
+    # line above them.
+    assert non_empty_lines[-2] == "1 failed"
+    assert non_empty_lines[-1].startswith("3 tests · 2 passed · ")
     assert "wall (" in non_empty_lines[-1]
     assert "concurrency)" in non_empty_lines[-1]
 
@@ -820,7 +841,8 @@ def test_main_mixes_isolated_and_in_process_tests_in_one_run(
 
     out = capsys.readouterr().out
     assert status == 1
-    assert "4 tests: 2 passed, 2 failed" in out
+    assert "2 failed" in out
+    assert "4 tests · 2 passed" in out
     assert "::test_in_process_fail" in out
     assert "::test_isolated_fail" in out
 
@@ -847,7 +869,7 @@ def test_main_runs_one_test_by_id(project: Project, capsys: pytest.CaptureFixtur
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "1 tests: 1 passed" in out
+    assert "1 test · 1 passed" in out
     assert "3 deselected" in out
 
 
@@ -861,7 +883,7 @@ def test_main_runs_one_class_grouped_test_by_id(
     out = capsys.readouterr().out
     assert status == 0
     assert "test_users.py::TestDelete::test_soft" in out
-    assert "1 tests collected" in out
+    assert "1 test collected" in out
 
 
 def test_main_id_naming_a_class_selects_every_test_in_it(
@@ -1107,7 +1129,7 @@ def test_main_k_selects_by_substring_of_the_id(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "1 tests: 1 passed" in out
+    assert "1 test · 1 passed" in out
     assert "4 deselected" in out
 
 
@@ -1123,7 +1145,7 @@ def test_main_k_matches_a_parametrize_case_id(
     out = capsys.readouterr().out
     assert status == 0
     assert "test_users.py::test_role[admin]" in out
-    assert "1 tests collected" in out
+    assert "1 test collected" in out
 
 
 def test_main_k_supports_boolean_operators(
@@ -1163,7 +1185,7 @@ def test_main_collect_only_prints_ids_and_runs_nothing(
     # Exit 0 with a test that fails when run: nothing was run.
     assert status == 0
     assert "test_sample.py::test_one" in out
-    assert "1 tests collected" in out
+    assert "1 test collected" in out
     assert "wall" not in out
 
 
@@ -1250,8 +1272,9 @@ def test_main_x_stops_after_the_first_failure(
 
     out = capsys.readouterr().out
     assert status == 1
-    assert "3 tests: 0 passed, 1 failed" in out
-    assert "2 not run" in out
+    assert "1 failed" in out
+    assert "3 tests · " in out
+    assert "2 not run (--maxfail)" in out
     assert "stopped after 1 failed" in out
 
 
@@ -1270,7 +1293,7 @@ def test_main_maxfail_counts_up_to_its_threshold(
     out = capsys.readouterr().out
     assert status == 1
     assert "2 failed" in out
-    assert "1 not run" in out
+    assert "1 not run (--maxfail)" in out
 
 
 def test_main_maxfail_does_not_stop_a_passing_run(
@@ -1282,7 +1305,7 @@ def test_main_maxfail_does_not_stop_a_passing_run(
 
     out = capsys.readouterr().out
     assert status == 0
-    assert "5 tests: 5 passed" in out
+    assert "5 tests · 5 passed" in out
     assert "not run" not in out
 
 
@@ -1424,5 +1447,6 @@ def test_main_runs_class_grouped_tests_end_to_end(
 
     out = capsys.readouterr().out
     assert status == 1
-    assert "2 tests: 1 passed, 1 failed" in out
+    assert "1 failed" in out
+    assert "2 tests · 1 passed" in out
     assert "test_sample.py::TestGroup::test_fails" in out

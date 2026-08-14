@@ -30,7 +30,7 @@ uv venv && uv pip install -e ../..
 ## Commands
 
 ```bash
-velox                    # everything (23 tests, 1 skipped)
+velox                    # everything (24 tests, 1 skipped)
 velox --concurrency 1    # exactly serial
 velox --timeout 5        # per-test setup+call budget
 ```
@@ -41,14 +41,12 @@ velox --timeout 5        # per-test setup+call budget
 $ velox
 assertions: rewrite, cache /home/you/.cache/velox/rewrite
 config: /path/to/examples/03-shared-resources/pyproject.toml
-PASS  tests/test_migrations.py            7 tests   Σ 1.62s
-PASS  tests/test_webhooks.py              1 tests   Σ 0.57s
-PASS  tests/test_safety.py                4 tests   Σ 0.90s
-PASS  tests/test_ledger.py               11 tests   Σ 7.58s
-tests/test_safety.py::test_strict_transfers_rejects_overdraft SKIPPED (would race ...)
-23 tests: 23 passed, 0 failed, 0 errored, 1 skipped, 0 collection error(s)
+PASS  tests/test_migrations.py                    7 tests  Σ 0.75s
+PASS  tests/test_webhooks.py                      1 test   Σ 0.07s
+PASS  tests/test_ledger.py                       11 tests  Σ 9.25s
+PASS  tests/test_safety.py                        5 tests  Σ 1.36s   (1 skipped)
 
-23 tests · 0 failed · 1.72s wall (Σ 10.66s, 6.2x concurrency)
+24 tests · 23 passed · 1 skipped · 2.09s wall (5.5x concurrency)
 ```
 
 ## What to look at

@@ -43,15 +43,13 @@ velox --timeout 5              # per-test setup+call budget
 $ velox
 assertions: rewrite, cache /home/you/.cache/velox/rewrite
 config: /path/to/examples/02-async-library/pyproject.toml
-PASS  tests/test_cache.py                12 tests   Σ 0.00s
-PASS  tests/test_delivery.py             13 tests   Σ 0.08s
-PASS  tests/test_patching.py              8 tests   Σ 0.01s
-tests/test_cache.py::test_evicts_when_full SKIPPED (cache does not evict on size yet ...)
-34 tests: 33 passed, 0 failed, 0 errored, 1 skipped, 0 collection error(s)
+PASS  tests/test_cache.py                        13 tests  Σ 0.00s   (1 skipped)
+PASS  tests/test_delivery.py                     13 tests  Σ 0.08s
+PASS  tests/test_patching.py                      8 tests  Σ 0.01s
 
-unittest.mock: 2 tests ran solo · Σ 0.00s of 0.12s wall
+unittest.mock: 2 tests ran solo · Σ 0.00s of 0.15s wall
 
-34 tests · 0 failed · 0.12s wall (0.9x concurrency)
+34 tests · 33 passed · 1 skipped · 0.15s wall (0.6x concurrency)
 ```
 
 ## What to look at

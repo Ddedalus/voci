@@ -338,15 +338,6 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     return None
 
 
-def _count(n: int, label: str, color: str, *, enabled: bool) -> str:
-    """One `N label` field of a summary line: the category's semantic color only when it
-    actually has something to say (`n > 0`); a zero count fades to gray rather than, say,
-    "0 failed" in red crying wolf on every clean run. Categories that are only ever
-    appended when already nonzero take `color` through this same path, not a special case.
-    """
-    return _color.paint(f"{n} {label}", color if n else _color.GRAY, enabled=enabled)
-
-
 def _report_collection(collected: _collect.CollectionResult, *, color_enabled: bool) -> int:
     """`--collect-only`: every selected test's id in the order they would run, then what
     collection found besides them, and the exit code for a run that stopped here.
@@ -373,16 +364,17 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
         print(f"{error.path} {error_word}")
         print(error.message)
 
-    def count(n: int, label: str, color: str) -> str:
-        return _count(n, label, color, enabled=color_enabled)
-
-    print(
-        f"{_color.paint(str(len(collected.records)), _color.PRIMARY, enabled=color_enabled)} "
-        f"tests collected"
-        f", {count(len(collected.skipped), 'skipped', _color.YELLOW)}"
-        f", {count(len(collected.deselected), 'deselected', _color.GRAY)}"
-        f", {count(len(collected.errors), 'collection error(s)', _color.RED)}"
+    errors = len(collected.errors)
+    counts = _color.counts(
+        (len(collected.skipped), "skipped", _color.YELLOW),
+        (len(collected.deselected), "deselected", _color.GRAY),
+        (errors, "collection error" if errors == 1 else "collection errors", _color.RED),
+        enabled=color_enabled,
     )
+    found = len(collected.records)
+    total = _color.paint(str(found), _color.PRIMARY, enabled=color_enabled)
+    collected_line = f"{total} test{'' if found == 1 else 's'} collected"
+    print(" · ".join(part for part in (collected_line, counts) if part))
 
     # Spelled out rather than deferred to `_run.exit_code_for`, which reads an empty result
     # list as "nothing ran, so nothing was collected" -- true of a real run, false here,
@@ -702,9 +694,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 4
 
         # Shared with reporter's own coloring (it resolves the same thing internally
-        # for its own prints) so the SKIPPED/COLLECTION ERROR/summary lines below,
-        # which main prints itself rather than through reporter, match its file
-        # blocks instead of being colored by a different rule.
+        # for its own prints) so the COLLECTION ERROR and --maxfail lines below, which
+        # main prints itself rather than through reporter, match its file blocks
+        # instead of being colored by a different rule.
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
@@ -725,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         # instance it produces). See Reporter's own docstring for the full reasoning.
         reporter = _report.Reporter(
             records=collected.records,
+            skipped=collected.skipped,
             capture_passthrough=capture_passthrough,
             stream=sys.stdout,
             verbosity=verbosity,
@@ -757,92 +750,33 @@ def main(argv: list[str] | None = None) -> int:
         # leaves a file block unprinted, and -q leaves its line of characters unclosed.
         reporter.flush_pending()
 
-        # reporter.finish(...) is called last, after every other end-of-run section
-        # below, so its "final line" claim is actually true of cli.main's output.
-        skipped_word = _color.paint("SKIPPED", _color.YELLOW, enabled=color_enabled)
-        for skipped in collected.skipped:
-            reason = _color.paint(f"({skipped.reason})", _color.GRAY, enabled=color_enabled)
-            print(f"{skipped.id} {skipped_word} {reason}")
-
         error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
         for error in collected.errors:
             print(f"{error.path} {error_word}")
             print(error.message)
 
-        passed = sum(1 for result in results if result.outcome is _run.Outcome.PASSED)
-        failed = sum(1 for result in results if result.outcome is _run.Outcome.FAILED)
-        errored = sum(1 for result in results if result.outcome is _run.Outcome.ERROR)
-        timed_out = sum(1 for result in results if result.outcome is _run.Outcome.TIMEOUT)
-        xfailed = sum(1 for result in results if result.outcome is _run.Outcome.XFAILED)
-        xpassed = sum(1 for result in results if result.outcome is _run.Outcome.XPASSED)
-        # `other` exists so this line can't silently stop adding up to len(results): a
-        # future Outcome member reaching run_suite's results before this line is
-        # updated for it shows up here as a nonzero "other" bucket instead of
-        # vanishing from the total with nothing to say the count is now wrong. This is
-        # checked against len(results) specifically (tests that were actually run),
-        # not the leading count below (which also folds in skipped tests -- they never
-        # reach run_suite, so they can't contribute an Outcome to account for here).
-        other = len(results) - passed - failed - errored - timed_out - xfailed - xpassed
         # run_suite returns one result per test that ran, so anything collection handed
         # it that isn't in there is a test --maxfail stopped before it started.
         not_run = len(collected.records) - len(results)
-        # Leading count is every test collection found, whether it ran or not --
-        # len(results) alone would undercount by len(collected.skipped), making "N
-        # tests: ..., K skipped" read like K is already part of N when it's additive.
-        # The tests --maxfail dropped are in it for the same reason.
-        total_tests = len(results) + len(collected.skipped) + not_run
-
-        def count(n: int, label: str, color: str) -> str:
-            return _count(n, label, color, enabled=color_enabled)
-
         if not_run:
-            stopped = _color.paint(
-                f"stopped after {maxfail} failed (--maxfail)", _color.YELLOW, enabled=color_enabled
+            print(
+                _color.paint(
+                    f"stopped after {maxfail} failed (--maxfail)",
+                    _color.YELLOW,
+                    enabled=color_enabled,
+                )
             )
-            print(stopped)
 
-        summary = (
-            f"{_color.paint(str(total_tests), _color.PRIMARY, enabled=color_enabled)} tests: "
-            f"{count(passed, 'passed', _color.GREEN)}, "
-            f"{count(failed, 'failed', _color.RED)}, "
-            f"{count(errored, 'errored', _color.RED)}"
-        )
-        if timed_out:
-            summary += f", {count(timed_out, 'timed out', _color.RED)}"
-        if xfailed:
-            summary += f", {count(xfailed, 'xfailed', _color.GRAY)}"
-        if xpassed:
-            summary += f", {count(xpassed, 'xpassed', _color.YELLOW)}"
-        if other:
-            summary += f", {count(other, 'other', _color.RED)}"
-        if not_run:
-            summary += f", {count(not_run, 'not run', _color.YELLOW)}"
-        summary += (
-            f", {count(len(collected.skipped), 'skipped', _color.YELLOW)}"
-            f", {count(len(collected.errors), 'collection error(s)', _color.RED)}"
-        )
-        # Shown whenever a selection flag was given, including a 0 count -- same always-shown
-        # treatment as skipped/errors, so the line reliably says whether -m/-k/an explicit id
-        # was in effect rather than looking identical to a run without one. Always gray:
-        # deselection is the user's own filter, not an outcome, so it never earns an alarm
-        # color regardless of count.
-        if markexpr is not None or keywordexpr is not None or id_selection is not None:
-            summary += f", {count(len(collected.deselected), 'deselected', _color.GRAY)}"
-        print(summary)
-
-        # This line and reporter.finish's final line both use "failed" for different
-        # sets on purpose: this one is the per-Outcome breakdown (FAILED specifically,
-        # distinct from errored/timed_out); finish's is the coarser proof-of-value
-        # count (every `_run.FAILING_OUTCOMES` result -- XFAILED and non-strict
-        # XPASSED don't count, since either means a test behaved exactly as its
-        # `xfail` mark said it would). skipped is passed through so finish's leading
-        # count matches this line's total_tests instead of quietly disagreeing with it.
+        # Every count the run ends on is reporter's to print, so the file blocks above and
+        # the totals below can't drift into disagreeing about the same suite. Skips reach it
+        # through its constructor, since it counts them per file too.
         reporter.finish(
             results,
             wall_clock=wall_clock,
             unattributed_output=unattributed,
-            skipped=len(collected.skipped),
             not_run=not_run,
+            deselected=len(collected.deselected),
+            collection_errors=len(collected.errors),
         )
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
