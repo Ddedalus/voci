@@ -143,8 +143,21 @@ class CollectionResult:
     errors: list[CollectionError]
     skipped: list[Skipped]
     deselected: list[str] = field(default_factory=list)
-    """Ids of tests excluded by `tag_expr`, not `skipped`: these passed the skip check (they
-    would otherwise run) but never reached the DI checks."""
+    """Ids of tests excluded by `tag_expr`, `keyword_expr` or `id_selection`.
+
+    A `skip`-marked test lands here when `keyword_expr` or `id_selection` leaves it out of the
+    run: what the run is about is settled before what each test would have done. Everything else
+    here would have run.
+    """
+    unexpanded: list[str] = field(default_factory=list)
+    """The ids in `skipped` and `deselected` that name a whole test rather than one case of it.
+
+    A test excluded before its `@velox.parametrize` cases are built has no per-case ids to be
+    listed under, and `velox.skip` plus `tag_expr` both exclude that early -- deliberately, since
+    building the cases resolves a DI graph neither has any use for. Callers matching a
+    `test_name[case]` selector against these ids need to know they stop short of the `[case]`
+    part (`IdSelection.unmatched`); nothing else does.
+    """
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -244,8 +257,12 @@ def collect(
     4. Sort by definition line (`_definition_line`, read through any decorators) — source order,
        whether a test is a module-level function or a method, not `vars()` iteration order.
     5. Per test: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
-       instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
-       don't satisfy it into `deselected`. Otherwise a malformed DI graph — its own, or one the
+       instead, unless `keyword_expr` or `id_selection` leaves it out of the run altogether, in
+       which case it goes to `deselected` — both are matched against its bare id, its cases
+       never having been worked out. Otherwise `tag_expr`, if given, excludes a test whose
+       `@velox.tag(...)` names don't satisfy it into `deselected`, and a skip outranks it: a
+       skipped test is skipped for the reason it gives whatever tags are in play. Otherwise a
+       malformed DI graph — its own, or one the
        `velox.use(...)` fixtures reaching it introduce — or a name collision between stacked
        `@parametrize`s, excludes it into `errors` instead. Otherwise build one
        `TestRecord` per case in the cartesian product of `@velox.parametrize`'s cases and the
@@ -273,6 +290,7 @@ def collect(
     errors: list[CollectionError] = []
     skipped: list[Skipped] = []
     deselected: list[str] = []
+    unexpanded: list[str] = []
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
@@ -332,6 +350,22 @@ def collect(
                 continue
 
             if reason is not None:
+                # Every exit from here on names the test by its bare id, cases and all: what
+                # follows excludes it before expansion, which is what would have built them.
+                unexpanded.append(test_id)
+                # -k and a `path.py::test_name` argument say which tests this run is about at
+                # all, so a skip they exclude is not its business to report. They differ in
+                # reach here, and only here: `test_role[admin]` names this exact test whatever
+                # its cases turn out to be, while a -k term is matched against the id that
+                # exists -- so -k admin, which would have found the case, doesn't find this.
+                if keyword_expr is not None and not keyword_expr.matches(test_id):
+                    deselected.append(test_id)
+                    continue
+                if id_selection is not None and not id_selection.selects_unexpanded(
+                    resolved_path, candidate.name
+                ):
+                    deselected.append(test_id)
+                    continue
                 # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
                 # regardless of -m -- @velox.skip is never silently reclassified as deselected
                 # depending on which tags happen to be in play.
@@ -340,6 +374,7 @@ def collect(
 
             if tag_expr is not None and not tag_expr.matches(marks.tags):
                 deselected.append(test_id)
+                unexpanded.append(test_id)
                 continue
 
             # A decorator's wrapper takes `(*args, **kwargs)`, so the injection plan and the
@@ -418,7 +453,13 @@ def collect(
 
     declaring_files.update(package_declarations)
     errors.extend(_misplaced_declarations(declaring_files))
-    return CollectionResult(records=records, errors=errors, skipped=skipped, deselected=deselected)
+    return CollectionResult(
+        records=records,
+        errors=errors,
+        skipped=skipped,
+        deselected=deselected,
+        unexpanded=unexpanded,
+    )
 
 
 def _package_declarations(

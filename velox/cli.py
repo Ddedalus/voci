@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import overload
 
@@ -46,7 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
         "paths",
         nargs="*",
         help="Files, directories, or test ids (path.py::test_name, path.py::TestGroup::test_name, "
-        "path.py::test_name[case]) to run. Defaults to the configured testpaths, else the "
+        "path.py::test_name[case]) to run, each read relative to the current directory, or to "
+        "the rootdir if it names nothing there. Defaults to the configured testpaths, else the "
         "rootdir.",
     )
     parser.add_argument(
@@ -274,6 +276,34 @@ def _invalid_target_argument(targets: list[_targets.Target]) -> str | None:
     return None
 
 
+def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
+    """`targets`, with any path that names nothing from the current directory read relative to
+    the rootdir instead, where that names something.
+
+    Test ids are rootdir-relative wherever velox prints them, so this is what lets one be pasted
+    back as an argument from a directory that isn't the rootdir. The literal reading always
+    wins, so an argument that already names something keeps meaning what it says.
+
+    The rootdir here is the one a `[tool.velox]` table fixes, found by `_config.resolve`'s own
+    upward search from the current directory and raising its `ConfigError` the same way. A run
+    with no such table has a rootdir derived from the arguments themselves, which would make one
+    argument's meaning depend on the others, so those runs are left alone. Searched at all only
+    when some argument names nothing from here, which is the uncommon case.
+    """
+    if all(target.path.is_absolute() or target.path.exists() for target in targets):
+        return targets
+    config = _config.resolve([])
+    if config.source is None:
+        return targets
+    rootdir = config.rootdir
+    reread = []
+    for target in targets:
+        on_rootdir = rootdir / target.path
+        keep = target.path.is_absolute() or target.path.exists() or not on_rootdir.exists()
+        reread.append(target if keep else replace(target, path=on_rootdir))
+    return reread
+
+
 def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     """The usage error in an explicit `--basetemp DIR`, or `None` if it looks safe
     enough to let `_capture.install` decide the rest.
@@ -322,7 +352,10 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
     collection found besides them, and the exit code for a run that stopped here.
 
     The ids are printed bare, one per line, so the list pipes into another tool (or back
-    into `velox` as arguments) without stripping anything. Skips and collection errors are
+    into `velox` as arguments) without stripping anything. An id's path is relative to the
+    rootdir, and so is an argument that names nothing from the current directory, so a run
+    a `[tool.velox]` table gives a fixed rootdir takes its own ids back from any directory
+    under it. Skips and collection errors are
     shown the way a real run shows them: `--collect-only` is how a suite is inspected
     before it runs, and a file that failed to import is exactly what such an inspection is
     looking for.
@@ -445,10 +478,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
+    # nothing from the current directory gets that reading before anything else looks at
+    # it: pasting an id `--collect-only` printed back as an argument is the point.
+    try:
+        targets = _reread_on_rootdir(targets)
+    except _config.ConfigError as exc:
+        print(f"velox: {exc}", file=sys.stderr)
+        return 4
+
     # A typo'd path and a genuinely empty suite must not look the same: without this,
     # a bad path would silently walk to nothing and exit 5 "no tests collected",
     # indistinguishable from an honest empty selection.
-    targets = [_targets.parse_target(raw) for raw in args.paths]
     problem = _invalid_target_argument(targets)
     if problem is not None:
         print(f"velox: {problem}", file=sys.stderr)
@@ -640,11 +682,16 @@ def main(argv: list[str] | None = None) -> int:
         # then deselects is an empty intersection the user asked for, not a typo. Skipped
         # entirely when a file failed to import, since the ids it would have contributed
         # are unknowable -- the traceback printed below is the real story there.
+        #
+        # collected.unexpanded is the part of that which stops short of its own `[case]` ids
+        # (a skip, or a test -m excluded), so `test_role[admin]` naming a case of one of those
+        # counts as a match rather than reading as a typo.
         if id_selection is not None and not collected.errors:
             missing = id_selection.unmatched(
                 [record.id for record in collected.records]
                 + [skipped.id for skipped in collected.skipped]
                 + collected.deselected,
+                unexpanded=collected.unexpanded,
                 rootdir=rootdir,
             )
             if missing:

@@ -86,24 +86,45 @@ class IdSelection:
         names = self._by_path.get(path)
         return names is None or any(_matches(suffix, name) for name in names)
 
-    def unmatched(self, ids: Sequence[str], *, rootdir: Path) -> list[str]:
-        """The selectors that matched none of `ids` (whole test ids, `path::suffix`), in the
-        order the command line gave them.
+    def selects_unexpanded(self, path: Path, name: str) -> bool:
+        """Whether a test in `path` (resolved) whose cases were never expanded was asked for.
+
+        A `@velox.skip`-marked test is reported under its bare name, one entry however many cases
+        it declares, so `test_role[admin]` has to select it: the run cannot say which cases exist
+        without resolving a graph the skip exists to avoid touching.
+        """
+        names = self._by_path.get(path)
+        return names is None or any(_covers(name, selector) for selector in names)
+
+    def unmatched(
+        self, ids: Sequence[str], *, unexpanded: Sequence[str] = (), rootdir: Path
+    ) -> list[str]:
+        """The selectors that matched none of `ids` or `unexpanded`, in the order the command
+        line gave them.
 
         A selector naming a test that doesn't exist is a typo, and must not look like an honest
         empty selection any more than a typo'd path does -- `cli.main` reports these as a usage
         error. `rootdir` is what a test id's path part is relative to (`TestRecord.path`), so it
         is what resolves them back to the absolute paths this selection is keyed by.
+
+        `ids` are whole ids and match strictly, so `test_role[typo]` naming no collected case is
+        the typo it looks like. `unexpanded` are ids whose `[case]` suffixes were never worked
+        out -- the skipped tests -- and a selector naming any case of one counts as matched.
         """
-        suffixes_by_path: dict[Path, list[str]] = {}
-        for test_id in ids:
+        by_path: dict[Path, list[tuple[str, bool]]] = {}
+        for test_id, expanded in [(i, True) for i in ids] + [(i, False) for i in unexpanded]:
             path_part, _, suffix = test_id.partition("::")
-            suffixes_by_path.setdefault((rootdir / path_part).resolve(), []).append(suffix)
+            by_path.setdefault((rootdir / path_part).resolve(), []).append((suffix, expanded))
         missing: list[str] = []
         for path, names in self._by_path.items():
-            suffixes = suffixes_by_path.get(path, [])
+            suffixes = by_path.get(path, [])
             missing.extend(
-                name for name in names if not any(_matches(suffix, name) for suffix in suffixes)
+                name
+                for name in names
+                if not any(
+                    _matches(suffix, name) if expanded else _covers(suffix, name)
+                    for suffix, expanded in suffixes
+                )
             )
         return missing
 
@@ -117,3 +138,9 @@ def _matches(suffix: str, selector: str) -> bool:
         or suffix.startswith(f"{selector}::")
         or suffix.startswith(f"{selector}[")
     )
+
+
+def _covers(suffix: str, selector: str) -> bool:
+    """`_matches`, plus the case where `selector` names a `[case]` of `suffix` -- the reading an
+    id tail that stops short of its own cases needs."""
+    return _matches(suffix, selector) or selector.startswith(f"{suffix}[")
