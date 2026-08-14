@@ -1,9 +1,8 @@
-"""The session dependency.
+"""The request-scoped database session.
 
-`get_session` is the seam tests override, and being a named callable is the whole of what it takes
-to be one: `app.dependency_overrides` is keyed by the function object. Reading the sessionmaker off
-`app.state` rather than a module global is the same idea one level down — state that arrives
-through the request is state a test can substitute (see `tests/fixtures.py::api_client`).
+`get_session` is the seam tests substitute, and a named callable is all it takes to be one:
+`app.dependency_overrides` is keyed by the function object. The sessionmaker it reads lives on
+`app.state`, which a test can layer the same way (see `tests/fixtures.py::api_client`).
 """
 
 from __future__ import annotations

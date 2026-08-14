@@ -39,12 +39,11 @@ async def test_create_user_rejects_duplicate_email(
     user: User = Depends(alice),
     client: AsyncClient = Depends(api_client),
 ) -> None:
-    """Two fixtures, one shared instance.
+    """Two fixtures, one shared session.
 
-    `alice` depends on `session`, and so does `api_client`. Both get the *same* `AsyncSession`:
-    within one test, a function-scoped fixture is constructed exactly once no matter how many
-    paths reach it. So the user this test created through the ORM is visible to the request it
-    makes over HTTP.
+    `alice` and `api_client` both depend on `session`, and within a test a fixture is built
+    exactly once however many paths reach it — so the user `alice` wrote through the ORM is
+    there for the request this test makes over HTTP.
     """
     response = await client.post("/users", json={"email": user.email})
 
@@ -92,11 +91,7 @@ REQUEST_ID_MIDDLEWARE_ENABLED = False
 
 @velox.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
 async def test_response_carries_request_id(client: AsyncClient = Depends(api_client)) -> None:
-    """`skipif` conditions are evaluated at collection, once per test, before any test runs.
-
-    A condition cheap enough to import-time-evaluate, like the feature flag here, can't tell the
-    difference; one with real side effects would notice.
-    """
+    """`skipif` conditions are evaluated once per test at collection, before any test runs."""
     response = await client.get("/health")
     assert "x-request-id" in response.headers
 

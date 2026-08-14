@@ -1,10 +1,4 @@
-"""Application configuration.
-
-A plain frozen dataclass rather than module-level constants, because that is what makes
-configuration *injectable* — see the `premium_settings` test in `tests/test_orders.py`. Every
-setting read from a global is a setting that eventually gets patched, and every patch is a test
-that runs solo.
-"""
+"""Application configuration, as a frozen dataclass a test can hand around as a value."""
 
 from __future__ import annotations
 
@@ -21,10 +15,9 @@ class Settings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
-        """Read settings from a mapping that *defaults* to the environment.
+        """Settings read from `env`, which defaults to the process environment.
 
-        Taking `env` as a parameter is the whole trick: production passes nothing, tests pass a
-        dict. No `monkeypatch.setenv`, no `mock.patch.dict`, no solo scheduling.
+        Production passes nothing; `tests/test_orders.py` passes a dict.
         """
         env = os.environ if env is None else env
         return cls(

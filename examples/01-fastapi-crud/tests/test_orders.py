@@ -84,15 +84,9 @@ async def premium_client(
 ) -> AsyncIterator[AsyncClient]:
     """`api_client`, rebuilt with `premium_settings` in place of the default.
 
-    A sibling fixture, built exactly like `api_client`, with one dependency swapped by hand.
-    Everything else in the graph — the session, the engine, the app itself — is still shared with
-    every other test. There is no patching and no override registry; the substitution is an
-    ordinary fixture in the static graph.
-
-    The tests below run against the same singleton `app` as every other test in this suite, and
-    read `settings.max_orders_per_user == 2` while their neighbours read the default. That is the
-    layering in `velox.fastapi.client` doing its job: the substituted value reaches `app.state`
-    for this test's context and no other.
+    A sibling fixture with one dependency swapped by hand; the session, the engine and the app
+    are still the ones everybody else uses. The tests below read `max_orders_per_user == 2` while
+    their neighbours, running at the same moment against the same `app`, read the default.
     """
     async with velox_fastapi.client(
         app,
@@ -131,11 +125,10 @@ async def test_order_limit_is_enforced(
 
 
 def test_settings_reject_a_non_numeric_bonus() -> None:
-    """`velox.raises` is pytest's, verbatim, including `match=`.
+    """`velox.raises`, with `match=` as a regex against the message.
 
-    Also a `def`, not an `async def`. Sync tests are supported: velox runs them on a
-    context-propagating executor thread so they cannot block the loop, at the cost of holding a
-    concurrency slot while they do. Pure-function tests like this one are exactly the case for it.
+    A `def`, not an `async def`: velox runs sync tests on a context-propagating executor thread,
+    where they hold a concurrency slot but cannot block the loop.
     """
     with velox.raises(ValueError, match="invalid literal for int"):
         Settings.from_env({"SIGNUP_BONUS_CENTS": "five hundred"})
@@ -156,16 +149,11 @@ async def test_duplicate_email_is_logged(
     client: AsyncClient = Depends(api_client),
     logs: velox.LogRecords = Depends(velox.log_records),
 ) -> None:
-    """`velox.log_records` is `caplog`, with the records captured per test.
+    """Log records captured for this test alone.
 
-    Attribution is by ContextVar rather than by a global handler swap, so sixteen concurrent tests
-    each see only their own records — including records emitted from `asyncio.to_thread` calls,
-    which inherit the context.
-
-    `logs.messages` is `record.getMessage()` already applied — velox's handler never formats a
-    record onto a stream the way pytest's does, so the raw `logging.LogRecord`s in `logs.records`
-    never get a `.message` attribute set on them. Read `.records` for level/name/exc_info; read
-    `.messages` for text.
+    Attribution is by `ContextVar`, so sixteen concurrent tests each see only their own records,
+    including those emitted from `asyncio.to_thread` calls. Read `.messages` for formatted text
+    and `.records` for level, logger name and `exc_info`.
     """
     with logs.set_level(logging.WARNING, logger="app"):
         await client.post("/users", json={"email": user.email})
@@ -181,8 +169,8 @@ async def test_export_orders_to_disk(
 ) -> None:
     """`tmp_path` is unique by construction: `basetemp/<sanitized-test-id>`.
 
-    No scan-and-retry for a free numbered directory — that is a serial-era artifact, and it is a
-    race under concurrency. `velox.test_info` is the read-only `request` replacement.
+    `velox.test_info` carries this test's id, tags, timeout budget and concurrency slot, and is
+    read-only.
     """
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 4200})
     orders = (await client.get(f"/users/{user.id}/orders")).json()
@@ -204,10 +192,10 @@ async def test_order_charges_the_sandbox(
     client: AsyncClient = Depends(api_client),
     sandbox: PaymentSandbox = Depends(payment_sandbox),
 ) -> None:
-    """This test inherits the `payments-sandbox` token from the fixture.
+    """A test that inherits the `payments-sandbox` token from the fixture.
 
-    So does `test_refund_releases_the_sandbox` below. The two never overlap; both still run
-    concurrently with every other test in the suite, which is the difference between an exclusive
+    So does `test_refund_releases_the_sandbox` below, and the two never overlap — while both still
+    run alongside every other test in the suite, which is the difference between an exclusive
     token and `@velox.solo`.
     """
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 700})

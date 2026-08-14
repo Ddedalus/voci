@@ -1,12 +1,12 @@
-"""Project-wide fixtures.
+"""Fixtures shared by the whole suite.
 
-velox has no `conftest.py`. This is an ordinary module; test files import from it by name, so
+velox has no `conftest.py`. This is an ordinary module and test files import from it by name, so
 "go to definition" works, renames are safe, and a typo is an `ImportError` at collection rather
 than a fixture-not-found at run time.
 
-Note the `from __future__ import annotations` below: velox reads the injection plan from
-`__defaults__` only and never evaluates an annotation, so PEP 563 costs nothing here. The
-annotations are for you and your type checker.
+`from __future__ import annotations` below costs nothing: velox reads the injection plan from
+`__defaults__` and never evaluates an annotation. The annotations are for you and your type
+checker.
 """
 
 from __future__ import annotations
@@ -16,88 +16,35 @@ from collections.abc import AsyncIterator
 
 import velox
 from httpx import AsyncClient
-from sqlalchemy import Connection, event
-from sqlalchemy.engine.interfaces import DBAPIConnection
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
-from sqlalchemy.pool import ConnectionPoolEntry
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from velox import Depends
 from velox import fastapi as velox_fastapi
 
 from app.db import get_session
 from app.main import app
-from app.models import Base, User
+from app.models import User
 from app.settings import Settings
+
+# Engine construction and the transaction-per-test dance live next door, in `tests/database.py`:
+# that part is SQLAlchemy's business rather than velox's.
+from tests import database
 
 # --------------------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------------------
 
 
-def _sqlite_no_implicit_transaction(
-    dbapi_connection: DBAPIConnection, _record: ConnectionPoolEntry
-) -> None:
-    """`connect` listener: turn off pysqlite/aiosqlite's own implicit-BEGIN/implicit-COMMIT
-    heuristics, so the explicit `conn.begin()` + SAVEPOINT nesting `session` relies on for
-    transaction-per-test rollback is the *only* transaction control in play.
-
-    Without this (and `_sqlite_begin` below), `trans.rollback()` in `session` is a no-op against
-    the driver's own transaction: a row one test inserted stays visible to the next one, keyed
-    against the same file — an `alice@example.com` UNIQUE-constraint failure a few tests later, if
-    you're wondering what a rollback that never happened looks like from the outside. This is
-    SQLAlchemy's own documented fix for pysqlite/aiosqlite (`AsyncEngine.begin()` docs, "DBAPI
-    AUTOCOMMIT").
-    """
-    # `isolation_level` is a pysqlite/aiosqlite extension, not part of the DBAPI-2.0 surface
-    # `DBAPIConnection` types — real on the object this hook actually receives.
-    dbapi_connection.isolation_level = None  # type: ignore[attr-defined]
-
-
-def _sqlite_begin(conn: Connection) -> None:
-    """`begin` listener: issue `BEGIN` ourselves now that `_sqlite_no_implicit_transaction` has
-    told the driver not to."""
-    conn.exec_driver_sql("BEGIN")
-
-
-def _configure_sqlite_explicit_transactions(e: AsyncEngine) -> None:
-    """Wire both listeners above onto `e`, one call instead of two paired ones a future fixture
-    could register out of order or forget half of.
-
-    Guarded by dialect: `database_url` below documents Postgres as the swap for a suite you
-    actually care about the wall clock of, and neither listener is sqlite-specific by name alone
-    — `isolation_level = None` on a non-pysqlite/aiosqlite connection is a no-op at best, a raw
-    `"BEGIN"` on every `Connection.begin()` a real conflict with a different driver's own
-    transaction handling at worst. Skipping both outright on a non-sqlite engine means that swap
-    doesn't have to remember to remove this pair, or silently reintroduce either failure mode.
-    """
-    if e.dialect.name != "sqlite":
-        return
-    event.listens_for(e.sync_engine, "connect")(_sqlite_no_implicit_transaction)
-    event.listens_for(e.sync_engine, "begin")(_sqlite_begin)
-
-
 @velox.fixture(scope="session")
-def database_url(tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory)) -> str:
-    # For a suite you actually care about the wall clock of, point this at Postgres:
-    #     return "postgresql+asyncpg://velox:velox@localhost/velox_test"
-    # SQLite serialises writers, so it caps the concurrency win at the storage layer.
-    return f"sqlite+aiosqlite:///{tmp.mktemp('db') / 'app.sqlite'}"
+async def engine(
+    tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory),
+) -> AsyncIterator[AsyncEngine]:
+    """One engine for the entire run, shared by every concurrent test.
 
-
-@velox.fixture(scope="session")
-async def engine(url: str = Depends(database_url)) -> AsyncIterator[AsyncEngine]:
-    """One engine for the entire run.
-
-    Constructed once, on first use, and shared by every concurrent test — the single-flight
-    guarantee means 200 tests starting at once produce exactly one `create_async_engine` call.
+    Session-scoped fixtures are built once, on first use, under a single-flight guard: 200 tests
+    starting at the same moment produce exactly one `create_async_engine` call.
     """
-    e = create_async_engine(url)
-    _configure_sqlite_explicit_transactions(e)
-    async with e.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    try:
+    async with database.engine_with_schema(database.url_for(tmp.mktemp("db"))) as e:
         yield e
-    finally:
-        await e.dispose()
 
 
 @velox.fixture()
@@ -105,18 +52,10 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
     """A real session inside a transaction that is always rolled back.
 
     Every test sees the real schema and none of its neighbours' writes, which is what makes
-    hundreds of database tests safe to run concurrently against one engine. Note that the test's
-    own `session.commit()` calls commit the *nested* transaction, not this one.
+    hundreds of database tests safe to run at once against a single engine.
     """
-    async with engine.connect() as conn:
-        trans = await conn.begin()
-        async with AsyncSession(
-            bind=conn,
-            expire_on_commit=False,
-            join_transaction_mode="create_savepoint",
-        ) as s:
-            yield s
-        await trans.rollback()
+    async with database.transaction(engine) as s:
+        yield s
 
 
 # --------------------------------------------------------------------------------------
@@ -134,30 +73,18 @@ async def api_client(
     session: AsyncSession = Depends(session),
     settings: Settings = Depends(settings),
 ) -> AsyncIterator[AsyncClient]:
-    """An HTTP client speaking to `app` — the real one, the module-level singleton.
+    """An HTTP client speaking to `app`, the module-level singleton from `app/main.py`.
 
-    Not a copy, not a factory call, not a per-test rebuild. `app/main.py` is written the way every
-    FastAPI deployment guide writes it, and the tests take it as it is.
+    `overrides` is `app.dependency_overrides` and `state` is `app.state`, with their usual
+    meanings: an override maps a dependency to another *dependency callable*, hence
+    `lambda: session`. Both are layered per test behind a `ContextVar`, so sixteen concurrent
+    tests each get their own view of the one app — no locking to arrange, and no teardown
+    `.clear()` to remember. The layer goes away when this fixture's `async with` exits, whether
+    the test passed, failed, or raised halfway through.
 
-    Read the two mappings below and compare them to what you already hand-roll from the FastAPI
-    testing docs: `app.dependency_overrides[get_session] = lambda: session`. Character for
-    character the same substitution, with the same semantics — the value is a *dependency
-    callable*, which is why the session is passed as `lambda: session`.
-
-    What is gone is the part the docs cannot help with. `dependency_overrides` and `state` are
-    per-app-instance dicts, so sixteen concurrent tests writing them are sixteen tests writing one
-    dict, and the `.clear()` those docs put in teardown wipes the fifteen that are still running.
-    velox routes both through a `ContextVar` keyed to this test's context (`velox/fastapi.py`), so
-    the writes cannot collide and the reset is unnecessary — the layer goes away when this fixture's
-    `async with` exits, whether the test passed, failed, or raised halfway through.
-
-    Note what did *not* have to happen for that: no change to `app/main.py`, no factory, no
-    `create_app(settings)` that exists only because the tests asked for it.
-
-    The app's `lifespan` does not run here — `ASGITransport` sends no lifespan scope — so no real
-    engine is created and `app.state.sessionmaker` stays unset. Nothing reads it, because
-    `get_session` is overridden above. For an app whose startup builds something the tests need,
-    depend on `velox.fastapi.lifespan(app)`, a session-scoped fixture that runs it once per run.
+    `ASGITransport` sends no lifespan scope, so `app`'s `lifespan` stays out of the way here. When
+    startup builds something your tests need, depend on `velox.fastapi.lifespan(app)`, which runs
+    it once for the whole session.
     """
     async with velox_fastapi.client(
         app,
@@ -174,10 +101,10 @@ async def api_client(
 
 @velox.fixture()
 async def alice(session: AsyncSession = Depends(session)) -> User:
-    """A committed-enough user for tests that need one to exist.
+    """A user who exists, for tests that need one to.
 
-    Not a generator: there is no teardown, because the enclosing transaction rollback is the
-    teardown. Sync and async plain functions are both fine as fixtures.
+    A plain function rather than a generator, because the rollback in `session` is the teardown.
+    Sync and async, generator and plain, are all fine as fixtures.
     """
     user = User(email="alice@example.com")
     session.add(user)
@@ -204,13 +131,11 @@ class PaymentSandbox:
 
 @velox.fixture(exclusive="payments-sandbox")
 async def payment_sandbox() -> AsyncIterator[PaymentSandbox]:
-    """`exclusive` is declared on the *resource*, not on the tests that use it.
+    """The sandbox, held by one test at a time.
 
-    Any test whose dependency graph transitively reaches this fixture inherits the
-    `payments-sandbox` token, and the scheduler never runs two of them at the same time. Nothing
-    has to be annotated at the call site, and nothing can forget to be.
-
-    See examples/03 for the general case, including tests that hold two tokens at once.
+    `exclusive` is declared on the resource, so every test whose dependency graph reaches this
+    fixture inherits the `payments-sandbox` token — nothing at the call site has to be annotated,
+    and nothing can forget to be. See examples/03 for tests that hold two tokens at once.
     """
     sandbox = PaymentSandbox()
     try:

@@ -1,8 +1,7 @@
-"""HTTP layer and the app.
+"""Routes, request and response models, and the app.
 
-Nothing in this file is arranged for the tests. `app` is a module-level singleton built at import
-— the shape every FastAPI tutorial, deployment guide and `uvicorn app.main:app` command line
-assumes — and the test suite consumes it exactly as it is. See `tests/fixtures.py::api_client`.
+`app` is a module-level singleton built at import, the shape `uvicorn app.main:app` expects, and
+the suite tests it as it is (see `tests/fixtures.py::api_client`).
 """
 
 from __future__ import annotations
@@ -67,28 +66,9 @@ async def create_user(
     try:
         await session.flush()
     except IntegrityError as exc:
-        # A failed flush leaves the session's transaction in a "pending rollback" state --
-        # SQLAlchemy raises on the *next* operation against it, not this one, until this is
-        # issued. In production `get_session` hands each request a fresh session (`db.py`), so
-        # that next operation would always be a different session on a different request; in
-        # tests, `api_client` overrides `get_session` with the one `session` fixture shared by
-        # every request the test makes (`tests/fixtures.py`), so a second request in the same
-        # test landing on this same session is exactly the case this rollback is for.
-        #
-        # Coarser than it looks: `session` (`tests/fixtures.py`) joins one SAVEPOINT for its
-        # whole lifetime (`join_transaction_mode="create_savepoint"`), so this rolls back to
-        # *that* boundary -- every flush the test's own fixtures made through this same session
-        # before this request, not just this request's failed insert. Scoping the rollback to
-        # only this insert would need its own nested SAVEPOINT (`session.begin_nested()`), which
-        # turns out not to compose cleanly with a flush failure here: SQLAlchemy's unit-of-work
-        # still requires the same session-level `rollback()` afterward, which then rolls back to
-        # the *nearest remaining* SAVEPOINT -- the one the test's own fixtures share, not a
-        # narrower one, since there isn't a narrower one left once the nested block has already
-        # unwound. Not exercised by any test in this suite today (none reads a fixture-created
-        # row through this same session after triggering this 409), but real: extending
-        # `tests/fixtures.py::alice` to be read again after a duplicate-email 409 in the same
-        # test would need each fixture's own state committed to its own durable savepoint first,
-        # not this one-line fix.
+        # A failed flush leaves the session refusing every later operation until it is rolled
+        # back, which matters as soon as one session serves more than one request -- as it does
+        # under `tests/fixtures.py::api_client`.
         await session.rollback()
         logger.warning("signup rejected: email already registered: %s", payload.email)
         raise HTTPException(status_code=409, detail="email already registered") from exc
@@ -158,13 +138,7 @@ async def list_orders(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Real startup: one engine, one sessionmaker, disposed on shutdown.
-
-    The test suite never runs this. `httpx.ASGITransport` sends no lifespan scope, and building a
-    real engine per test would be the wrong thing to do anyway — the tests override `get_session`
-    outright, so nothing reads `app.state.sessionmaker`. An app whose startup *does* put something
-    under test in place would depend on `velox.fastapi.lifespan(app)` instead.
-    """
+    """Startup: one engine and one sessionmaker on `app.state`, disposed on shutdown."""
     settings: Settings = app.state.settings
     engine = create_async_engine(settings.database_url)
     app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
