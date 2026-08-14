@@ -2,9 +2,9 @@
 
 Standalone: stdlib only, no `requirements.txt`. A webhook delivery client with retry, jittered
 backoff, and a TTL cache. `tests/test_patching.py` walks the mocking ladder cheapest rung first:
-`unittest.mock` objects are per-instance state and run fully concurrently, but `mock.patch` installs
-by mutating a module or class, so tests using it are marked `skip` rather than run unguarded
-against each other's shared target.
+`unittest.mock` objects are per-instance state and run fully concurrently, while `mock.patch`
+installs by mutating a module or class, so velox finds those tests at collection and runs them
+alone — the last lines of the run say how much of the wall clock that cost.
 
 ```
 relay/
@@ -31,7 +31,7 @@ uv venv && uv pip install -e ../..
 ## Commands
 
 ```bash
-velox                          # everything (28 tests, 4 skipped)
+velox                          # everything (34 tests, 1 skipped)
 velox tests/test_patching.py   # the interesting file
 velox --concurrency 1          # exactly serial
 velox --timeout 5              # per-test setup+call budget
@@ -44,15 +44,14 @@ $ velox
 assertions: rewrite, cache /home/you/.cache/velox/rewrite
 config: /path/to/examples/02-async-library/pyproject.toml
 PASS  tests/test_cache.py                12 tests   Σ 0.00s
-PASS  tests/test_patching.py              5 tests   Σ 0.01s
-PASS  tests/test_delivery.py             11 tests   Σ 0.07s
+PASS  tests/test_delivery.py             13 tests   Σ 0.08s
+PASS  tests/test_patching.py              8 tests   Σ 0.01s
 tests/test_cache.py::test_evicts_when_full SKIPPED (cache does not evict on size yet ...)
-tests/test_patching.py::test_context_manager_patching_must_be_marked SKIPPED (patches the same target as ...)
-tests/test_patching.py::test_relative_path_resolution SKIPPED (os.chdir has process-wide effect)
-tests/test_patching.py::test_jitter_is_deterministic SKIPPED (relay.client.random.uniform is a module-global function ...)
-28 tests: 28 passed, 0 failed, 0 errored, 4 skipped, 0 collection error(s)
+34 tests: 33 passed, 0 failed, 0 errored, 1 skipped, 0 collection error(s)
 
-28 tests · 0 failed · 0.06s wall (Σ 0.07s, 1.3x concurrency)
+unittest.mock: 2 tests ran solo · Σ 0.00s of 0.12s wall
+
+34 tests · 0 failed · 0.12s wall (0.9x concurrency)
 ```
 
 ## What to look at
@@ -66,8 +65,12 @@ tests/test_patching.py::test_jitter_is_deterministic SKIPPED (relay.client.rando
   `create_autospec` used as a value, not installed anywhere; safe under concurrency with no
   scheduling cost at all.
 - **`relay/client.py`'s inline `random.uniform`** is the one seam this library doesn't have, and
-  `test_jitter_is_deterministic` shows what patching it costs: the test is marked `skip` because a
-  decorator-installed patch on a module-global name would collide with every other concurrently
-  running test that exercises the same retry path.
+  `test_jitter_is_deterministic` shows what patching it costs: velox finds the `@mock.patch`
+  decorator at collection, injects the test's fixtures around the mock parameter, and drains the
+  suite to run it alone — otherwise every concurrently running test through the same retry path
+  would see the patch too.
+- **`test_patching.py::test_context_manager_patching_must_be_marked`** — the same patch written as
+  `with mock.patch(...)`, which nothing can find until the line runs. `@velox.solo` is written by
+  hand; without it velox refuses the patch as it installs and the test fails.
 - **`tests/fixtures.py::audit_log`** — a session-scoped fixture built once under a single-flight
   guard and torn down by refcount after the last dependent test finishes.

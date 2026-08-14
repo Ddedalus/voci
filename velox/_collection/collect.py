@@ -15,6 +15,11 @@ values are call kwargs, not part of the DI graph. A test transitively depending 
 with `params=` expands the same way, on the DI graph instead (`_fixtures.expand_cases`); the two
 axes cross freely, so both together multiply.
 
+A decorated test is read through its decorators: its injection plan and its definition line come
+from the function underneath (`_mocking.real_function`), while the decorated object is what runs.
+`unittest.mock` patching found on the way down (`_mocking.patching_of`) lands on `TestRecord` as
+`patches`, which is what schedules the test alone.
+
 Import mechanics: importlib only, path-derived module names under `velox_tests.*`, one entry per
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
 attributed to that file rather than aborting the run. The assertion-rewriting meta-path hook, when
@@ -44,6 +49,7 @@ from velox._collection.requires import REQUIRES_ATTR, requires_of
 from velox._collection.tagexpr import TagExpression
 from velox._di.fixtures import ResolutionPlan, expand_cases, plan_for
 from velox._marks import Marks, marks_of
+from velox._mocking import patching_of, real_function
 
 __all__ = [
     "CollectionError",
@@ -85,6 +91,10 @@ class TestRecord:
     same function, since parametrize values are call kwargs, not part of the DI graph — but
     distinct per fixture-case combination for a function depending on a `params=` fixture, since
     that's what specializes each fixture's construction and cache key to its chosen case."""
+    patches: tuple[str, ...] = ()
+    """What this test patches with `unittest.mock`, one display name per patcher
+    (`_mocking.patching_of`). Non-empty means the test installs a process-global override and
+    is scheduled to run alone."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,8 +211,8 @@ def collect(
        elsewhere isn't collected twice, nor given the importing module's `velox.use(...)`
        declarations. A `class Test*` defined in the module and carrying its own `test_*` method
        becomes a `CollectionError` naming the class and its methods, one per class.
-    3. Sort the functions by `func.__code__.co_firstlineno` — definition order, not `vars()`
-       iteration order.
+    3. Sort the functions by definition line (`_definition_line`, read through any decorators) —
+       definition order, not `vars()` iteration order.
     4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
        instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
        don't satisfy it into `deselected`. Otherwise a malformed DI graph — its own, or one the
@@ -258,7 +268,7 @@ def collect(
         functions = [
             obj for obj in vars(module).values() if _is_own_test_function(obj, module_name)
         ]
-        functions.sort(key=lambda func: func.__code__.co_firstlineno)
+        functions.sort(key=_definition_line)
 
         classes = [obj for obj in vars(module).values() if _is_own_test_class(obj, module_name)]
         classes.sort(key=lambda cls: cls.__qualname__)
@@ -296,12 +306,24 @@ def collect(
                 deselected.append(test_id)
                 continue
 
+            # A decorator's wrapper takes `(*args, **kwargs)`, so the injection plan and the
+            # definition line are read off the function underneath it; `func` itself stays what
+            # gets called, since the decorator is the whole point of applying it.
+            defined = real_function(func)
+            patching = patching_of(func)
             try:
                 # `known_params` must be computed before `plan_for`, which reads it to keep a
                 # parametrized argument from reading as a missing injection -- and `cases_for`
                 # only needs to run after, to build this same function's expanded call kwargs.
-                known_params = known_params_of(marks.parametrizations)
-                plan = plan_for(func, known_params=known_params, implicit=implicit)
+                # A `mock.patch.multiple` parameter is supplied by name at call time exactly as
+                # a parametrized one is, so it joins the same set.
+                known_params = known_params_of(marks.parametrizations) | patching.keyword_args
+                plan = plan_for(
+                    defined,
+                    known_params=known_params,
+                    implicit=implicit,
+                    positional_supplied=patching.positional_args,
+                )
                 cases = cases_for(marks.parametrizations) if marks.parametrizations else None
                 expansions = expand_cases(plan)
             except Exception:
@@ -334,11 +356,12 @@ def collect(
                         id=f"{test_id}[{case_id}]" if case_id else test_id,
                         index=index,
                         path=display_path,
-                        lineno=func.__code__.co_firstlineno,
+                        lineno=defined.__code__.co_firstlineno,
                         qualname=func.__qualname__,
                         func=func,
                         params=params,
                         plan=record_plan,
+                        patches=patching.targets,
                     )
                 )
                 index += 1
@@ -421,6 +444,12 @@ def _import_module(path: Path, module_name: str) -> object:
     # being `sys.modules`-resident after import will not find it there.
     sys.modules.pop(module_name, None)
     return module
+
+
+def _definition_line(func: Callable[..., object]) -> int:
+    """The line `func` is written on: the function underneath its decorators, so decorated and
+    undecorated tests sort together in definition order."""
+    return real_function(func).__code__.co_firstlineno
 
 
 def _is_own_test_function(obj: object, module_name: str) -> bool:

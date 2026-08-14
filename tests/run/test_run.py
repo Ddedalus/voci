@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from unittest import mock
 
 from _support import make_record as _record
 from _support import run_async
@@ -14,7 +16,13 @@ import pytest
 import velox
 from velox._collection.collect import CollectionError
 from velox._di.fixtures import expand_cases, plan_for
-from velox._run.run import AdmissionGate, Outcome, exit_code_for, run_suite
+from velox._run.run import (
+    AdmissionGate,
+    Outcome,
+    exit_code_for,
+    run_suite,
+    solo_for_patching,
+)
 from velox._run.run import TestResult as Result
 
 
@@ -1615,3 +1623,85 @@ def test_exit_code_xfailed_and_xpassed_are_not_failures() -> None:
     `@velox.xfail` section), so it never reaches `exit_code_for` as XPASSED."""
     results = [_result(Outcome.PASSED), _result(Outcome.XFAILED), _result(Outcome.XPASSED)]
     assert exit_code_for(results, []) == 0
+
+
+# `unittest.mock`: solo scheduling for a patch-decorated test, and the guard on the rest.
+# ------------------------------------------------------------------------------------------
+
+
+def test_a_patching_test_never_overlaps_with_anything_else() -> None:
+    """A test collection found `unittest.mock` patching on takes the whole gate, exactly as a
+    `@velox.solo`-marked one does -- a patch is a write every concurrent test would see."""
+    active: set[str] = set()
+    violations: list[frozenset[str]] = []
+
+    def _make(name: str) -> Callable[[], object]:
+        async def test_func() -> None:
+            active.add(name)
+            if "patching" in active and active != {"patching"}:
+                violations.append(frozenset(active))
+            await asyncio.sleep(0.02)
+            active.discard(name)
+
+        return test_func
+
+    records = [_record(0, _make("patching"), "test_patching", patches=("getcwd",))]
+    records += [_record(i, _make(f"ordinary_{i}"), f"test_ordinary_{i}") for i in range(1, 6)]
+
+    results = run_suite(records, concurrency=4)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED] * 6
+    assert violations == []
+
+
+def test_an_isolated_test_is_not_serialized_for_its_patching() -> None:
+    """`@velox.isolated` patches its own subprocess, where there is nothing else to disturb."""
+
+    async def test_isolated() -> None:
+        pass
+
+    async def test_plain() -> None:
+        pass
+
+    isolated_record = _record(0, velox.isolated(test_isolated), "test_isolated", patches=("x",))
+    plain_record = _record(1, test_plain, "test_plain", patches=("x",))
+
+    assert not solo_for_patching(isolated_record)
+    assert solo_for_patching(plain_record)
+
+
+def test_a_patch_entered_by_a_concurrent_test_fails_that_test() -> None:
+    """`with mock.patch(...)` inside a body is invisible at collection, so it is caught where it
+    installs: the test fails and the patch never reaches `os`."""
+
+    async def test_patches_in_its_body() -> None:
+        with mock.patch("os.getcwd", return_value="/x"):
+            pass
+
+    (result,) = run_suite([_record(0, test_patches_in_its_body, "test_patches_in_its_body")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary is not None
+    assert "getcwd" in result.failure_summary
+    assert os.getcwd() != "/x"
+
+
+def test_a_solo_test_may_patch_in_its_body() -> None:
+    async def test_patches_in_its_body() -> None:
+        with mock.patch("os.getcwd", return_value="/x"):
+            assert os.getcwd() == "/x"
+
+    records = [_record(0, velox.solo(test_patches_in_its_body), "test_patches_in_its_body")]
+
+    (result,) = run_suite(records)
+
+    assert result.outcome is Outcome.PASSED
+
+
+def test_the_patch_guard_does_not_outlive_the_run() -> None:
+    """It replaces a method on `unittest.mock`'s own class, so leaving it installed would
+    change how patching behaves for whatever runs after `run_suite` returns."""
+    run_suite([_record(0, _passes, "test_passes")])
+
+    with mock.patch("os.getcwd", return_value="/x"):
+        assert os.getcwd() == "/x"

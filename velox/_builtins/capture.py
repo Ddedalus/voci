@@ -218,6 +218,10 @@ class TestContext:
     tags: tuple[str, ...]
     timeout: float | None
     worker: int
+    patching_allowed: bool = False
+    """Whether this test has the process to itself -- it runs solo, or in its own
+    subprocess -- and may therefore install a process-global patch. Read by `_mocking`'s
+    guard on `unittest.mock`."""
 
 
 current_test_context: ContextVar[TestContext | None] = ContextVar(

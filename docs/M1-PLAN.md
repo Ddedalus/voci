@@ -237,19 +237,26 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   dispatched to a fresh `python -m velox._run._isolated_worker` subprocess, which re-collects the
   one file naming it and runs it through this package's own `run_suite` a second time, on that
   process's own loop; the result crosses back as JSON.
-- [ ] **`@mock.patch`-decorated tests silently skip DI, not just solo scheduling** — a sharper
+- [x] **`@mock.patch`-decorated tests silently skipped DI, not just solo scheduling** — a sharper
   version of the item above, found dogfooding `examples/02-async-library`:
-  `_fixtures.plan_for`/`plan_of` read `func.__code__`/`func.__defaults__` directly (deliberately,
-  per `_fixtures.py`'s own module docstring: "never `inspect.signature`, never... unwrapping
-  `__wrapped__`"), so a test wrapped by `@mock.patch(...)` — whose real signature is `(*args,
-  **keywargs)` — presents zero named parameters to collection. Any `Depends(...)` default on the
-  *real* function underneath is never found, so it's never resolved either: `_run.py` ends up
-  calling the wrapper with no arguments, and the parameter that should have been injected instead
-  gets Python's own fallback — the literal, unresolved `Depends(...)` object — rather than a
-  `DIError` or a real value. Silent, not loud; worth its own fix (likely: detect `hasattr(func,
-  "patchings")` at collection and build the plan from `func.__wrapped__` instead) independent of
-  whether solo scheduling has landed yet, since a `Depends()` default silently not resolving is an
-  I8 violation on its own.
+  `_fixtures.plan_for`/`plan_of` read `func.__code__`/`func.__defaults__` directly, so a test
+  wrapped by `@mock.patch(...)` — whose real signature is `(*args, **keywargs)` — presented zero
+  named parameters to collection. Any `Depends(...)` default on the *real* function underneath was
+  never found, so it was never resolved either: `_run.py` called the wrapper with no arguments and
+  the parameter that should have been injected got Python's own fallback, the literal, unresolved
+  `Depends(...)` object — an I8 violation on its own. Fixed with the spec/08 tier-(b) work in one
+  pass (`velox/_mocking.py`): collection reads the plan and the definition line off
+  `real_function(func)` while `TestRecord.func` stays the wrapper, and `plan_for` is told how many
+  leading positional parameters `unittest.mock` fills so they don't read as missing injections (a
+  `Depends()` declared in one of those slots is now a collection error). Detection lands on
+  `TestRecord.patches` — `patchings` for `mock.patch`, the wrapper's closure for `mock.patch.dict`,
+  which records no `patchings` — and `dispatch_one` takes the gate solo for it; `_report.terminal`
+  prints the drained wall clock. The context-manager form is caught by a guard on
+  `unittest.mock._patch.__enter__`/`_patch_dict.__enter__`, installed for the run only when the
+  suite imported `unittest.mock` at all, which raises before the patch is written unless the test
+  is solo or isolated. `examples/02-async-library`'s three `@velox.skip`ped patching tests (and its
+  `@velox.isolated` `chdir` one) run for real now: 34 tests, 33 passed, 1 skipped, repeated at
+  `--concurrency 1`/16/64.
 - [ ] **The loop-starvation watchdog does not exist** — no code at all, not even a declared,
   unenforced mark; `watchdog_threshold` is a real spec/02 §3 config key the loader correctly
   rejects as unknown (M1-PLAN.md's own config-loader entry above: "no consumer before M2"), and

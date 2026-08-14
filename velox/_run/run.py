@@ -4,7 +4,10 @@ outcome.
 Tests are dispatched as concurrent `asyncio` tasks, admitted by a shared `AdmissionGate` that
 bounds how many run at once and, within that bound, withholds a test whose `exclusive=` fixtures
 claim a resource another running test already holds, or that is running while a `@velox.solo`
-test holds the whole gate to itself. Each admitted test gets a real setup -> call -> teardown
+test holds the whole gate to itself. A test velox found `unittest.mock` patching on at collection
+takes the gate the same way a `@velox.solo` one does, and for the duration of the run `_mocking`'s
+guard is installed, so a patch from any *other* test is refused rather than let loose on
+everything running alongside it. Each admitted test gets a real setup -> call -> teardown
 envelope, plus an optional per-test `asyncio.timeout` budget -- the suite-wide `--timeout`, or a
 `@velox.timeout(...)` mark overriding it for that test alone. An `async def` test's call phase is
 awaited directly; a sync `def` one runs on the context-propagating executor
@@ -34,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO, cast, final
 
+from velox import _mocking
 from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
@@ -49,6 +53,7 @@ __all__ = [
     "TestResult",
     "exit_code_for",
     "run_suite",
+    "solo_for_patching",
 ]
 
 #: Re-exported so a caller only needs `from velox._run import run` to build the one argument
@@ -342,6 +347,15 @@ async def _run_one(
     return result, module_keys
 
 
+def solo_for_patching(record: TestRecord) -> bool:
+    """Whether `record` runs alone because velox found `unittest.mock` patching on it.
+
+    A `@velox.isolated` test is excluded: it patches its own subprocess, where there is nothing
+    else to disturb, so it costs the suite no concurrency.
+    """
+    return bool(record.patches) and not marks_of(record.func).isolated
+
+
 @final
 class AdmissionGate:
     """The single point every dispatched test is admitted through: bounds how many run at once,
@@ -462,7 +476,14 @@ def run_suite(
     # (basetemp_root) before touching sys.stdout/sys.stderr/the log handler, so a
     # failure here leaves nothing installed for the finally below to need to undo.
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
+    # Set before the try, like `cli.main`'s own hook bookkeeping: if `_mocking.install` itself
+    # raised, the finally must not try to undo something that was never done.
+    guard_installed = False
     try:
+        # After collection has imported every test module, so a suite that patches has already
+        # brought `unittest.mock` in and this finds it (`_mocking.install`). False when an
+        # enclosing run already installed the guard, whose uninstall is then not ours to do.
+        guard_installed = _mocking.install()
         worker_slots = _capture.WorkerSlots(concurrency)
         gate = AdmissionGate(concurrency)
 
@@ -478,7 +499,10 @@ def run_suite(
             # included -- is released.
             marks = marks_of(record.func)
             tokens = exclusive_tokens_of(record.plan)
-            await gate.acquire(tokens, solo=marks.solo)
+            # One value, computed once and passed to both acquire and release: the two must
+            # agree, or the gate's solo bookkeeping never unwinds.
+            solo = marks.solo or solo_for_patching(record)
+            await gate.acquire(tokens, solo=solo)
             # A `@velox.timeout(...)` mark overrides the suite-wide budget for this test
             # alone; `marks.timeout is None` is the common case of "no override", not "no
             # limit" -- that's what the bare `timeout` parameter already means.
@@ -529,7 +553,15 @@ def run_suite(
                     slot = worker_slots.acquire()
                     sink = _capture.Sink(label=record.id)
                     test_context = _capture.TestContext(
-                        sink=sink, tags=marks.tags, timeout=test_timeout, worker=slot
+                        sink=sink,
+                        tags=marks.tags,
+                        timeout=test_timeout,
+                        worker=slot,
+                        # Solo holds the whole gate; an isolated mark reaching this branch at
+                        # all means `already_isolated` -- this process was spawned for this one
+                        # test. Either way nothing else is running to see a process-global
+                        # patch, so `_mocking`'s guard lets one through.
+                        patching_allowed=solo or marks.isolated,
                     )
                     token = _capture.current_test_context.set(test_context)
                     try:
@@ -570,7 +602,7 @@ def run_suite(
                             log_records=tuple(sink.log_records),
                         )
             finally:
-                await gate.release(tokens, solo=marks.solo)
+                await gate.release(tokens, solo=solo)
 
             # Fired in real completion order, before the logical-order results slot
             # below is written, so a streaming reporter never sees a filled slot
@@ -633,6 +665,8 @@ def run_suite(
         # Guaranteed to run whether the try above completed normally, raised a real
         # KeyboardInterrupt/SystemExit, or raised for some other reason entirely --
         # every statement between install() succeeding and here lives inside this try.
+        if guard_installed:
+            _mocking.uninstall()
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         _capture.uninstall()

@@ -804,3 +804,151 @@ def test_assertion_rewrite_hook_is_consulted_when_installed(tmp_path: Path) -> N
         assert "assert 2 == 3" in str(exc)
     else:
         raise AssertionError("expected the test function to fail")
+
+
+def test_a_patch_decorated_test_still_has_its_depends_defaults_injected(
+    tmp_path: Path,
+) -> None:
+    """A decorator's wrapper takes `(*args, **kwargs)`, which hides the real signature: the plan
+    is built from the function underneath, so the `Depends(...)` default is found and resolved
+    rather than passed through to the test as the raw sentinel."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from unittest import mock\n"
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 1\n\n"
+        "@mock.patch('os.getcwd', return_value='/x')\n"
+        "async def test_patched(getcwd, value: int = velox.Depends(db)):\n"
+        "    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert record.plan.root_args == (("value", 0, False),)
+    assert record.plan.steps[0].fixture.name == "db"
+    # The mock's own parameter is filled by `unittest.mock`, not by velox.
+    assert record.patches == ("getcwd",)
+
+
+def test_a_patch_decorated_test_records_what_it_patches(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import os\n"
+        "from unittest import mock\n\n"
+        "@mock.patch.dict(os.environ, {'VELOX_TEST': '1'})\n"
+        "async def test_env():\n"
+        "    pass\n\n"
+        "async def test_plain():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.patches for record in result.records] == [("os._Environ",), ()]
+
+
+def test_a_patch_multiple_test_collects_with_its_named_mock_parameters(tmp_path: Path) -> None:
+    """`mock.patch.multiple` fills its parameters by name, so they are supplied rather than
+    missing -- exactly like `@velox.parametrize`'s, and alongside a real injection."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from unittest import mock\n"
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 1\n\n"
+        "@mock.patch.multiple('os.path', exists=mock.DEFAULT, isdir=mock.DEFAULT)\n"
+        "async def test_patched(exists, isdir, value: int = velox.Depends(db)):\n"
+        "    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert len(result.records) == 1
+    assert result.records[0].patches == ("exists", "isdir")
+    assert result.records[0].plan.root_args == (("value", 0, False),)
+
+
+def test_a_decorated_test_keeps_its_place_in_definition_order(tmp_path: Path) -> None:
+    """Line numbers come from the function underneath the decorators -- a wrapper's own line
+    number is wherever the decorator happens to be defined, which is nowhere near the test."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from unittest import mock\n\n"
+        "async def test_first():\n"
+        "    pass\n\n"
+        "@mock.patch('os.getcwd')\n"
+        "async def test_second(getcwd):\n"
+        "    pass\n\n"
+        "async def test_third():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert [record.qualname for record in result.records] == [
+        "test_first",
+        "test_second",
+        "test_third",
+    ]
+    assert [record.lineno for record in result.records] == [3, 6, 10]
+
+
+def test_a_depends_default_in_a_slot_mock_patch_fills_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    """`unittest.mock` passes its mocks in first, positionally, so an injected parameter
+    declared ahead of them would receive a mock instead of its fixture."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from unittest import mock\n"
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 1\n\n"
+        "@mock.patch('os.getcwd')\n"
+        "async def test_patched(value: int = velox.Depends(db), getcwd=None):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "value" in result.errors[0].message
+    assert "@mock.patch" in result.errors[0].message
+
+
+def test_an_ordinary_wrapping_decorator_no_longer_hides_an_injection(tmp_path: Path) -> None:
+    """`functools.wraps` is what makes a decorated test collectible at all, and reading the
+    plan through it is what makes its dependencies resolvable."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import functools\n"
+        "import velox\n\n"
+        "def announce(fn):\n"
+        "    @functools.wraps(fn)\n"
+        "    async def wrapper(*args, **kwargs):\n"
+        "        return await fn(*args, **kwargs)\n"
+        "    return wrapper\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 1\n\n"
+        "@announce\n"
+        "async def test_wrapped(value: int = velox.Depends(db)):\n"
+        "    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert len(result.records) == 1
+    assert result.records[0].plan.root_args == (("value", 0, False),)
+    assert result.records[0].patches == ()
