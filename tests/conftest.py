@@ -8,7 +8,6 @@ from pathlib import Path
 from _support import Project
 
 import pytest
-
 from velox._builtins import capture as _capture
 
 
