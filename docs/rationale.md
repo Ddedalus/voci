@@ -169,6 +169,25 @@ matter how it was installed. `_import_module` therefore asks the installed hook'
 directly before falling back. Remove that call and rewriting stops working for every test while the
 reported mode still says `rewrite` — no exception, no failing test, just worse assertion messages.
 
+**A class-grouped test gets its receiver built per call, through a hand-written wrapper.** A
+`class Test*` is namespacing and nothing else, so the instance a method runs on is constructed for
+that one test and discarded — anything shared through `self` would be shared between concurrently
+running tests, which is the one thing the grouping must not buy. The wrapper that does this copies
+`__name__`, `__qualname__`, `__wrapped__` and the marks by hand rather than using
+`functools.wraps`, which copies `__dict__` wholesale: `mock.patch` keeps its `patchings` list
+there, and a copy of it on the wrapper is counted a second time by `patching_of`, doubling both
+the reported patch targets and the positional arguments they are taken to supply — which then
+hides a real missing injection behind a parameter velox believes a mock will fill.
+
+**A test shape that would collect as nothing is a collection error.** A `Test*` class velox can't
+construct, a `setup_method` that would never run, a mark on a class, a `test_*` name bound to a
+lambda, a test that yields — each of these is silent in the worst way: the suite looks green
+because tests are missing from it, or because a test ran without the setup it was written to
+expect. The naming rules for reporting them are deliberately narrow (a class is only reported for
+being misnamed when it reads as a suite — `unittest.TestCase`, or a name ending in
+`Test`/`Tests`/`TestCase`), because the cost of a false report is a collection error on working
+code.
+
 **`@velox.parametrize` shares one resolution plan across every expanded case.** `plan_for` runs
 once per test function, not once per case: a parametrized value is a call kwarg, not a DI graph
 node, so building the plan per case would repeat identical work for nothing. `parametrize.
@@ -273,6 +292,12 @@ concurrency slot instead of everyone else's. Neither path can be preempted by th
 sync body never reaches, and a thread pool worker can't be killed out from under it — so the
 budget still elapses and the result still reports `TIMEOUT`, just with the thread finishing out of
 band afterward.
+
+**`--maxfail`'s counter is bumped inside the gate, before the release.** Releasing the admission
+gate is what admits the next queued test, so a failure counted after the release races that test's
+own check of the flag and lets it start anyway. Every dispatched task also checks the flag once
+before queueing, which is worth nothing on its own: the tasks are all created together and reach
+that first check before any result exists. The check that decides is the one after admission.
 
 **Module-scope fixtures are released by the suite, not by the test.** Releasing a module's fixtures
 when a test's own teardown runs would tear them down as soon as the *first* of that module's

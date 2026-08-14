@@ -5,7 +5,9 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 
 ## Working today
 
-Discovery and collection · explicit dependency injection with `call`/`function`/`module`/`session`
+Discovery and collection, including `class Test*` grouping and a diagnostic for test shapes that
+would otherwise collect as nothing · explicit dependency injection with
+`call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
@@ -14,21 +16,16 @@ per-test subprocess tier · `skip`/`skipif`/`xfail` ·
 `@velox.fixture`) · `velox.use(...)` fixture declarations on a test module or a package
 `__init__.py` ·
 `unittest.mock` patch detection, solo scheduling and its reported cost ·
-`@velox.tag` selection with `-m` · assertion introspection with comparison
+selection by `path.py::test_name` id, `-k` and `@velox.tag` with `-m` · `-x`/`--maxfail`,
+`--serial`, `--collect-only`, `-v`/`-q` and `--durations` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
 `velox.fastapi` per-test dependency overrides.
 
 ## Next
 
 Fast-tracked: the pytest migration codegen (see
-[docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
-three items, roughly in the order the codegen needs them.
-
-**Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
-collect as zero tests rather than as an error.
-
-**CLI.** `-k` selection, `path.py::test_name` ids, `-v`/`-q`, `-x`, `--collect-only`,
-`--serial`, `--durations`.
+[docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the
+reporting item below.
 
 **Reporting.** A live footer, JUnit XML, `--report-json`, and GitHub annotations.
 
@@ -38,7 +35,8 @@ seeing an opening.
 
 **Runtime safety.** A loop-starvation watchdog that names the blocking call instead of letting the
 suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;
-Ctrl-C and `--maxfail` cancellation with time-boxed teardown.
+cancelling in-flight tests, with time-boxed teardown, on Ctrl-C and when `--maxfail` is reached
+(which today stops new tests from starting and lets running ones finish).
 
 ### 01-fastapi-crud example improvements
 Audience of the example is new user. Narrator of the example is velox creator.

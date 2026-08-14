@@ -198,14 +198,19 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   argument stops reading as a missing injection; `collect.py` now expands one `TestRecord` per
   case, all sharing the one plan built for the function, and `_run.py` merges each case's
   `params` into its call kwargs. — `8d0a432`, review `81604e8`
-- [ ] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
-  ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Not
-  implemented: `_collect.collect` only looks for module-level `async def test_*` (`vars(module)
-  .values()`), so a `Test*` class's methods are silently collected as zero tests — no
-  `CollectionError`, no `Skipped` entry, nothing. Worth at minimum a loud diagnostic (I8: "silent
-  passes are bugs" — this is a silent *absence*, arguably the same class of problem) even before
-  the feature itself lands. Found dogfooding `examples/01-fastapi-crud`; worked around there by
-  flattening the one `Test*` class to free functions.
+- [x] **`class Test*` grouping** — spec'd as pure namespacing (spec/01 §7: no `__init__`, `self`
+  ignored, ids read `path.py::TestFoo::test_bar`), and listed MVP there and in spec/03 §8. Was not
+  implemented: `_collect.collect` only looked for module-level `async def test_*` (`vars(module)
+  .values()`), so a `Test*` class's methods were silently collected as zero tests — no
+  `CollectionError`, no `Skipped` entry, nothing. Found dogfooding `examples/01-fastapi-crud`;
+  worked around there by flattening the one `Test*` class to free functions. Fixed in `collect.py`
+  by `_module_candidates`/`_class_candidates`: module functions and class methods are gathered as
+  one `_Candidate` list sorted by definition line, a method is called through `_receiving` (a fresh
+  receiver per call, marks and `__wrapped__` copied by hand so `patching_of` doesn't double-count
+  `mock.patch`'s `patchings`), and `self`/`cls` reaches `plan_for` as `positional_supplied`.
+  Alongside it, the I8 "silent absence" diagnostics: `_class_problems` (a class with `__init__`,
+  `setup_method`-style hooks, a mark, or a `unittest.TestCase` base) and `_shape_problem` (a
+  `test_*` name bound to a non-function callable), plus a generator test function.
 - [x] **`@velox.xfail` execution** — was recorded on a function's marks the same way `skip`/
   `skipif` are, but nothing read `marks.xfail` to turn a failing call into `XFAILED` (or a passing
   one into `XPASSED`, under `strict=True`); a `strict=True` mark just reported `FAILED`,
@@ -215,13 +220,18 @@ imports resolving; rootdir-import-convention alone would have had no config-driv
   `_report.py` and `cli.py`'s summary line updated to match. `@velox.timeout(...)` was fixed the
   same pass — `dispatch_one` now reads `marks_of(record.func).timeout` and uses it in place of the
   suite-wide `--timeout` for that one test.
-- [ ] **Tag-based selection (`-m`) and the rest of the CLI surface** — `@velox.tag` records names on
-  a function's marks (works, and is harmless to apply today) but nothing consumes them: `-m`
-  doesn't exist in `cli.py`'s parser, alongside `-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`,
-  and `--collect-only` — all documented in spec/02 §1, all absent from `build_parser`. Matches
-  spec/00 §7's MVP table (`-k`/`-m` explicitly "Deferred"); grouped here as one item since they're
-  naturally one CLI slice's worth of work. Bare paths (a file or a directory, no `::`) already
-  work today and aren't part of this item.
+- [x] **Tag-based selection (`-m`) and the rest of the CLI surface** — `@velox.tag` recorded names
+  on a function's marks but nothing consumed them: `-m` didn't exist in `cli.py`'s parser,
+  alongside `-k`, `-v`/`-q`, `--serial`, `-x`, `--durations`, and `--collect-only` — all documented
+  in spec/02 §1, all absent from `build_parser`. `-m` landed first, on `_collection/tagexpr.py`.
+  The rest followed: that module became `_collection/selection.py`, one vetted-AST expression
+  compiler serving both `-m` (term = a tag the test carries) and `-k` (term = a case-insensitive
+  substring of the whole id); `_collection/targets.py` parses `path.py::test_name` arguments and
+  answers which ids they select, with an unmatched selector reported as a usage error the way a
+  missing path is. `-k` and id selection are applied per record, after parametrize expansion, so
+  both can name one `[case]`. `--maxfail`/`-x` are a `run_suite` parameter (flag set inside the
+  admission gate, before the release that admits the next test); `-v`/`-q` and `--durations` are
+  `Reporter` fields; `--serial` joins the CLI tier of `--concurrency`'s three-tier resolution.
 - [x] **`exclusive=`/`@velox.solo` admission, and `@velox.isolated`'s subprocess tier** — all three
   were recorded on a function's/fixture's marks (`Marks.solo`, `Marks.isolated`, `Fixture.exclusive`)
   with nothing acting on them: a test carrying any of the three ran exactly like one that doesn't —

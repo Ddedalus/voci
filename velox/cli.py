@@ -24,7 +24,8 @@ from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
-from velox._collection import tagexpr as _tagexpr
+from velox._collection import selection as _selection
+from velox._collection import targets as _targets
 from velox._report import color as _color
 from velox._report import terminal as _report
 from velox._run import isolated as _isolated
@@ -44,7 +45,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Files or directories to run. Defaults to the configured testpaths, else the rootdir.",
+        help="Files, directories, or test ids (path.py::test_name, path.py::TestGroup::test_name, "
+        "path.py::test_name[case]) to run. Defaults to the configured testpaths, else the "
+        "rootdir.",
+    )
+    parser.add_argument(
+        "-k",
+        dest="keywordexpr",
+        metavar="EXPR",
+        default=None,
+        help="Run only tests whose id satisfies this boolean expression, e.g. 'users and not "
+        "slow'. Each term is matched as a case-insensitive substring of the whole id -- path, "
+        "test name and [case] suffix alike -- so -k users selects every test in "
+        "tests/test_users.py. A term that isn't a bare identifier (has a dash, a dot or "
+        "brackets) must be quoted, e.g. \"'test_create[admin]'\". A test that doesn't match is "
+        "deselected, not skipped.",
     )
     parser.add_argument(
         "-m",
@@ -128,6 +143,61 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Shorthand for --capture=no.",
     )
+    # --serial is a shorthand rather than its own mode: everything it means is already
+    # --concurrency=1, and main folds it into the same three-tier resolution so a
+    # [tool.velox] concurrency doesn't quietly outrank a flag typed on the command line.
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="Shorthand for --concurrency=1: one test at a time, in collection order. The first "
+        "step when a concurrent run behaves differently from a serial one.",
+    )
+    # -x/--maxfail stop dispatching; they do not cancel what is already running (ROADMAP.md),
+    # which is why the help says "stop starting" rather than "stop".
+    parser.add_argument(
+        "--maxfail",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Stop starting new tests once N of them have failed. Tests already running are "
+        "left to finish, so slightly more than N failures can be reported. Default: run "
+        "everything.",
+    )
+    parser.add_argument(
+        "-x",
+        dest="exitfirst",
+        action="store_true",
+        help="Shorthand for --maxfail=1.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Print a line per test as it finishes, on top of the per-file blocks.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Print one character per file instead of a block, and drop the startup header. "
+        "Failure detail, the summary and every end-of-run section are printed regardless.",
+    )
+    parser.add_argument(
+        "--durations",
+        type=int,
+        default=0,
+        metavar="N",
+        help="List the N slowest tests at the end of the run. Under concurrency the slowest "
+        "test is what the wall clock can't drop below, so this is the list to read before "
+        "tuning --concurrency. Default: 0, no such list.",
+    )
+    parser.add_argument(
+        "--collect-only",
+        dest="collect_only",
+        action="store_true",
+        help="Print the id of every selected test, in the order they would run, and exit "
+        "without running any of them.",
+    )
     # A fresh, numbered session root by default (see
     # _capture.DEFAULT_BASETEMP_RETENTION), or this override. Validated by hand in
     # main (_invalid_basetemp_argument, exit code 4) before it ever reaches
@@ -182,17 +252,25 @@ def _friendly_path(path: Path, *, max_up_hops: int = 2) -> str:
     return str(path)
 
 
-def _invalid_path_argument(paths: list[str]) -> str | None:
+def _invalid_target_argument(targets: list[_targets.Target]) -> str | None:
     """The first usage error in an explicit `PATHS` list, or `None` if they all look
-    usable: a test id (`path.py::test_name`, not implemented yet) or a path that
-    doesn't exist. A path that exists but matches no test files is a legitimate, if
-    unusual, empty selection -- not a usage error.
+    usable: a path that doesn't exist, or a test id whose selector is empty or hangs off
+    a directory rather than a file. A path that exists but matches no test files is a
+    legitimate, if unusual, empty selection -- not a usage error, unlike a selector that
+    matches no test (checked after collection, once there are ids to match against).
     """
-    for raw in paths:
-        if "::" in raw:
-            return f"test ids are not supported yet: {raw!r}"
-        if not Path(raw).exists():
-            return f"path does not exist: {raw!r}"
+    for target in targets:
+        if not target.path.exists():
+            return f"path does not exist: {str(target.path)!r}"
+        if target.selector is None:
+            continue
+        if not target.selector:
+            return f"test id has nothing after '::': {target.raw!r}"
+        if target.path.is_dir():
+            return (
+                f"a test id names a test inside one file, and {str(target.path)!r} is a "
+                f"directory: {target.raw!r}"
+            )
     return None
 
 
@@ -228,6 +306,59 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
             f"cleared before use): {resolved}"
         )
     return None
+
+
+def _count(n: int, label: str, color: str, *, enabled: bool) -> str:
+    """One `N label` field of a summary line: the category's semantic color only when it
+    actually has something to say (`n > 0`); a zero count fades to gray rather than, say,
+    "0 failed" in red crying wolf on every clean run. Categories that are only ever
+    appended when already nonzero take `color` through this same path, not a special case.
+    """
+    return _color.paint(f"{n} {label}", color if n else _color.GRAY, enabled=enabled)
+
+
+def _report_collection(collected: _collect.CollectionResult, *, color_enabled: bool) -> int:
+    """`--collect-only`: every selected test's id in the order they would run, then what
+    collection found besides them, and the exit code for a run that stopped here.
+
+    The ids are printed bare, one per line, so the list pipes into another tool (or back
+    into `velox` as arguments) without stripping anything. Skips and collection errors are
+    shown the way a real run shows them: `--collect-only` is how a suite is inspected
+    before it runs, and a file that failed to import is exactly what such an inspection is
+    looking for.
+    """
+    for record in collected.records:
+        print(record.id)
+
+    skipped_word = _color.paint("SKIPPED", _color.YELLOW, enabled=color_enabled)
+    for skipped in collected.skipped:
+        reason = _color.paint(f"({skipped.reason})", _color.GRAY, enabled=color_enabled)
+        print(f"{skipped.id} {skipped_word} {reason}")
+
+    error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
+    for error in collected.errors:
+        print(f"{error.path} {error_word}")
+        print(error.message)
+
+    def count(n: int, label: str, color: str) -> str:
+        return _count(n, label, color, enabled=color_enabled)
+
+    print(
+        f"{_color.paint(str(len(collected.records)), _color.PRIMARY, enabled=color_enabled)} "
+        f"tests collected"
+        f", {count(len(collected.skipped), 'skipped', _color.YELLOW)}"
+        f", {count(len(collected.deselected), 'deselected', _color.GRAY)}"
+        f", {count(len(collected.errors), 'collection error(s)', _color.RED)}"
+    )
+
+    # Spelled out rather than deferred to `_run.exit_code_for`, which reads an empty result
+    # list as "nothing ran, so nothing was collected" -- true of a real run, false here,
+    # where nothing running is the whole point.
+    if collected.errors:
+        return 1
+    if not collected.records and not collected.skipped:
+        return 5
+    return 0
 
 
 @overload
@@ -284,39 +415,79 @@ def main(argv: list[str] | None = None) -> int:
         print(f"velox: {basetemp_problem}", file=sys.stderr)
         return 4
 
+    # Both shorthands mean exactly one other flag's value, so the contradiction is worth
+    # reporting rather than silently picking a winner -- a run that quietly ignored
+    # --serial (or -x) would report the wrong thing about what it did.
+    if args.serial and args.concurrency is not None and args.concurrency != 1:
+        print(
+            f"velox: --serial is --concurrency=1, and --concurrency={args.concurrency} was also "
+            f"given",
+            file=sys.stderr,
+        )
+        return 4
+    if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
+        print(
+            f"velox: -x is --maxfail=1, and --maxfail={args.maxfail} was also given",
+            file=sys.stderr,
+        )
+        return 4
+
+    # Checked by hand rather than through argparse for the same reason --concurrency is:
+    # exit code 4 with a velox-styled message instead of argparse's generic one.
+    maxfail = 1 if args.exitfirst else args.maxfail
+    if maxfail is not None and maxfail < 1:
+        print(f"velox: --maxfail must be a positive integer, got {maxfail}", file=sys.stderr)
+        return 4
+    if args.durations < 0:
+        print(
+            f"velox: --durations must be zero or more, got {args.durations}",
+            file=sys.stderr,
+        )
+        return 4
+
     # A typo'd path and a genuinely empty suite must not look the same: without this,
     # a bad path would silently walk to nothing and exit 5 "no tests collected",
     # indistinguishable from an honest empty selection.
-    problem = _invalid_path_argument(args.paths)
+    targets = [_targets.parse_target(raw) for raw in args.paths]
+    problem = _invalid_target_argument(targets)
     if problem is not None:
         print(f"velox: {problem}", file=sys.stderr)
         return 4
+    # None unless some argument actually carried a `::` selector, which is what lets
+    # collection skip id filtering entirely in the common case.
+    id_selection = _targets.IdSelection.of(targets)
 
-    # Compiled up front, before collection does any real work, so a malformed -m expression
-    # fails fast with a usage error rather than surfacing mid-collection.
+    # Compiled up front, before collection does any real work, so a malformed -m/-k
+    # expression fails fast with a usage error rather than surfacing mid-collection.
     markexpr = None
-    if args.markexpr is not None:
-        try:
-            markexpr = _tagexpr.compile_tag_expression(args.markexpr)
-        except _tagexpr.TagExpressionError as exc:
-            print(f"velox: {exc}", file=sys.stderr)
-            return 4
+    keywordexpr = None
+    try:
+        if args.markexpr is not None:
+            markexpr = _selection.compile_tag_expression(args.markexpr)
+        if args.keywordexpr is not None:
+            keywordexpr = _selection.compile_keyword_expression(args.keywordexpr)
+    except _selection.SelectionError as exc:
+        print(f"velox: {exc}", file=sys.stderr)
+        return 4
 
     # [tool.velox]-anchored upward search, stopping at the git root -- see
     # _config.resolve's own docstring for exactly where it starts and stops. A
     # malformed pyproject.toml/[tool.velox] table is always a usage error: never
     # silently fall back to defaults over a config the user wrote but velox can't honor.
+    # The file part of a `path.py::test_name` argument is what anchors the search, the
+    # same as a plain path does.
     try:
-        config = _config.resolve([Path(p) for p in args.paths])
+        config = _config.resolve([target.path for target in targets])
     except _config.ConfigError as exc:
         print(f"velox: {exc}", file=sys.stderr)
         return 4
 
     # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
     # args.timeout are None exactly when the flag wasn't given (see build_parser's
-    # comments on both).
+    # comments on both). --serial joins the CLI tier: a flag typed on the command line
+    # outranks [tool.velox] concurrency whichever of the two spellings was used.
     effective_concurrency = _resolve_layered(
-        args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
+        1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
     )
     effective_timeout = _resolve_layered(args.timeout, config.timeout)
 
@@ -348,11 +519,11 @@ def main(argv: list[str] | None = None) -> int:
     # config.rootdir here, not cwd().
     # is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
     # and means "nothing" -- truthiness would silently run the built-in default instead.
-    if args.paths:
-        roots = [Path(p) for p in args.paths]
+    if targets:
+        roots = [target.path for target in targets]
     elif config.testpaths is not None:
         roots = [config.rootdir / p for p in config.testpaths]
-        # Mirrors _invalid_path_argument's reasoning for CLI paths: a typo'd testpaths
+        # Mirrors _invalid_target_argument's reasoning for CLI paths: a typo'd testpaths
         # entry must not silently look like an honest empty selection either.
         for root, raw in zip(roots, config.testpaths, strict=True):
             if not root.exists():
@@ -373,17 +544,23 @@ def main(argv: list[str] | None = None) -> int:
     setup = _rewrite.plan(
         roots, mode=args.assert_mode, cache_dir=args.rewrite_cache, rootdir=config.rootdir
     )
-    header = setup.header_line()
-    if header is not None:
-        print(header)
-    # Same transparency plan's own header line gives the assertion-rewrite decision --
-    # a run silently picking up config the user forgot was there is exactly the kind
-    # of surprise this avoids. _friendly_path: this is usually a couple of directories
-    # under cwd (or cwd itself), and the absolute form is just noise at that distance.
-    if config.source is not None:
-        print(f"config: {_friendly_path(config.source)}")
-    else:
-        print("config: none")
+    # -q drops the two header lines and nothing else: they describe how the run was set
+    # up, which is exactly the part a quiet run is asking to do without. What the run
+    # *found* is printed at every verbosity.
+    verbosity = (1 if args.verbose else 0) - (1 if args.quiet else 0)
+    if verbosity >= 0:
+        header = setup.header_line()
+        if header is not None:
+            print(header)
+        # Same transparency plan's own header line gives the assertion-rewrite decision
+        # -- a run silently picking up config the user forgot was there is exactly the
+        # kind of surprise this avoids. _friendly_path: this is usually a couple of
+        # directories under cwd (or cwd itself), and the absolute form is just noise at
+        # that distance.
+        if config.source is not None:
+            print(f"config: {_friendly_path(config.source)}")
+        else:
+            print("config: none")
 
     rootdir = config.rootdir
 
@@ -447,7 +624,40 @@ def main(argv: list[str] | None = None) -> int:
             else _discovery.DEFAULT_IGNORE_DIRS
         )
         files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
-        collected = _collect.collect(files, rootdir=rootdir, tag_expr=markexpr)
+        collected = _collect.collect(
+            files,
+            rootdir=rootdir,
+            tag_expr=markexpr,
+            keyword_expr=keywordexpr,
+            id_selection=id_selection,
+        )
+        # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
+        # would otherwise select nothing and exit 5, indistinguishable from a file that
+        # genuinely holds no tests.
+        if id_selection is not None:
+            # Skipped ids count as matched: naming a `@velox.skip`-marked test is a normal
+            # thing to do, and reporting it as a typo would be plainly wrong.
+            missing = id_selection.unmatched(
+                [record.id for record in collected.records]
+                + [skipped.id for skipped in collected.skipped],
+                rootdir=rootdir,
+            )
+            if missing:
+                print(
+                    f"velox: no test matches {', '.join(repr(name) for name in missing)}",
+                    file=sys.stderr,
+                )
+                return 4
+
+        # Shared with reporter's own coloring (it resolves the same thing internally
+        # for its own prints) so the SKIPPED/COLLECTION ERROR/summary lines below,
+        # which main prints itself rather than through reporter, match its file
+        # blocks instead of being colored by a different rule.
+        color_enabled = _color.color_enabled(sys.stdout)
+
+        if args.collect_only:
+            return _report_collection(collected, color_enabled=color_enabled)
+
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
         # for what can land here. Empty in the common case. Rendered by
@@ -465,18 +675,16 @@ def main(argv: list[str] | None = None) -> int:
             records=collected.records,
             capture_passthrough=capture_passthrough,
             stream=sys.stdout,
+            verbosity=verbosity,
+            durations=args.durations,
         )
-        # Shared with reporter's own coloring (it resolves the same thing internally
-        # for its own prints) so the SKIPPED/COLLECTION ERROR/summary lines below,
-        # which main prints itself rather than through reporter, match its file
-        # blocks instead of being colored by a different rule.
-        color_enabled = _color.color_enabled(sys.stdout)
 
         results = _run.run_suite(
             collected.records,
             concurrency=effective_concurrency,
             timeout=effective_timeout,
             capture_passthrough=capture_passthrough,
+            maxfail=maxfail,
             basetemp=args.basetemp,
             unattributed_output=unattributed,
             on_result=reporter.on_result,
@@ -492,6 +700,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         wall_clock = time.monotonic() - wall_start
+
+        # Before this function prints anything of its own: a run stopped by --maxfail
+        # leaves a file block unprinted, and -q leaves its line of characters unclosed.
+        reporter.flush_pending()
 
         # reporter.finish(...) is called last, after every other end-of-run section
         # below, so its "final line" claim is actually true of cli.main's output.
@@ -519,18 +731,23 @@ def main(argv: list[str] | None = None) -> int:
         # not the leading count below (which also folds in skipped tests -- they never
         # reach run_suite, so they can't contribute an Outcome to account for here).
         other = len(results) - passed - failed - errored - timed_out - xfailed - xpassed
+        # run_suite returns one result per test that ran, so anything collection handed
+        # it that isn't in there is a test --maxfail stopped before it started.
+        not_run = len(collected.records) - len(results)
         # Leading count is every test collection found, whether it ran or not --
         # len(results) alone would undercount by len(collected.skipped), making "N
         # tests: ..., K skipped" read like K is already part of N when it's additive.
-        total_tests = len(results) + len(collected.skipped)
+        # The tests --maxfail dropped are in it for the same reason.
+        total_tests = len(results) + len(collected.skipped) + not_run
 
-        # count(): a category's semantic color only when it actually has something to
-        # say (n > 0); a zero count fades to gray rather than, say, "0 failed" in red
-        # crying wolf on every clean run. Categories that are only ever appended when
-        # already nonzero (timed_out/xfailed/xpassed/other below) always take `color`
-        # through this same path, not a special case.
         def count(n: int, label: str, color: str) -> str:
-            return _color.paint(f"{n} {label}", color if n else _color.GRAY, enabled=color_enabled)
+            return _count(n, label, color, enabled=color_enabled)
+
+        if not_run:
+            stopped = _color.paint(
+                f"stopped after {maxfail} failed (--maxfail)", _color.YELLOW, enabled=color_enabled
+            )
+            print(stopped)
 
         summary = (
             f"{_color.paint(str(total_tests), _color.PRIMARY, enabled=color_enabled)} tests: "
@@ -546,15 +763,18 @@ def main(argv: list[str] | None = None) -> int:
             summary += f", {count(xpassed, 'xpassed', _color.YELLOW)}"
         if other:
             summary += f", {count(other, 'other', _color.RED)}"
+        if not_run:
+            summary += f", {count(not_run, 'not run', _color.YELLOW)}"
         summary += (
             f", {count(len(collected.skipped), 'skipped', _color.YELLOW)}"
             f", {count(len(collected.errors), 'collection error(s)', _color.RED)}"
         )
-        # Shown whenever -m was given, including a 0 count -- same always-shown treatment as
-        # skipped/errors, so the line reliably says whether -m was in effect rather than looking
-        # identical to a run without it. Always gray: deselection is the user's own filter, not
-        # an outcome, so it never earns an alarm color regardless of count.
-        if markexpr is not None:
+        # Shown whenever a selection flag was given, including a 0 count -- same always-shown
+        # treatment as skipped/errors, so the line reliably says whether -m/-k/an explicit id
+        # was in effect rather than looking identical to a run without one. Always gray:
+        # deselection is the user's own filter, not an outcome, so it never earns an alarm
+        # color regardless of count.
+        if markexpr is not None or keywordexpr is not None or id_selection is not None:
             summary += f", {count(len(collected.deselected), 'deselected', _color.GRAY)}"
         print(summary)
 
@@ -570,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
             wall_clock=wall_clock,
             unattributed_output=unattributed,
             skipped=len(collected.skipped),
+            not_run=not_run,
         )
 
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))

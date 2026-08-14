@@ -89,11 +89,24 @@ class _FakeTTYStream(io.StringIO):
 
 
 def _reporter(
-    records: list[Record], *, capture_passthrough: bool = False
+    records: list[Record],
+    *,
+    capture_passthrough: bool = False,
+    verbosity: int = 0,
+    durations: int = 0,
 ) -> tuple[Reporter, io.StringIO]:
     """A Reporter over a fresh StringIO, returned alongside it."""
     stream = io.StringIO()
-    return Reporter(records=records, capture_passthrough=capture_passthrough, stream=stream), stream
+    return (
+        Reporter(
+            records=records,
+            capture_passthrough=capture_passthrough,
+            stream=stream,
+            verbosity=verbosity,
+            durations=durations,
+        ),
+        stream,
+    )
 
 
 # ------------------------------------------------------------------------------------------
@@ -578,6 +591,145 @@ def test_a_run_with_no_patching_says_nothing_about_it() -> None:
     reporter.finish([_result(f"{path}::test_plain", 0)], wall_clock=1.0)
 
     assert "unittest.mock" not in stream.getvalue()
+
+
+# ------------------------------------------------------------------------------------------
+# Verbosity (-v / -q) and --durations
+# ------------------------------------------------------------------------------------------
+
+
+def test_verbose_prints_a_line_per_test_as_it_finishes() -> None:
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
+    reporter, stream = _reporter(records, verbosity=1)
+
+    reporter.on_result(_result(f"{path}::test_a", 0, duration=0.5))
+    # Printed as it finishes, not held back until the file's block.
+    assert "PASSED" in stream.getvalue()
+    assert f"{path}::test_a" in stream.getvalue()
+
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.FAILED, duration=0.25))
+    out = stream.getvalue()
+    assert "FAILED" in out
+    # The per-file block still lands, after both of its tests.
+    assert "FAIL " in out
+
+
+def test_quiet_prints_one_character_per_file() -> None:
+    first, second = Path("tests/test_a.py"), Path("tests/test_b.py")
+    records = [_test_record(f"{first}::test_a", first), _test_record(f"{second}::test_b", second)]
+    reporter, stream = _reporter(records, verbosity=-1)
+
+    reporter.on_result(_result(f"{first}::test_a", 0))
+    reporter.on_result(_result(f"{second}::test_b", 1, outcome=Outcome.FAILED))
+
+    assert stream.getvalue() == ".F"
+
+
+def test_quiet_closes_its_progress_line_before_anything_else_prints() -> None:
+    path = Path("tests/test_a.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records, verbosity=-1)
+    reporter.on_result(_result(f"{path}::test_a", 0))
+
+    reporter.flush_pending()
+
+    assert stream.getvalue().splitlines()[0] == "."
+    # Idempotent: a second call (finish's own) adds no further blank line.
+    reporter.flush_pending()
+    assert stream.getvalue() == ".\n"
+
+
+def test_quiet_still_prints_failure_detail() -> None:
+    path = Path("tests/test_a.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records, verbosity=-1)
+    result = _result(
+        f"{path}::test_a",
+        0,
+        outcome=Outcome.FAILED,
+        failure=_TRACEBACK_FAILURE,
+        failure_summary="AssertionError: assert 2 == 3",
+    )
+    reporter.on_result(result)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "assert 2 == 3" in out
+    assert "--- short test summary ---" in out
+
+
+def test_flush_pending_prints_the_block_of_a_file_that_never_finished() -> None:
+    """`--maxfail` stops the run mid-file, so that file's block never reached its own
+    completion check -- what did run is still accounted for."""
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
+    reporter, stream = _reporter(records)
+    result = _result(f"{path}::test_a", 0, outcome=Outcome.FAILED)
+    reporter.on_result(result)
+    assert stream.getvalue() == ""
+
+    reporter.finish([result], wall_clock=1.0, not_run=1)
+
+    block_line = stream.getvalue().splitlines()[0]
+    assert block_line.startswith("FAIL")
+    assert "1 tests" in block_line
+
+
+def test_finish_folds_not_run_into_the_leading_count() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records)
+    result = _result(f"{path}::test_a", 0, outcome=Outcome.FAILED)
+
+    reporter.finish([result], wall_clock=1.0, not_run=2)
+
+    assert "3 tests · 1 failed" in stream.getvalue()
+
+
+def test_durations_lists_the_slowest_tests_in_order() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_{name}", path) for name in ("a", "b", "c")]
+    reporter, stream = _reporter(records, durations=2)
+    results = [
+        _result(f"{path}::test_a", 0, duration=0.10),
+        _result(f"{path}::test_b", 1, duration=2.50),
+        _result(f"{path}::test_c", 2, duration=1.00),
+    ]
+
+    reporter.finish(results, wall_clock=3.0)
+
+    listed = stream.getvalue().split("--- slowest 2 tests ---\n")[1].splitlines()[:2]
+    assert "::test_b" in listed[0]
+    assert "2.50s" in listed[0]
+    assert "::test_c" in listed[1]
+
+
+def test_durations_asks_for_more_than_there_are() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records, durations=10)
+
+    reporter.finish([_result(f"{path}::test_a", 0, duration=0.5)], wall_clock=1.0)
+
+    assert "--- slowest 1 test ---" in stream.getvalue()
+
+
+def test_no_durations_section_without_the_option() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish([_result(f"{path}::test_a", 0, duration=0.5)], wall_clock=1.0)
+
+    assert "slowest" not in stream.getvalue()
 
 
 # ------------------------------------------------------------------------------------------

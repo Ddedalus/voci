@@ -65,14 +65,14 @@ def test_main_rejects_a_nonexistent_path_as_a_usage_error(
     assert str(missing) in capsys.readouterr().err
 
 
-def test_main_rejects_a_test_id_argument_as_a_usage_error(
+def test_main_rejects_a_test_id_whose_file_is_missing_as_a_usage_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`path.py::test_name` is a plausible invocation, but test ids are not parsed -- that
-    must be reported as a usage error, not fail as though the path were simply missing."""
-    status = main(["tests/test_run.py::test_x"])
+    """The file part of an id is checked exactly like a bare path: a typo there must not walk
+    to nothing and exit 5 as though the suite were empty."""
+    status = main(["tests/does_not_exist.py::test_x"])
     assert status == 4
-    assert "test ids" in capsys.readouterr().err
+    assert "does not exist" in capsys.readouterr().err
 
 
 def test_default_roots_prefer_tests_dir_over_cwd(chdir_project: Project) -> None:
@@ -823,3 +823,400 @@ def test_main_mixes_isolated_and_in_process_tests_in_one_run(
     assert "4 tests: 2 passed, 2 failed" in out
     assert "::test_in_process_fail" in out
     assert "::test_isolated_fail" in out
+
+
+def _write_selection_suite(project: Project) -> None:
+    """Two files, five tests -- a class group and a parametrized test among them, so one suite
+    serves every selection, ordering and early-stop assertion below."""
+    project.write(
+        "test_users.py",
+        "import velox\n\n"
+        "async def test_create():\n    pass\n\n"
+        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "async def test_role(role):\n    pass\n\n"
+        "class TestDelete:\n"
+        "    async def test_soft(self):\n        pass\n",
+    )
+    project.write("test_orders.py", "async def test_place():\n    pass\n")
+
+
+def test_main_runs_one_test_by_id(project: Project, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_create"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 tests: 1 passed" in out
+    assert "3 deselected" in out
+
+
+def test_main_runs_one_class_grouped_test_by_id(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::TestDelete::test_soft", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_users.py::TestDelete::test_soft" in out
+    assert "1 tests collected" in out
+
+
+def test_main_id_naming_a_class_selects_every_test_in_it(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_group.py",
+        "class TestGroup:\n"
+        "    async def test_a(self):\n        pass\n\n"
+        "    async def test_b(self):\n        pass\n\n"
+        "async def test_outside():\n    pass\n",
+    )
+
+    status = main([f"{project.root / 'test_group.py'}::TestGroup", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "2 tests collected" in out
+    assert "::test_outside" not in out
+
+
+def test_main_id_selects_one_parametrize_case(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_role[admin]", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_users.py::test_role[admin]" in out
+    assert "[guest]" not in out
+
+
+def test_main_id_naming_a_function_selects_all_of_its_cases(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_role", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "2 tests collected" in out
+
+
+def test_main_rejects_an_id_that_matches_no_test_as_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Same reasoning as a path that doesn't exist, one level down: a mistyped test name would
+    otherwise select nothing and exit 5, indistinguishable from an empty file."""
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_typo"])
+
+    assert status == 4
+    assert "test_typo" in capsys.readouterr().err
+
+
+def test_main_rejects_an_empty_id_as_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::"])
+
+    assert status == 4
+    assert "::" in capsys.readouterr().err
+
+
+def test_main_rejects_an_id_on_a_directory_as_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([f"{project.root}::test_create"])
+
+    assert status == 4
+    assert "directory" in capsys.readouterr().err
+
+
+def test_main_k_selects_by_substring_of_the_id(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-k", "orders"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 tests: 1 passed" in out
+    assert "4 deselected" in out
+
+
+def test_main_k_matches_a_parametrize_case_id(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`-k` is applied after expansion, so a case id is matchable -- the reason it can't be a
+    cheap per-function filter."""
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-k", "admin", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_users.py::test_role[admin]" in out
+    assert "1 tests collected" in out
+
+
+def test_main_k_supports_boolean_operators(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-k", "users and not role", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "2 tests collected" in out
+
+
+def test_main_rejects_a_malformed_k_expression_as_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-k", "users and"])
+
+    assert status == 4
+    assert "-k" in capsys.readouterr().err
+
+
+def test_main_collect_only_prints_ids_and_runs_nothing(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "async def test_one():\n    raise AssertionError('must not run')\n",
+    )
+
+    status = main([str(project.root), "--collect-only"])
+
+    out = capsys.readouterr().out
+    # Exit 0 with a test that fails when run: nothing was run.
+    assert status == 0
+    assert "test_sample.py::test_one" in out
+    assert "1 tests collected" in out
+    assert "wall" not in out
+
+
+def test_main_collect_only_exits_five_when_nothing_is_collected(tmp_path: Path) -> None:
+    assert main([str(tmp_path), "--collect-only"]) == 5
+
+
+def test_main_collect_only_reports_a_collection_error_and_exits_one(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Inspecting a suite is exactly when an unimportable file matters most."""
+    project.write("test_broken.py", "raise RuntimeError('boom')\n")
+
+    status = main([str(project.root), "--collect-only"])
+
+    assert status == 1
+    assert "COLLECTION ERROR" in capsys.readouterr().out
+
+
+def test_main_x_stops_after_the_first_failure(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--serial` so the stop point is deterministic: tests start in collection order, so
+    everything after the first failure is left unstarted."""
+    project.write(
+        "test_sample.py",
+        "async def test_one():\n    assert False\n\n"
+        "async def test_two():\n    assert False\n\n"
+        "async def test_three():\n    assert False\n",
+    )
+
+    status = main([str(project.root), "-x", "--serial"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "3 tests: 0 passed, 1 failed" in out
+    assert "2 not run" in out
+    assert "stopped after 1 failed" in out
+
+
+def test_main_maxfail_counts_up_to_its_threshold(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "async def test_one():\n    assert False\n\n"
+        "async def test_two():\n    assert False\n\n"
+        "async def test_three():\n    assert False\n",
+    )
+
+    status = main([str(project.root), "--maxfail=2", "--serial"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "2 failed" in out
+    assert "1 not run" in out
+
+
+def test_main_maxfail_does_not_stop_a_passing_run(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-x"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "5 tests: 5 passed" in out
+    assert "not run" not in out
+
+
+@pytest.mark.parametrize("bad", ["--maxfail=0", "--maxfail=-2"])
+def test_bad_maxfail_value_is_a_usage_error(bad: str, capsys: pytest.CaptureFixture[str]) -> None:
+    status = main([bad])
+    assert status == 4
+    assert "--maxfail" in capsys.readouterr().err
+
+
+def test_x_contradicting_maxfail_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """-x *is* --maxfail=1; a run that silently ignored one of the two would report the wrong
+    thing about what it did."""
+    status = main(["-x", "--maxfail=3"])
+    assert status == 4
+    assert "-x" in capsys.readouterr().err
+
+
+def test_main_serial_runs_exactly_one_test_at_a_time(project: Project) -> None:
+    project.write(
+        "test_sample.py",
+        "import asyncio\n\n"
+        "running = 0\n\n"
+        "async def _one():\n"
+        "    global running\n"
+        "    running += 1\n"
+        "    assert running == 1\n"
+        "    await asyncio.sleep(0)\n"
+        "    running -= 1\n\n"
+        "async def test_a():\n    await _one()\n\n"
+        "async def test_b():\n    await _one()\n",
+    )
+
+    assert main([str(project.root), "--serial"]) == 0
+
+
+def test_serial_contradicting_concurrency_is_a_usage_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    status = main(["--serial", "--concurrency=4"])
+    assert status == 4
+    assert "--serial" in capsys.readouterr().err
+
+
+def test_main_verbose_prints_a_line_per_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-v"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert len(_lines_starting_with(out, "PASSED ")) == 5
+    assert "::test_create" in out
+
+
+def test_main_quiet_prints_one_character_per_file_and_no_header(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main([str(project.root), "-q"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "config:" not in out
+    assert _lines_starting_with(out, "PASS ") == []
+    # One character per file, on a line of their own.
+    assert out.splitlines()[0] == ".."
+
+
+def test_main_quiet_still_prints_failure_detail(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What a run *found* never gets quieter -- only how it narrates its progress does."""
+    project.write("test_sample.py", "async def test_bad():\n    x = 1\n    assert x == 2\n")
+
+    status = main([str(project.root), "-q"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "assert 1 == 2" in out
+    assert "--- short test summary ---" in out
+
+
+def test_main_durations_lists_the_slowest_tests(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import asyncio\n\n"
+        "async def test_slow():\n    await asyncio.sleep(0.05)\n\n"
+        "async def test_fast():\n    pass\n",
+    )
+
+    status = main([str(project.root), "--durations=1"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "--- slowest 1 test ---" in out
+    duration_line = out.split("--- slowest 1 test ---\n")[1].splitlines()[0]
+    assert "::test_slow" in duration_line
+
+
+def test_main_prints_no_durations_section_by_default(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    main([str(project.root)])
+
+    assert "slowest" not in capsys.readouterr().out
+
+
+def test_bad_durations_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    status = main(["--durations=-1"])
+    assert status == 4
+    assert "--durations" in capsys.readouterr().err
+
+
+def test_main_runs_class_grouped_tests_end_to_end(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n"
+        "from velox import Depends\n\n"
+        "@velox.fixture()\n"
+        "async def number() -> int:\n    return 7\n\n"
+        "class TestGroup:\n"
+        "    async def test_injected(self, n: int = Depends(number)):\n"
+        "        assert n == 7\n\n"
+        "    async def test_fails(self):\n"
+        "        assert False\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "2 tests: 1 passed, 1 failed" in out
+    assert "test_sample.py::TestGroup::test_fails" in out

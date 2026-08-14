@@ -5,8 +5,14 @@ short test summary.
 prints the moment every one of its tests has finished, in real completion order, so
 output starts appearing before the whole suite is done. `Reporter.finish` runs once,
 after `run_suite` returns, and prints everything that belongs in logical (collection)
-order instead: failure details, the short summary, unattributed output, the
-`unittest.mock` solo-scheduling cost, and the wall-vs-concurrency line.
+order instead: failure details, the short summary, unattributed output, the slowest
+tests (`--durations`), the `unittest.mock` solo-scheduling cost, and the
+wall-vs-concurrency line.
+
+`verbosity` scales what the streaming half prints, and nothing else: `-v` adds a line
+per test as it finishes, `-q` reduces each file to one character. Failure detail and
+every end-of-run section are printed at any verbosity -- what a run found is never what
+gets quieter.
 """
 
 from __future__ import annotations
@@ -27,6 +33,11 @@ __all__ = ["Reporter"]
 #: directory prefix to disambiguate stay visible.
 _PATH_COLUMN_WIDTH = 32
 
+#: Width of the test-id column `-v` and `--durations` line their durations up against. A
+#: longer id simply pushes its own duration right rather than being elided: unlike a file
+#: block's path column, an id is what the reader copies back into the next `velox` invocation.
+_ID_COLUMN_WIDTH = 56
+
 
 @dataclass
 class Reporter:
@@ -40,6 +51,12 @@ class Reporter:
     records: Sequence[TestRecord]
     capture_passthrough: bool
     stream: TextIO
+    #: `-v` (1) prints a line per test as it finishes on top of the per-file blocks; `-q` (-1)
+    #: replaces each block with a single `.`/`F`. 0 is the default per-file block.
+    verbosity: int = 0
+    #: `--durations N`: how many of the slowest tests `finish` lists. 0 (the default) prints no
+    #: such section at all.
+    durations: int = 0
 
     #: Resolved once, at construction, rather than re-checked on every print.
     is_tty: bool = field(init=False)
@@ -60,6 +77,9 @@ class Reporter:
     #: Ids of the tests `unittest.mock` patching forced to run alone, for `finish`'s cost
     #: line. Seeded from `records` alongside the per-file counts below.
     _patching_ids: set[str] = field(init=False, default_factory=set)
+    #: Whether `-q`'s per-file characters have been written without a newline after them, so
+    #: `finish` knows to close that line before printing anything of its own.
+    _open_progress_line: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         """Seed per-file bookkeeping from `records`: an id->path lookup, each file's
@@ -84,23 +104,56 @@ class Reporter:
         `FAIL`, since either means the test behaved exactly as its `xfail` mark said it
         would. Duration is the sum of each test's own `duration`, labeled Σ since
         concurrent dispatch means no single wall-clock span is attributable to "the
-        file". This body has no `await`, so it runs atomically with respect to every
-        other `dispatch_one` under asyncio's cooperative scheduling -- nothing here
-        needs a lock.
+        file". Under `-v` each result also gets its own line here, as it finishes; under
+        `-q` the block collapses to one character. This body has no `await`, so it runs
+        atomically with respect to every other `dispatch_one` under asyncio's
+        cooperative scheduling -- nothing here needs a lock.
         """
         path = self._path_by_id[result.id]
         self._buffered_by_path.setdefault(path, []).append(result)
         self._remaining_by_path[path] -= 1
+        if self.verbosity >= 1:
+            self._print_test_line(result)
         if self._remaining_by_path[path] == 0:
             self._print_file_block(path, self._buffered_by_path.pop(path))
 
+    def _print_test_line(self, result: TestResult) -> None:
+        """`-v`'s line for one finished test, printed in completion order:
+
+        PASSED   tests/api/test_users.py::test_create              0.08s
+        """
+        failed = result.outcome in FAILING_OUTCOMES
+        label = _color.paint(
+            f"{result.outcome.value.upper():<8}",
+            _color.RED if failed else _color.GREEN,
+            enabled=self._color_enabled,
+        )
+        duration = _color.paint(f"{result.duration:.2f}s", _color.GRAY, enabled=self._color_enabled)
+        print(f"{label} {result.id:<{_ID_COLUMN_WIDTH}} {duration}", file=self.stream, flush=True)
+
     def _print_file_block(self, path: Path, results: list[TestResult]) -> None:
         """One scrollback line for `path`, once every one of its tests has reported
-        in. `results` is in completion order, not logical order -- irrelevant here,
-        since this only counts and sums them; logical order matters only once
-        `finish` reads the caller's own `results` list."""
+        in -- or one character under `-q`. `results` is in completion order, not logical
+        order -- irrelevant here, since this only counts and sums them; logical order
+        matters only once `finish` reads the caller's own `results` list."""
         failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
         status = "PASS" if failed == 0 else "FAIL"
+        if self.verbosity <= -1:
+            # No newline: `-q` builds one line of characters across the whole run, which
+            # `finish` closes before printing anything else.
+            character = "." if failed == 0 else "F"
+            print(
+                _color.paint(
+                    character,
+                    _color.GREEN if failed == 0 else _color.RED,
+                    enabled=self._color_enabled,
+                ),
+                end="",
+                file=self.stream,
+                flush=True,
+            )
+            self._open_progress_line = True
+            return
         # A sum, not a span: under concurrency a file's summed durations can exceed
         # the whole run's wall clock, so it's labeled Σ to avoid reading like "this
         # file took N seconds".
@@ -127,6 +180,24 @@ class Reporter:
         # whole run ended -- defeating the point of streaming per file.
         print(line, file=self.stream, flush=True)
 
+    def flush_pending(self) -> None:
+        """Close out what the streaming half left open, once `run_suite` has returned.
+
+        A file whose tests didn't all report -- `--maxfail` stopped the run partway through
+        it -- never reached its own block in `on_result`; it prints here, in path order, so
+        what did run is still accounted for file by file. `-q`'s line of characters gets its
+        closing newline the same way.
+
+        `cli.main` calls this before printing any section of its own, so nothing lands on the
+        end of an unfinished progress line; `finish` calls it too, and calling it twice prints
+        nothing the second time.
+        """
+        for path in sorted(self._buffered_by_path):
+            self._print_file_block(path, self._buffered_by_path.pop(path))
+        if self._open_progress_line:
+            print(file=self.stream)
+            self._open_progress_line = False
+
     def finish(
         self,
         results: list[TestResult],
@@ -134,6 +205,7 @@ class Reporter:
         wall_clock: float,
         unattributed_output: list[str] | None = None,
         skipped: int = 0,
+        not_run: int = 0,
     ) -> None:
         """Called once, after `_run.run_suite` returns. `results` is the caller's
         full, authoritative list, already in logical order -- not whatever
@@ -144,10 +216,12 @@ class Reporter:
         wall-vs-concurrency line. `captured_stdout`/`captured_stderr`
         are shown only when `capture_passthrough` is off, since passthrough already
         echoed them live; `log_records` are always shown, since they're never echoed
-        live. `skipped` folds into the final line's leading count alongside `results`
-        -- caller-supplied because skipped tests never reach `results` themselves (see
-        `cli.main`'s own summary line, which the same count matches).
+        live. `skipped` and `not_run` (tests `--maxfail` stopped before they started)
+        fold into the final line's leading count alongside `results` -- caller-supplied
+        because neither kind ever reaches `results` itself (see `cli.main`'s own summary
+        line, which the same counts match).
         """
+        self.flush_pending()
         failing = [result for result in results if result.outcome in FAILING_OUTCOMES]
 
         if failing:
@@ -193,6 +267,7 @@ class Reporter:
             for section in unattributed_output:
                 print(section, file=self.stream)
 
+        self._print_durations(results)
         self._print_patching_cost(results, wall_clock=wall_clock)
 
         total = sum(result.duration for result in results)
@@ -203,9 +278,10 @@ class Reporter:
             # non-positive wall_clock -- cli.main's own measurement can't land here.
             concurrency = "n/a concurrency"
         # Same total_tests reasoning as cli.main's mid-run summary: len(results) alone
-        # excludes skipped tests, which never reach run_suite to begin with.
+        # excludes skipped tests, which never reach run_suite to begin with, and the
+        # tests --maxfail stopped before they started.
         total_tests = _color.paint(
-            str(len(results) + skipped), _color.PRIMARY, enabled=self._color_enabled
+            str(len(results) + skipped + not_run), _color.PRIMARY, enabled=self._color_enabled
         )
         failed_count = _color.paint(
             f"{len(failing)} failed",
@@ -218,6 +294,31 @@ class Reporter:
             file=self.stream,
         )
         self.stream.flush()
+
+    def _print_durations(self, results: list[TestResult]) -> None:
+        """`--durations N`: the N slowest tests of the run, printed only when asked for.
+
+            --- slowest 3 tests ---
+            2.41s  tests/api/test_users.py::test_create
+            0.88s  tests/api/test_users.py::test_delete
+
+        Under concurrency this is what a run is actually bound by: the wall clock can't drop
+        below the slowest test, however much concurrency the rest of the suite gets, so this
+        is the list to read before reaching for `--concurrency`. Ties break on logical order,
+        so two equally slow tests print in the same order on every run.
+        """
+        if self.durations <= 0 or not results:
+            return
+        slowest = sorted(results, key=lambda result: (-result.duration, result.index))
+        slowest = slowest[: self.durations]
+        tests = "test" if len(slowest) == 1 else "tests"
+        print(file=self.stream)
+        print(f"--- slowest {len(slowest)} {tests} ---", file=self.stream)
+        for result in slowest:
+            duration = _color.paint(
+                f"{result.duration:6.2f}s", _color.GRAY, enabled=self._color_enabled
+            )
+            print(f"{duration}  {result.id}", file=self.stream)
 
     def _print_patching_cost(self, results: list[TestResult], *, wall_clock: float) -> None:
         """What `unittest.mock` patching cost this run, printed only when something patched:
