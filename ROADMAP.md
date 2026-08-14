@@ -54,6 +54,14 @@ suite mysteriously stall; failing a test that returns a value or leaves a corout
 cancelling in-flight tests, with time-boxed teardown, on Ctrl-C and when `--maxfail` is reached
 (which today stops new tests from starting and lets running ones finish).
 
+**An `@velox.isolated` flake in velox's own suite.** `tests/test_cli.py`'s isolated-subprocess
+tests (`test_isolated_test_gets_a_working_tmp_path`,
+`test_main_shows_captured_output_for_a_failing_isolated_test`) failed together in one run on
+2026-08-14, immediately after an edit to `velox/`, and passed in every run since — 20 targeted
+and 6 whole-suite. The suspect is the assertion-rewrite cache: a subprocess re-collects its
+target file (`velox/_run/_isolated_worker.py`) and reads a cache the parent wrote, so a source
+file changing between the two is the condition to reproduce first.
+
 ## Later
 **Performance.** A persistent collection cache, `--lf`/`--ff`,
 
