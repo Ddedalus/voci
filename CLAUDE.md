@@ -30,13 +30,28 @@ plus only what a caller would get wrong otherwise. No counterfactuals ("doesn't 
 `velox-docs` skill for the full layer table, rules, and worked examples before writing or
 editing any doc, docstring, or comment.
 
-# Worktree workflow
+# Workflows
+This is a prototype repo not yet published. We're working alone locally. There is no human code review, just fast AI iteration.
 
-This is a prototype repo not yet published. We're working alone locally. There is no human code review, just fast AI iteration. When asked to do work in a session:
+Pick the appropriate workflow for each session.
+
+## Direct commit workflow
+
+When asked to work on docs, roadmap and other admin or plans, commit directly to current branch, including main. Also when asked to fix CI or tests where job is reasonably small.
+
+## Worktree workflow
+
+When asked to do work on feature or larger refactor:
 1. Create a worktree off main
 2. Do the work. Commit.
 3. Spawn /code-review (default: medium, hard for very complex changes)
 4. Address all findings. Commit.
-5. Merge into main. Delete the worktree.
+5. Clean up docs roadmap etc.
+6. Merge into main. Delete the worktree.
 
+If **material** uncertainty exists after plan or implementation, explain and only merge once clarified.
 When asked to implement roadmap item, delete its entry from ROADMAP.md as part of the worktree.
+
+## Branch workflow
+
+Only branch in current worktree if explicitly asked. Do not merge until instructed.
