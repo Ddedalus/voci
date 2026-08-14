@@ -937,6 +937,99 @@ def test_main_an_id_in_a_file_that_fails_to_import_reports_the_import_error(
     assert "no test matches" not in captured.err
 
 
+def test_main_an_id_leaves_a_skipped_test_it_does_not_name_out_of_the_run(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Asking for one test is asking about that test: a skip elsewhere in the file is not part
+    of the answer, and is not counted in the run either."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "async def test_wanted():\n    pass\n\n"
+        "@velox.skip('later')\n"
+        "async def test_other():\n    pass\n",
+    )
+
+    status = main([f"{project.root / 'test_sample.py'}::test_wanted"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 tests: 1 passed" in out
+    assert "SKIPPED" not in out
+
+
+def test_main_k_leaves_a_skipped_test_it_does_not_match_out_of_the_run(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "async def test_wanted():\n    pass\n\n"
+        "@velox.skip('later')\n"
+        "async def test_other():\n    pass\n",
+    )
+
+    status = main([str(project.root), "-k", "wanted"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 tests: 1 passed" in out
+    assert "SKIPPED" not in out
+
+
+def test_main_an_id_naming_a_case_of_a_skipped_test_reports_the_skip(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A skipped test is reported under its bare name, its cases never having been built, so a
+    case selector has to reach it -- the alternative is calling a real test id a typo."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('later')\n"
+        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "async def test_role(role):\n    pass\n",
+    )
+
+    status = main([f"{project.root / 'test_sample.py'}::test_role[admin]"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "test_role SKIPPED (later)" in captured.out
+    assert "no test matches" not in captured.err
+
+
+def test_main_an_id_naming_a_case_of_a_test_dash_m_excluded_is_an_empty_run(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`-m` excludes a test before its cases are built, so the case id it would have carried is
+    never spelled out anywhere -- and naming it is an empty intersection, not a typo."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.tag('slow')\n"
+        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "async def test_role(role):\n    pass\n",
+    )
+
+    status = main([f"{project.root / 'test_sample.py'}::test_role[admin]", "-m", "not slow"])
+
+    assert status == 5
+    assert "no test matches" not in capsys.readouterr().err
+
+
+def test_main_rejects_a_case_id_on_a_test_that_has_no_cases(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the rule above: a `[case]` on a test whose cases *are* known, and that
+    has none by that name, is the typo it looks like."""
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_create[admin]"])
+
+    assert status == 4
+    assert "test_create[admin]" in capsys.readouterr().err
+
+
 def test_main_an_id_deselected_by_k_is_an_empty_run_not_a_usage_error(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1053,6 +1146,43 @@ def test_main_collect_only_prints_ids_and_runs_nothing(
     assert "test_sample.py::test_one" in out
     assert "1 tests collected" in out
     assert "wall" not in out
+
+
+def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
+    chdir_project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The round trip `--collect-only` exists for: an id it printed, pasted back as an argument
+    from wherever the reader happens to be standing."""
+    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write("tests/test_sample.py", "async def test_one():\n    pass\n")
+    assert main(["--collect-only"]) == 0
+    printed = capsys.readouterr().out.splitlines()[-2]
+    assert printed == "tests/test_sample.py::test_one"
+
+    monkeypatch.chdir(chdir_project.root / "tests")
+    status = main([printed])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 tests: 1 passed" in out
+
+
+def test_main_prefers_the_local_reading_of_a_path_that_exists(
+    chdir_project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The rootdir reading is the fallback, not the rule: an argument that names something from
+    here means that, whatever the same spelling would name under the rootdir."""
+    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write("tests/test_sample.py", "async def test_root_level():\n    pass\n")
+    chdir_project.write("tests/tests/test_sample.py", "async def test_nested():\n    pass\n")
+
+    monkeypatch.chdir(chdir_project.root / "tests")
+    status = main(["tests/test_sample.py", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "::test_nested" in out
+    assert "::test_root_level" not in out
 
 
 def test_main_collect_only_exits_five_when_nothing_is_collected(tmp_path: Path) -> None:

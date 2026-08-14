@@ -111,3 +111,42 @@ def test_unmatched_is_empty_when_every_selector_found_something(tmp_path: Path) 
     selection = IdSelection.of([parse_target(f"{path}::test_role")])
     assert selection is not None
     assert selection.unmatched(["test_users.py::test_role[admin]"], rootdir=tmp_path) == []
+
+
+def test_unmatched_reads_an_unexpanded_id_as_covering_its_own_cases(tmp_path: Path) -> None:
+    """A skipped test's `[case]` ids are never built, so the bare name is all there is to match
+    a case selector against -- and it is a real test, not a typo."""
+    path = tmp_path / "test_users.py"
+    selection = IdSelection.of([parse_target(f"{path}::test_role[admin]")])
+    assert selection is not None
+    assert selection.unmatched([], unexpanded=["test_users.py::test_role"], rootdir=tmp_path) == []
+
+
+def test_unmatched_keeps_a_case_selector_strict_against_a_whole_id(tmp_path: Path) -> None:
+    """The reading above is for ids that stop short of their cases only: an id that carries its
+    own cases answers for them, so a case it doesn't have is the typo it looks like."""
+    path = tmp_path / "test_users.py"
+    selection = IdSelection.of([parse_target(f"{path}::test_role[nobody]")])
+    assert selection is not None
+    assert selection.unmatched(["test_users.py::test_role[admin]"], rootdir=tmp_path) == [
+        "test_role[nobody]"
+    ]
+
+
+@pytest.mark.parametrize(
+    "selector, name, expected",
+    [
+        ("test_role", "test_role", True),
+        # The point of the unexpanded reading: a case of a test whose cases don't exist yet.
+        ("test_role[admin]", "test_role", True),
+        ("test_role[admin]", "test_other", False),
+        ("TestDelete", "TestDelete::test_soft", True),
+    ],
+)
+def test_selects_unexpanded_reaches_a_test_through_a_case_selector(
+    tmp_path: Path, selector: str, name: str, expected: bool
+) -> None:
+    path = tmp_path / "test_users.py"
+    selection = IdSelection.of([parse_target(f"{path}::{selector}")])
+    assert selection is not None
+    assert selection.selects_unexpanded(path, name) is expected
