@@ -23,11 +23,27 @@ diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.
 
 ## Next
 
-Fast-tracked: the pytest migration codegen (see
-[docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the
-reporting item below.
+**DX Improvements** This is how the output currently looks like:
 
-**Reporting.** A live footer, JUnit XML, `--report-json`, and GitHub annotations.
+```
+config: pyproject.toml
+PASS  tests/test_orders.py               13 tests   Σ 4.91s
+PASS  tests/test_users.py                10 tests   Σ 2.42s
+tests/test_users.py::test_list_users_is_paginated SKIPPED (pagination is not implemented yet (GET /users has no route -- 405, not 200))
+tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is behind a feature flag)
+25 tests: 23 passed, 0 failed, 0 errored, 2 skipped, 0 collection error(s)
+
+25 tests · 0 failed · 1.77s wall (4.1x concurrency)
+```
+
+Feedback:
+1. Skips take too much place, they should just be counted in the per-file line entry
+2. The space left for paths is too small for real life - increase unless it's dynamically calculated.
+3. There are two summary lines which duplicate info - this is nonsense. For success, compress to one line, do not show the zero counts, so something like:
+```
+25 tests · 23 passed · 2 skipped · 1.77s wall (4.1x concurrency)
+```
+For failure, you can have two lines: one for the failures and one for the summary. I'd also accept other sensible layouts as you dig through the UX.
 
 **Starvation-aware scheduling.** `exclusive=`/`@velox.solo` admission has no fairness guarantee: a
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
@@ -39,14 +55,20 @@ cancelling in-flight tests, with time-boxed teardown, on Ctrl-C and when `--maxf
 (which today stops new tests from starting and lets running ones finish).
 
 ## Later
+**Performance.** A persistent collection cache, `--lf`/`--ff`,
+
+**Reporting.** JUnit XML, `--report-json`, and GitHub annotations.
+
+**Coverage.** Ensuring we play nicely with coverage and can produce suitable reports.
+
+
+### Needs human review
 
 **Migration.** Codegen that rewrites a pytest suite's fixture wiring to velox, with no hand edits.
 This is the difference between velox being adoptable and being greenfield-only.
 
-**Performance.** A persistent collection cache, `--lf`/`--ff`, and a published, reproducible
+**Benchmark** A published, reproducible
 benchmark against pytest and `pytest-xdist` on a real suite.
-
-### Needs human review
 
 **Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
 of tests without hand-duplicating everything downstream of it.
