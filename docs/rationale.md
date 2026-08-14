@@ -66,24 +66,28 @@ never by unwrapping `__wrapped__`. That keeps collection fast and predictable, a
 known sharp edge: a decorator that replaces a test's signature with `(*args, **kwargs)` hides its
 `Depends()` defaults from collection entirely.
 
-The line is drawn at name-based resolution, not at where a dependency is declared. A module can
-declare fixtures on behalf of every test it defines, with `velox.use(...)`:
+The line is drawn at name-based resolution, not at where a dependency is declared. A container —
+a test module, or a package `__init__.py` covering that directory and below — can declare fixtures
+on behalf of every test inside it, with `velox.use(...)`:
 
 ```python
 velox.use(db_reset)
 ```
 
 The fixture is still an imported object, named at a site you can jump to; the declaration lives on
-the module rather than in each signature, and its value is discarded. FastAPI draws the same line
-with `APIRouter(dependencies=[Depends(...)])`. What a reader gives up is that a test's dependencies
-are readable from its signature *plus its module header* rather than its signature alone; what the
-DI system keeps is everything the static half rests on — no lookup that can fail at run time, no
-shadowing rule, and a `ResolutionPlan` that still describes the whole graph, since a declared
-fixture becomes a step like any other, just one nothing in `root_args` points at.
+the container rather than in each signature, and its value is discarded. FastAPI draws the same
+line with `APIRouter(dependencies=[Depends(...)])`. What a reader gives up is that a test's
+dependencies are readable from its signature plus the headers of the files above it rather than
+from its signature alone; what the DI system keeps is everything the static half rests on — no
+lookup that can fail at run time, no shadowing rule, and a `ResolutionPlan` that still describes
+the whole graph, since a declared fixture becomes a step like any other, just one nothing in
+`root_args` points at.
 
-Declarations accumulate rather than override. There is no proximity rule by which one can replace
-another, which is the machinery that makes a conftest chain hard to read; a test that should not
-have a fixture goes in a module that does not declare it.
+Declarations accumulate rather than override. A package's apply ahead of those of the modules
+under it, and there is no proximity rule by which one can replace another — that rule is the
+machinery that makes a conftest chain hard to read, and without it, finding what reaches a test is
+reading each `__init__.py` on the way down, in order. A test that should not have a fixture goes
+where nothing declares it.
 
 ## Logical order governs all output
 

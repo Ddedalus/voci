@@ -81,14 +81,12 @@ fixture body's own `param` argument; `skip`/`skipif`/`xfail` marks; custom marks
 `caplog` → `velox.log_records`; `pytest.raises` (including `match=` semantics, `re.search`, same
 escaping gotcha); `pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` marks and
 `event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`;
-`@pytest.fixture(autouse=True)` and `@pytest.mark.usefixtures(...)` → `velox.use(...)` in each
-affected test module (see §4.3); `@mock.patch`-decorated tests, left as they are and scheduled
-solo, with their `Depends()` defaults injected around the mock arguments.
+`@pytest.fixture(autouse=True)` and `@pytest.mark.usefixtures(...)` → `velox.use(...)` on the
+package or module the fixture covered (see §4.3); `@mock.patch`-decorated tests, left as they are
+and scheduled solo, with their `Depends()` defaults injected around the mock arguments.
 
 **On the roadmap, and worth designing against rather than around.** `-k` selection and
-`path.py::test_name` ids (CI invocations depend on both); a `velox.use(...)` declaration on a
-package `__init__.py`, which is what turns a conftest `autouse` into one line per *directory*
-rather than one per module (§4.3); `class Test*` as namespacing;
+`path.py::test_name` ids (CI invocations depend on both); `class Test*` as namespacing;
 JUnit XML and `--report-json` (CI consumers depend on these).
 
 **Under review, so plan for its absence.** Lazy or optional dependencies, and overriding one
@@ -160,16 +158,15 @@ There is no parameter name to invent, because a declared fixture binds to nothin
 holds: pytest orders autouse fixtures before others at the same scope, and `velox.use` puts its
 fixtures earliest in the resolution plan, so they construct first and tear down last.
 
-What is left is a visibility mismatch. `autouse` in a `conftest.py` covers a whole directory tree,
-while a module declaration covers one file — so a conftest-level autouse expands to a `velox.use(...)`
-in every test module beneath that conftest. That is a per-module diff rather than a per-test one,
-and it collapses to a single line once declarations on a package `__init__.py` land (see
-[ROADMAP.md](../ROADMAP.md)). The tool should present the expansion as a measurement of how much
-implicit wiring the suite carried, not as a defect.
+Visibility lines up too. `autouse` in a `conftest.py` covers a whole directory tree, and a
+declaration on that directory's `__init__.py` covers the same tree, so a conftest-level autouse is
+one line wherever the conftest was — with the `__init__.py` created if the directory was not
+already a package. An `autouse` fixture defined in a test module, and `usefixtures` marks, stay
+module-level declarations.
 
-The remaining decision is placement: the same fixture object has to be importable from every module
-that declares it, which is the same question §4.5 asks about where translated conftest fixtures
-live.
+The remaining decision is placement: the same fixture object has to be importable from the
+container that declares it, which is the same question §4.5 asks about where translated conftest
+fixtures live.
 
 ### 4.4 Eliminating `request`
 
@@ -338,8 +335,8 @@ Properties to design toward, stated as requirements rather than as a design:
 2. **Preserve the conftest layout, or consolidate into one fixture module?** (§4.5)
 3. **How far does §4.2's chain specialization go before it is better to fail loudly?** Is there a
    duplication budget past which the tool should stop and ask for a DI seam instead?
-4. **Where do the fixtures a `velox.use(...)` line names live**, given every module under a
-   translated `conftest.py` has to import them? (§4.3, §4.5)
+4. **Where do the fixtures a `velox.use(...)` line names live**, given the `__init__.py` that
+   replaces a `conftest.py` has to import them? (§4.3, §4.5)
 5. **Should the tool ever propose a DI seam** — rewriting a patched module global into an injected
    dependency — or only report the opportunity? The idiomatic result needs it; the reviewable diff
    argues against doing it in the same pass.
