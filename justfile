@@ -51,8 +51,26 @@ vendor-check:
 bench-cold-start *args:
     uv run python scripts/bench_cold_start.py "$@"
 
-# Run lint, format-check, typecheck and tests together
-check: lint fmt-check typecheck test
+# Run lint, format-check, typecheck and tests together (quiet on success)
+check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run() {
+        local desc="$1"; shift
+        local out status=0
+        out=$("$@" 2>&1) || status=$?
+        if [ "$status" -eq 0 ]; then
+            echo "✓ $desc"
+        else
+            echo "✗ $desc"
+            printf '%s\n' "$out"
+            exit "$status"
+        fi
+    }
+    run lint       just lint
+    run format     just fmt-check
+    run typecheck  just typecheck
+    run tests      just test
 
 # Refactor tools (summarize, move, rewire, init) — see refactor.justfile
 import 'refactor.justfile'
