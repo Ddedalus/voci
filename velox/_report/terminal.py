@@ -17,6 +17,7 @@ what a run found is never what gets quieter.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,8 +164,9 @@ class Reporter:
         order -- irrelevant here, since this only counts and sums them; logical order
         matters only once `finish` reads the caller's own `results` list.
 
-        The test count spans everything the file collected, skips included, and `SKIP`
-        is the status of a file that collected nothing else."""
+        The count is what this run accounted for in that file -- its tests that ran, plus
+        its tests a skip mark kept from running -- and `SKIP` is the status of a file with
+        nothing in the first group."""
         failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
         skipped = self._skipped_by_path.get(path, 0)
         if failed:
@@ -336,15 +338,22 @@ class Reporter:
         run carries only what that run actually found and the failure line above it doesn't
         appear at all.
         """
-        counted = {outcome: 0 for outcome in Outcome}
-        for result in results:
-            counted[result.outcome] += 1
-        # A guard, not a category: an Outcome member reaching results without a line here to
-        # count it lands in `other` rather than vanishing from a total that then silently
-        # stops adding up.
-        other = len(results) - sum(counted.values())
+        counted = Counter(result.outcome for result in results)
+        reported = (
+            Outcome.FAILED,
+            Outcome.ERROR,
+            Outcome.TIMEOUT,
+            Outcome.PASSED,
+            Outcome.XFAILED,
+            Outcome.XPASSED,
+        )
+        # A guard, not a category: an Outcome member reaching results without a field of its
+        # own below lands in `other` rather than vanishing from a total that then silently
+        # stops adding up. Counted against `reported`, the outcomes this method actually
+        # prints, so adding a member to `Outcome` alone is enough to trip it.
+        other = len(results) - sum(counted[outcome] for outcome in reported)
 
-        wrong = self._fields(
+        wrong = self._counts(
             (counted[Outcome.FAILED], "failed", _color.RED),
             (counted[Outcome.ERROR], "errored", _color.RED),
             (counted[Outcome.TIMEOUT], "timed out", _color.RED),
@@ -361,7 +370,7 @@ class Reporter:
         totals = [
             f"{_color.paint(str(total), _color.PRIMARY, enabled=self._color_enabled)} "
             f"{_plural(total, 'test')}",
-            self._fields(
+            self._counts(
                 (counted[Outcome.PASSED], "passed", _color.GREEN),
                 (len(self.skipped), "skipped", _color.YELLOW),
                 (counted[Outcome.XFAILED], "xfailed", _color.GRAY),
@@ -379,14 +388,9 @@ class Reporter:
         ]
         print(" · ".join(part for part in totals if part), file=self.stream)
 
-    def _fields(self, *fields: tuple[int, str, str]) -> str:
-        """`(count, label, color)` triples joined into `2 failed · 1 errored`, dropping every
-        zero count. Empty when they were all zero."""
-        return " · ".join(
-            _color.paint(f"{count} {label}", color, enabled=self._color_enabled)
-            for count, label, color in fields
-            if count
-        )
+    def _counts(self, *fields: tuple[int, str, str]) -> str:
+        """`color.counts` against this reporter's own color setting."""
+        return _color.counts(*fields, enabled=self._color_enabled)
 
     def _print_skip_reasons(self) -> None:
         """`-v`'s section for the tests a skip mark kept from running, each with its reason:

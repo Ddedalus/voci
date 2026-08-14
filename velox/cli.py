@@ -308,16 +308,6 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     return None
 
 
-def _counts(*fields: tuple[int, str, str], enabled: bool) -> str:
-    """`(count, label, color)` triples joined into `2 skipped · 1 deselected`, dropping every
-    zero count. Empty when they were all zero."""
-    return " · ".join(
-        _color.paint(f"{count} {label}", color, enabled=enabled)
-        for count, label, color in fields
-        if count
-    )
-
-
 def _report_collection(collected: _collect.CollectionResult, *, color_enabled: bool) -> int:
     """`--collect-only`: every selected test's id in the order they would run, then what
     collection found besides them, and the exit code for a run that stopped here.
@@ -342,7 +332,7 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
         print(error.message)
 
     errors = len(collected.errors)
-    counts = _counts(
+    counts = _color.counts(
         (len(collected.skipped), "skipped", _color.YELLOW),
         (len(collected.deselected), "deselected", _color.GRAY),
         (errors, "collection error" if errors == 1 else "collection errors", _color.RED),
@@ -657,9 +647,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 4
 
         # Shared with reporter's own coloring (it resolves the same thing internally
-        # for its own prints) so the SKIPPED/COLLECTION ERROR/summary lines below,
-        # which main prints itself rather than through reporter, match its file
-        # blocks instead of being colored by a different rule.
+        # for its own prints) so the COLLECTION ERROR and --maxfail lines below, which
+        # main prints itself rather than through reporter, match its file blocks
+        # instead of being colored by a different rule.
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
