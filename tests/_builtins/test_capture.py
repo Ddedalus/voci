@@ -672,20 +672,34 @@ def test_basetemp_retention_reclaims_a_root_whose_owner_died(tmp_path: Path) -> 
     assert not abandoned.exists()
 
 
-def test_basetemp_retention_reclaims_a_root_whose_lock_is_older_than_any_plausible_run(
-    tmp_path: Path,
-) -> None:
-    """The pid recorded in a lock answers nothing on a machine that has since rebooted, or
-    for a platform velox can't ask. Age alone reclaims those."""
+def test_basetemp_retention_reclaims_an_old_root_whose_lock_names_nobody(tmp_path: Path) -> None:
+    """A lock that no longer names a pid — truncated by the crash that abandoned it — leaves
+    age as the only thing left to go on."""
     parent = tmp_path / "velox-of-someone"
     abandoned, _release = _capture._allocate_session_root(parent, retention=0)
     lock = abandoned / _capture.SESSION_LOCK_NAME
+    lock.write_text("")
     ancient = time.time() - _capture.LOCK_STALE_AFTER - 1
     os.utime(lock, (ancient, ancient))
 
     _finished_run(parent, retention=0)
 
     assert not abandoned.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pid liveness is probed on POSIX only")
+def test_basetemp_retention_spares_a_live_root_however_old_its_lock_is(tmp_path: Path) -> None:
+    """A lock is written once and never refreshed, so its age is how long its run has been
+    going — never a reason to reclaim a root whose owner is right there."""
+    parent = tmp_path / "velox-of-someone"
+    live, _release = _capture._allocate_session_root(parent, retention=0)
+    lock = live / _capture.SESSION_LOCK_NAME
+    ancient = time.time() - _capture.LOCK_STALE_AFTER - 1
+    os.utime(lock, (ancient, ancient))
+
+    _finished_run(parent, retention=0)
+
+    assert live.exists()
 
 
 def test_allocation_sweeps_up_a_half_deleted_root(tmp_path: Path) -> None:

@@ -454,18 +454,19 @@ def _lock_session_root(root: Path) -> Callable[[], None]:
     return release
 
 
-def _owner_is_running(lock: Path) -> bool:
-    """Whether the process that wrote `lock` is alive. `True` whenever that can't be
-    determined, leaving `LOCK_STALE_AFTER` as the only way such a root is reclaimed."""
+def _owner_is_running(lock: Path) -> bool | None:
+    """Whether the process that wrote `lock` is alive, or `None` when this machine can't
+    answer -- a lock too damaged to read a pid out of, or a platform where asking is
+    itself destructive."""
     # Signal 0 is the standard liveness probe on POSIX only: on Windows `os.kill` maps
     # any signal other than the two console events onto TerminateProcess, so probing
     # there would kill the very run being asked about.
     if sys.platform == "win32":
-        return True
+        return None
     try:
         pid = int(lock.read_text())
     except (OSError, ValueError):
-        return True
+        return None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -476,13 +477,18 @@ def _owner_is_running(lock: Path) -> bool:
 
 
 def _is_in_use(root: Path) -> bool:
-    """Whether a velox run may still be writing into `root`."""
+    """Whether a velox run may still be writing into `root`. Age is the fallback, not a
+    second condition: a lock is written once and never touched again, so its age is the
+    holding run's duration, and a run of any length still holds its root."""
     lock = root / SESSION_LOCK_NAME
     try:
         age = time.time() - lock.stat().st_mtime
     except OSError:
         return False
-    return age < LOCK_STALE_AFTER and _owner_is_running(lock)
+    running = _owner_is_running(lock)
+    if running is not None:
+        return running
+    return age < LOCK_STALE_AFTER
 
 
 def _discard_session_root(root: Path) -> None:
@@ -527,8 +533,10 @@ def _allocate_session_root(parent: Path, *, retention: int) -> tuple[Path, Calla
             next_n += 1
         else:
             break
-    _mark_as_basetemp(root)
+    # Locked before anything else is written into it: an unlocked directory is one a
+    # concurrent sweep of this same parent is free to delete.
     release = _lock_session_root(root)
+    _mark_as_basetemp(root)
 
     keep = {path for _, path in existing[-retention:]} if retention > 0 else set()
     for _, path in existing:
