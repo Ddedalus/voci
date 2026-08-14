@@ -341,7 +341,9 @@ order) while `TestRecord.func` stays the wrapper, since applying the decorator i
 `unittest.mock` fills its mock arguments in ahead of velox's keyword arguments, positionally, so
 `plan_for` is told how many leading parameters are already spoken for; a `Depends(...)` declared in
 one of those slots is a collection error rather than a mock silently arriving where a fixture
-belongs.
+belongs. `mock.patch.multiple` is the exception that fills its parameters by name, which is what
+`@velox.parametrize` already does, so those names join the same set of externally supplied
+arguments.
 
 **`with mock.patch(...)` inside a body fails the test instead of racing it.** There is no patcher
 object to find at collection — it does not exist until the line runs — so the only place left to

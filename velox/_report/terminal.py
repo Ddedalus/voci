@@ -232,8 +232,9 @@ class Reporter:
         if not solo:
             return
         drained = sum(result.duration for result in solo)
+        tests = "test" if len(solo) == 1 else "tests"
         count = _color.paint(
-            f"{len(solo)} tests ran solo", _color.YELLOW, enabled=self._color_enabled
+            f"{len(solo)} {tests} ran solo", _color.YELLOW, enabled=self._color_enabled
         )
         cost = _color.paint(
             f"Σ {drained:.2f}s of {wall_clock:.2f}s wall", _color.GRAY, enabled=self._color_enabled

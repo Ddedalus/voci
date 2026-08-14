@@ -110,6 +110,21 @@ def test_patch_dict_is_found_even_though_it_records_no_patchings() -> None:
     assert patching.positional_args == 0
 
 
+def test_patch_multiple_fills_its_parameters_by_name() -> None:
+    """`mock.patch.multiple` records one patcher holding the rest of its group, and passes every
+    mock in by keyword rather than positionally."""
+
+    @mock.patch.multiple("os.path", exists=mock.DEFAULT, isdir=mock.DEFAULT)
+    def test_patched(exists: Any, isdir: Any) -> None:
+        pass
+
+    patching = _mocking.patching_of(test_patched)
+
+    assert patching.targets == ("exists", "isdir")
+    assert patching.positional_args == 0
+    assert patching.keyword_args == frozenset({"exists", "isdir"})
+
+
 def test_real_function_reads_through_decorators() -> None:
     def test_underneath(value: int = 1) -> None:
         pass
@@ -118,6 +133,18 @@ def test_real_function_reads_through_decorators() -> None:
 
     assert decorated is not test_underneath
     assert _mocking.real_function(decorated) is test_underneath
+    assert _mocking.real_function(test_underneath) is test_underneath
+
+
+def test_real_function_stops_at_the_innermost_actual_function() -> None:
+    """`__wrapped__` is an ordinary attribute anyone can set to anything; whatever velox hands
+    back has to be a function, since the caller reads `__code__` off it."""
+
+    def test_underneath() -> None:
+        pass
+
+    test_underneath.__wrapped__ = mock.MagicMock()  # type: ignore[attr-defined]
+
     assert _mocking.real_function(test_underneath) is test_underneath
 
 
@@ -176,9 +203,25 @@ def test_uninstall_puts_unittest_mock_back(running_test: None) -> None:
 def test_install_is_idempotent(running_test: None) -> None:
     """A second install must not guard the guard -- one uninstall has to restore the original."""
     original = mock._patch.__enter__
-    _mocking.install()
-    _mocking.install()
+    assert _mocking.install() is True
+    assert _mocking.install() is False
 
     _mocking.uninstall()
 
     assert mock._patch.__enter__ is original
+
+
+def test_a_nested_run_does_not_disarm_the_guard_around_it(running_test: None) -> None:
+    """`install` reports who installed it precisely so a nested `run_suite` -- an embedding
+    caller's, say -- leaves the enclosing run's guard alone."""
+    _mocking.install()
+    try:
+        assert _mocking.install() is False  # what the nested run sees
+        assert _mocking.installed()  # and so it never calls uninstall
+        with (
+            pytest.raises(_mocking.GlobalPatchError),
+            mock.patch("os.getcwd", return_value="/x"),
+        ):
+            pass
+    finally:
+        _mocking.uninstall()

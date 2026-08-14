@@ -14,7 +14,6 @@ isn't running alone.
 from __future__ import annotations
 
 import functools
-import inspect
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -44,6 +43,10 @@ class Patching:
     positional_args: int
     """How many leading positional parameters the patchers pass their mock objects to --
     what `_di.fixtures.plan_for` needs so those parameters don't read as missing injections."""
+    keyword_args: frozenset[str] = frozenset()
+    """Parameters the patchers pass their mock objects to by name instead, as
+    `mock.patch.multiple` does. Supplied at call time exactly the way `@velox.parametrize`'s
+    own arguments are, and handed to collection the same way."""
 
 
 NO_PATCHING = Patching(targets=(), positional_args=0)
@@ -65,34 +68,54 @@ def patching_of(func: Callable[..., Any]) -> Patching:
         return NO_PATCHING
 
     targets: list[str] = []
+    keyword_args: set[str] = set()
     positional_args = 0
     for level in _wrapper_chain(func):
-        for patcher in getattr(level, "patchings", None) or ():
-            if not isinstance(patcher, patch_type):
+        for group in getattr(level, "patchings", None) or ():
+            if not isinstance(group, patch_type):
                 continue
-            targets.append(_target_name(patcher))
-            # A patcher passes its mock in as an extra positional argument unless the caller
-            # named a replacement (`new=`) or asked for keywords (`patch.multiple`).
-            if patcher.attribute_name is None and patcher.new is default:
-                positional_args += 1
+            for patcher in _group_members(group):
+                targets.append(_target_name(patcher))
+                if patcher.new is not default:
+                    continue  # `new=` named the replacement; the test is passed nothing
+                # `mock.patch.multiple` names the parameter it fills, every other form
+                # appends its mock to the positional arguments the test is called with.
+                if patcher.attribute_name is None:
+                    positional_args += 1
+                else:
+                    keyword_args.add(patcher.attribute_name)
         # `mock.patch.dict` records no `patchings`: its decorator is a closure over the
         # patcher, so the closure is where it can be found. It passes no mock object in.
         for value in _closure_values(level):
             if isinstance(value, dict_patch_type):
                 targets.append(_target_name(value))
-    return Patching(targets=tuple(targets), positional_args=positional_args)
+    return Patching(
+        targets=tuple(targets),
+        positional_args=positional_args,
+        keyword_args=frozenset(keyword_args),
+    )
+
+
+def _group_members(patcher: Any) -> Iterator[Any]:
+    """`patcher`, then the patchers it leads. `mock.patch.multiple` records one patcher per
+    call, holding the rest of its group; every other form is a group of one."""
+    yield patcher
+    yield from getattr(patcher, "additional_patchers", None) or ()
 
 
 def real_function(func: Callable[..., Any]) -> Callable[..., Any]:
     """The function underneath `func`'s `functools.wraps`-style decorators, or `func` itself.
 
     A decorator's wrapper takes `(*args, **kwargs)`, so this is the object to read a test's
-    injection plan and its definition line off; the wrapper is still what velox calls.
+    injection plan and its definition line off; the wrapper is still what velox calls. Only a
+    real function is ever returned -- a `__wrapped__` pointing at something else (a mock, an
+    instance) leaves the innermost function above it as the answer.
     """
-    try:
-        return inspect.unwrap(func)
-    except ValueError:  # a `__wrapped__` cycle -- take the outermost and move on
-        return func
+    real = func
+    for level in _wrapper_chain(func):
+        if hasattr(level, "__code__"):
+            real = level
+    return real
 
 
 def _wrapper_chain(func: Callable[..., Any]) -> Iterator[Callable[..., Any]]:
@@ -144,18 +167,20 @@ _restore: list[tuple[type, Any]] = []
 _active = False
 
 
-def install() -> None:
-    """Guard `unittest.mock`'s patch installation for the rest of the run. Idempotent.
+def install() -> bool:
+    """Guard `unittest.mock`'s patch installation for the rest of the run, and report whether
+    this call is the one that installed it -- only that caller may `uninstall`, so a nested run
+    can't disarm the guard the run around it is relying on.
 
     A no-op unless the suite has imported `unittest.mock`, and a no-op for a stdlib whose
     internals have moved -- both leave patching undetected rather than failing a run over it.
     """
     global _active
     if _active:
-        return
+        return False
     mock = sys.modules.get("unittest.mock")
     if mock is None:
-        return
+        return False
     _active = True
     for name in ("_patch", "_patch_dict"):
         patch_type = getattr(mock, name, None)
@@ -164,6 +189,7 @@ def install() -> None:
             continue
         patch_type.__enter__ = _guarded(original)
         _restore.append((patch_type, original))
+    return True
 
 
 def uninstall() -> None:

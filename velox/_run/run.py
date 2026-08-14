@@ -476,10 +476,14 @@ def run_suite(
     # (basetemp_root) before touching sys.stdout/sys.stderr/the log handler, so a
     # failure here leaves nothing installed for the finally below to need to undo.
     capture_setup = _capture.install(passthrough=capture_passthrough, basetemp=basetemp)
+    # Set before the try, like `cli.main`'s own hook bookkeeping: if `_mocking.install` itself
+    # raised, the finally must not try to undo something that was never done.
+    guard_installed = False
     try:
         # After collection has imported every test module, so a suite that patches has already
-        # brought `unittest.mock` in and this finds it (`_mocking.install`).
-        _mocking.install()
+        # brought `unittest.mock` in and this finds it (`_mocking.install`). False when an
+        # enclosing run already installed the guard, whose uninstall is then not ours to do.
+        guard_installed = _mocking.install()
         worker_slots = _capture.WorkerSlots(concurrency)
         gate = AdmissionGate(concurrency)
 
@@ -661,7 +665,8 @@ def run_suite(
         # Guaranteed to run whether the try above completed normally, raised a real
         # KeyboardInterrupt/SystemExit, or raised for some other reason entirely --
         # every statement between install() succeeding and here lives inside this try.
-        _mocking.uninstall()
+        if guard_installed:
+            _mocking.uninstall()
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         _capture.uninstall()

@@ -853,6 +853,29 @@ def test_a_patch_decorated_test_records_what_it_patches(tmp_path: Path) -> None:
     assert [record.patches for record in result.records] == [("os._Environ",), ()]
 
 
+def test_a_patch_multiple_test_collects_with_its_named_mock_parameters(tmp_path: Path) -> None:
+    """`mock.patch.multiple` fills its parameters by name, so they are supplied rather than
+    missing -- exactly like `@velox.parametrize`'s, and alongside a real injection."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from unittest import mock\n"
+        "import velox\n\n"
+        "@velox.fixture()\n"
+        "async def db():\n"
+        "    return 1\n\n"
+        "@mock.patch.multiple('os.path', exists=mock.DEFAULT, isdir=mock.DEFAULT)\n"
+        "async def test_patched(exists, isdir, value: int = velox.Depends(db)):\n"
+        "    assert value == 1\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert len(result.records) == 1
+    assert result.records[0].patches == ("exists", "isdir")
+    assert result.records[0].plan.root_args == (("value", 0, False),)
+
+
 def test_a_decorated_test_keeps_its_place_in_definition_order(tmp_path: Path) -> None:
     """Line numbers come from the function underneath the decorators -- a wrapper's own line
     number is wherever the decorator happens to be defined, which is nowhere near the test."""

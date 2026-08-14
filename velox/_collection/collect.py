@@ -315,7 +315,9 @@ def collect(
                 # `known_params` must be computed before `plan_for`, which reads it to keep a
                 # parametrized argument from reading as a missing injection -- and `cases_for`
                 # only needs to run after, to build this same function's expanded call kwargs.
-                known_params = known_params_of(marks.parametrizations)
+                # A `mock.patch.multiple` parameter is supplied by name at call time exactly as
+                # a parametrized one is, so it joins the same set.
+                known_params = known_params_of(marks.parametrizations) | patching.keyword_args
                 plan = plan_for(
                     defined,
                     known_params=known_params,

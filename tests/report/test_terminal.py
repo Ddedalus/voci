@@ -566,7 +566,7 @@ def test_the_cost_of_patching_is_reported_against_the_wall_clock() -> None:
     )
 
     out = stream.getvalue()
-    assert "unittest.mock: 1 tests ran solo" in out
+    assert "unittest.mock: 1 test ran solo" in out
     assert "Σ 1.20s of 3.40s wall" in out
 
 
