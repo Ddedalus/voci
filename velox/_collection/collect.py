@@ -9,7 +9,10 @@ skip check, so a skip-marked test is always `skipped`, never reclassified as des
 on `-m`. A `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`, alongside the
 fixtures the module declared for all of its tests with `velox.use(...)` (`requires.py`), and a
 malformed DI graph (bad scope nesting, a missing injection) becomes a `CollectionError`, the same
-way a bad import does. A `@velox.parametrize`d test expands into one record per case
+way a bad import does. The declarations reaching one test are those of its own module together
+with those of every package above it, outermost first (`requires.package_inits`).
+
+A `@velox.parametrize`d test expands into one record per case
 (`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function — parametrize
 values are call kwargs, not part of the DI graph. A test transitively depending on a fixture built
 with `params=` expands the same way, on the DI graph instead (`_fixtures.expand_cases`); the two
@@ -24,7 +27,8 @@ Import mechanics: importlib only, path-derived module names under `velox_tests.*
 module never touching `sys.path`, an exception during `exec_module` becomes a `CollectionError`
 attributed to that file rather than aborting the run. The assertion-rewriting meta-path hook, when
 installed, is consulted explicitly (`_import_module`) — `spec_from_file_location` alone never
-gives it the chance to run.
+gives it the chance to run. The packages above a test file go through the same import, ahead of
+the file itself.
 
 Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
 ones on the context-propagating executor rather than inline. A `class Test*` carrying a `test_*`
@@ -42,12 +46,13 @@ import traceback
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from velox._assertions import rewrite as _rewrite
 from velox._collection.parametrize import cases_for, known_params_of
-from velox._collection.requires import REQUIRES_ATTR, requires_of
+from velox._collection.requires import REQUIRES_ATTR, combined, package_inits, requires_of
 from velox._collection.tagexpr import TagExpression
-from velox._di.fixtures import ResolutionPlan, expand_cases, plan_for
+from velox._di.fixtures import Fixture, ResolutionPlan, expand_cases, plan_for
 from velox._marks import Marks, marks_of
 from velox._mocking import patching_of, real_function
 
@@ -202,21 +207,25 @@ def collect(
 
     Per file, in the order given:
 
-    1. Compute the module name (`module_name_for`) and import it (`_import_module`, which
+    1. Read what the packages above the file declared with `velox.use(...)`
+       (`_package_declarations`), importing each `__init__.py` at most once per call. An
+       `__init__.py` that fails to import is a `CollectionError` of its own, and every file
+       underneath it is skipped rather than run without the fixtures its package declared.
+    2. Compute the module name (`module_name_for`) and import it (`_import_module`, which
        consults the installed assertion-rewriting hook first). An exception here becomes a
        `CollectionError`; the file contributes zero records and collection continues to the next
        file.
-    2. Within the imported module, find `test_*` functions *defined* in it — i.e.
+    3. Within the imported module, find `test_*` functions *defined* in it — i.e.
        `getattr(obj, "__module__", None) == module.__name__`, so a `test_*` helper imported from
        elsewhere isn't collected twice, nor given the importing module's `velox.use(...)`
        declarations. A `class Test*` defined in the module and carrying its own `test_*` method
        becomes a `CollectionError` naming the class and its methods, one per class.
-    3. Sort the functions by definition line (`_definition_line`, read through any decorators) —
+    4. Sort the functions by definition line (`_definition_line`, read through any decorators) —
        definition order, not `vars()` iteration order.
-    4. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
+    5. Per function: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
        instead. Otherwise `tag_expr`, if given, excludes a test whose `@velox.tag(...)` names
        don't satisfy it into `deselected`. Otherwise a malformed DI graph — its own, or one the
-       module's `velox.use(...)` fixtures introduce — or a name collision between stacked
+       `velox.use(...)` fixtures reaching it introduce — or a name collision between stacked
        `@parametrize`s, excludes it into `errors` instead. Otherwise build one
        `TestRecord` per case in the cartesian product of `@velox.parametrize`'s cases and the
        fixture graph's own parametrized-fixture cases (one of each, for a function using
@@ -224,10 +233,11 @@ def collect(
        axis contributes, with `path` relative to `rootdir` and each record carrying the
        `ResolutionPlan` specialized for its own fixture-case combination.
 
-    A module's `velox.use(...)` declarations are validated once, before its tests: a malformed
-    declared graph is one `CollectionError` for the file, which then contributes no records.
-    Once every file is done, a `velox.use(...)` call left on a module that isn't a collected test
-    file becomes a `CollectionError` of its own (`_misplaced_declarations`).
+    The `velox.use(...)` declarations reaching a file are validated once, before its tests: a
+    malformed declared graph is one `CollectionError` for the file, which then contributes no
+    records. Once every file is done, a `velox.use(...)` call left on a module that is neither a
+    collected test file nor a package velox read declarations from becomes a `CollectionError` of
+    its own (`_misplaced_declarations`).
 
     `files` is assumed already de-duplicated and in deterministic order (`discover_files` gives
     you both); `index` is assigned across the concatenation of all files' records, in that order
@@ -240,11 +250,25 @@ def collect(
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
-    collected_files: set[Path] = set()
+    declaring_files: set[Path] = set()
+    #: `__init__.py` path -> what that package declared, or `None` if it failed to import. One
+    #: entry per package for the whole call, so every test under a package shares the one import
+    #: and therefore the one `Fixture` object: two imports would be two identities, and a
+    #: `scope="session"` declared fixture would then build once per importing subtree.
+    package_declarations: dict[Path, tuple[Fixture[Any], ...] | None] = {}
 
     for path in files:
-        collected_files.add(Path(path).resolve())
+        declaring_files.add(Path(path).resolve())
         display_path = _display_path(path, resolved_rootdir)
+
+        inherited = _package_declarations(
+            path, rootdir=rootdir, cache=package_declarations, errors=errors
+        )
+        if inherited is None:
+            # A package above this file failed to import; the error naming it is already
+            # recorded. Running its tests anyway would silently drop declared setup.
+            continue
+
         module_name = module_name_for(path, rootdir)
         try:
             module = _import_module(path, module_name)
@@ -254,7 +278,7 @@ def collect(
             errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
             continue
 
-        implicit = requires_of(module)
+        implicit = combined(inherited, requires_of(module))
         if implicit:
             try:
                 # Validated once against a stand-in body rather than per test: the declared graph
@@ -366,18 +390,54 @@ def collect(
                 )
                 index += 1
 
-    errors.extend(_misplaced_declarations(collected_files))
+    declaring_files.update(package_declarations)
+    errors.extend(_misplaced_declarations(declaring_files))
     return CollectionResult(records=records, errors=errors, skipped=skipped, deselected=deselected)
 
 
-def _misplaced_declarations(collected_files: set[Path]) -> list[CollectionError]:
-    """`velox.use(...)` declarations on modules that aren't test files velox collected.
+def _package_declarations(
+    path: Path,
+    *,
+    rootdir: Path,
+    cache: dict[Path, tuple[Fixture[Any], ...] | None],
+    errors: list[CollectionError],
+) -> tuple[Fixture[Any], ...] | None:
+    """What every package containing `path` declared with `velox.use(...)`, outermost first.
 
-    A declaration is read back off the test module velox imported it from, so a call in a shared
+    `None` when one of those `__init__.py` files failed to import, in which case a
+    `CollectionError` naming it has been appended to `errors` — once, however many test files sit
+    under it. `cache` holds one entry per `__init__.py` and is what keeps a package imported
+    exactly once across a whole `collect` call.
+    """
+    declared: list[Fixture[Any]] = []
+    for init in package_inits(path, rootdir):
+        if init not in cache:
+            try:
+                cache[init] = requires_of(_import_module(init, module_name_for(init, rootdir)))
+            except Exception:
+                cache[init] = None
+                errors.append(
+                    CollectionError(
+                        path=_display_path(init, Path(rootdir).resolve()),
+                        message=traceback.format_exc(),
+                    )
+                )
+        package = cache[init]
+        if package is None:
+            return None
+        declared.extend(package)
+    return tuple(declared)
+
+
+def _misplaced_declarations(declaring_files: set[Path]) -> list[CollectionError]:
+    """`velox.use(...)` declarations on modules that are neither collected test files nor
+    packages above one.
+
+    A declaration is read back off the modules velox imported for itself, so a call in a shared
     helper module is never seen and the fixtures it names never run. Reported rather than left as
-    a missing side effect. A collected test module reaches `sys.modules` only when something else
-    imported it under its real name too, hence the `collected_files` exemption; velox's own import
-    drops it again (`_import_module`).
+    a missing side effect. A module velox imported reaches this scan only when something else
+    imported it under its real name too, hence the `declaring_files` exemption; velox's own
+    imports drop theirs again.
     """
     misplaced: list[CollectionError] = []
     for name, module in list(sys.modules.items()):
@@ -385,15 +445,16 @@ def _misplaced_declarations(collected_files: set[Path]) -> list[CollectionError]
         if namespace is None or not namespace.get(REQUIRES_ATTR):
             continue
         file = getattr(module, "__file__", None)
-        if file is not None and Path(file).resolve() in collected_files:
+        if file is not None and Path(file).resolve() in declaring_files:
             continue
         misplaced.append(
             CollectionError(
                 path=Path(file) if file else Path(name),
                 message=(
-                    f"{name}: velox.use(...) applies to the tests in the module that calls it, "
-                    f"and this module isn't one velox collects. Move the call into each test "
-                    f"module that needs those fixtures."
+                    f"{name}: velox.use(...) applies to the tests in the container that calls it, "
+                    f"and this module is neither a test module velox collects nor a package "
+                    f"__init__.py above one. Move the call into a container that reaches the "
+                    f"tests needing those fixtures."
                 ),
             )
         )

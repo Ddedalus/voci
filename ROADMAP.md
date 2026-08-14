@@ -11,7 +11,8 @@ with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` o
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
 per-test subprocess tier · `skip`/`skipif`/`xfail` ·
 `@velox.parametrize`, including stacked decorators · parametrized fixtures (`params=` on
-`@velox.fixture`) · `velox.use(...)` module-level fixture declarations ·
+`@velox.fixture`) · `velox.use(...)` fixture declarations on a test module or a package
+`__init__.py` ·
 `unittest.mock` patch detection, solo scheduling and its reported cost ·
 `@velox.tag` selection with `-m` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
@@ -21,11 +22,7 @@ diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.
 
 Fast-tracked: the pytest migration codegen (see
 [docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
-four items, roughly in the order the codegen needs them.
-
-**Container declarations.** `velox.use(...)` on a package `__init__.py`, applying to every test in
-that directory and below — the difference between translating a `conftest.py` `autouse` fixture
-into one line and into a line per test module underneath it.
+three items, roughly in the order the codegen needs them.
 
 **Collection.** `class Test*` as pure namespacing, and a diagnostic for test shapes that currently
 collect as zero tests rather than as an error.

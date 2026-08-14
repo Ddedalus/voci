@@ -1,23 +1,27 @@
 """`velox.use(...)`: fixtures a container declares on behalf of the tests inside it.
 
 A test module that calls `velox.use(db_reset)` gives every test it defines an extra dependency on
-`db_reset`, without any of those tests naming it. The fixture is an imported object, exactly as at
+`db_reset`, without any of those tests naming it. A package `__init__.py` that calls it does the
+same for every test in that directory and below. The fixture is an imported object, exactly as at
 a `Depends(...)` site — the declaration just lives on the container rather than on each signature,
 and the value is discarded.
 
 The call writes a tuple onto the enclosing module, which `collect` reads back with `requires_of`
-and hands to `_fixtures.plan_for` as its `implicit` argument. Declarations accumulate: several
-calls in one module apply in source order.
+and hands to `_fixtures.plan_for` as its `implicit` argument. `package_inits` gives `collect` the
+enclosing packages to read it back from, outermost first. Declarations accumulate: several calls
+in one module apply in source order, and a package's apply ahead of those of the modules under it.
 """
 
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from velox._di.fixtures import Fixture
 
-__all__ = ["REQUIRES_ATTR", "requires_of", "use"]
+__all__ = ["REQUIRES_ATTR", "combined", "package_inits", "requires_of", "use"]
 
 #: Where `use` stores a container's declared fixtures. Part of the tested surface, the same way
 #: `_marks.MARKS_ATTR` is.
@@ -25,12 +29,12 @@ REQUIRES_ATTR = "__velox_requires__"
 
 
 def use(*fixtures: Fixture[Any]) -> None:
-    """Declare fixtures every test in the enclosing module depends on.
+    """Declare fixtures every test in the enclosing container depends on.
 
-    Called as a statement in a module body, alongside the tests it applies to. Each fixture is
-    constructed before the test's own dependencies and torn down after them, and its value is
-    never passed to the test. Raises `TypeError` for an argument that isn't a `Fixture`, or for a
-    call anywhere but a module body.
+    Called as a statement in a module body — a test module, or a package `__init__.py`, which
+    reaches every test in that directory and below. Each fixture is constructed before the test's
+    own dependencies and torn down after them, and its value is never passed to the test. Raises
+    `TypeError` for an argument that isn't a `Fixture`, or for a call anywhere but a module body.
     """
     for fixture in fixtures:
         if not isinstance(fixture, Fixture):
@@ -50,6 +54,37 @@ def requires_of(module: object) -> tuple[Fixture[Any], ...]:
     return namespace.get(REQUIRES_ATTR) or ()
 
 
+def package_inits(path: Path, rootdir: Path) -> tuple[Path, ...]:
+    """The `__init__.py` files of the packages containing `path`, outermost first.
+
+    Walks up from `path`'s own directory and stops at the first directory without an
+    `__init__.py`, so the result is the unbroken package chain a Python import would traverse.
+    `rootdir` is the far end of the walk: a directory above it is never read, however the packages
+    there are laid out. Returns resolved, absolute paths that exist.
+    """
+    directory = Path(path).resolve().parent
+    rootdir = Path(rootdir).resolve()
+    inits: list[Path] = []
+    while (init := directory / "__init__.py").is_file():
+        inits.append(init)
+        if directory == rootdir or directory.parent == directory:
+            break
+        directory = directory.parent
+    inits.reverse()
+    return tuple(inits)
+
+
+def combined(*declarations: Sequence[Fixture[Any]]) -> tuple[Fixture[Any], ...]:
+    """`declarations` concatenated, keeping the earliest occurrence of a fixture object declared
+    more than once. A `scope="call"` fixture is otherwise built once per declaration naming it,
+    since it is the one scope with no single-flight cache to fold the repeats back together."""
+    seen: dict[int, Fixture[Any]] = {}
+    for group in declarations:
+        for fixture in group:
+            seen.setdefault(id(fixture), fixture)
+    return tuple(seen.values())
+
+
 def _declaring_namespace() -> dict[str, Any]:
     """The globals of the module body calling `use`.
 
@@ -61,7 +96,7 @@ def _declaring_namespace() -> dict[str, Any]:
     frame = sys._getframe(2)
     if frame.f_code.co_name != "<module>":
         raise TypeError(
-            "velox.use() applies to every test in a module, so it belongs in a module body, "
-            f"not inside {frame.f_code.co_qualname!r}."
+            "velox.use() applies to every test in the container declaring it, so it belongs in a "
+            f"module body, not inside {frame.f_code.co_qualname!r}."
         )
     return frame.f_globals

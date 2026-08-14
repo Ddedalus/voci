@@ -232,6 +232,168 @@ async def test_one():
     assert "shared_helpers" in result.errors[0].message
 
 
+# Packages: a declaration on an `__init__.py`, reaching that directory and below.
+# ------------------------------------------------------------------------------------------
+
+
+_DECLARING_PACKAGE = """
+import velox
+
+@velox.fixture()
+def from_package():
+    return "from_package"
+
+velox.use(from_package)
+"""
+
+_PLAIN_TEST = "async def test_one():\n    pass\n"
+
+
+def test_a_package_declaration_reaches_a_test_beside_it(tmp_path: Path) -> None:
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    path = _write(tmp_path / "pkg" / "test_sample.py", _PLAIN_TEST)
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == ["from_package"]
+
+
+def test_a_package_declaration_reaches_a_test_further_down(tmp_path: Path) -> None:
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    _write(tmp_path / "pkg" / "deep" / "__init__.py", "")
+    path = _write(tmp_path / "pkg" / "deep" / "test_sample.py", _PLAIN_TEST)
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == ["from_package"]
+
+
+def test_declarations_apply_outermost_first(tmp_path: Path) -> None:
+    """Outer package, then inner package, then the module — the order they are torn down in
+    reverse."""
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    _write(
+        tmp_path / "pkg" / "deep" / "__init__.py",
+        """
+import velox
+
+@velox.fixture()
+def from_subpackage():
+    return "from_subpackage"
+
+velox.use(from_subpackage)
+""",
+    )
+    path = _write(tmp_path / "pkg" / "deep" / "test_sample.py", _DECLARING_MODULE)
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == ["from_package", "from_subpackage", "declared"]
+
+
+def test_the_walk_stops_at_a_directory_without_an_init(tmp_path: Path) -> None:
+    """The package chain is what an import would traverse, so a gap ends it."""
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    path = _write(tmp_path / "pkg" / "loose" / "test_sample.py", _PLAIN_TEST)
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == []
+
+
+def test_the_walk_stops_at_rootdir(tmp_path: Path) -> None:
+    _write(tmp_path / "__init__.py", _DECLARING_PACKAGE)
+    _write(tmp_path / "proj" / "__init__.py", "")
+    path = _write(tmp_path / "proj" / "test_sample.py", _PLAIN_TEST)
+
+    result = collect([path], rootdir=tmp_path / "proj")
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == []
+
+
+def test_every_test_under_a_package_shares_one_fixture_object(tmp_path: Path) -> None:
+    """One import per package per run: two would be two identities, and a session-scoped declared
+    fixture would build once per subtree that imported it."""
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    _write(tmp_path / "pkg" / "one" / "__init__.py", "")
+    _write(tmp_path / "pkg" / "two" / "__init__.py", "")
+    first = _write(tmp_path / "pkg" / "one" / "test_first.py", _PLAIN_TEST)
+    second = _write(tmp_path / "pkg" / "two" / "test_second.py", _PLAIN_TEST)
+
+    result = collect([first, second], rootdir=tmp_path)
+
+    (one, two) = result.records
+    assert one.plan.steps[0].fixture is two.plan.steps[0].fixture
+
+
+def test_a_fixture_declared_by_both_a_package_and_a_module_gets_one_step(tmp_path: Path) -> None:
+    """`scope="call"` has no single-flight cache to fold a repeat back together, so a duplicate
+    declaration would otherwise build it twice."""
+    _write(
+        tmp_path / "declarations.py",
+        """
+import velox
+
+@velox.fixture(scope="call")
+def shared():
+    return 1
+""",
+    )
+    header = f"""
+import sys
+
+sys.path.insert(0, {str(tmp_path)!r})
+
+import velox
+from declarations import shared
+
+velox.use(shared)
+"""
+    _write(tmp_path / "pkg" / "__init__.py", header)
+    path = _write(
+        tmp_path / "pkg" / "test_sample.py", header + "\nasync def test_one():\n    pass\n"
+    )
+
+    try:
+        result = collect([path], rootdir=tmp_path)
+    finally:
+        sys.modules.pop("declarations", None)
+        while str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+    assert result.errors == []
+    assert _step_names(result.records[0]) == ["shared"]
+
+
+def test_a_package_that_fails_to_import_is_one_error_and_no_records(tmp_path: Path) -> None:
+    """Its tests are skipped rather than run without the fixtures it declares — and the failure
+    is reported once, not once per file underneath it."""
+    _write(tmp_path / "pkg" / "__init__.py", "raise RuntimeError('boom')\n")
+    first = _write(tmp_path / "pkg" / "test_first.py", _PLAIN_TEST)
+    second = _write(tmp_path / "pkg" / "test_second.py", _PLAIN_TEST)
+
+    result = collect([first, second], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "boom" in result.errors[0].message
+    assert result.errors[0].path == Path("pkg/__init__.py")
+
+
+def test_a_package_is_not_left_in_sys_modules(tmp_path: Path) -> None:
+    _write(tmp_path / "pkg" / "__init__.py", _DECLARING_PACKAGE)
+    path = _write(tmp_path / "pkg" / "test_sample.py", _PLAIN_TEST)
+
+    collect([path], rootdir=tmp_path)
+
+    assert "velox_tests.pkg.__init__" not in sys.modules
+
+
 def test_a_declared_parametrized_fixture_fans_the_module_out_by_case(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",

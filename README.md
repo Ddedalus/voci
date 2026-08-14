@@ -9,10 +9,10 @@ imports behind it.
 Tests declare what they need as parameter defaults, the way FastAPI routes do. There is no
 `conftest.py` and no name-based lookup: a fixture is a function you import, so "go to definition"
 works, renames are safe, and a typo is an `ImportError` at collection rather than a mystery at run
-time. When a fixture is a side effect no test needs the value of, a module declares it once for
-every test it defines — `velox.use(reset_cache)` — the way a FastAPI router declares dependencies
-for every route on it. Assertions keep the introspection you already know — velox vendors pytest's
-assertion rewriter, so `assert a == b` still prints a real diff.
+time. When a fixture is a side effect no test needs the value of, a module — or a package, for
+everything under it — declares it once: `velox.use(reset_cache)`, the way a FastAPI router
+declares dependencies for every route on it. Assertions keep the introspection you already know —
+velox vendors pytest's assertion rewriter, so `assert a == b` still prints a real diff.
 
 ```python
 # tests/fixtures.py
