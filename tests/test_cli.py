@@ -998,6 +998,25 @@ def test_main_an_id_naming_a_case_of_a_skipped_test_reports_the_skip(
     assert "no test matches" not in captured.err
 
 
+def test_main_k_matches_a_skipped_test_by_the_id_it_has(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `-k` term is matched against the id a skipped test actually carries, cases and all
+    still unbuilt -- so a term naming the test finds it, and one naming a case does not."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('later')\n"
+        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "async def test_role(role):\n    pass\n",
+    )
+
+    assert main([str(project.root), "-k", "role"]) == 0
+    assert "test_role SKIPPED (later)" in capsys.readouterr().out
+    assert main([str(project.root), "-k", "admin"]) == 5
+    assert "SKIPPED" not in capsys.readouterr().out
+
+
 def test_main_an_id_naming_a_case_of_a_test_dash_m_excluded_is_an_empty_run(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

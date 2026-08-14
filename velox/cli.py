@@ -276,18 +276,28 @@ def _invalid_target_argument(targets: list[_targets.Target]) -> str | None:
     return None
 
 
-def _rebased_on_rootdir(target: _targets.Target, rootdir: Path) -> _targets.Target:
-    """`target` with its path read relative to `rootdir` instead, when that is the reading that
-    names something and the literal one names nothing.
+def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
+    """`targets`, with any path that names nothing from the current directory read relative to
+    the rootdir instead, where that names something.
 
-    Test ids are relative to rootdir wherever velox prints them, so this is what lets one be
-    pasted back as an argument from a directory that isn't rootdir. The literal reading is tried
-    first, so an argument that already names something keeps meaning what it says.
+    Test ids are rootdir-relative wherever velox prints them, so this is what lets one be pasted
+    back as an argument from a directory that isn't the rootdir. The literal reading always
+    wins, so an argument that already names something keeps meaning what it says.
+
+    The rootdir this uses is found by the same search `_config.resolve` runs for the whole run,
+    anchored on the arguments that do exist (`cwd` when none do), and raises its `ConfigError`
+    the same way. That is a second search only in the uncommon case: a run whose arguments all
+    name something skips it entirely.
     """
-    if target.path.is_absolute() or target.path.exists():
-        return target
-    rebased = rootdir / target.path
-    return replace(target, path=rebased) if rebased.exists() else target
+    if all(target.path.is_absolute() or target.path.exists() for target in targets):
+        return targets
+    rootdir = _config.resolve([t.path for t in targets if t.path.exists()]).rootdir
+    reread = []
+    for target in targets:
+        on_rootdir = rootdir / target.path
+        keep = target.path.is_absolute() or target.path.exists() or not on_rootdir.exists()
+        reread.append(target if keep else replace(target, path=on_rootdir))
+    return reread
 
 
 def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
@@ -338,9 +348,10 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
     collection found besides them, and the exit code for a run that stopped here.
 
     The ids are printed bare, one per line, so the list pipes into another tool (or back
-    into `velox` as arguments) without stripping anything: an id's path is relative to the
-    rootdir, and an argument that names nothing from the current directory is read relative
-    to the rootdir too. Skips and collection errors are
+    into `velox` as arguments) without stripping anything. An id's path is relative to the
+    rootdir, and so is an argument that names nothing from the current directory, so a run
+    a `[tool.velox]` table gives a fixed rootdir takes its own ids back from any directory
+    under it. Skips and collection errors are
     shown the way a real run shows them: `--collect-only` is how a suite is inspected
     before it runs, and a file that failed to import is exactly what such an inspection is
     looking for.
@@ -464,6 +475,25 @@ def main(argv: list[str] | None = None) -> int:
         return 4
 
     targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
+    # nothing from the current directory gets that reading before anything else looks at
+    # it: pasting an id `--collect-only` printed back as an argument is the point.
+    try:
+        targets = _reread_on_rootdir(targets)
+    except _config.ConfigError as exc:
+        print(f"velox: {exc}", file=sys.stderr)
+        return 4
+
+    # A typo'd path and a genuinely empty suite must not look the same: without this,
+    # a bad path would silently walk to nothing and exit 5 "no tests collected",
+    # indistinguishable from an honest empty selection.
+    problem = _invalid_target_argument(targets)
+    if problem is not None:
+        print(f"velox: {problem}", file=sys.stderr)
+        return 4
+    # None unless some argument actually carried a `::` selector, which is what lets
+    # collection skip id filtering entirely in the common case.
+    id_selection = _targets.IdSelection.of(targets)
 
     # Compiled up front, before collection does any real work, so a malformed -m/-k
     # expression fails fast with a usage error rather than surfacing mid-collection.
@@ -489,21 +519,6 @@ def main(argv: list[str] | None = None) -> int:
     except _config.ConfigError as exc:
         print(f"velox: {exc}", file=sys.stderr)
         return 4
-
-    # Ahead of the existence check below, which is what decides whether the rootdir
-    # reading of an argument is the one that gets used.
-    targets = [_rebased_on_rootdir(target, config.rootdir) for target in targets]
-
-    # A typo'd path and a genuinely empty suite must not look the same: without this,
-    # a bad path would silently walk to nothing and exit 5 "no tests collected",
-    # indistinguishable from an honest empty selection.
-    problem = _invalid_target_argument(targets)
-    if problem is not None:
-        print(f"velox: {problem}", file=sys.stderr)
-        return 4
-    # None unless some argument actually carried a `::` selector, which is what lets
-    # collection skip id filtering entirely in the common case.
-    id_selection = _targets.IdSelection.of(targets)
 
     # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
     # args.timeout are None exactly when the flag wasn't given (see build_parser's

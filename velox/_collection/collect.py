@@ -143,8 +143,12 @@ class CollectionResult:
     errors: list[CollectionError]
     skipped: list[Skipped]
     deselected: list[str] = field(default_factory=list)
-    """Ids of tests excluded by `tag_expr`, `keyword_expr` or `id_selection`, not `skipped`:
-    these passed the skip check (they would otherwise run) but never reached the DI checks."""
+    """Ids of tests excluded by `tag_expr`, `keyword_expr` or `id_selection`.
+
+    A `skip`-marked test lands here when `keyword_expr` or `id_selection` leaves it out of the
+    run: what the run is about is settled before what each test would have done. Everything else
+    here would have run.
+    """
     unexpanded: list[str] = field(default_factory=list)
     """The ids in `skipped` and `deselected` that name a whole test rather than one case of it.
 
@@ -350,7 +354,10 @@ def collect(
                 # follows excludes it before expansion, which is what would have built them.
                 unexpanded.append(test_id)
                 # -k and a `path.py::test_name` argument say which tests this run is about at
-                # all, so a skip they exclude is not its business to report.
+                # all, so a skip they exclude is not its business to report. They differ in
+                # reach here, and only here: `test_role[admin]` names this exact test whatever
+                # its cases turn out to be, while a -k term is matched against the id that
+                # exists -- so -k admin, which would have found the case, doesn't find this.
                 if keyword_expr is not None and not keyword_expr.matches(test_id):
                     deselected.append(test_id)
                     continue
