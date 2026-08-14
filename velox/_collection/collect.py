@@ -38,11 +38,14 @@ ones on the context-propagating executor rather than inline. A `class Test*` is 
 its `test_*` methods are collected as `path.py::TestGroup::test_name`, each called on a fresh
 instance constructed for that one test, so nothing is shared through `self`.
 
+A group collects the `test_*` methods it inherits as well as its own (`_test_methods`), so a
+shared base of tests runs once per group that inherits it.
+
 Shapes that would otherwise contribute nothing, silently, are `CollectionError`s naming what to
 do instead (`_shape_problem`, `_class_problems`): a class velox can't construct or whose
 `setup_method`-style hooks would never run, a `unittest.TestCase`, a `test_*` method on a class
-named like a test suite but not `Test*`, a `test_*` name bound to something that isn't a function,
-and a `test_*` function that yields instead of running.
+named like a test suite but not `Test*` and inherited by no group, a `test_*` name bound to a
+function defined under a different name, and a `test_*` function that yields instead of running.
 """
 
 from __future__ import annotations
@@ -587,11 +590,14 @@ def _module_candidates(module: object, module_name: str) -> tuple[list[_Candidat
     Module-level `test_*` functions and the `test_*` methods of every `class Test*` are gathered
     together and sorted by definition line, so a file mixing both reads in source order. Both are
     keyed on being defined in this module (`__module__`), so an imported helper is neither
-    collected here nor mistaken for a broken test.
+    collected here nor mistaken for a broken test — with one exception, `_test_methods`' walk of
+    a group's base classes, which is how a shared base contributes its tests to each group that
+    inherits them.
     """
     candidates: list[_Candidate] = []
     problems: list[str] = []
     seen: set[int] = set()
+    inherited_by_a_group = _group_bases(vars(module).values(), module_name)
     for name, obj in vars(module).items():
         if id(obj) in seen:
             # The same object bound twice (`test_alias = test_real`) is one test, collected
@@ -602,7 +608,9 @@ def _module_candidates(module: object, module_name: str) -> tuple[list[_Candidat
             candidates.append(_Candidate(name=obj.__name__, func=obj, supplied_positionals=0))
         elif inspect.isclass(obj) and getattr(obj, "__module__", None) == module_name:
             seen.add(id(obj))
-            found, class_problems = _class_candidates(obj, prefix="")
+            found, class_problems = _class_candidates(
+                obj, prefix="", inherited_by_a_group=inherited_by_a_group
+            )
             candidates.extend(found)
             problems.extend(class_problems)
         else:
@@ -627,7 +635,31 @@ def _module_candidates(module: object, module_name: str) -> tuple[list[_Candidat
     return collectible, problems
 
 
-def _class_candidates(cls: type, *, prefix: str) -> tuple[list[_Candidate], list[str]]:
+def _group_bases(objects: Iterable[object], module_name: str) -> frozenset[type]:
+    """Every class a `class Test*` in this module inherits from, however deep.
+
+    A shared base holding `test_*` methods (`class SharedTests:`, inherited by
+    `class TestPostgres(SharedTests)`) is not a group velox lost -- its tests run through each
+    group that inherits them -- so `_misnamed_group_problem` leaves the base alone.
+    """
+    bases: set[type] = set()
+    pending = [obj for obj in objects if inspect.isclass(obj) and obj.__name__.startswith("Test")]
+    while pending:
+        cls = pending.pop()
+        bases.update(cls.__mro__[1:])
+        pending.extend(
+            member
+            for member in vars(cls).values()
+            if inspect.isclass(member)
+            and member.__name__.startswith("Test")
+            and getattr(member, "__module__", None) == module_name
+        )
+    return frozenset(bases)
+
+
+def _class_candidates(
+    cls: type, *, prefix: str, inherited_by_a_group: frozenset[type]
+) -> tuple[list[_Candidate], list[str]]:
     """The tests one class contributes, `prefix` being the `::`-joined groups above it (empty at
     module level), plus a message per shape velox refuses to collect silently.
 
@@ -640,7 +672,7 @@ def _class_candidates(cls: type, *, prefix: str) -> tuple[list[_Candidate], list
     """
     methods = _test_methods(cls)
     if not cls.__name__.startswith("Test"):
-        problem = _misnamed_group_problem(cls, methods)
+        problem = None if cls in inherited_by_a_group else _misnamed_group_problem(cls, methods)
         return [], [problem] if problem is not None else []
 
     group = f"{prefix}{cls.__name__}"
@@ -648,7 +680,9 @@ def _class_candidates(cls: type, *, prefix: str) -> tuple[list[_Candidate], list
     nested_problems: list[str] = []
     for member in vars(cls).values():
         if inspect.isclass(member) and getattr(member, "__module__", None) == cls.__module__:
-            found, found_problems = _class_candidates(member, prefix=f"{group}::")
+            found, found_problems = _class_candidates(
+                member, prefix=f"{group}::", inherited_by_a_group=inherited_by_a_group
+            )
             nested_candidates.extend(found)
             nested_problems.extend(found_problems)
 
@@ -689,18 +723,27 @@ _SUITE_NAME_ENDINGS = ("Test", "Tests", "TestCase", "TestCases", "TestSuite")
 
 
 def _class_problems(cls: type, methods: list[tuple[str, Callable[..., object], int]]) -> list[str]:
-    """What stops `cls`'s `test_*` methods from being collected, or an empty list."""
+    """What stops `cls`'s `test_*` methods from being collected, or an empty list.
+
+    Read across the whole MRO, not just `cls` itself: an `__init__` or a `setup_method` on a base
+    governs the group exactly as much as one written on it directly, and is just as invisible to
+    the tests underneath.
+    """
     problems: list[str] = []
     names = ", ".join(name for name, _, _ in methods) or "its tests"
+    own = _class_namespace(cls)
     if _is_unittest_case(cls):
-        problems.append(_unittest_message(cls))
-    elif "__init__" in vars(cls):
+        # On its own, not alongside the checks below: `TestCase` brings an `__init__` and
+        # `setUp`/`tearDown` with it, and repeating those as separate problems says nothing
+        # the one message about the base doesn't already cover.
+        return [_unittest_message(cls)]
+    if "__init__" in own:
         problems.append(
             f"{cls.__qualname__}: velox constructs a test class with no arguments, once per test, "
             f"and this one defines __init__. Move what it sets up into a fixture {names} depend "
             f"on, or rename the class so velox doesn't collect it."
         )
-    hooks = [hook for hook in _LIFECYCLE_HOOKS if hook in vars(cls)]
+    hooks = [hook for hook in _LIFECYCLE_HOOKS if hook in own]
     if hooks:
         problems.append(
             f"{cls.__qualname__}: {', '.join(hooks)} would never run -- a test class is pure "
@@ -758,18 +801,36 @@ def _is_unittest_case(cls: type) -> bool:
     return case is not None and issubclass(cls, case)
 
 
-def _test_methods(cls: type) -> list[tuple[str, Callable[..., object], int]]:
-    """The `test_*` methods defined directly on `cls`: each one's name, what velox calls, and how
-    many leading positional parameters that call already fills in.
+def _class_namespace(cls: type) -> dict[str, Any]:
+    """`cls`'s own attributes plus everything it inherits (`object`'s excluded), with a derived
+    class's definition winning over the base it overrides.
 
-    `@staticmethod`/`@classmethod` wrap the function in a descriptor, so `vars(cls)` doesn't hand
+    Reversed MRO, not `dir()`: this keeps the raw class-body object for each name -- the
+    `staticmethod`/`classmethod` descriptor rather than what attribute access turns it into --
+    which is what `_test_methods` reads to tell one kind of method from another.
+    """
+    namespace: dict[str, Any] = {}
+    for klass in reversed(cls.__mro__[:-1]):
+        namespace.update(vars(klass))
+    return namespace
+
+
+def _test_methods(cls: type) -> list[tuple[str, Callable[..., object], int]]:
+    """The `test_*` methods `cls` provides, inherited ones included: each one's name, what velox
+    calls, and how many leading positional parameters that call already fills in.
+
+    A shared base of test methods is an ordinary class, so its tests belong to every group that
+    inherits them -- and a group that inherits and overrides one collects the override, since
+    `_class_namespace` resolves the MRO the way an attribute lookup would.
+
+    `@staticmethod`/`@classmethod` wrap the function in a descriptor, so a class body doesn't hand
     back a plain `FunctionType` for those the way it does for an ordinary method -- unwrapped via
     `__func__` first, so a `test_*` method under either decorator is collected rather than
     silently missed. A static method is called exactly as written; every other form goes through
     `_receiving`, which supplies a fresh instance (or, for a class method, the class itself).
     """
     methods: list[tuple[str, Callable[..., object], int]] = []
-    for name, member in vars(cls).items():
+    for name, member in _class_namespace(cls).items():
         if not name.startswith("test_"):
             continue
         if isinstance(member, staticmethod):
@@ -818,26 +879,25 @@ def _receiving(func: Callable[..., Any], receiver: Callable[[], object]) -> Call
 
 
 def _shape_problem(name: str, obj: object, module_name: str) -> str | None:
-    """The message for a module-level `test_*` name velox doesn't collect, or `None`.
+    """The message for a module-level `test_*` name bound to a function velox doesn't collect, or
+    `None`.
 
-    Every shape reported here would otherwise be a silent absence -- a name the file plainly
-    meant as a test, contributing nothing and saying nothing. A `test_*` function imported from
-    another module is not one of them: it belongs to the module that defines it, and not
-    collecting it here is what keeps it from being collected twice.
+    The shape reported is a function body this module wrote as a test but bound under a name that
+    isn't its own -- `test_x = lambda: ...`, `test_x = _impl` -- which contributes nothing and
+    says nothing. Only functions are reported: `test_app = FastAPI()` and `test_client = Mock()`
+    are objects a test uses, and they are callable, so anything wider than this turns ordinary
+    code into a collection error. A `test_*` function imported from another module isn't reported
+    either -- it belongs to the module that defines it, and not collecting it here is what keeps
+    it from being collected twice.
     """
-    if not name.startswith("test_") or inspect.isclass(obj) or not callable(obj):
+    if not name.startswith("test_") or not inspect.isfunction(obj):
         return None
-    if inspect.isfunction(obj) and getattr(obj, "__module__", None) != module_name:
+    if getattr(obj, "__module__", None) != module_name or obj.__name__.startswith("test_"):
         return None
-    described = (
-        f"the function {obj.__name__!r}"
-        if inspect.isfunction(obj)
-        else f"a {type(obj).__name__} object"
-    )
     return (
-        f"{name}: velox collects `def`/`async def` functions whose own name starts with `test_` "
-        f"and that are defined in the module itself; this name is bound to {described}, so it "
-        f"would run as no test at all. Define it with `def {name}(...)`."
+        f"{name}: velox collects `def`/`async def` functions whose own name starts with `test_`, "
+        f"and this name is bound to the function {obj.__name__!r}, so it would run as no test at "
+        f"all. Define it with `def {name}(...)`."
     )
 
 

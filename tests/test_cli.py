@@ -921,6 +921,49 @@ def test_main_rejects_an_id_that_matches_no_test_as_a_usage_error(
     assert "test_typo" in capsys.readouterr().err
 
 
+def test_main_an_id_in_a_file_that_fails_to_import_reports_the_import_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ids that file would have contributed are unknowable, so "no test matches" would be a
+    guess -- and it would bury the traceback that actually explains the run."""
+    project.write("test_broken.py", "raise RuntimeError('boom')\n")
+
+    status = main([f"{project.root / 'test_broken.py'}::test_anything"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "COLLECTION ERROR" in captured.out
+    assert "boom" in captured.out
+    assert "no test matches" not in captured.err
+
+
+def test_main_an_id_deselected_by_k_is_an_empty_run_not_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two selection flags that intersect to nothing is a thing the user asked for; only an id
+    matching no collected test at all is a typo."""
+    _write_selection_suite(project)
+
+    status = main([f"{project.root / 'test_users.py'}::test_create", "-k", "orders"])
+
+    assert status == 5
+    assert "no test matches" not in capsys.readouterr().err
+
+
+def test_main_a_directory_argument_widens_an_id_for_a_file_under_it(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_selection_suite(project)
+
+    status = main(
+        [str(project.root), f"{project.root / 'test_users.py'}::test_create", "--collect-only"]
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "5 tests collected" in out
+
+
 def test_main_rejects_an_empty_id_as_a_usage_error(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

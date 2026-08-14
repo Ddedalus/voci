@@ -44,9 +44,10 @@ def parse_target(raw: str) -> Target:
 class IdSelection:
     """The `path.py::test_name` selectors of one run, keyed by the file they name.
 
-    A file absent from `_by_path` is unconstrained: every test in it is selected. That covers
-    both a plain directory argument and a file named once bare and once with a selector -- the
-    bare form is the wider request, so it wins (`of` drops the narrower entry).
+    A file absent from `_by_path` is unconstrained: every test in it is selected. That covers a
+    file no argument narrows at all, and a file also reached by a bare argument -- naming a file
+    (or a directory holding it) with no selector is the wider request, so it wins and `of` drops
+    the narrower entry.
     """
 
     _by_path: Mapping[Path, tuple[str, ...]]
@@ -60,15 +61,19 @@ class IdSelection:
         whatever mix of relative and absolute forms the command line held.
         """
         selectors: dict[Path, list[str]] = {}
-        unconstrained: set[Path] = set()
+        unconstrained: list[Path] = []
         for target in targets:
             resolved = target.path.resolve()
             if target.selector is None:
-                unconstrained.add(resolved)
+                unconstrained.append(resolved)
             else:
                 selectors.setdefault(resolved, []).append(target.selector)
         constrained = {
-            path: tuple(names) for path, names in selectors.items() if path not in unconstrained
+            path: tuple(names)
+            for path, names in selectors.items()
+            # `parents`, not equality alone: `velox tests/ tests/test_api.py::test_create` asks
+            # for all of tests/, which includes every test of the file the selector names.
+            if not any(path == bare or bare in path.parents for bare in unconstrained)
         }
         return cls(_by_path=constrained) if constrained else None
 

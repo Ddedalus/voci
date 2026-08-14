@@ -634,12 +634,17 @@ def main(argv: list[str] | None = None) -> int:
         # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
         # would otherwise select nothing and exit 5, indistinguishable from a file that
         # genuinely holds no tests.
-        if id_selection is not None:
-            # Skipped ids count as matched: naming a `@velox.skip`-marked test is a normal
-            # thing to do, and reporting it as a typo would be plainly wrong.
+        #
+        # Every id collection produced counts as a match, not just the selected ones: a
+        # `@velox.skip`-marked test is a normal thing to name, and an id that `-k`/`-m`
+        # then deselects is an empty intersection the user asked for, not a typo. Skipped
+        # entirely when a file failed to import, since the ids it would have contributed
+        # are unknowable -- the traceback printed below is the real story there.
+        if id_selection is not None and not collected.errors:
             missing = id_selection.unmatched(
                 [record.id for record in collected.records]
-                + [skipped.id for skipped in collected.skipped],
+                + [skipped.id for skipped in collected.skipped]
+                + collected.deselected,
                 rootdir=rootdir,
             )
             if missing:

@@ -59,12 +59,21 @@ def test_selects_matches_a_selector_against_an_id_tail(
 
 
 def test_a_file_no_selector_names_is_unconstrained(tmp_path: Path) -> None:
-    """`velox tests/ tests/test_users.py::test_create` runs all of tests/ -- only the file the
-    selector names is narrowed."""
+    """A selector narrows the one file it names and nothing else -- every other file discovery
+    turns up runs whole."""
     selected = tmp_path / "test_users.py"
     selection = IdSelection.of([parse_target(f"{selected}::test_create")])
     assert selection is not None
     assert selection.selects(tmp_path / "test_orders.py", "test_anything") is True
+
+
+def test_a_directory_argument_unconstrains_the_files_under_it(tmp_path: Path) -> None:
+    """`velox tests/ tests/test_users.py::test_create` asks for all of tests/, which includes
+    every test of the file the selector names."""
+    directory = tmp_path / "tests"
+    path = directory / "test_users.py"
+    selection = IdSelection.of([parse_target(str(directory)), parse_target(f"{path}::test_create")])
+    assert selection is None
 
 
 def test_the_same_file_given_bare_and_with_a_selector_is_unconstrained(tmp_path: Path) -> None:

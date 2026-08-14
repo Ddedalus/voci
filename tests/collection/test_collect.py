@@ -248,6 +248,107 @@ def test_a_parametrized_class_method_expands_per_case(tmp_path: Path) -> None:
     ]
 
 
+def test_a_group_collects_the_test_methods_it_inherits(tmp_path: Path) -> None:
+    """The shared-base pattern: one set of tests, run once per backend that inherits them."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestPostgres(SharedTests):\n"
+        "    def test_own(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestSqlite(SharedTests):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert sorted(record.id for record in result.records) == [
+        "test_sample.py::TestPostgres::test_own",
+        "test_sample.py::TestPostgres::test_shared",
+        "test_sample.py::TestSqlite::test_shared",
+    ]
+
+
+def test_a_shared_base_of_tests_is_not_reported_as_a_misnamed_group(tmp_path: Path) -> None:
+    """Its tests do run -- through every group that inherits them -- so there is nothing lost
+    to report, even though the base itself is named like a suite."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestPostgres(SharedTests):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+
+
+def test_an_overridden_test_method_is_collected_once_from_the_group(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        raise AssertionError('base body must not run')\n"
+        "\n"
+        "class TestOverriding(SharedTests):\n"
+        "    def test_shared(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    (record,) = result.records
+    record.func()
+
+
+def test_an_inherited_lifecycle_hook_is_a_collection_error(tmp_path: Path) -> None:
+    """A hook on a base governs the group exactly as much as one written on it directly, and is
+    just as invisible to the tests underneath."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class HookBase:\n"
+        "    def setup_method(self):\n"
+        "        self.client = object()\n"
+        "\n"
+        "class TestHooks(HookBase):\n"
+        "    def test_method(self):\n"
+        "        assert self.client\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert any("setup_method" in error.message for error in result.errors)
+
+
+def test_an_inherited_init_is_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Base:\n"
+        "    def __init__(self, dependency):\n"
+        "        self.dependency = dependency\n"
+        "\n"
+        "class TestSomething(Base):\n"
+        "    def test_method(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert any("__init__" in error.message for error in result.errors)
+
+
 def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
@@ -445,10 +546,12 @@ def test_a_test_name_bound_to_a_lambda_is_a_collection_error(tmp_path: Path) -> 
     assert "test_x" in error.message
 
 
-def test_a_test_name_bound_to_a_callable_object_is_a_collection_error(tmp_path: Path) -> None:
+def test_a_test_name_bound_to_a_function_defined_under_another_name_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "class Runner:\n    def __call__(self):\n        pass\n\ntest_thing = Runner()\n",
+        "def _implementation():\n    pass\n\ntest_thing = _implementation\n",
     )
 
     result = collect([path], rootdir=tmp_path)
@@ -458,8 +561,22 @@ def test_a_test_name_bound_to_a_callable_object_is_a_collection_error(tmp_path: 
     assert "test_thing" in error.message
 
 
+def test_a_test_name_bound_to_a_callable_object_is_left_alone(tmp_path: Path) -> None:
+    """`test_app = FastAPI()`, `test_client = Mock()`: callable, ordinary, and not a test body
+    anyone meant velox to run."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Client:\n    def __call__(self):\n        pass\n\ntest_client = Client()\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
 def test_a_test_name_bound_to_data_is_left_alone(tmp_path: Path) -> None:
-    """Only callables are reported: `test_cases = [...]` is data a test reads, not a test."""
+    """`test_cases = [...]` is data a test reads, not a test."""
     path = _write(tmp_path / "test_sample.py", "test_cases = [1, 2, 3]\n")
 
     result = collect([path], rootdir=tmp_path)

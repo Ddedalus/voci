@@ -183,10 +183,17 @@ hides a real missing injection behind a parameter velox believes a mock will fil
 construct, a `setup_method` that would never run, a mark on a class, a `test_*` name bound to a
 lambda, a test that yields — each of these is silent in the worst way: the suite looks green
 because tests are missing from it, or because a test ran without the setup it was written to
-expect. The naming rules for reporting them are deliberately narrow (a class is only reported for
-being misnamed when it reads as a suite — `unittest.TestCase`, or a name ending in
-`Test`/`Tests`/`TestCase`), because the cost of a false report is a collection error on working
-code.
+expect. Every rule for reporting them is deliberately narrow, because the cost of a false report
+is a collection error on working code: a class is reported for being misnamed only when it reads
+as a suite (`unittest.TestCase`, or a name ending in `Test`/`Tests`/`TestCase`) *and* no group
+inherits it, and a `test_*` name is reported only when it is bound to a function — `test_app =
+FastAPI()` and `test_client = Mock()` are callable, ordinary, and nobody's test body.
+
+**A group's shape is read across its whole MRO.** Test methods, `__init__` and lifecycle hooks
+are all resolved the way an attribute lookup would resolve them, not off the class body alone.
+Reading only `vars(cls)` silently drops every test a shared base contributes — the standard
+"one suite, run against three backends" layout — and lets an inherited `setup_method` through the
+guard whose entire job is catching setup that will never run.
 
 **`@velox.parametrize` shares one resolution plan across every expanded case.** `plan_for` runs
 once per test function, not once per case: a parametrized value is a call kwarg, not a DI graph
