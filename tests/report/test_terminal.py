@@ -23,9 +23,9 @@ async def _noop() -> None:
     pass
 
 
-def _test_record(id: str, path: Path, index: int = 0) -> Record:
+def _test_record(id: str, path: Path, index: int = 0, patches: tuple[str, ...] = ()) -> Record:
     """A minimal, real `TestRecord` for feeding `Reporter`'s constructor. `Reporter` only ever
-    reads `.id`/`.path` off each record; the rest of the fields are filler."""
+    reads `.id`/`.path`/`.patches` off each record; the rest of the fields are filler."""
     return Record(
         id=id,
         index=index,
@@ -35,6 +35,7 @@ def _test_record(id: str, path: Path, index: int = 0) -> Record:
         func=_noop,
         params=None,
         plan=_EMPTY_PLAN,
+        patches=patches,
     )
 
 
@@ -539,6 +540,44 @@ def test_is_tty_reflects_the_streams_own_isatty() -> None:
     with no such method at all."""
     assert Reporter(records=[], capture_passthrough=False, stream=io.StringIO()).is_tty is False
     assert Reporter(records=[], capture_passthrough=False, stream=_FakeTTYStream()).is_tty is True
+
+
+# ------------------------------------------------------------------------------------------
+# unittest.mock solo-scheduling cost
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_cost_of_patching_is_reported_against_the_wall_clock() -> None:
+    """A suite drifting into serial should read that off the summary rather than a stopwatch:
+    the line sums the tests patching forced to run alone against the whole run's wall clock."""
+    path = Path("f.py")
+    records = [
+        _test_record(f"{path}::test_patches", path, 0, patches=("getcwd",)),
+        _test_record(f"{path}::test_plain", path, 1),
+    ]
+    reporter, stream = _reporter(records)
+
+    reporter.finish(
+        [
+            _result(f"{path}::test_patches", 0, duration=1.2),
+            _result(f"{path}::test_plain", 1, duration=0.1),
+        ],
+        wall_clock=3.4,
+    )
+
+    out = stream.getvalue()
+    assert "unittest.mock: 1 tests ran solo" in out
+    assert "Σ 1.20s of 3.40s wall" in out
+
+
+def test_a_run_with_no_patching_says_nothing_about_it() -> None:
+    path = Path("f.py")
+    records = [_test_record(f"{path}::test_plain", path)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish([_result(f"{path}::test_plain", 0)], wall_clock=1.0)
+
+    assert "unittest.mock" not in stream.getvalue()
 
 
 # ------------------------------------------------------------------------------------------

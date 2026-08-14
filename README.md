@@ -115,3 +115,8 @@ around shared resources, the migration tool, and most of the CLI surface are sti
 velox is not pytest and does not aim to be compatible with it. There is no plugin ecosystem and no
 hook system — dependency injection is the extension point. Adopting it means rewriting your fixture
 wiring, and it requires Python 3.13+. Linux and macOS are supported; Windows is best-effort.
+
+`unittest.mock` keeps working, at a price: `mock.patch` writes to a module or class, which every
+concurrently running test would see, so velox runs a patch-decorated test alone and reports what
+that cost. A patch opened inside a test body fails that test unless it is marked `@velox.solo`.
+[examples/02-async-library](examples/02-async-library/) walks the alternatives.

@@ -45,12 +45,12 @@ The invariants any rewrite has to land inside, all of them load-bearing in the c
 - **Fixtures are objects, imported by name.** `@velox.fixture()` returns a `Fixture`; `Depends()`
   takes that object and raises `TypeError` on anything else. There is no name lookup and no
   fallback, so the import statement *is* the wiring.
-- **Injection is read from `__code__`/`__defaults__`.** Not `inspect.signature`, not annotations,
-  not `__wrapped__`. Two hard consequences: `Depends()` must sit in default position (a stray one
-  inside `Annotated[...]` is rejected outright), and **any decorator that replaces a test's
-  signature with `(*args, **kwargs)` hides its `Depends()` defaults entirely** — the canonical case
-  being `@mock.patch(...)`, where the parameter silently receives the unresolved sentinel. Rewrites
-  that add decorators must respect this.
+- **Injection is read from `__code__`/`__defaults__`,** on the function underneath any decorators
+  wrapping the test. Not `inspect.signature`, not annotations. Two hard consequences: `Depends()`
+  must sit in default position (a stray one inside `Annotated[...]` is rejected outright), and a
+  decorator that fills parameters itself claims the leading ones — `@mock.patch(...)` passes its
+  mocks first, positionally, so an injected parameter declared ahead of them is a collection error.
+  Rewrites that add decorators must respect this.
 - **Scopes are `call`/`function`/`module`/`session`**, and a fixture may depend only on
   equal-or-wider scopes — checked statically at collection, so a bad nesting is a collection error
   rather than a runtime surprise. `module` scope keys on the test's module path; teardown is by
@@ -82,14 +82,14 @@ fixture body's own `param` argument; `skip`/`skipif`/`xfail` marks; custom marks
 escaping gotcha); `pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` marks and
 `event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`;
 `@pytest.fixture(autouse=True)` and `@pytest.mark.usefixtures(...)` → `velox.use(...)` in each
-affected test module (see §4.3).
+affected test module (see §4.3); `@mock.patch`-decorated tests, left as they are and scheduled
+solo, with their `Depends()` defaults injected around the mock arguments.
 
 **On the roadmap, and worth designing against rather than around.** `-k` selection and
 `path.py::test_name` ids (CI invocations depend on both); a `velox.use(...)` declaration on a
 package `__init__.py`, which is what turns a conftest `autouse` into one line per *directory*
 rather than one per module (§4.3); `class Test*` as namespacing;
-`@mock.patch` detection and automatic solo scheduling; the fix for patch-decorated tests losing
-their DI; JUnit XML and `--report-json` (CI consumers depend on these).
+JUnit XML and `--report-json` (CI consumers depend on these).
 
 **Under review, so plan for its absence.** Lazy or optional dependencies, and overriding one
 fixture for a subtree of tests without hand-duplicating its downstream chain, are held pending a
@@ -224,7 +224,7 @@ The ~80% that is a lookup table — with the traps that make a naive identifier 
 | `pytest.importorskip("mod")` | — | No equivalent. Closest faithful form is a module-level import guard plus `@velox.skipif`. |
 | `pytest.warns`, `recwarn`, `pytest.deprecated_call` | — | No equivalent, and `warnings` filters are process-global — see §6. |
 | `monkeypatch` | — | See §6; every use is a semantic decision. |
-| `unittest.mock.patch` | left as-is | Keeps working. The decorator form hides `Depends()` defaults (§2); the context-manager form is undetectable statically and patches a module global for *every* concurrently running test, not just this one. |
+| `unittest.mock.patch` | left as-is | Keeps working. The decorator form is found at collection and scheduled solo; the context-manager form is invisible until it runs, so velox refuses it at install time and the test fails until it carries `@velox.solo` — the codegen should add that mark at every such site. |
 
 ## 6. Hazards the tool must detect and report, never silently paper over
 

@@ -5,8 +5,8 @@ short test summary.
 prints the moment every one of its tests has finished, in real completion order, so
 output starts appearing before the whole suite is done. `Reporter.finish` runs once,
 after `run_suite` returns, and prints everything that belongs in logical (collection)
-order instead: failure details, the short summary, unattributed output, and the
-wall-vs-concurrency line.
+order instead: failure details, the short summary, unattributed output, the
+`unittest.mock` solo-scheduling cost, and the wall-vs-concurrency line.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import TextIO
 
 from velox._collection.collect import TestRecord
 from velox._report import color as _color
-from velox._run.run import FAILING_OUTCOMES, TestResult
+from velox._run.run import FAILING_OUTCOMES, TestResult, solo_for_patching
 
 __all__ = ["Reporter"]
 
@@ -57,6 +57,9 @@ class Reporter:
     #: moment its count reaches zero. `finish` reads the caller's own `results` list
     #: instead of this buffer.
     _buffered_by_path: dict[Path, list[TestResult]] = field(init=False, default_factory=dict)
+    #: Ids of the tests `unittest.mock` patching forced to run alone, for `finish`'s cost
+    #: line. Seeded from `records` alongside the per-file counts below.
+    _patching_ids: set[str] = field(init=False, default_factory=set)
 
     def __post_init__(self) -> None:
         """Seed per-file bookkeeping from `records`: an id->path lookup, each file's
@@ -66,6 +69,8 @@ class Reporter:
         for record in self.records:
             self._path_by_id[record.id] = record.path
             self._remaining_by_path[record.path] = self._remaining_by_path.get(record.path, 0) + 1
+            if solo_for_patching(record):
+                self._patching_ids.add(record.id)
 
     def on_result(self, result: TestResult) -> None:
         """Wired as `_run.run_suite`'s `on_result`. Buffers `result` under its file;
@@ -135,7 +140,8 @@ class Reporter:
         `on_result` buffered internally. Prints, in order: failure details (one block
         per `FAILING_OUTCOMES` result, traceback plus captured sections), the short
         test summary (one line per `FAILING_OUTCOMES` result), unattributed output if
-        any, and the final wall-vs-concurrency line. `captured_stdout`/`captured_stderr`
+        any, what `unittest.mock` patching cost in drained wall clock, and the final
+        wall-vs-concurrency line. `captured_stdout`/`captured_stderr`
         are shown only when `capture_passthrough` is off, since passthrough already
         echoed them live; `log_records` are always shown, since they're never echoed
         live. `skipped` folds into the final line's leading count alongside `results`
@@ -187,6 +193,8 @@ class Reporter:
             for section in unattributed_output:
                 print(section, file=self.stream)
 
+        self._print_patching_cost(results, wall_clock=wall_clock)
+
         total = sum(result.duration for result in results)
         if wall_clock > 0:
             concurrency = f"{total / wall_clock:.1f}x concurrency"
@@ -210,6 +218,28 @@ class Reporter:
             file=self.stream,
         )
         self.stream.flush()
+
+    def _print_patching_cost(self, results: list[TestResult], *, wall_clock: float) -> None:
+        """What `unittest.mock` patching cost this run, printed only when something patched:
+
+            unittest.mock: 2 tests ran solo · Σ 1.20s of 3.40s wall
+
+        The sum is each solo test's own duration -- the stretch of the run during which the
+        suite was drained to that one test -- against the whole run's wall clock, so a suite
+        drifting into serial reads it here rather than off a stopwatch.
+        """
+        solo = [result for result in results if result.id in self._patching_ids]
+        if not solo:
+            return
+        drained = sum(result.duration for result in solo)
+        count = _color.paint(
+            f"{len(solo)} tests ran solo", _color.YELLOW, enabled=self._color_enabled
+        )
+        cost = _color.paint(
+            f"Σ {drained:.2f}s of {wall_clock:.2f}s wall", _color.GRAY, enabled=self._color_enabled
+        )
+        print(file=self.stream)
+        print(f"unittest.mock: {count} · {cost}", file=self.stream)
 
 
 def _elide_middle(text: str, width: int) -> str:

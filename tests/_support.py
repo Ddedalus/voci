@@ -25,6 +25,7 @@ def make_record(
     plan: ResolutionPlan = EMPTY_PLAN,
     path: Path = Path("mod.py"),
     params: Mapping[str, object] | None = None,
+    patches: tuple[str, ...] = (),
 ) -> Record:
     return Record(
         id=f"{path}::{qualname}",
@@ -35,6 +36,7 @@ def make_record(
         func=func,
         params=params,
         plan=plan,
+        patches=patches,
     )
 
 

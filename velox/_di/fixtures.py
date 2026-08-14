@@ -573,6 +573,7 @@ def plan_for(
     *,
     known_params: frozenset[str] = frozenset(),
     implicit: Sequence[Fixture[Any]] = (),
+    positional_supplied: int = 0,
 ) -> ResolutionPlan:
     """Build `func`'s `ResolutionPlan`: a topological walk over its `Depends(...)` graph.
 
@@ -592,12 +593,19 @@ def plan_for(
     absent from `root_args`, so `func` never sees its value. They are walked before `func`'s own
     `Depends(...)` sites, which is what puts them earliest in `steps` and therefore first to
     construct and last to tear down.
+
+    `positional_supplied` counts leading positional parameters a decorator wrapping `func` fills
+    in itself at call time -- `@mock.patch`'s mock objects, the one case velox recognizes
+    (`_mocking`). Like `known_params`, they are supplied rather than injected, so they never
+    become part of the plan.
     """
     root_injections = plan_of(func)
     # Only the test function's own missing-injection check happens here; every fixture `visit`
     # below reaches already had its own body checked at `Fixture.__init__` time, independent of
     # who depends on it.
-    _check_missing_injections(func, root_injections, known_params=known_params)
+    _check_missing_injections(
+        func, root_injections, known_params=known_params, positional_supplied=positional_supplied
+    )
 
     steps: list[PlanStep] = []
     #: `id(fixture) -> step_id`, non-`"call"` scopes only — the memo that turns a diamond into
@@ -742,10 +750,10 @@ def exclusive_tokens_of(plan: ResolutionPlan) -> frozenset[object]:
     )
 
 
-def _reject_known_params(name: str, offenders: frozenset[str], message: str) -> None:
-    """Raise `DIError` naming `offenders`, sorted, iff there are any. Shared by every
-    `known_params` sanity check in `_check_missing_injections` below -- each just supplies the
-    offending set and its own explanation of what's wrong with it."""
+def _reject_params(name: str, offenders: frozenset[str], message: str) -> None:
+    """Raise `DIError` naming `offenders`, sorted, iff there are any. Shared by every sanity
+    check in `_check_missing_injections` below -- each just supplies the offending set and its
+    own explanation of what's wrong with it."""
     if offenders:
         raise DIError(f"{name}: parameter(s) {', '.join(sorted(offenders))} {message}")
 
@@ -755,16 +763,18 @@ def _check_missing_injections(
     injections: tuple[Injection, ...],
     *,
     known_params: frozenset[str] = frozenset(),
+    positional_supplied: int = 0,
 ) -> None:
     """Raise `DIError` naming any parameter with no default that isn't `self`, isn't injected,
-    and isn't in `known_params`.
+    isn't in `known_params`, and isn't one of the first `positional_supplied` parameters.
 
     Reads `__code__`/`__defaults__`, the same way `plan_of` does, keeping the two code paths
     consistent. Also rejects a `known_params` name that collides with an actual `Depends(...)`
     injection, that falls before the signature's `/` (both bind by keyword at call time --
     `_di.setup`'s and expansion's kwargs alike -- so a positional-only one could never actually
     receive its value), or that matches none of `func`'s parameters at all (unless `func` takes
-    `**kwargs`, which would absorb it same as a real call would).
+    `**kwargs`, which would absorb it same as a real call would); and a `Depends(...)` or
+    `known_params` name landing in a parameter a wrapping decorator already fills positionally.
     """
     code = getattr(func, "__code__", None)
     if code is None:
@@ -772,7 +782,7 @@ def _check_missing_injections(
     injected = {injection.param for injection in injections}
     name = getattr(func, "__name__", repr(func))
 
-    _reject_known_params(
+    _reject_params(
         name,
         known_params & injected,
         "are both Depends(...)-injected and supplied externally (e.g. by @velox.parametrize) "
@@ -781,8 +791,27 @@ def _check_missing_injections(
 
     positional = code.co_varnames[: code.co_argcount]
     kwonly = code.co_varnames[code.co_argcount : code.co_argcount + code.co_kwonlyargcount]
+    # The parameters a decorator wrapping `func` binds positionally before velox's own keyword
+    # arguments reach it -- `@mock.patch`'s mock objects arrive in exactly this many leading
+    # slots, so nothing else can claim them.
+    supplied = frozenset(positional[:positional_supplied])
 
-    _reject_known_params(
+    _reject_params(
+        name,
+        supplied & injected,
+        "are Depends(...)-injected in a slot the decorator wrapping this test fills itself "
+        "(e.g. @mock.patch's mock objects, which arrive first and positionally) -- declare the "
+        "injected parameters after them.",
+    )
+    _reject_params(
+        name,
+        known_params & supplied,
+        "are supplied externally (e.g. by @velox.parametrize) in a slot the decorator wrapping "
+        "this test fills itself (e.g. @mock.patch's mock objects, which arrive first and "
+        "positionally) -- declare them after those.",
+    )
+
+    _reject_params(
         name,
         known_params & set(positional[: code.co_posonlyargcount]),
         "are supplied externally (e.g. by @velox.parametrize) on a positional-only parameter "
@@ -792,7 +821,7 @@ def _check_missing_injections(
     # `code.co_flags`, not `inspect.signature` -- consistent with the rest of this module reading
     # `__code__` directly. `inspect.CO_VARKEYWORDS` is just the flag-bit constant.
     if not (code.co_flags & inspect.CO_VARKEYWORDS):
-        _reject_known_params(
+        _reject_params(
             name,
             known_params - set(positional) - set(kwonly),
             "are supplied externally (e.g. by @velox.parametrize) but match none of this "
@@ -804,7 +833,7 @@ def _check_missing_injections(
     missing = [
         p
         for p in required_positional
-        if p not in injected and p not in known_params and p != "self"
+        if p not in injected and p not in known_params and p not in supplied and p != "self"
     ]
 
     kwdefaults = func.__kwdefaults__ or {}

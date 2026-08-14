@@ -88,26 +88,25 @@ async def test_settings_substituted_by_di() -> None:
 
 
 @mock.patch("relay.client.random.uniform", return_value=1.0)
-@velox.skip(
-    "relay.client.random.uniform is a module-global function; any other concurrently-running "
-    "test that exercises Relay.deliver()'s retry path would see this patch too"
-)
-async def test_jitter_is_deterministic(uniform: mock.MagicMock) -> None:
+async def test_jitter_is_deterministic(
+    uniform: mock.MagicMock,
+    r: Relay = Depends(flaky_relay),
+    t: FakeTransport = Depends(flaky_transport),
+) -> None:
     """The mock parameter comes first, exactly as under pytest — `mock.patch` injects positionally.
 
-    `flaky_relay`/`flaky_transport` are built by hand below rather than injected, since a
-    `Depends(...)` default on a `@mock.patch`-wrapped function is never resolved: velox reads the
-    injection plan off the wrapper's own `(*args, **keywargs)` shape, not the real signature
-    underneath.
+    Injected parameters come after it and are resolved as usual: velox reads this test's
+    dependencies off the function underneath the decorator, and `unittest.mock` fills the leading
+    parameters it owns. `relay.client.random.uniform` is a module global, though, so this test is
+    scheduled to run alone and the suite drains around it — the summary line at the end of the run
+    says how long that took.
 
     The alternative is a `jitter: Callable[[], float]` argument on `Relay`. That makes this tier
-    (a), and free of the conflict above.
+    (a), and free of the scheduling cost.
     """
-    t = FakeTransport(responses=[Response(503), Response(503), Response(200, b"ok")])
-    r = Relay(t, retries=3, base_delay=0.001)
-
     await r.deliver("https://hooks.test/v1", b"x")
 
+    assert len(t.sent) == 3
     assert uniform.call_count == 2
 
 
@@ -115,16 +114,17 @@ async def test_jitter_is_deterministic(uniform: mock.MagicMock) -> None:
 async def test_settings_from_the_real_environment() -> None:
     """`test_settings_substituted_by_di` above is the same assertion for none of the cost.
 
-    This one is safe to run live because nothing else in this suite reads the real `os.environ`.
+    `mock.patch.dict` writes to the real `os.environ`, which is as global as any other patch, so
+    this one runs alone too.
     """
     assert Settings.from_env().retries == 9
 
 
-# `with mock.patch(...)` inside a body has no `patchings` attribute to find statically — there is
-# no patcher object until the line runs — so it is marked `@velox.solo` by hand rather than found
-# automatically. It patches the same target as `test_jitter_is_deterministic` above.
+# `with mock.patch(...)` inside a body has no patcher object to find until the line runs, so
+# `@velox.solo` is written by hand here. Without it the patch is refused as it installs and the
+# test fails, naming the target — a patch nothing scheduled around is never quietly allowed to
+# reach a module every other running test reads.
 @velox.solo
-@velox.skip("patches the same target as test_jitter_is_deterministic above")
 async def test_context_manager_patching_must_be_marked(
     r: Relay = Depends(relay),
     t: FakeTransport = Depends(transport),
@@ -145,7 +145,6 @@ async def test_context_manager_patching_must_be_marked(
 # `chdir` has no per-task equivalent in CPython — one cwd per process — so this test is marked
 # `@velox.isolated` rather than run for real against the process every other test shares.
 @velox.isolated
-@velox.skip("os.chdir has process-wide effect")
 async def test_relative_path_resolution() -> None:
     os.chdir("/tmp")
     assert os.getcwd() == "/tmp"
