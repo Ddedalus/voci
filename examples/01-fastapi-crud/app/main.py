@@ -67,8 +67,8 @@ async def create_user(
         await session.flush()
     except IntegrityError as exc:
         # A failed flush leaves the session refusing every later operation until it is rolled
-        # back, which matters as soon as one session serves more than one request -- as it does
-        # under `tests/fixtures.py::api_client`.
+        # back. Under `tests/fixtures.py::session`, where every request in a test shares one
+        # session, this unwinds to that test's SAVEPOINT: rows its fixtures wrote go too.
         await session.rollback()
         logger.warning("signup rejected: email already registered: %s", payload.email)
         raise HTTPException(status_code=409, detail="email already registered") from exc

@@ -2,7 +2,7 @@
 
 The suite runs on SQLite so that `uv sync && velox` is the whole setup — no server, no container.
 SQLite serialises writers, so it caps how much of the concurrency win reaches the storage layer;
-`url_for` is the one line to change when that matters.
+`url_for` is where a suite that cares about its wall clock would point somewhere else.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from app.models import Base
 def url_for(directory: Path) -> str:
     """A SQLite URL for a database file under `directory`.
 
-    Postgres is a drop-in swap: `"postgresql+asyncpg://velox:velox@localhost/velox_test"`.
+    Postgres is the swap for a real suite — `"postgresql+asyncpg://velox:velox@localhost/velox_test"`,
+    once `asyncpg` is installed — and everything below works against either.
     """
     return f"sqlite+aiosqlite:///{directory / 'app.sqlite'}"
 
@@ -31,11 +32,11 @@ def url_for(directory: Path) -> str:
 async def engine_with_schema(url: str) -> AsyncIterator[AsyncEngine]:
     """An engine for `url` with every table created, disposed on exit."""
     engine = create_async_engine(url)
-    if engine.dialect.name == "sqlite":
-        _drive_sqlite_transactions_explicitly(engine)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     try:
+        if engine.dialect.name == "sqlite":
+            _drive_sqlite_transactions_explicitly(engine)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         yield engine
     finally:
         await engine.dispose()

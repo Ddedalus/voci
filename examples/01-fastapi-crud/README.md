@@ -22,8 +22,9 @@ tests/
 uv sync
 ```
 
-The database is SQLite, so there is no server to start; `tests/database.py::url_for` is the one
-line to change for Postgres. `pyproject.toml` sets `extend-immutable-calls = ["velox.Depends"]`
+The database is SQLite, so there is no server to start; `tests/database.py::url_for` is where a
+suite that has one would point at Postgres. `pyproject.toml` sets
+`extend-immutable-calls = ["velox.Depends"]`
 under `[tool.ruff.lint.flake8-bugbear]`, without which ruff's B008 fires on every `Depends(...)`
 default.
 
@@ -51,7 +52,8 @@ tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is beh
 25 tests · 0 failed · 1.66s wall (7.0x concurrency)
 ```
 
-`Σ 11.58s` is the serial cost of the 25 dispatched tests; `1.66s wall` is what you actually waited.
+Each file's `Σ` is the serial cost of the tests in it — 11.58s of test time between them, and
+`1.66s wall` of actually waiting.
 
 ## What to look at
 
