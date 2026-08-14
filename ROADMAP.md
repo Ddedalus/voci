@@ -20,18 +20,11 @@ diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.
 
 Fast-tracked: the pytest migration codegen (see
 [docs/migration-problem-statement.md](docs/migration-problem-statement.md)) depends on the next
-six items, roughly in the order the codegen needs them.
+five items, roughly in the order the codegen needs them.
 
 **Container declarations.** `velox.use(...)` on a package `__init__.py`, applying to every test in
-that directory and below, and in a `class Test*` body once classes collect. Without the directory
-form, translating one `autouse` fixture out of a `conftest.py` writes a line into every test module
-underneath it rather than one line in one place.
-
-**Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
-of tests without duplicating everything downstream of it by hand. Without these, a conftest-style
-override still forces the migration tool to generate a whole specialized fixture chain per
-override scope — the largest remaining source of hand edits a migrated suite would otherwise
-carry (see `docs/migration-problem-statement.md` §4.2).
+that directory and below — the difference between translating a `conftest.py` `autouse` fixture
+into one line and into a line per test module underneath it.
 
 **Mocking tiers.** Detecting stock `unittest.mock` patching and scheduling those tests solo, with
 the cost reported in the run summary. Related: a `@mock.patch`-decorated test hides its real
@@ -68,6 +61,23 @@ This is the difference between velox being adoptable and being greenfield-only.
 
 **Performance.** A persistent collection cache, `--lf`/`--ff`, and a published, reproducible
 benchmark against pytest and `pytest-xdist` on a real suite.
+
+### Needs human review
+
+**Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree
+of tests without hand-duplicating everything downstream of it.
+
+Held for a design decision rather than for effort. Overriding rewires a graph on behalf of code
+that cannot see the change: a `scope="session"` fixture two hops downstream of a substitution
+constructs once per override set, with nothing local telling its author so. `params=` on a fixture
+multiplies its dependents the same way, so the question to settle first is how much implicit
+specialization velox wants in total — and whether the answer here is a named specialization object
+that keeps the wiring visible at the call site, or nothing at all.
+
+Migration codegen depends on the outcome: with no override mechanism, a translated conftest
+override needs a full specialized fixture chain per override scope, which
+[docs/migration-problem-statement.md](docs/migration-problem-statement.md) §4.2 measures as the
+largest single source of hand edits in a migrated suite.
 
 ## Not planned
 

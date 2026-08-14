@@ -87,11 +87,15 @@ affected test module (see §4.3).
 **On the roadmap, and worth designing against rather than around.** `-k` selection and
 `path.py::test_name` ids (CI invocations depend on both); a `velox.use(...)` declaration on a
 package `__init__.py`, which is what turns a conftest `autouse` into one line per *directory*
-rather than one per module (§4.3); `class Test*` as namespacing; lazy or
-optional dependencies and overriding one fixture for a subtree of tests without hand-duplicating
-its whole downstream chain (see §4.2 — the single largest source of hand edits if it never lands);
+rather than one per module (§4.3); `class Test*` as namespacing;
 `@mock.patch` detection and automatic solo scheduling; the fix for patch-decorated tests losing
 their DI; JUnit XML and `--report-json` (CI consumers depend on these).
+
+**Under review, so plan for its absence.** Lazy or optional dependencies, and overriding one
+fixture for a subtree of tests without hand-duplicating its downstream chain, are held pending a
+decision on how much implicit specialization velox wants at all
+([ROADMAP.md](../ROADMAP.md)). The codegen has to produce a working suite without them, which makes
+the specialized chain of §4.2 its baseline output rather than a fallback.
 
 **Never.** `conftest.py`, name-based lookup, `request`, hooks (`pytest_configure`,
 `pytest_collection_modifyitems`, `pytest_addoption`, …), plugin entry points, `monkeypatch`,
