@@ -20,8 +20,7 @@ concurrency = 16
 timeout = 60
 env = { ENVIRONMENT = "test", SIGNUP_BONUS_CENTS = "0" }
 
-# Unknown keys here are an error, not a warning. A typo'd config key that silently does nothing
-# is a footgun the ecosystem taught users to expect, and velox does not have to.
+# An unknown key in this table is an error, so a typo says so instead of doing nothing.
 
 [tool.ruff]
 line-length = 100
@@ -31,6 +30,6 @@ target-version = "py313"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.flake8-bugbear]
-# `Depends(...)` in a parameter default is the injection syntax, for velox exactly as for FastAPI.
-# Without this, B008 fires on every test in the suite.
+# `Depends(...)` in a parameter default is the injection syntax, for velox as for FastAPI, and
+# B008 fires on every test without this.
 extend-immutable-calls = ["velox.Depends", "fastapi.Depends"]

@@ -38,14 +38,6 @@ suite mysteriously stall; failing a test that returns a value or leaves a corout
 cancelling in-flight tests, with time-boxed teardown, on Ctrl-C and when `--maxfail` is reached
 (which today stops new tests from starting and lets running ones finish).
 
-### 01-fastapi-crud example improvements
-Audience of the example is new user. Narrator of the example is velox creator.
-Remind yourself good quality narrative documentation like FastAPI's - it ought to be friendly and pleasant to read.
-
-1. Apply our docstring best practice to the example. Remove all hectoring and tirrades about what not. An example speaks by the code primarily + simple comments like 'note that we took care of making app.dependency_overrides concurrency-safe for you - it just works' 
-2. The entire SQLAlchemy setup is too complicated - it should be hidden in a helper file/class and just imported with a brief comment.
-3. I understand SQLite is used for simplicity, which causes some issues; again, hide them in helper file and just add a brief comment stating this is a simplification
-
 ## Later
 
 **Migration.** Codegen that rewrites a pytest suite's fixture wiring to velox, with no hand edits.
