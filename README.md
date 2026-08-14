@@ -49,11 +49,10 @@ async def test_create_user(db: AsyncSession = Depends(session)) -> None:
 
 ```console
 $ velox
-PASS  tests/test_users.py                10 tests   Σ 3.84s
-PASS  tests/test_orders.py               12 tests   Σ 7.29s
-22 tests: 22 passed, 0 failed, 0 errored, 0 skipped, 0 collection error(s)
+PASS  tests/test_users.py                        10 tests  Σ 3.84s
+PASS  tests/test_orders.py                       12 tests  Σ 7.29s
 
-22 tests · 0 failed · 1.14s wall (9.8x concurrency)
+22 tests · 22 passed · 1.14s wall (9.8x concurrency)
 ```
 
 The last line is the one to watch: the multiplier is what running concurrently bought you over

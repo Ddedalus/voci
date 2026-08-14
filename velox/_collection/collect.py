@@ -135,6 +135,9 @@ class Skipped:
 
     id: str
     reason: str
+    path: Path
+    """The file this test was collected from, relative to `rootdir` exactly as `TestRecord.path`
+    is, so the reporter can count a skip against the same file block as its siblings that ran."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,7 +338,7 @@ def collect(
                 # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
                 # regardless of -m -- @velox.skip is never silently reclassified as deselected
                 # depending on which tags happen to be in play.
-                skipped.append(Skipped(id=test_id, reason=reason))
+                skipped.append(Skipped(id=test_id, reason=reason, path=display_path))
                 continue
 
             if tag_expr is not None and not tag_expr.matches(marks.tags):

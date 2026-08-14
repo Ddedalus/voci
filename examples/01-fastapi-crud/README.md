@@ -43,17 +43,14 @@ velox -s                  # live, id-prefixed stdout/stderr instead of captured-
 ```
 $ velox
 config: /path/to/examples/01-fastapi-crud/pyproject.toml
-PASS  tests/test_users.py                10 tests   Σ 3.66s
-PASS  tests/test_orders.py               13 tests   Σ 7.92s
-tests/test_users.py::test_list_users_is_paginated SKIPPED (pagination is not implemented yet (GET /users has no route -- 405, not 200))
-tests/test_users.py::test_response_carries_request_id SKIPPED (middleware is behind a feature flag)
-25 tests: 23 passed, 0 failed, 0 errored, 2 skipped, 0 collection error(s)
+PASS  tests/test_orders.py                       13 tests  Σ 5.11s
+PASS  tests/test_users.py                        12 tests  Σ 2.83s   (2 skipped)
 
-25 tests · 0 failed · 1.66s wall (7.0x concurrency)
+25 tests · 23 passed · 2 skipped · 1.37s wall (5.8x concurrency)
 ```
 
-Each file's `Σ` is the serial cost of the tests in it — 11.58s of test time between them, and
-`1.66s wall` of actually waiting.
+Each file's `Σ` is the serial cost of the tests in it — 7.94s of test time between them, and
+`1.37s wall` of actually waiting. Run with `-v` to see why each skipped test was skipped.
 
 ## What to look at
 
