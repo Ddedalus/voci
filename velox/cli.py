@@ -284,14 +284,18 @@ def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
     back as an argument from a directory that isn't the rootdir. The literal reading always
     wins, so an argument that already names something keeps meaning what it says.
 
-    The rootdir this uses is found by the same search `_config.resolve` runs for the whole run,
-    anchored on the arguments that do exist (`cwd` when none do), and raises its `ConfigError`
-    the same way. That is a second search only in the uncommon case: a run whose arguments all
-    name something skips it entirely.
+    The rootdir here is the one a `[tool.velox]` table fixes, found by `_config.resolve`'s own
+    upward search from the current directory and raising its `ConfigError` the same way. A run
+    with no such table has a rootdir derived from the arguments themselves, which would make one
+    argument's meaning depend on the others, so those runs are left alone. Searched at all only
+    when some argument names nothing from here, which is the uncommon case.
     """
     if all(target.path.is_absolute() or target.path.exists() for target in targets):
         return targets
-    rootdir = _config.resolve([t.path for t in targets if t.path.exists()]).rootdir
+    config = _config.resolve([])
+    if config.source is None:
+        return targets
+    rootdir = config.rootdir
     reread = []
     for target in targets:
         on_rootdir = rootdir / target.path

@@ -1186,6 +1186,20 @@ def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
     assert "1 tests: 1 passed" in out
 
 
+def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no config file the rootdir is derived from the arguments, so re-reading one against
+    it would make an argument's meaning depend on what it was typed alongside."""
+    chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
+    chdir_project.write("sub/test_b.py", "async def test_b():\n    pass\n")
+
+    status = main(["sub/test_a.py", "test_b.py"])
+
+    assert status == 4
+    assert "path does not exist: 'test_b.py'" in capsys.readouterr().err
+
+
 def test_main_prefers_the_local_reading_of_a_path_that_exists(
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
