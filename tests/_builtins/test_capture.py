@@ -8,8 +8,11 @@ import asyncio
 import contextvars
 import io
 import logging
+import os
+import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -624,13 +627,117 @@ def test_basetemp_override_refuses_to_clear_a_directory_without_the_marker(tmp_p
     _capture.uninstall()  # still a safe no-op
 
 
+def _finished_run(parent: Path, *, retention: int = 2) -> Path:
+    """One session root allocated and released again, standing in for a run that has
+    ended: what the retention policy is about."""
+    root, release = _capture._allocate_session_root(parent, retention=retention)
+    release()
+    return root
+
+
 def test_basetemp_retention_keeps_only_the_last_few_previous_roots(tmp_path: Path) -> None:
     parent = tmp_path / "velox-of-someone"
-    roots = [_capture._allocate_session_root(parent, retention=2) for _ in range(5)]
+    roots = [_finished_run(parent) for _ in range(5)]
 
     remaining = sorted(p.name for p in parent.iterdir())
     # 5 allocations, retention=2 -> the newest 3 survive (2 previous + the one just made).
     assert remaining == sorted(p.name for p in roots[-3:])
+
+
+def test_basetemp_retention_spares_a_root_a_live_run_still_holds(tmp_path: Path) -> None:
+    """The keep window counts runs, not liveness, so a long run's root falls out of it while
+    the run is still writing there. Its lock is what keeps the sweep off it."""
+    parent = tmp_path / "velox-of-someone"
+    live, _release = _capture._allocate_session_root(parent, retention=0)
+    (live / "in-use.txt").write_text("written by a run that is still going")
+
+    for _ in range(3):
+        _finished_run(parent, retention=0)
+
+    assert (live / "in-use.txt").read_text() == "written by a run that is still going"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pid liveness is probed on POSIX only")
+def test_basetemp_retention_reclaims_a_root_whose_owner_died(tmp_path: Path) -> None:
+    """A run killed before it could release its root leaves the lock behind. The recorded
+    pid is what tells that apart from a run still in progress."""
+    parent = tmp_path / "velox-of-someone"
+    abandoned, _release = _capture._allocate_session_root(parent, retention=0)
+    finished = subprocess.Popen([sys.executable, "-c", ""])
+    finished.wait()
+    (abandoned / _capture.SESSION_LOCK_NAME).write_text(str(finished.pid))
+
+    _finished_run(parent, retention=0)
+
+    assert not abandoned.exists()
+
+
+def test_basetemp_retention_reclaims_an_old_root_whose_lock_names_nobody(tmp_path: Path) -> None:
+    """A lock that no longer names a pid — truncated by the crash that abandoned it — leaves
+    age as the only thing left to go on."""
+    parent = tmp_path / "velox-of-someone"
+    abandoned, _release = _capture._allocate_session_root(parent, retention=0)
+    lock = abandoned / _capture.SESSION_LOCK_NAME
+    lock.write_text("")
+    ancient = time.time() - _capture.LOCK_STALE_AFTER - 1
+    os.utime(lock, (ancient, ancient))
+
+    _finished_run(parent, retention=0)
+
+    assert not abandoned.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pid liveness is probed on POSIX only")
+def test_basetemp_retention_spares_a_live_root_however_old_its_lock_is(tmp_path: Path) -> None:
+    """A lock is written once and never refreshed, so its age is how long its run has been
+    going — never a reason to reclaim a root whose owner is right there."""
+    parent = tmp_path / "velox-of-someone"
+    live, _release = _capture._allocate_session_root(parent, retention=0)
+    lock = live / _capture.SESSION_LOCK_NAME
+    ancient = time.time() - _capture.LOCK_STALE_AFTER - 1
+    os.utime(lock, (ancient, ancient))
+
+    _finished_run(parent, retention=0)
+
+    assert live.exists()
+
+
+def test_allocation_sweeps_up_a_half_deleted_root(tmp_path: Path) -> None:
+    """A root renamed for deletion by a run that was killed mid-sweep is nobody's to read
+    back — the next allocation finishes the job."""
+    parent = tmp_path / "velox-of-someone"
+    parent.mkdir()
+    garbage = parent / "garbage-abc123"
+    garbage.mkdir()
+    (garbage / "leftover.txt").write_text("half-deleted")
+
+    _finished_run(parent)
+
+    assert not garbage.exists()
+
+
+def test_a_root_survives_another_velox_processs_retention_sweep(tmp_path: Path) -> None:
+    """The parent directory is shared by every velox running as this user, all of them
+    sweeping it as they start."""
+    parent = tmp_path / "velox-of-someone"
+    live, _release = _capture._allocate_session_root(parent, retention=0)
+    (live / "in-use.txt").write_text("written by the run in this process")
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from velox._builtins import capture\n"
+            "parent = Path(sys.argv[1])\n"
+            "[capture._allocate_session_root(parent, retention=0)[1]() for _ in range(4)]\n",
+            str(parent),
+        ],
+        check=True,
+    )
+
+    assert (live / "in-use.txt").read_text() == "written by the run in this process"
 
 
 # ------------------------------------------------------------------------------------------
@@ -677,6 +784,24 @@ def test_install_is_idempotent_and_uninstall_restores_the_real_streams(tmp_path:
     assert _capture.installed() is None
     # Idempotent the other way too.
     _capture.uninstall()
+
+
+def test_install_holds_its_session_root_until_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run's artifacts outlive it — for a post-mortem, and for the retention window — so
+    what `uninstall()` ends is the claim, not the directory."""
+    monkeypatch.setattr(_capture, "_basetemp_default_root", lambda: tmp_path / "velox-of-someone")
+    try:
+        setup = _capture.install()
+        lock = setup.basetemp_root / _capture.SESSION_LOCK_NAME
+        assert lock.is_file()
+        assert int(lock.read_text()) == os.getpid()
+    finally:
+        _capture.uninstall()
+
+    assert not lock.exists()
+    assert setup.basetemp_root.is_dir()
 
 
 def test_install_raises_rather_than_silently_ignoring_a_mismatched_second_call(

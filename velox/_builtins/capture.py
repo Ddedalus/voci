@@ -10,16 +10,21 @@ tests can never observe or clobber each other's sink.
 
 from __future__ import annotations
 
+import atexit
 import concurrent.futures
+import contextlib
 import contextvars
 import getpass
 import hashlib
 import logging
+import os
 import re
 import shutil
 import sys
 import tempfile
 import threading
+import time
+import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextvars import ContextVar
@@ -408,18 +413,104 @@ def _basetemp_default_root() -> Path:
 #: security boundary (trivially spoofable), just a guard against the ordinary mistake.
 BASETEMP_MARKER_NAME = ".velox-basetemp"
 
+#: Written into a session root while a run holds it, and removed when that run ends.
+#: The retention sweep below reads it to tell a finished run's leftovers from a root
+#: another velox process is still writing into, since every velox on a machine shares
+#: one parent directory and sweeps it on startup.
+SESSION_LOCK_NAME = ".velox-lock"
+
+#: How long a lock protects its root when nothing can be learned about the process that
+#: wrote it -- long enough to cover any plausible run. The pid check below settles the
+#: ordinary case, on any platform that can answer it, without waiting this out.
+LOCK_STALE_AFTER = 3 * 24 * 60 * 60
+
+#: Prefix of the transient name a root is renamed to before deletion, out of the
+#: `velox-<n>` namespace the sweep scans.
+_GARBAGE_PREFIX = "garbage-"
+
 
 def _mark_as_basetemp(root: Path) -> None:
     (root / BASETEMP_MARKER_NAME).write_text("")
 
 
-def _allocate_session_root(parent: Path, *, retention: int) -> Path:
-    """One fresh, numbered `velox-<n>` directory under `parent`, applying the
-    retention policy: only the most recent `retention` previous roots are kept.
+def _lock_session_root(root: Path) -> Callable[[], None]:
+    """Claim `root` for this process, and return the idempotent callable that drops the
+    claim. Also registered with `atexit`, so a run that never reaches `uninstall()`
+    still frees its root for a later sweep."""
+    lock = root / SESSION_LOCK_NAME
+    owner_pid = os.getpid()
+    lock.write_text(str(owner_pid))
 
-    Two velox processes racing to allocate a session root under the same parent at the
-    same instant could pick the same `n` -- a known, narrow TOCTOU window; the failure
-    mode is a `FileExistsError` on the second `root.mkdir()`, not silent data loss.
+    def release() -> None:
+        # A process forked while the lock is held inherits the atexit registration along
+        # with everything else, and would otherwise free a root its parent still holds.
+        if os.getpid() != owner_pid:
+            return
+        atexit.unregister(release)
+        with contextlib.suppress(OSError):
+            lock.unlink()
+
+    atexit.register(release)
+    return release
+
+
+def _owner_is_running(lock: Path) -> bool | None:
+    """Whether the process that wrote `lock` is alive, or `None` when this machine can't
+    answer -- a lock too damaged to read a pid out of, or a platform where asking is
+    itself destructive."""
+    # Signal 0 is the standard liveness probe on POSIX only: on Windows `os.kill` maps
+    # any signal other than the two console events onto TerminateProcess, so probing
+    # there would kill the very run being asked about.
+    if sys.platform == "win32":
+        return None
+    try:
+        pid = int(lock.read_text())
+    except (OSError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # Alive, but owned by another user -- not ours to reclaim.
+    return True
+
+
+def _is_in_use(root: Path) -> bool:
+    """Whether a velox run may still be writing into `root`. Age is the fallback, not a
+    second condition: a lock is written once and never touched again, so its age is the
+    holding run's duration, and a run of any length still holds its root."""
+    lock = root / SESSION_LOCK_NAME
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except OSError:
+        return False
+    running = _owner_is_running(lock)
+    if running is not None:
+        return running
+    return age < LOCK_STALE_AFTER
+
+
+def _discard_session_root(root: Path) -> None:
+    """Delete `root`, renaming it out of the `velox-<n>` namespace first so that a
+    concurrent sweep of the same parent sees either a whole root or nothing, never a
+    half-deleted tree."""
+    garbage = root.parent / f"{_GARBAGE_PREFIX}{uuid.uuid4().hex}"
+    try:
+        root.rename(garbage)
+    except OSError:
+        return  # Another sweeper claimed it first.
+    shutil.rmtree(garbage, ignore_errors=True)
+
+
+def _allocate_session_root(parent: Path, *, retention: int) -> tuple[Path, Callable[[], None]]:
+    """One fresh, numbered `velox-<n>` directory under `parent`, with the callable that
+    releases this process's claim on it, and the retention policy applied: the most
+    recent `retention` previous roots are kept, and so is any root another velox run
+    still holds.
+
+    Safe to call from several processes at once, which is the ordinary case -- `parent`
+    is one shared directory per user per machine.
     """
     parent.mkdir(parents=True, exist_ok=True)
     existing: list[tuple[int, Path]] = []
@@ -427,23 +518,40 @@ def _allocate_session_root(parent: Path, *, retention: int) -> Path:
         match = _SESSION_DIR_RE.match(child.name)
         if match is not None and child.is_dir():
             existing.append((int(match.group(1)), child))
+        elif child.name.startswith(_GARBAGE_PREFIX):
+            # A root whose owner was killed between the rename and the delete below.
+            shutil.rmtree(child, ignore_errors=True)
     existing.sort(key=lambda pair: pair[0])
 
     next_n = existing[-1][0] + 1 if existing else 0
-    root = parent / f"velox-{next_n}"
-    root.mkdir()
+    while True:
+        root = parent / f"velox-{next_n}"
+        try:
+            root.mkdir()
+        except FileExistsError:
+            # Another velox took this number in the moment since `parent.iterdir()`.
+            next_n += 1
+        else:
+            break
+    # Locked before anything else is written into it: an unlocked directory is one a
+    # concurrent sweep of this same parent is free to delete.
+    release = _lock_session_root(root)
     _mark_as_basetemp(root)
 
     keep = {path for _, path in existing[-retention:]} if retention > 0 else set()
     for _, path in existing:
-        if path not in keep:
-            shutil.rmtree(path, ignore_errors=True)
-    return root
+        if path not in keep and not _is_in_use(path):
+            _discard_session_root(path)
+    return root, release
 
 
-def _resolve_basetemp_root(explicit: Path | None, *, retention: int) -> Path:
+def _resolve_basetemp_root(
+    explicit: Path | None, *, retention: int
+) -> tuple[Path, Callable[[], None]]:
     """`--basetemp DIR` (cleared and recreated) if given, else a fresh numbered root
-    under the platform temp dir with the retention policy applied.
+    under the platform temp dir with the retention policy applied, paired with the
+    callable that releases it. A directory named by `--basetemp` belongs to whoever
+    named it and is swept by nobody, so its release is a no-op.
 
     `explicit` is assumed to have already passed `cli.py`'s own path-shaped validation.
     This function's own `BASETEMP_MARKER_NAME` check is a second, independent layer
@@ -462,7 +570,7 @@ def _resolve_basetemp_root(explicit: Path | None, *, retention: int) -> Path:
             shutil.rmtree(root)
         root.mkdir(parents=True)
         _mark_as_basetemp(root)
-        return root
+        return root, lambda: None
     return _allocate_session_root(_basetemp_default_root(), retention=retention)
 
 
@@ -512,6 +620,7 @@ class CaptureSetup:
     log_handler: _RoutingHandler
     real_stdout: TextIO
     real_stderr: TextIO
+    release_basetemp: Callable[[], None]
 
 
 #: What the currently-installed Router/handler decided, so a later idempotent
@@ -555,7 +664,7 @@ def install(
         return _installed
 
     # The one fallible step, resolved before any global state is touched.
-    basetemp_root = _resolve_basetemp_root(basetemp, retention=retention)
+    basetemp_root, release_basetemp = _resolve_basetemp_root(basetemp, retention=retention)
 
     session_sink = Sink(label="<unattributed>")
     real_stdout, real_stderr = cast(TextIO, sys.stdout), cast(TextIO, sys.stderr)
@@ -576,6 +685,7 @@ def install(
         log_handler=log_handler,
         real_stdout=real_stdout,
         real_stderr=real_stderr,
+        release_basetemp=release_basetemp,
     )
     _installed = setup
     return setup
@@ -590,6 +700,9 @@ def uninstall() -> None:
     sys.stdout = cast(Any, _installed.real_stdout)
     sys.stderr = cast(Any, _installed.real_stderr)
     logging.getLogger().removeHandler(_installed.log_handler)
+    # The run's artifacts stay on disk for a post-mortem; what ends here is the claim
+    # that keeps a later run's retention sweep off them.
+    _installed.release_basetemp()
     _installed = None
 
 
