@@ -89,8 +89,13 @@ CLI flags win over config, which wins over the defaults:
 ```bash
 velox                              # run everything
 velox tests/test_users.py          # run one file
-velox --concurrency 1              # exactly serial — the first debugging step
-velox --timeout 5                  # per-test setup+call budget
+velox tests/test_users.py::test_create[admin]   # run one test, or one of its cases
+velox -k "users and not slow"      # select by substring of the test id
+velox -m "smoke"                   # select by @velox.tag
+velox --serial                     # exactly serial — the first debugging step
+velox -x                           # stop starting new tests after the first failure
+velox --durations 10               # the slowest tests, to tune --concurrency by
+velox --collect-only               # print the ids that would run, and stop
 velox -s                           # live, id-prefixed output instead of captured
 ```
 
@@ -106,9 +111,9 @@ velox -s                           # live, id-prefixed output instead of capture
 
 Pre-release, ahead of v0.1. The core is real and exercised by velox's own suite and the three
 examples: discovery, dependency injection with four scopes and inverted teardown, concurrent
-execution with per-test timeouts, capture, assertion introspection, and the reporter. Scheduling
-around shared resources, the migration tool, and most of the CLI surface are still ahead — see
-[ROADMAP.md](ROADMAP.md). The public API is not frozen yet.
+execution with per-test timeouts, capture, assertion introspection, selection, and the reporter.
+Fair scheduling around shared resources, the migration tool, and machine-readable reports are
+still ahead — see [ROADMAP.md](ROADMAP.md). The public API is not frozen yet.
 
 ## Trade-offs
 

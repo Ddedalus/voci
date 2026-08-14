@@ -13,7 +13,8 @@ from _support import Project
 import pytest
 from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
-from velox._collection.tagexpr import compile_tag_expression
+from velox._collection.selection import compile_tag_expression
+from velox._mocking import real_function
 
 
 def _write(path: Path, source: str) -> Path:
@@ -85,30 +86,418 @@ def test_sync_def_test_star_is_collected_on_its_own(tmp_path: Path) -> None:
     assert [record.qualname for record in result.records] == ["test_sync"]
 
 
-def test_a_class_test_method_becomes_a_collection_error(tmp_path: Path) -> None:
-    """`class Test*` grouping isn't implemented (see `ROADMAP.md`); rather than collecting
-    nothing, `collect` reports the shape as a `CollectionError` naming the class and its
-    methods."""
+def test_a_class_groups_its_test_methods_under_a_double_colon_id(tmp_path: Path) -> None:
+    """`class Test*` is namespacing: its methods are collected, and the class name is a
+    `::`-separated segment of the id, the way it reads in a pytest node id."""
     path = _write(
         tmp_path / "test_sample.py",
-        "class TestSomething:\n    def test_method(self):\n        pass\n",
+        "class TestSomething:\n"
+        "    def test_sync(self):\n"
+        "        pass\n"
+        "\n"
+        "    async def test_async(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::TestSomething::test_sync",
+        "test_sample.py::TestSomething::test_async",
+    ]
+    assert [record.lineno for record in result.records] == [2, 5]
+
+
+def test_a_class_test_runs_on_a_fresh_instance_per_test(tmp_path: Path) -> None:
+    """Namespacing only: two tests of one class never see each other's `self`, which is what
+    keeps them as independent as module-level tests under concurrent dispatch."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "seen = []\n"
+        "\n"
+        "class TestSomething:\n"
+        "    def test_one(self):\n"
+        "        self.value = 1\n"
+        "        seen.append(id(self))\n"
+        "\n"
+        "    def test_two(self):\n"
+        "        assert not hasattr(self, 'value')\n"
+        "        seen.append(id(self))\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    for record in result.records:
+        record.func()
+    # Through `real_function`: `record.func` is velox's own per-call wrapper, so the test
+    # module's globals are on the method underneath it.
+    seen = real_function(result.records[0].func).__globals__["seen"]
+    assert len(set(seen)) == 2
+
+
+def test_a_class_test_method_is_injected_like_any_other_test(tmp_path: Path) -> None:
+    """`self` is supplied by velox, so it must not read as a parameter with no injection."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n"
+        "from velox import Depends\n"
+        "\n"
+        "@velox.fixture()\n"
+        "async def number() -> int:\n"
+        "    return 7\n"
+        "\n"
+        "class TestSomething:\n"
+        "    async def test_method(self, n: int = Depends(number)):\n"
+        "        assert n == 7\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    (record,) = result.records
+    assert record.plan.root_args
+
+
+def test_static_and_class_methods_are_collected_too(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n"
+        "    @staticmethod\n"
+        "    def test_static():\n"
+        "        pass\n"
+        "\n"
+        "    @classmethod\n"
+        "    def test_classmethod(cls):\n"
+        "        assert cls.__name__ == 'TestSomething'\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::TestSomething::test_static",
+        "test_sample.py::TestSomething::test_classmethod",
+    ]
+    for record in result.records:
+        record.func()
+
+
+def test_a_nested_class_extends_the_group_path(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestOuter:\n"
+        "    def test_outer(self):\n"
+        "        pass\n"
+        "\n"
+        "    class TestInner:\n"
+        "        def test_inner(self):\n"
+        "            pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::TestOuter::test_outer",
+        "test_sample.py::TestOuter::TestInner::test_inner",
+    ]
+
+
+def test_class_methods_and_module_functions_are_ordered_by_source_line(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "def test_first():\n"
+        "    pass\n"
+        "\n"
+        "class TestGroup:\n"
+        "    def test_second(self):\n"
+        "        pass\n"
+        "\n"
+        "def test_third():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert [record.id.split("::")[-1] for record in result.records] == [
+        "test_first",
+        "test_second",
+        "test_third",
+    ]
+
+
+def test_a_parametrized_class_method_expands_per_case(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n"
+        "\n"
+        "class TestSomething:\n"
+        "    @velox.parametrize('n', [1, 2])\n"
+        "    def test_method(self, n):\n"
+        "        assert n\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert [record.id for record in result.records] == [
+        "test_sample.py::TestSomething::test_method[1]",
+        "test_sample.py::TestSomething::test_method[2]",
+    ]
+
+
+def test_a_group_collects_the_test_methods_it_inherits(tmp_path: Path) -> None:
+    """The shared-base pattern: one set of tests, run once per backend that inherits them."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestPostgres(SharedTests):\n"
+        "    def test_own(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestSqlite(SharedTests):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert sorted(record.id for record in result.records) == [
+        "test_sample.py::TestPostgres::test_own",
+        "test_sample.py::TestPostgres::test_shared",
+        "test_sample.py::TestSqlite::test_shared",
+    ]
+
+
+def test_a_shared_base_of_tests_is_not_reported_as_a_misnamed_group(tmp_path: Path) -> None:
+    """Its tests do run -- through every group that inherits them -- so there is nothing lost
+    to report, even though the base itself is named like a suite."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        pass\n"
+        "\n"
+        "class TestPostgres(SharedTests):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+
+
+def test_an_overridden_test_method_is_collected_once_from_the_group(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class SharedTests:\n"
+        "    def test_shared(self):\n"
+        "        raise AssertionError('base body must not run')\n"
+        "\n"
+        "class TestOverriding(SharedTests):\n"
+        "    def test_shared(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    (record,) = result.records
+    record.func()
+
+
+def test_an_inherited_lifecycle_hook_is_a_collection_error(tmp_path: Path) -> None:
+    """A hook on a base governs the group exactly as much as one written on it directly, and is
+    just as invisible to the tests underneath."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class HookBase:\n"
+        "    def setup_method(self):\n"
+        "        self.client = object()\n"
+        "\n"
+        "class TestHooks(HookBase):\n"
+        "    def test_method(self):\n"
+        "        assert self.client\n",
     )
 
     result = collect([path], rootdir=tmp_path)
 
     assert result.records == []
-    assert len(result.errors) == 1
-    assert result.errors[0].path == Path("test_sample.py")
-    assert "TestSomething" in result.errors[0].message
-    assert "test_method" in result.errors[0].message
+    assert any("setup_method" in error.message for error in result.errors)
 
 
-def test_a_class_test_error_does_not_stop_module_level_tests_in_the_same_file(
+def test_an_inherited_init_is_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Base:\n"
+        "    def __init__(self, dependency):\n"
+        "        self.dependency = dependency\n"
+        "\n"
+        "class TestSomething(Base):\n"
+        "    def test_method(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert any("__init__" in error.message for error in result.errors)
+
+
+def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestHelper:\n    def helper(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
+    tmp_path: Path,
+) -> None:
+    """A helper class that happens to define a `test_*`-named method (a fake client with a
+    `test_connection`, say) is ordinary code, not a suite velox lost."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Helper:\n    def test_method(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_class_with_an_init_is_a_collection_error(tmp_path: Path) -> None:
+    """velox constructs the class itself, so an `__init__` it can't satisfy must be reported
+    rather than left to fail once per test at run time."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n"
+        "    def __init__(self, client):\n"
+        "        self.client = client\n"
+        "\n"
+        "    def test_method(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert error.path == Path("test_sample.py")
+    assert "__init__" in error.message
+    assert "test_method" in error.message
+
+
+def test_lifecycle_hooks_on_a_class_are_a_collection_error(tmp_path: Path) -> None:
+    """The dangerous shape: collecting these tests while silently never running their setup
+    would report passes for tests that never got what they were written to expect."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class TestSomething:\n"
+        "    def setup_method(self):\n"
+        "        self.client = object()\n"
+        "\n"
+        "    def test_method(self):\n"
+        "        assert self.client\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "setup_method" in error.message
+
+
+def test_a_unittest_test_case_is_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import unittest\n"
+        "\n"
+        "class TestSomething(unittest.TestCase):\n"
+        "    def test_method(self):\n"
+        "        self.assertTrue(True)\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "unittest" in error.message
+
+
+def test_a_unittest_test_case_not_named_test_first_is_a_collection_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import unittest\n"
+        "\n"
+        "class SomethingTest(unittest.TestCase):\n"
+        "    def test_method(self):\n"
+        "        self.assertTrue(True)\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "unittest" in error.message
+
+
+def test_a_mark_on_a_class_is_a_collection_error(tmp_path: Path) -> None:
+    """A `@velox.skip` on the class would otherwise be read by nobody: its tests would run
+    exactly as though the mark weren't there."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n"
+        "\n"
+        "@velox.skip('not yet')\n"
+        "class TestSomething:\n"
+        "    def test_method(self):\n"
+        "        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "mark" in error.message
+
+
+def test_a_class_named_like_a_suite_but_not_test_first_is_a_collection_error(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class UserTests:\n    def test_method(self):\n        pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "UserTests" in error.message
+    assert "test_method" in error.message
+
+
+def test_a_class_problem_does_not_stop_module_level_tests_in_the_same_file(
     tmp_path: Path,
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
         "class TestSomething:\n"
+        "    def setup_method(self):\n"
+        "        pass\n"
+        "\n"
         "    def test_method(self):\n"
         "        pass\n"
         "\n"
@@ -126,10 +515,16 @@ def test_multiple_offending_classes_each_get_their_own_error(tmp_path: Path) -> 
     path = _write(
         tmp_path / "test_sample.py",
         "class TestA:\n"
+        "    def __init__(self):\n"
+        "        pass\n"
+        "\n"
         "    def test_a(self):\n"
         "        pass\n"
         "\n"
         "class TestB:\n"
+        "    def setup_method(self):\n"
+        "        pass\n"
+        "\n"
         "    def test_b(self):\n"
         "        pass\n",
     )
@@ -139,58 +534,85 @@ def test_multiple_offending_classes_each_get_their_own_error(tmp_path: Path) -> 
     assert {error.message.split(":", 1)[0] for error in result.errors} == {"TestA", "TestB"}
 
 
-def test_a_class_named_like_a_test_with_no_test_methods_is_not_flagged(tmp_path: Path) -> None:
-    path = _write(
-        tmp_path / "test_sample.py",
-        "class TestHelper:\n    def helper(self):\n        pass\n",
-    )
-
-    result = collect([path], rootdir=tmp_path)
-
-    assert result.errors == []
-    assert result.records == []
-
-
-def test_a_staticmethod_test_method_is_flagged(tmp_path: Path) -> None:
-    path = _write(
-        tmp_path / "test_sample.py",
-        "class TestSomething:\n    @staticmethod\n    def test_method():\n        pass\n",
-    )
+def test_a_test_name_bound_to_a_lambda_is_a_collection_error(tmp_path: Path) -> None:
+    """`test_x = lambda: ...` collects as nothing at all: the object's own name is `<lambda>`,
+    not `test_x`. Reported rather than silently absent."""
+    path = _write(tmp_path / "test_sample.py", "test_x = lambda: None  # noqa: E731\n")
 
     result = collect([path], rootdir=tmp_path)
 
     assert result.records == []
-    assert len(result.errors) == 1
-    assert "test_method" in result.errors[0].message
+    (error,) = result.errors
+    assert "test_x" in error.message
 
 
-def test_a_classmethod_test_method_is_flagged(tmp_path: Path) -> None:
-    path = _write(
-        tmp_path / "test_sample.py",
-        "class TestSomething:\n    @classmethod\n    def test_method(cls):\n        pass\n",
-    )
-
-    result = collect([path], rootdir=tmp_path)
-
-    assert result.records == []
-    assert len(result.errors) == 1
-    assert "test_method" in result.errors[0].message
-
-
-def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
+def test_a_test_name_bound_to_a_function_defined_under_another_name_is_a_collection_error(
     tmp_path: Path,
 ) -> None:
-    """Only the `Test*` naming convention triggers the diagnostic; an ordinary helper class that
-    happens to define a `test_*`-named method is left alone, same as before."""
     path = _write(
         tmp_path / "test_sample.py",
-        "class Helper:\n    def test_method(self):\n        pass\n",
+        "def _implementation():\n    pass\n\ntest_thing = _implementation\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "test_thing" in error.message
+
+
+def test_a_test_name_bound_to_a_callable_object_is_left_alone(tmp_path: Path) -> None:
+    """`test_app = FastAPI()`, `test_client = Mock()`: callable, ordinary, and not a test body
+    anyone meant velox to run."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "class Client:\n    def __call__(self):\n        pass\n\ntest_client = Client()\n",
     )
 
     result = collect([path], rootdir=tmp_path)
 
     assert result.errors == []
     assert result.records == []
+
+
+def test_a_test_name_bound_to_data_is_left_alone(tmp_path: Path) -> None:
+    """`test_cases = [...]` is data a test reads, not a test."""
+    path = _write(tmp_path / "test_sample.py", "test_cases = [1, 2, 3]\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_test_function_imported_from_another_module_is_left_alone(tmp_path: Path) -> None:
+    """Not collected here (it belongs to the module that defines it) and not reported either:
+    the exclusion is deliberate, not a shape velox failed to understand."""
+    _write(tmp_path / "helpers.py", "def test_shared():\n    pass\n")
+    path = _write(
+        tmp_path / "test_sample.py",
+        f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\nfrom helpers import test_shared\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.errors == []
+    assert result.records == []
+
+
+def test_a_generator_test_function_is_a_collection_error(tmp_path: Path) -> None:
+    """Calling it returns a generator and runs none of its body -- a silent pass, which is
+    exactly what a collection error exists to prevent."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "def test_yielding():\n    yield 1\n    assert False\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    (error,) = result.errors
+    assert "test_yielding" in error.message
 
 
 def test_import_error_becomes_a_collection_error_and_does_not_abort(tmp_path: Path) -> None:

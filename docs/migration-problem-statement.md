@@ -62,9 +62,10 @@ The invariants any rewrite has to land inside, all of them load-bearing in the c
 - **Both `async def` and plain `def` tests are collected.** A sync test runs on a
   context-propagating executor thread, so a blocking call inside one holds only its own concurrency
   slot rather than the whole loop. Sync tests do *not* have to become async to migrate.
-- **Class-based tests are a collection error today** (`class Test*` carrying `test_*` methods),
-  with pure namespacing on the roadmap. Nothing in velox will ever provide `self`, `setup_method`,
-  or `TestCase`.
+- **`class Test*` is pure namespacing**: its `test_*` methods collect as
+  `path.py::TestGroup::test_name`, each called on an instance built for that one test. Nothing in
+  velox provides `setup_method`/`teardown_method` or `unittest.TestCase`, and a class carrying
+  either is a collection error naming what to move into a fixture.
 - **Configuration is `[tool.velox]` in `pyproject.toml`** with six recognized keys — `testpaths`,
   `concurrency`, `timeout`, `test_file_patterns`, `ignore`, `env` — and unknown keys are a hard
   error, not a warning.
@@ -83,11 +84,12 @@ escaping gotcha); `pytest.approx` for scalars; `@pytest.mark.asyncio`/`anyio` ma
 `event_loop` fixtures → deleted; `pytest-timeout` → `@velox.timeout(...)`;
 `@pytest.fixture(autouse=True)` and `@pytest.mark.usefixtures(...)` → `velox.use(...)` on the
 package or module the fixture covered (see §4.3); `@mock.patch`-decorated tests, left as they are
-and scheduled solo, with their `Depends()` defaults injected around the mock arguments.
+and scheduled solo, with their `Depends()` defaults injected around the mock arguments; `class
+Test*` grouping; and the CI invocation surface — `path.py::test_name` ids, `-k`, `-x`/`--maxfail`,
+`-v`/`-q`, `--serial`, `--collect-only`, `--durations`.
 
-**On the roadmap, and worth designing against rather than around.** `-k` selection and
-`path.py::test_name` ids (CI invocations depend on both); `class Test*` as namespacing;
-JUnit XML and `--report-json` (CI consumers depend on these).
+**On the roadmap, and worth designing against rather than around.** JUnit XML and `--report-json`
+(CI consumers depend on these).
 
 **Under review, so plan for its absence.** Lazy or optional dependencies, and overriding one
 fixture for a subtree of tests without hand-duplicating its downstream chain, are held pending a

@@ -1158,6 +1158,87 @@ def test_on_result_sees_captured_output_already_folded_on() -> None:
     assert "captured-before-callback" in seen[0].captured_stdout
 
 
+def test_maxfail_stops_dispatching_after_the_threshold() -> None:
+    """`concurrency=1` so the stop point is exact: tests start in logical order, so nothing
+    after the first failure ever runs."""
+    started: list[str] = []
+
+    async def _record_start_and_fail() -> None:
+        started.append("fail")
+        raise AssertionError("nope")
+
+    async def _record_start() -> None:
+        started.append("pass")
+
+    records = [
+        _record(0, _record_start_and_fail, "test_fails"),
+        _record(1, _record_start, "test_after_a"),
+        _record(2, _record_start, "test_after_b"),
+    ]
+
+    results = run_suite(records, concurrency=1, maxfail=1)
+
+    assert started == ["fail"]
+    # One result per test that actually ran, still in logical order.
+    assert [result.id for result in results] == ["mod.py::test_fails"]
+
+
+def test_maxfail_counts_failures_not_tests() -> None:
+    records = [
+        _record(0, _passes, "test_a"),
+        _record(1, _fails, "test_b"),
+        _record(2, _passes, "test_c"),
+        _record(3, _fails, "test_d"),
+        _record(4, _passes, "test_e"),
+    ]
+
+    results = run_suite(records, concurrency=1, maxfail=2)
+
+    assert [result.id for result in results] == [
+        "mod.py::test_a",
+        "mod.py::test_b",
+        "mod.py::test_c",
+        "mod.py::test_d",
+    ]
+
+
+def test_maxfail_that_is_never_reached_runs_everything() -> None:
+    records = [_record(0, _passes, "test_a"), _record(1, _fails, "test_b")]
+
+    results = run_suite(records, concurrency=1, maxfail=2)
+
+    assert len(results) == 2
+
+
+def test_maxfail_counts_errors_and_timeouts_too() -> None:
+    """Every `FAILING_OUTCOMES` member counts: a suite stopped early is stopped by whatever
+    went wrong, not by the FAILED bucket specifically."""
+
+    async def _boom() -> AsyncIterator[int]:
+        raise RuntimeError("setup boom")
+        yield 1  # pragma: no cover -- unreachable, keeps this a generator fixture
+
+    broken = velox.fixture()(_boom)
+
+    async def _needs_it(value: int = velox.Depends(broken)) -> None:
+        pass  # pragma: no cover -- setup fails before the body runs
+
+    records = [
+        _record(0, _needs_it, "test_errors", plan=plan_for(_needs_it)),
+        _record(1, _passes, "test_after"),
+    ]
+
+    results = run_suite(records, concurrency=1, maxfail=1)
+
+    assert [result.outcome for result in results] == [Outcome.ERROR]
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_run_suite_rejects_non_positive_maxfail(bad: int) -> None:
+    with pytest.raises(ValueError):
+        run_suite([_record(0, _passes, "test_passes")], maxfail=bad)
+
+
 @pytest.mark.parametrize("bad", [0, -1])
 def test_run_suite_rejects_non_positive_concurrency(bad: int) -> None:
     with pytest.raises(ValueError):

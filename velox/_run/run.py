@@ -421,6 +421,7 @@ def run_suite(
     concurrency: int = DEFAULT_CONCURRENCY,
     timeout: float | None = None,
     capture_passthrough: bool = False,
+    maxfail: int | None = None,
     basetemp: Path | None = None,
     unattributed_output: list[str] | None = None,
     on_result: Callable[[TestResult], None] | None = None,
@@ -448,6 +449,15 @@ def run_suite(
     completes. An exception raised by `on_result` itself aborts the run, the same as a
     bug in test execution would.
 
+    `maxfail`, if given, stops the run once that many results have a failing outcome:
+    tests not yet started are dropped, and the returned list is shorter than `records`
+    by exactly that many -- still in logical order, so a caller comparing the two
+    lengths learns the run stopped early. Tests already running are left to finish
+    rather than cancelled (`ROADMAP.md`), so a few more results than the threshold can
+    come back. A dropped test's module never reaches its last test, so that module's
+    `scope="module"` fixtures are released at the end of the run with the session's
+    rather than as its own last test finishes.
+
     `module`-scope fixtures are released once every test of that module has finished,
     not as each test's own teardown runs, so a module fixture stays alive for its
     still-running siblings. `unattributed_output`, if given, is populated with whatever
@@ -457,6 +467,8 @@ def run_suite(
     """
     if concurrency < 1:
         raise ValueError(f"concurrency must be >= 1, got {concurrency}")
+    if maxfail is not None and maxfail < 1:
+        raise ValueError(f"maxfail must be >= 1, got {maxfail}")
     if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
         raise ValueError(f"timeout must be a positive, finite number of seconds, got {timeout}")
     if isolated is None and not already_isolated:
@@ -491,8 +503,20 @@ def run_suite(
         for record in records:
             remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
         pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
+        #: `maxfail`'s bookkeeping. Read and written only from `dispatch_one` bodies, which
+        #: never `await` between the two below, so the count can't be missed by a task
+        #: admitted in between.
+        failures = 0
+        stopping = False
 
         async def dispatch_one(index: int, record: TestRecord) -> None:
+            nonlocal failures, stopping
+            # Every test's task is created up front, so `maxfail` is enforced here, as each
+            # one is about to start, rather than by not creating the task at all. A test
+            # that returns without filling its results slot is what shortens the returned
+            # list.
+            if stopping:
+                return
             # The whole body lives between `gate.acquire()` and `gate.release()`, including
             # the module-scope flush below, so concurrency=1 is a genuine exact-serial mode:
             # the next test cannot start until this one's admission -- module teardown
@@ -508,6 +532,14 @@ def run_suite(
             # limit" -- that's what the bare `timeout` parameter already means.
             test_timeout = marks.timeout if marks.timeout is not None else timeout
             try:
+                # Re-checked now that this test holds a slot, which is the moment that
+                # actually decides whether it runs: every task reaches the check above
+                # before the first result exists, since they are all created together and
+                # then queue on the gate. Under `--serial` that makes the stop exact --
+                # nothing starts after the Nth failure; under real concurrency the tests
+                # already admitted still finish (ROADMAP.md).
+                if stopping:
+                    return
                 if marks.isolated and not already_isolated:
                     if isolated is None:
                         # Unreachable: run_suite checks this for every isolated-marked
@@ -601,6 +633,14 @@ def run_suite(
                             captured_stderr=sink.err,
                             log_records=tuple(sink.log_records),
                         )
+
+                # Inside the gate, ahead of the release below, and with no `await`
+                # between this and the release: releasing is what admits the next
+                # waiting test, so counting the failure afterwards would race that
+                # test's own `stopping` check and let it start anyway.
+                if maxfail is not None and result.outcome in FAILING_OUTCOMES:
+                    failures += 1
+                    stopping = stopping or failures >= maxfail
             finally:
                 await gate.release(tokens, solo=solo)
 
@@ -670,11 +710,12 @@ def run_suite(
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         _capture.uninstall()
-    # Safe: every dispatch_one task unconditionally sets results[index] as its final
-    # action once _run_one returns. _run_one's own contract is that it never raises
-    # anything but KeyboardInterrupt/SystemExit, so a None surviving to here would mean
-    # that contract was violated, not a gap in this function's own exception handling.
-    return cast(list[TestResult], results)
+    # Every dispatch_one task unconditionally sets results[index] as its final action once
+    # _run_one returns, and _run_one's own contract is that it never raises anything but
+    # KeyboardInterrupt/SystemExit -- so the only slots still None here are the tests
+    # `maxfail` stopped before they started. Dropping them keeps this list to results that
+    # describe a test that actually ran, in logical order.
+    return [result for result in results if result is not None]
 
 
 def _result_from_json(data: dict[str, Any]) -> TestResult:

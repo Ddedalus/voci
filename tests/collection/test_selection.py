@@ -1,9 +1,13 @@
-"""Tests for velox._collection.tagexpr: expression parsing and tag matching."""
+"""Tests for velox._collection.selection: expression parsing, tag matching and -k id matching."""
 
 from __future__ import annotations
 
 import pytest
-from velox._collection.tagexpr import TagExpressionError, compile_tag_expression
+from velox._collection.selection import (
+    SelectionError,
+    compile_keyword_expression,
+    compile_tag_expression,
+)
 
 
 @pytest.mark.parametrize(
@@ -66,7 +70,7 @@ def test_a_quoted_string_selects_a_tag_name_that_is_not_a_bare_identifier(
     ],
 )
 def test_a_syntactically_invalid_expression_raises(expr: str) -> None:
-    with pytest.raises(TagExpressionError, match="invalid -m expression"):
+    with pytest.raises(SelectionError, match="invalid -m expression"):
         compile_tag_expression(expr)
 
 
@@ -89,5 +93,47 @@ def test_syntax_outside_names_quoted_names_and_and_or_not_is_rejected(expr: str)
     """Only tag names (bare or quoted) combined with and/or/not/parens are accepted -- calls,
     attribute access, comparisons, and non-string literals are all rejected rather than
     silently evaluated."""
-    with pytest.raises(TagExpressionError, match="invalid -m expression"):
+    with pytest.raises(SelectionError, match="invalid -m expression"):
         compile_tag_expression(expr)
+
+
+_ID = "tests/api/test_users.py::TestDelete::test_create[admin]"
+
+
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        ("users", True),
+        ("orders", False),
+        ("test_create", True),
+        ("TestDelete", True),
+        ("not orders", True),
+        ("users and create", True),
+        ("users and orders", False),
+        ("users or orders", True),
+        ("(users or orders) and not create", False),
+    ],
+)
+def test_keyword_terms_match_substrings_of_the_whole_id(expr: str, expected: bool) -> None:
+    """`-k` matches path, class, function name and case suffix alike -- the whole id is the
+    haystack, which is what makes `-k users` mean "everything in tests/test_users.py"."""
+    assert compile_keyword_expression(expr).matches(_ID) is expected
+
+
+def test_keyword_matching_is_case_insensitive() -> None:
+    assert compile_keyword_expression("USERS").matches(_ID) is True
+    assert compile_keyword_expression("testdelete").matches(_ID) is True
+
+
+def test_a_quoted_keyword_term_selects_a_parametrize_case() -> None:
+    """`[admin]` isn't a bare identifier, so quoting is how a case id is named."""
+    assert compile_keyword_expression("'test_create[admin]'").matches(_ID) is True
+    assert compile_keyword_expression("'test_create[guest]'").matches(_ID) is False
+
+
+@pytest.mark.parametrize("expr", ["", "users and", "users()", "1"])
+def test_an_invalid_keyword_expression_is_reported_as_a_k_error(expr: str) -> None:
+    """The message names the flag that was actually given -- a rejected `-k` expression
+    explained in terms of `-m` would send the reader to the wrong place."""
+    with pytest.raises(SelectionError, match="invalid -k expression"):
+        compile_keyword_expression(expr)
