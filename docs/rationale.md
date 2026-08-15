@@ -354,6 +354,14 @@ clock at dispatch would turn "this test's setup/call/teardown took too long" and
 behind a contended resource" into the same `TIMEOUT` outcome, though they point at unrelated fixes:
 raise the budget or find the blocking call, versus reduce contention or accept the wait.
 
+**The worker pool is sized to at least `concurrency`, and never below Python's own default.**
+The floor at `concurrency` is what stops one sync test from waiting for a thread while its own
+`--timeout` budget runs down — the gate admits at most that many tests, so that many threads is
+enough for all of them. The floor at `min(32, cpu + 4)` is what stops the *other* direction from
+biting: this is the loop's default executor, so a test's own `asyncio.to_thread(...)` calls land
+in the same pool, and a pool sized to `--serial`'s single slot would deadlock any test that fans
+out over two threads and waits for both.
+
 **Stopping early cancels; it does not wait.** `--maxfail` and a Ctrl-C both mean the run is over,
 and a run that keeps waiting for the tests already in flight is only as fast to stop as its
 slowest one — under concurrency that is routinely the whole point of the flag, spent waiting.

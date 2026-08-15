@@ -236,3 +236,33 @@ def test_run_isolated_kills_the_subprocess_and_reraises_on_keyboard_interrupt(
         )
 
     assert proc.killed
+
+
+def test_run_isolated_hands_the_subprocess_the_runs_own_safety_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A watchdog the user switched off stays off in the subprocess, and a cancelled test
+    there gets the same teardown budget as one in the parent."""
+    record = _record(0, _passes, "test_passes")
+    written_config: dict[str, Any] = {}
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        written_config.update(json.loads(Path(args[3]).read_text()))
+        return _FakeProcess(returncode=1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    run_async(
+        run_isolated(
+            record,
+            config=_config(tmp_path),
+            timeout=2.0,
+            basetemp_root=tmp_path / "basetemp",
+            scratch_dir=tmp_path / "scratch",
+            loop_watchdog=0,
+            teardown_grace=1.5,
+        )
+    )
+
+    assert written_config["loop_watchdog"] == 0
+    assert written_config["teardown_grace"] == 1.5

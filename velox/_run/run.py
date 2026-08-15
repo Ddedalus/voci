@@ -37,6 +37,7 @@ import functools
 import inspect
 import logging
 import math
+import os
 import signal
 import threading
 import time
@@ -503,6 +504,19 @@ class AdmissionGate:
             self._condition.notify_all()
 
 
+def _current_task() -> asyncio.Task[Any] | None:
+    """The running task, or `None` when there is no loop to have one.
+
+    `asyncio.current_task()` raises instead, and the one place that matters is a task
+    abandoned by an aborted run: the garbage collector finalizes its coroutine, running every
+    `finally` it was suspended inside, from outside any loop.
+    """
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
 #: What each `StopController` reason reads as in a result and on screen.
 _STOP_REASONS = {
     "maxfail": "the run stopped after --maxfail",
@@ -579,7 +593,7 @@ class StopController:
         if self._reason is not None:
             return
         self._reason = reason
-        current = asyncio.current_task()
+        current = _current_task()
         for task in self._running:
             if task is not current:
                 self._cancelled.add(task)
@@ -604,13 +618,13 @@ class StopController:
     def register(self, test_id: str) -> None:
         """Enter the calling task into what a stop cancels. Called once the test is admitted,
         with no `await` between the caller's own `stopping` check and this."""
-        task = asyncio.current_task()
+        task = _current_task()
         if task is not None:
             self._running[task] = test_id
 
     def unregister(self) -> None:
         """The reverse of `register`, whatever the test's envelope did."""
-        task = asyncio.current_task()
+        task = _current_task()
         if task is not None:
             self._running.pop(task, None)
             self._cancelled.discard(task)
@@ -623,7 +637,7 @@ class StopController:
         Claimed at most once per cancellation: a test that catches, claims, and then somehow
         gets cancelled again is being cancelled by something that isn't this.
         """
-        task = asyncio.current_task()
+        task = _current_task()
         if task is None or task not in self._cancelled:
             return False
         self._cancelled.discard(task)
@@ -734,6 +748,9 @@ def run_suite(
     # raised, the finally must not try to undo something that was never done.
     guard_installed = False
     unawaited_installed = False
+    #: Set below, once there is a loop to watch; named here so the outer `finally` can stop
+    #: it whatever happened in between.
+    watchdog: _safety.LoopWatchdog | None = None
     try:
         # After collection has imported every test module, so a suite that patches has already
         # brought `unittest.mock` in and this finds it (`_mocking.install`). False when an
@@ -808,7 +825,11 @@ def run_suite(
                     if failures >= maxfail:
                         stop.request("maxfail")
             finally:
-                await gate.release(tokens, solo=solo)
+                # Skipped only when the run was aborted outright: this task is then being
+                # finalized by the garbage collector, long after the loop it would need was
+                # closed, and there is no test left waiting on the gate to admit anyway.
+                if not stop.aborting:
+                    await gate.release(tokens, solo=solo)
 
             # Fired in real completion order, before the logical-order results slot
             # below is written, so a streaming reporter never sees a filled slot
@@ -843,6 +864,8 @@ def run_suite(
                         timeout=test_timeout,
                         basetemp_root=capture_setup.basetemp_root,
                         scratch_dir=capture_setup.basetemp_root / ".velox-isolated",
+                        loop_watchdog=loop_watchdog,
+                        teardown_grace=teardown_grace,
                     )
                 )
                 # `run_isolated` kills its subprocess and reports rather than propagating a
@@ -931,23 +954,22 @@ def run_suite(
             return result
 
         # Constructed synchronously, outside the loop, so the finally below can shut
-        # this down directly without going through the loop at all. One worker thread per
-        # concurrency slot: the gate never admits more than `concurrency` tests, so a sync
-        # test can never end up queued behind another one -- which would burn its own
-        # timeout budget waiting for a thread rather than running.
+        # this down directly without going through the loop at all. At least one worker
+        # thread per concurrency slot, so a sync test never waits for a thread while its own
+        # timeout budget runs -- and never fewer than Python's own default, since this is
+        # also the pool a test's `asyncio.to_thread(...)` lands in and a test that fans out
+        # over several threads must not be able to deadlock against itself.
         executor = _capture.ContextPropagatingExecutor(
-            max_workers=concurrency, thread_name_prefix="velox-worker"
+            max_workers=max(concurrency, _default_max_workers()),
+            thread_name_prefix="velox-worker",
         )
-        watchdog = (
-            _safety.LoopWatchdog(
+        if loop_watchdog is not None and loop_watchdog > 0:
+            watchdog = _safety.LoopWatchdog(
                 loop_watchdog,
                 report=note,
                 test_ids=_safety.code_index(records),
                 in_flight=stop.in_flight,
             )
-            if loop_watchdog is not None and loop_watchdog > 0
-            else None
-        )
 
         async def run_all() -> None:
             asyncio.get_running_loop().set_default_executor(executor)
@@ -1013,14 +1035,29 @@ def run_suite(
                     # which is the one thing a second Ctrl-C means not to do: the tasks
                     # still here are the ones that ignored the first cancellation, and
                     # waiting on them again would hang the abort. The loop is closed out
-                    # from under them instead.
-                    runner.get_loop().close()
+                    # from under them instead, with its exception handler silenced first:
+                    # abandoning those tasks is what the abort *is*, so asyncio's reports
+                    # about them ("Task was destroyed but it is pending", a shielded
+                    # release that outlived its loop) describe the instruction rather than
+                    # a problem with it.
+                    aborted_loop = runner.get_loop()
+                    aborted_loop.set_exception_handler(lambda _loop, _context: None)
+                    _close_abandoned_tasks(aborted_loop)
+                    aborted_loop.close()
                 else:
                     runner.close()
     finally:
         # Guaranteed to run whether the try above completed normally, raised a real
         # KeyboardInterrupt/SystemExit, or raised for some other reason entirely --
         # every statement between install() succeeding and here lives inside this try.
+        #
+        # The watchdog is stopped here as well as in `run_all`: a `KeyboardInterrupt`
+        # raised by the signal handler leaves the loop without ever resuming `run_all`,
+        # so that coroutine's own `finally` never runs. Stopping twice is a no-op;
+        # leaving the thread behind would have it report the frozen heartbeat of a loop
+        # that no longer exists, into whatever runs next in this process.
+        if watchdog is not None:
+            watchdog.stop()
         if guard_installed:
             _mocking.uninstall()
         if unawaited_installed:
@@ -1042,6 +1079,35 @@ def run_suite(
     # started reports CANCELLED and fills its slot. Dropping the rest keeps this list to
     # results that describe a test that actually ran, in logical order.
     return [result for result in results if result is not None]
+
+
+def _close_abandoned_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Close the coroutines of every task still pending on `loop`, swallowing what their
+    cleanup raises. Only for an aborted run, where those tasks are the ones that ignored a
+    cancellation and the loop is about to be closed under them.
+
+    Closing each one here rather than leaving it to the garbage collector is what keeps the
+    abort quiet: a coroutine finalized later runs the same `finally` blocks from outside any
+    loop and outside its own context, where releasing a `ContextVar` token or asking for the
+    running task raises -- and an exception raised during finalization is printed by the
+    interpreter, after the last line the user asked for.
+    """
+    for task in asyncio.all_tasks(loop):
+        coro = task.get_coro()
+        # `close` is a coroutine's, not every awaitable's: a task wrapping something else
+        # has nothing here to finalize early, and the loop closing under it is the whole
+        # story anyway.
+        closer = getattr(coro, "close", None)
+        if closer is not None:
+            with contextlib.suppress(Exception):
+                closer()
+
+
+def _default_max_workers() -> int:
+    """What `ThreadPoolExecutor` would have sized itself to, spelled out here because the
+    executor `run_suite` installs is sized against it: velox raises that floor to fit its own
+    concurrency, and never lowers it."""
+    return min(32, (os.cpu_count() or 1) + 4)
 
 
 def _cancelled_result(record: TestRecord, duration: float, stop: StopController) -> TestResult:
@@ -1079,24 +1145,37 @@ def _install_interrupt_handler(
         return lambda: None
     loop = asyncio.get_running_loop()
     previous = signal.getsignal(signal.SIGINT)
+    if previous is None:
+        # `SIGINT`'s handler was installed from outside Python, so there is nothing here that
+        # could put it back afterwards. Left alone rather than replaced with something this
+        # run can't undo.
+        return lambda: None
 
-    def handler(signum: int, frame: Any) -> None:
-        if stop.stopping:
-            stop.aborting = True
-            signal.signal(signal.SIGINT, previous)
-            note("velox: interrupted again -- aborting now")
-            raise KeyboardInterrupt
+    def interrupt() -> None:
+        """The first Ctrl-C, back on the loop."""
         in_flight = stop.in_flight()
         note(
             f"velox: interrupted -- cancelling {in_flight} "
             f"{'test' if in_flight == 1 else 'tests'} in flight "
             f"(Ctrl-C again to abort immediately)"
         )
-        # Never `stop.request` directly: this runs wherever the main thread happened to be,
-        # including inside another task's frame, and cancelling from there would deliver a
-        # cancellation to a task in the middle of a step. `call_soon_threadsafe` also wakes
-        # the loop, which is what makes a Ctrl-C land promptly on an otherwise idle run.
-        loop.call_soon_threadsafe(stop.request, "interrupt")
+        stop.request("interrupt")
+
+    def handler(signum: int, frame: Any) -> None:
+        if stop.stopping:
+            stop.aborting = True
+            signal.signal(signal.SIGINT, previous)
+            # Suppressed, not skipped: a signal handler runs wherever the main thread was,
+            # which can be inside a buffered write to this very stream -- and re-entering
+            # one raises. Losing the line is survivable; losing the abort is not.
+            with contextlib.suppress(RuntimeError):
+                note("velox: interrupted again -- aborting now")
+            raise KeyboardInterrupt
+        # Nothing is printed and nothing is cancelled from the handler itself. It runs
+        # wherever the main thread happened to be -- mid-write to stderr, or inside another
+        # task's frame -- so both jobs are handed to the loop, which is also what wakes an
+        # otherwise idle run up to notice the Ctrl-C at all.
+        loop.call_soon_threadsafe(interrupt)
 
     signal.signal(signal.SIGINT, handler)
 

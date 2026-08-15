@@ -2015,3 +2015,65 @@ def test_the_interrupt_handler_does_not_outlive_the_run() -> None:
     run_suite([_record(0, _passes, "test_passes")])
 
     assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_a_test_may_fan_out_over_more_threads_than_the_run_has_concurrency() -> None:
+    """The executor a run installs is also where a test's own `asyncio.to_thread(...)` lands,
+    so sizing it to `concurrency` alone would let a single test deadlock against itself under
+    `--serial`."""
+    barrier = threading.Barrier(2)
+
+    async def test_fans_out() -> None:
+        await asyncio.gather(
+            asyncio.to_thread(barrier.wait, 10), asyncio.to_thread(barrier.wait, 10)
+        )
+
+    (result,) = run_suite([_record(0, test_fans_out, "test_fans_out")], concurrency=1)
+
+    assert result.outcome is Outcome.PASSED
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_sigint_handler_velox_could_not_restore_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`signal.getsignal` returns `None` for a handler installed from outside Python. Velox
+    has nothing to put back afterwards, so it doesn't take the signal in the first place."""
+    installed: list[object] = []
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
+    monkeypatch.setattr(signal, "signal", lambda _signum, handler: installed.append(handler))
+
+    (result,) = run_suite([_record(0, _passes, "test_passes")])
+
+    assert result.outcome is Outcome.PASSED
+    assert installed == []
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_second_ctrl_c_aborts_and_leaves_no_watchdog_thread_behind() -> None:
+    """The `KeyboardInterrupt` the second Ctrl-C raises never resumes the coroutine driving
+    the run, so anything that coroutine would have stopped on its way out has to be stopped
+    from outside it too."""
+
+    async def test_interrupts_twice() -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+        try:
+            # Where the first Ctrl-C's cancellation lands, once the loop has run the
+            # callback the handler scheduled.
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            # The second Ctrl-C: raised as a KeyboardInterrupt by the handler itself, on
+            # the next bytecode after this line, since the run is already stopping.
+            os.kill(os.getpid(), signal.SIGINT)
+            raise
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, test_interrupts_twice, "test_interrupts_twice")], loop_watchdog=0.05)
+
+    assert not [thread for thread in threading.enumerate() if thread.name == "velox-loop-watchdog"]
