@@ -2077,3 +2077,99 @@ def test_a_second_ctrl_c_aborts_and_leaves_no_watchdog_thread_behind() -> None:
         run_suite([_record(0, test_interrupts_twice, "test_interrupts_twice")], loop_watchdog=0.05)
 
     assert not [thread for thread in threading.enumerate() if thread.name == "velox-loop-watchdog"]
+
+
+def test_a_stop_landing_during_teardown_leaves_the_tests_own_verdict_alone() -> None:
+    """The test had already answered; the run stopping mid-release is the run's doing, not a
+    teardown error the test should be blamed for."""
+
+    @velox.fixture()
+    async def slow_release() -> AsyncIterator[str]:
+        yield "resource"
+        await asyncio.sleep(30)
+
+    async def test_passes_then_releases(value: str = velox.Depends(slow_release)) -> None:
+        pass
+
+    async def test_fails_a_moment_later() -> None:
+        await asyncio.sleep(0.1)
+        raise AssertionError("nope")
+
+    records = [
+        _record(
+            0,
+            test_passes_then_releases,
+            "test_passes_then_releases",
+            plan=plan_for(test_passes_then_releases),
+        ),
+        _record(1, test_fails_a_moment_later, "test_fails"),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert time.monotonic() - started < 10
+    assert [result.outcome for result in results] == [Outcome.PASSED, Outcome.FAILED]
+
+
+def test_a_stop_landing_during_the_module_scope_flush_keeps_the_real_result() -> None:
+    """The last test of a module releases that module's fixtures on its way out, holding a
+    result it has already earned -- a cancellation there must not overwrite it."""
+
+    @velox.fixture(scope="module")
+    async def slow_module_release() -> AsyncIterator[str]:
+        yield "resource"
+        await asyncio.sleep(30)
+
+    async def test_fails_then_flushes(value: str = velox.Depends(slow_module_release)) -> None:
+        raise AssertionError("nope")
+
+    async def test_fails_a_moment_later() -> None:
+        await asyncio.sleep(0.1)
+        raise AssertionError("nope")
+
+    records = [
+        _record(
+            0,
+            test_fails_then_flushes,
+            "test_fails_then_flushes",
+            plan=plan_for(test_fails_then_flushes),
+            path=Path("first.py"),
+        ),
+        _record(1, test_fails_a_moment_later, "test_fails", path=Path("second.py")),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert time.monotonic() - started < 10
+    assert [result.outcome for result in results] == [Outcome.FAILED, Outcome.FAILED]
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_ctrl_c_during_a_maxfail_stop_is_not_the_abort() -> None:
+    """The abort is the second Ctrl-C of a run, counted by the handler itself -- not "some
+    stop was already under way", which `--maxfail` sets before any Ctrl-C is pressed."""
+
+    async def test_fails_immediately() -> None:
+        raise AssertionError("nope")
+
+    async def test_interrupts_when_cancelled() -> None:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            os.kill(os.getpid(), signal.SIGINT)
+            raise
+
+    records = [
+        _record(0, test_interrupts_when_cancelled, "test_interrupts_when_cancelled"),
+        _record(1, test_fails_immediately, "test_fails"),
+    ]
+
+    # No KeyboardInterrupt: the run ends by itself and still reports both tests.
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert [result.outcome for result in results] == [Outcome.CANCELLED, Outcome.FAILED]

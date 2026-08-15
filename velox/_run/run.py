@@ -363,17 +363,27 @@ async def _run_one(
             # asyncio.timeout __aexit__ left to hand a re-raise to, and no outer
             # handler in this function left to catch it -- re-raising here would let a
             # bare CancelledError escape _run_one, breaking run_suite's invariant that
-            # every dispatched task fills its own results slot. Recorded as an ERROR
-            # instead, tagged distinctly since a cancelled teardown may have left the
-            # fixture only partially torn down.
-            teardown_failure = (
-                "teardown was cancelled (most likely collateral from a sibling's "
-                "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
-                f"down:\n\n{traceback.format_exc()}"
-            )
-            teardown_summary = (
-                "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
-            )
+            # every dispatched task fills its own results slot.
+            if stop is not None and stop.claim():
+                # The run stopped while this test was releasing its fixtures, which is
+                # nothing the test did: its call phase already reached a verdict and that
+                # verdict stands. What is left to say is that the release may be half
+                # done, and the place to say it is the run, not the result.
+                stop.note(
+                    f"velox: {record.id}: teardown was cancelled when the run stopped -- "
+                    f"the fixture may not have been fully torn down"
+                )
+            else:
+                # A collateral cancellation instead: recorded as an ERROR, tagged
+                # distinctly since it too may have left the fixture partially torn down.
+                teardown_failure = (
+                    "teardown was cancelled (most likely collateral from a sibling's "
+                    "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
+                    f"down:\n\n{traceback.format_exc()}"
+                )
+                teardown_summary = (
+                    "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
+                )
         except BaseException as exc:
             teardown_failure = traceback.format_exc()
             teardown_summary = _summarize_exception(exc)
@@ -838,6 +848,38 @@ def run_suite(
                 on_result(result)
             results[index] = result
 
+        async def flush_module_scope(record: TestRecord) -> None:
+            """Release `record`'s module's fixtures, if `record` was the last of its module
+            to finish. A stop landing in here is claimed rather than allowed to propagate:
+            the test itself is already done and has a real result, which a cancellation
+            escaping this far would replace with a synthetic CANCELLED one."""
+            remaining_by_module[record.path] -= 1
+            if remaining_by_module[record.path] != 0:
+                return
+            keys = pending_module_keys.pop(record.path, None)
+            if not keys:
+                return
+            try:
+                await _teardown_module_scope(
+                    store,
+                    keys,
+                    path=record.path,
+                    real_stderr=capture_setup.real_stderr,
+                    # Time-boxed once the run is stopping, for the same reason a cancelled
+                    # test's own teardown is.
+                    grace=stop.teardown_grace if stop.stopping else None,
+                )
+            except asyncio.CancelledError:
+                # Never re-raised: this test has already earned a result, and a cancellation
+                # escaping here would replace it with nothing at all. `claim` when the stop
+                # is what delivered it, so the task is left un-cancelled for the rest of its
+                # envelope; a sibling's collateral cancellation is simply reported.
+                stop.claim()
+                stop.note(
+                    f"velox: module-scope fixtures ({record.path}) were left mid-teardown -- "
+                    f"they may not have been fully released"
+                )
+
         async def run_envelope(
             record: TestRecord, marks: Marks, test_timeout: float | None, *, solo: bool
         ) -> TestResult:
@@ -873,20 +915,9 @@ def run_suite(
                 # error result. Claiming it turns that into the CANCELLED it actually is.
                 if stop.claim():
                     return _cancelled_result(record, result.duration, stop)
-                remaining_by_module[record.path] -= 1
-                if remaining_by_module[record.path] == 0:
-                    keys = pending_module_keys.pop(record.path, None)
-                    if keys:
-                        # No current_test_context to attribute this to -- it falls
-                        # back to the session sink, same as any output with no test
-                        # actively running would.
-                        await _teardown_module_scope(
-                            store,
-                            keys,
-                            path=record.path,
-                            real_stderr=capture_setup.real_stderr,
-                            grace=stop.teardown_grace if stop.stopping else None,
-                        )
+                # No current_test_context to attribute this flush to -- it falls back to
+                # the session sink, same as any output with no test actively running would.
+                await flush_module_scope(record)
                 return result
 
             # A fresh Sink and TestContext for this one test, published via
@@ -921,22 +952,9 @@ def run_suite(
 
                 if module_keys:
                     pending_module_keys.setdefault(record.path, []).extend(module_keys)
-                remaining_by_module[record.path] -= 1
-                if remaining_by_module[record.path] == 0:
-                    keys = pending_module_keys.pop(record.path, None)
-                    if keys:
-                        # Inside this test's current_test_context: this test is
-                        # the module's last, so a module-scope fixture's own
-                        # teardown print is attributed to it. Time-boxed once the run
-                        # is stopping, for the same reason a cancelled test's own
-                        # teardown is.
-                        await _teardown_module_scope(
-                            store,
-                            keys,
-                            path=record.path,
-                            real_stderr=capture_setup.real_stderr,
-                            grace=stop.teardown_grace if stop.stopping else None,
-                        )
+                # Inside this test's current_test_context: if this test is the module's
+                # last, a module-scope fixture's own teardown print is attributed to it.
+                await flush_module_scope(record)
             finally:
                 # Reset only now that nothing else this test's envelope owns --
                 # including, for the module's last test, that module's own fixture
@@ -1151,6 +1169,8 @@ def _install_interrupt_handler(
         # run can't undo.
         return lambda: None
 
+    presses = 0
+
     def interrupt() -> None:
         """The first Ctrl-C, back on the loop."""
         in_flight = stop.in_flight()
@@ -1162,7 +1182,12 @@ def _install_interrupt_handler(
         stop.request("interrupt")
 
     def handler(signum: int, frame: Any) -> None:
-        if stop.stopping:
+        nonlocal presses
+        presses += 1
+        # This handler's own presses, not `stop.stopping`: a `--maxfail` stop has already
+        # set that, and the first Ctrl-C of a run must never be the one that throws the
+        # report away.
+        if presses > 1:
             stop.aborting = True
             signal.signal(signal.SIGINT, previous)
             # Suppressed, not skipped: a signal handler runs wherever the main thread was,
@@ -1237,7 +1262,9 @@ async def _teardown_module_scope(
             f"{grace}s of the run being stopped",
             file=real_stderr,
         )
-    except (KeyboardInterrupt, SystemExit):
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        # A cancellation is the run being stopped, not this teardown failing, and the caller
+        # is the one that can tell those apart -- and that has a result to protect.
         raise
     except BaseException:
         print(f"velox: error tearing down module-scope fixtures ({path}):", file=real_stderr)

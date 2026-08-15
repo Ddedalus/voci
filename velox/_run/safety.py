@@ -63,7 +63,7 @@ _STACK_FRAMES = 6
 #: Where velox's own frames live. A reported stack is cut at the innermost of them: everything
 #: outside is velox dispatching a test (and asyncio dispatching velox), everything inside is the
 #: test's own call chain, which is the only part that answers "what is it blocked on".
-_VELOX_DIR = str(Path(__file__).resolve().parent.parent)
+_VELOX_DIR = f"{Path(__file__).resolve().parent.parent}{os.sep}"
 
 
 # ------------------------------------------------------------------------------ stack naming
