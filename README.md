@@ -92,8 +92,9 @@ velox tests/test_users.py::test_create[admin]   # run one test, or one of its ca
 velox -k "users and not slow"      # select by substring of the test id
 velox -m "smoke"                   # select by @velox.tag
 velox --serial                     # exactly serial — the first debugging step
-velox -x                           # stop starting new tests after the first failure
+velox -x                           # stop at the first failure, cancelling what is in flight
 velox --durations 10               # the slowest tests, to tune --concurrency by
+velox --loop-watchdog 10           # how long the loop may block before velox names the call
 velox --collect-only               # print the ids that would run, and stop
 velox -s                           # live, id-prefixed output instead of captured
 ```

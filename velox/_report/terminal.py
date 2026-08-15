@@ -231,9 +231,9 @@ class Reporter:
     def flush_pending(self) -> None:
         """Close out what the streaming half left open, once `run_suite` has returned.
 
-        A file whose tests didn't all report -- `--maxfail` stopped the run partway through
-        it -- never reached its own block in `on_result`; it prints here, in path order, so
-        what did run is still accounted for file by file. A file holding nothing but skips
+        A file whose tests didn't all report -- the run stopped partway through it -- never
+        reached its own block in `on_result`; it prints here, in path order, so what did run
+        is still accounted for file by file. A file holding nothing but skips
         prints here too, for the same reason: `on_result` never hears about it at all.
         `-q`'s line of characters gets its closing newline the same way.
 
@@ -385,8 +385,8 @@ class Reporter:
             print(wrong, file=self.stream)
 
         # Every test collection found, whether it ran or not: skips never reach run_suite,
-        # and neither do the tests --maxfail stopped before they started, so `results` alone
-        # would report a smaller suite than the one the user selected.
+        # and neither do the tests a stopped run never started, so `results` alone would
+        # report a smaller suite than the one the user selected.
         total = len(results) + len(self.skipped) + not_run
         totals = [
             f"{_color.paint(str(total), _color.PRIMARY, enabled=self._color_enabled)} "
