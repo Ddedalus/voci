@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 from _support import Project
@@ -1450,3 +1451,84 @@ def test_main_runs_class_grouped_tests_end_to_end(
     assert "1 failed" in out
     assert "2 tests · 1 passed" in out
     assert "test_sample.py::TestGroup::test_fails" in out
+
+
+# Runtime safety at the CLI: the loop watchdog's flag, and what a Ctrl-C leaves behind.
+# ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["--loop-watchdog=-1", "--loop-watchdog=inf"])
+def test_bad_loop_watchdog_value_is_a_usage_error(
+    bad: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    status = main([bad])
+
+    assert status == 4
+    assert "--loop-watchdog" in capsys.readouterr().err
+
+
+def test_loop_watchdog_zero_switches_the_watchdog_off(project: Project) -> None:
+    """0 is a real value, not a rejected one: it is how the diagnostic is turned off."""
+    project.write_passing_test()
+
+    assert main([str(project.root), "--loop-watchdog=0"]) == 0
+
+
+def test_a_bad_configured_loop_watchdog_names_the_config_file(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    chdir_project.write_pyproject("[tool.velox]\nloop_watchdog = -3\n")
+    chdir_project.write_passing_test()
+
+    status = main([])
+
+    assert status == 4
+    assert "pyproject.toml" in capsys.readouterr().err
+
+
+def test_maxfail_reports_the_tests_it_cancelled(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The run stops without waiting out the slow test, and says so rather than quietly
+    leaving it out of the counts."""
+    project.write(
+        "test_sample.py",
+        "import asyncio\n\n"
+        "async def test_slow():\n    await asyncio.sleep(30)\n\n"
+        "async def test_fails():\n    assert False\n",
+    )
+
+    status = main([str(project.root), "-x"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "1 failed · 1 cancelled" in out
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="velox only takes SIGINT on the main thread",
+)
+def test_a_ctrl_c_exits_two_and_still_prints_the_report(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit code 2 rather than whatever the finished tests added up to: an interrupted run
+    never reached a verdict, and a Ctrl-C reading as success in CI would be worse than
+    useless. The signal is sent from inside a test body, so it can only land while velox's own
+    handler is installed."""
+    project.write(
+        "test_sample.py",
+        "import asyncio, os, signal\n\n"
+        "async def test_ok():\n    pass\n\n"
+        "async def test_interrupts():\n"
+        "    os.kill(os.getpid(), signal.SIGINT)\n"
+        "    await asyncio.sleep(30)\n\n"
+        "async def test_slow():\n    await asyncio.sleep(30)\n",
+    )
+
+    status = main([str(project.root), "--concurrency=3"])
+
+    out = capsys.readouterr().out
+    assert status == 2
+    assert "INTERRUPTED (Ctrl-C)" in out
+    assert "2 cancelled" in out

@@ -5,9 +5,10 @@ stopping at the git root, and turns that table into a validated `Config`. The di
 becomes the run's rootdir. One file, one table — there is no inheritance and no per-directory
 config.
 
-Six keys are recognized: `testpaths`, `concurrency`, `timeout`, `test_file_patterns`, `ignore` and
-`env`. Anything else is an error, as is a value of the wrong type or shape. `cli.py` merges the
-resulting `Config` against the command line and the built-in defaults.
+Seven keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
+`test_file_patterns`, `ignore` and `env`. Anything else is an error, as is a value of the wrong
+type or shape. `cli.py` merges the resulting `Config` against the command line and the built-in
+defaults.
 """
 
 from __future__ import annotations
@@ -22,7 +23,15 @@ from types import MappingProxyType
 __all__ = ["Config", "ConfigError", "resolve"]
 
 _KNOWN_KEYS = frozenset(
-    {"testpaths", "concurrency", "timeout", "test_file_patterns", "ignore", "env"}
+    {
+        "testpaths",
+        "concurrency",
+        "timeout",
+        "loop_watchdog",
+        "test_file_patterns",
+        "ignore",
+        "env",
+    }
 )
 
 
@@ -52,6 +61,9 @@ class Config:
     testpaths: tuple[str, ...] | None = None
     concurrency: int | None = None
     timeout: float | None = None
+    #: Seconds the event loop may go unresponsive before velox names the call holding it;
+    #: `0` switches that diagnostic off entirely.
+    loop_watchdog: float | None = None
     test_file_patterns: tuple[str, ...] | None = None
     ignore: tuple[str, ...] | None = None
     #: `Mapping`, not `dict`: every other collection field here is a `tuple` for the same reason
@@ -161,6 +173,7 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
         testpaths=_str_list(table.get("testpaths"), key="testpaths", source=source),
         concurrency=_concurrency(table.get("concurrency"), source=source),
         timeout=_timeout(table.get("timeout"), source=source),
+        loop_watchdog=_seconds(table.get("loop_watchdog"), key="loop_watchdog", source=source),
         test_file_patterns=_str_list(
             table.get("test_file_patterns"), key="test_file_patterns", source=source
         ),
@@ -187,10 +200,17 @@ def _timeout(value: object, *, source: Path) -> float | None:
     `_concurrency`, for the same reason (`test_timeout_rejects_a_bool`). Always returned as
     `float`, matching `Config.timeout`'s own type regardless of which numeric form was written.
     """
+    return _seconds(value, key="timeout", source=source)
+
+
+def _seconds(value: object, *, key: str, source: Path) -> float | None:
+    """One of the numeric, seconds-valued keys. Whether the number makes sense as a budget is
+    `cli.py`'s to say, since the flag that overrides it needs the identical check anyway; this
+    only rejects what isn't a number at all."""
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ConfigError(f"{source}: 'timeout' must be a number, got {value!r}")
+        raise ConfigError(f"{source}: {key!r} must be a number, got {value!r}")
     return float(value)
 
 

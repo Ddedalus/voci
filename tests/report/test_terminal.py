@@ -908,3 +908,75 @@ def test_file_block_is_colored_on_a_tty_and_plain_otherwise(
     # The escape codes are decoration, not a rename -- strip them and the line reads the
     # same as the plain-stream case.
     assert "PASS" in colored
+
+
+# ------------------------------------------------------------------------------------------
+# Cancelled tests: the run stopped while they were in flight
+# ------------------------------------------------------------------------------------------
+
+
+def test_a_cancelled_test_is_counted_on_the_wrong_line_without_being_a_failure() -> None:
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
+    reporter, stream = _reporter(records)
+    results = [
+        _result(f"{path}::test_a", 0),
+        _result(f"{path}::test_b", 1, outcome=Outcome.CANCELLED, failure="cancelled: stopped"),
+    ]
+
+    reporter.finish(results, wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "1 cancelled" in out
+    assert "2 tests · 1 passed" in out
+    # Not a failure: no detail block, no short-summary line, nothing in `other`.
+    assert "--- short test summary ---" not in out
+    assert "other" not in out
+
+
+def test_a_file_the_run_was_stopped_in_reads_as_stopped_not_passed() -> None:
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
+    reporter, stream = _reporter(records)
+
+    reporter.on_result(_result(f"{path}::test_a", 0))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.CANCELLED))
+
+    line = stream.getvalue()
+    assert line.startswith("STOP")
+    assert "(1 cancelled)" in line
+
+
+def test_a_file_with_a_failure_and_a_cancellation_still_reads_as_failed() -> None:
+    path = Path("tests/test_sample.py")
+    records = [
+        _test_record(f"{path}::test_a", path, index=0),
+        _test_record(f"{path}::test_b", path, index=1),
+    ]
+    reporter, stream = _reporter(records)
+
+    reporter.on_result(_result(f"{path}::test_a", 0, outcome=Outcome.FAILED))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.CANCELLED))
+
+    line = stream.getvalue()
+    assert line.startswith("FAIL")
+    assert "(1 failed)" in line
+    assert "(1 cancelled)" in line
+
+
+def test_the_not_run_label_names_whatever_stopped_the_run() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_{i}", path, index=i) for i in range(3)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish(
+        [_result(f"{path}::test_0", 0)], wall_clock=1.0, not_run=2, not_run_label="interrupted"
+    )
+
+    assert "2 not run (interrupted)" in stream.getvalue()

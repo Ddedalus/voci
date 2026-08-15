@@ -147,13 +147,18 @@ class Reporter:
     def _print_test_line(self, result: TestResult) -> None:
         """`-v`'s line for one finished test, printed in completion order:
 
-        PASSED   tests/api/test_users.py::test_create              0.08s
+        PASSED    tests/api/test_users.py::test_create             0.08s
         """
-        failed = result.outcome in FAILING_OUTCOMES
+        if result.outcome in FAILING_OUTCOMES:
+            outcome_color = _color.RED
+        elif result.outcome is Outcome.CANCELLED:
+            # Neither green nor red: the run stopped this test, so it reported neither a
+            # pass nor a failure.
+            outcome_color = _color.YELLOW
+        else:
+            outcome_color = _color.GREEN
         label = _color.paint(
-            f"{result.outcome.value.upper():<8}",
-            _color.RED if failed else _color.GREEN,
-            enabled=self._color_enabled,
+            f"{result.outcome.value.upper():<9}", outcome_color, enabled=self._color_enabled
         )
         duration = _color.paint(f"{result.duration:.2f}s", _color.GRAY, enabled=self._color_enabled)
         print(f"{label} {result.id:<{_ID_COLUMN_WIDTH}} {duration}", file=self.stream, flush=True)
@@ -166,11 +171,15 @@ class Reporter:
 
         The count is what this run accounted for in that file -- its tests that ran, plus
         its tests a skip mark kept from running -- and `SKIP` is the status of a file with
-        nothing in the first group."""
+        nothing in the first group. `STOP` is the status of a file the run was stopped in
+        the middle of: nothing in it failed, but not everything in it got to answer."""
         failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
+        cancelled = sum(1 for result in results if result.outcome is Outcome.CANCELLED)
         skipped = self._skipped_by_path.get(path, 0)
         if failed:
             status, character, status_color = "FAIL", "F", _color.RED
+        elif cancelled:
+            status, character, status_color = "STOP", "!", _color.YELLOW
         elif results:
             status, character, status_color = "PASS", ".", _color.GREEN
         else:
@@ -204,6 +213,10 @@ class Reporter:
         if failed:
             line += "   " + _color.paint(
                 f"({failed} failed)", _color.RED, enabled=self._color_enabled
+            )
+        if cancelled:
+            line += "   " + _color.paint(
+                f"({cancelled} cancelled)", _color.YELLOW, enabled=self._color_enabled
             )
         # Only where it qualifies the count: on a wholly skipped file `SKIP` has said it.
         if skipped and results:
@@ -244,6 +257,7 @@ class Reporter:
         wall_clock: float,
         unattributed_output: list[str] | None = None,
         not_run: int = 0,
+        not_run_label: str = "--maxfail",
         deselected: int = 0,
         collection_errors: int = 0,
     ) -> None:
@@ -256,9 +270,10 @@ class Reporter:
         cost in drained wall clock, and the counts the run ends on.
         `captured_stdout`/`captured_stderr` are shown only when `capture_passthrough` is
         off, since passthrough already echoed them live; `log_records` are always shown,
-        since they're never echoed live. `not_run` (tests `--maxfail` stopped before they
-        started), `deselected` and `collection_errors` are caller-supplied because none of
-        them ever reaches `results` itself.
+        since they're never echoed live. `not_run` (tests a stopped run never started),
+        `not_run_label` (what stopped it: `--maxfail`, or an interruption), `deselected`
+        and `collection_errors` are caller-supplied because none of them ever reaches
+        `results` itself.
         """
         self.flush_pending()
         failing = [result for result in results if result.outcome in FAILING_OUTCOMES]
@@ -314,6 +329,7 @@ class Reporter:
             results,
             wall_clock=wall_clock,
             not_run=not_run,
+            not_run_label=not_run_label,
             deselected=deselected,
             collection_errors=collection_errors,
         )
@@ -325,6 +341,7 @@ class Reporter:
         *,
         wall_clock: float,
         not_run: int,
+        not_run_label: str,
         deselected: int,
         collection_errors: int,
     ) -> None:
@@ -343,6 +360,7 @@ class Reporter:
             Outcome.FAILED,
             Outcome.ERROR,
             Outcome.TIMEOUT,
+            Outcome.CANCELLED,
             Outcome.PASSED,
             Outcome.XFAILED,
             Outcome.XPASSED,
@@ -357,6 +375,9 @@ class Reporter:
             (counted[Outcome.FAILED], "failed", _color.RED),
             (counted[Outcome.ERROR], "errored", _color.RED),
             (counted[Outcome.TIMEOUT], "timed out", _color.RED),
+            # Yellow, on the same line as the failures: a cancelled test is not a failure,
+            # but it is one more thing this run couldn't tell the reader.
+            (counted[Outcome.CANCELLED], "cancelled", _color.YELLOW),
             (other, "other", _color.RED),
             (collection_errors, _plural(collection_errors, "collection error"), _color.RED),
         )
@@ -378,7 +399,7 @@ class Reporter:
                 # The user's own filter rather than an outcome, so it never earns an alarm
                 # color however many tests it took out.
                 (deselected, "deselected", _color.GRAY),
-                (not_run, "not run (--maxfail)", _color.YELLOW),
+                (not_run, f"not run ({not_run_label})", _color.YELLOW),
             ),
             _color.paint(
                 f"{wall_clock:.2f}s wall ({_concurrency(results, wall_clock)})",
