@@ -48,6 +48,10 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    # Cleared per run, so a second session in the same process does not inherit the first's
+    # failures and get its dump refused for them.
+    _collection_errors.clear()
+
     version = _pytest_version_tuple()
     if not (MIN_PYTEST <= version < MAX_PYTEST_EXCLUSIVE):
         supported = (
@@ -264,42 +268,28 @@ def _mark(mark):
 # --- session-level views ----------------------------------------------------------------------
 
 
-def _autouse_by_node(fixturemanager, relpath):
+def _autouse_by_node(fixturemanager):
     """Autouse fixture names keyed by the node they apply to — where a `velox.use` goes.
 
     pytest keeps two maps, one keyed by node and one by nodeid string, and unions them when it
-    answers this question itself; so does this. Keys are then re-keyed through `_visibility` so
-    that they agree with the fixtures they name.
+    answers this question itself; so does this. The session node, spelled `""`, is folded into
+    the rootdir, `"."`: both reach every collected test, and an ini-level `usefixtures` lands in
+    the first while a rootdir conftest's autouse lands in the second.
     """
     merged = {}
     by_node = getattr(fixturemanager, "_node_autousenames", None) or {}
     for node, names in by_node.items():
-        merged.setdefault(node.nodeid, []).extend(names)
+        merged.setdefault(node.nodeid or ".", []).extend(names)
     by_nodeid = getattr(fixturemanager, "_nodeid_autousenames", None) or {}
     for nodeid, names in by_nodeid.items():
-        merged.setdefault(nodeid, []).extend(names)
-
-    registry = getattr(fixturemanager, "_arg2fixturedefs", {})
-    placed = {}
-    for nodeid, names in merged.items():
-        for name in names:
-            placed.setdefault(_placement(registry, name, nodeid, relpath), []).append(name)
-    return {nodeid: placed[nodeid] for nodeid in sorted(placed)}
+        merged.setdefault(nodeid or ".", []).extend(names)
+    return {nodeid: _deduplicate(merged[nodeid]) for nodeid in sorted(merged)}
 
 
-def _placement(registry, name, nodeid, relpath):
-    """Where the autouse fixture `name`, registered under `nodeid`, is normalized to."""
-    for fd in registry.get(name, ()):
-        if _raw_visibility(fd) == nodeid and getattr(fd, "_autouse", True):
-            return _visibility(fd, relpath(_location(fd.func)))
-    return nodeid
-
-
-def _location(func):
-    try:
-        return inspect.getfile(_get_real_func(func))
-    except TypeError:
-        return None
+def _deduplicate(names):
+    """`names` without repeats, in the order pytest would set them up."""
+    seen = set()
+    return [name for name in names if not (name in seen or seen.add(name))]
 
 
 def _ini(config):
@@ -428,7 +418,7 @@ def build_dump(session):
         "ini_aliases": dict(getattr(parser, "_ini_aliases", {}) or {}),
         "collection_errors": sorted(set(_collection_errors)),
         "plugins": _plugins(config, relpath),
-        "autouse_by_node": _autouse_by_node(fixturemanager, relpath),
+        "autouse_by_node": _autouse_by_node(fixturemanager),
         "fixture_defs": table.as_dict(),
         "fixture_registry": registry,
         "items": items,

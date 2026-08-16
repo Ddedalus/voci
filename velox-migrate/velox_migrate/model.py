@@ -243,15 +243,20 @@ class GroundTruth:
             return self.ini[canonical]
         return self.ini.get(name)
 
-    def resolve_path(self, path: str | None, *, prefix: str | None = None) -> Path | None:
+    def resolve_path(
+        self, path: str | None, *, prefix: str | None = None, base_prefix: str | None = None
+    ) -> Path | None:
         """`path` as written in the dump, expanded against this suite's rootdir.
 
-        A path carrying a `${prefix}` token belongs to the environment the extraction ran in, and
-        expands only if that prefix is supplied.
+        A path carrying a `${prefix}` or `${base_prefix}` token belongs to the environment the
+        extraction ran in, not to the suite, and expands only if that prefix is supplied. In a
+        virtualenv the two differ, so they are supplied separately.
         """
         if path is None:
             return None
-        for token, replacement in (("${prefix}", prefix), ("${base_prefix}", prefix)):
+        for token, replacement in (("${prefix}", prefix), ("${base_prefix}", base_prefix)):
+            if path == token:
+                return Path(replacement) if replacement else None
             if path.startswith(token + "/"):
                 return Path(replacement, path[len(token) + 1 :]) if replacement else None
         if Path(path).is_absolute():

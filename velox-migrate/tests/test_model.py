@@ -266,6 +266,19 @@ def test_resolving_an_environment_path_needs_the_prefix_it_was_extracted_under(
     )
 
 
+def test_the_two_environment_prefixes_expand_independently(
+    ground_truth: model.GroundTruth,
+) -> None:
+    # In a virtualenv the interpreter's own prefix and the base installation's differ, so a path
+    # under one must not be rebuilt against the other.
+    resolved = ground_truth.resolve_path(
+        "${base_prefix}/lib/mod.py", prefix="/venv", base_prefix="/usr"
+    )
+
+    assert resolved == Path("/usr/lib/mod.py")
+    assert ground_truth.resolve_path("${base_prefix}/lib/mod.py", prefix="/venv") is None
+
+
 def test_a_chain_naming_a_definition_the_dump_lacks_is_refused() -> None:
     dump = _raw("9.1")
     dump["fixture_registry"]["settings"] = ["nonexistent"]

@@ -17,8 +17,8 @@ $ velox-migrate extract tests
 $ cat .velox-migrate/ground-truth.json
 ```
 
-Arguments `extract` does not recognize go to pytest unchanged, so a suite that needs its own
-flags to collect still works:
+Anything after `--` goes to pytest unchanged, so a suite that needs its own flags to collect
+still works:
 
 ```console
 $ velox-migrate extract tests -o ground-truth.json -- -p no:randomly --ignore tests/slow

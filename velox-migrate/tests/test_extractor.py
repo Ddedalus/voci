@@ -162,6 +162,47 @@ def test_a_suite_that_only_half_collects_is_recorded_as_such(tmp_path: Path) -> 
         schema.load(tmp_path / "dump.json")
 
 
+def test_a_session_wide_usefixtures_lands_on_the_same_node_as_a_root_autouse(
+    tmp_path: Path,
+) -> None:
+    # pytest registers an ini-level `usefixtures` as a session autouse name, keyed by the session
+    # rather than by the conftest the fixture is written in. Both reach every test, so both have
+    # to end up at one node — two keys meaning the same thing would place two declarations.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "pytest.ini").write_text("[pytest]\nusefixtures = db\n", encoding="utf-8")
+    (suite / "conftest.py").write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef db():\n    yield\n\n\n"
+        "@pytest.fixture(autouse=True)\ndef auto():\n    yield\n",
+        encoding="utf-8",
+    )
+    (suite / "test_it.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(suite),
+            "-p",
+            "velox_migrate.extractor",
+            "--collect-only",
+            "-q",
+            "--extractor-out",
+            "dump.json",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    autouse = schema.load(tmp_path / "dump.json")["autouse_by_node"]
+
+    assert list(autouse) == ["."]
+    assert sorted(autouse["."]) == ["auto", "db"]
+
+
 def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
     # It is copied into environments where only pytest is installed, so an import of a sibling
     # module would break exactly the case it exists for.

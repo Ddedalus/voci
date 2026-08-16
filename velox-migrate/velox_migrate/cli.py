@@ -1,24 +1,38 @@
 """The `velox-migrate` command line.
 
-`extract` is a convenience wrapper: it runs pytest with the extractor plugin loaded in the
-current environment. Where that environment cannot be arranged, `velox_migrate/extractor.py`
-copied next to the suite and loaded with `-p extractor` does the same job.
+`extract` is a convenience wrapper: it runs pytest, as a subprocess, with the extractor plugin
+loaded. Where that environment cannot be arranged, `velox_migrate/extractor.py` copied next to
+the suite and loaded with `-p extractor` does the same job.
+
+Nothing here imports pytest. `extract` shells out to it, and every other stage reads the dump.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 
-from velox_migrate import extractor, schema
+from velox_migrate import schema
+
+# Kept in step with `extractor.DEFAULT_OUT`, which cannot be imported from: the extractor is a
+# standalone file that imports nothing from this package.
+DEFAULT_OUT = os.path.join(".velox-migrate", "ground-truth.json")
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Split on `--` before argparse sees it. Letting argparse sort the two groups out mixes them:
+    # it claims flags it recognizes wherever they appear and files the rest as positionals, which
+    # separates a pytest flag from its value.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    passthrough: list[str] = []
+    if "--" in argv:
+        separator = argv.index("--")
+        argv, passthrough = argv[:separator], argv[separator + 1 :]
+
     parser = _parser()
-    # Unrecognized arguments are pytest's: `extract` is a wrapper around a pytest run, and a
-    # suite generally needs some of its own flags to collect at all.
-    args, passthrough = parser.parse_known_args(argv)
+    args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return 2
@@ -36,8 +50,8 @@ def _parser() -> argparse.ArgumentParser:
         help="collect the suite under pytest and write its ground-truth dump",
         description=(
             "Collect the suite under pytest, without running any test, and write what pytest "
-            "resolved to a JSON dump every later stage reads. Arguments this command does not "
-            "recognize are passed to pytest unchanged."
+            "resolved to a JSON dump every later stage reads. Anything after `--` is passed to "
+            "pytest unchanged."
         ),
     )
     extract.add_argument(
@@ -49,20 +63,15 @@ def _parser() -> argparse.ArgumentParser:
     extract.add_argument(
         "-o",
         "--out",
-        default=extractor.DEFAULT_OUT,
+        default=DEFAULT_OUT,
         metavar="PATH",
-        help=f"where to write the dump (default: {extractor.DEFAULT_OUT})",
+        help=f"where to write the dump (default: {DEFAULT_OUT})",
     )
     extract.set_defaults(run=_extract)
     return parser
 
 
 def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
-    # `--` is how a caller says the rest belongs to pytest. argparse leaves it in place, and
-    # pytest reads it as "everything after this is a file path", so it is dropped here.
-    if passthrough and passthrough[0] == "--":
-        passthrough = passthrough[1:]
-
     command = [
         sys.executable,
         "-m",

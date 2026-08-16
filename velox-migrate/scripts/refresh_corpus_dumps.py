@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,9 @@ def main(argv: list[str] | None = None) -> int:
             target = DUMPS / f"{suite}-pytest-{label}.json"
             produced = _extract(suite, requirement)
             if args.check:
-                if not target.exists() or target.read_text(encoding="utf-8") != produced:
+                if not target.exists() or _stable(target.read_text(encoding="utf-8")) != _stable(
+                    produced
+                ):
                     stale.append(target.relative_to(REPO_ROOT))
             else:
                 target.write_text(produced, encoding="utf-8")
@@ -64,6 +67,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         print("corpus dumps are current")
     return 0
+
+
+def _stable(text: str) -> object:
+    """The part of a dump that describes the suite rather than the machine it was taken on.
+
+    A dump records its kernel, its interpreter's patch version and the exact pytest that `8.4.*`
+    resolved to, all of which differ between two correct runs on different machines. `--check`
+    exists to catch the extractor and the checked-in artifacts drifting apart, so it compares
+    what the extractor decides and ignores what the environment decides.
+    """
+    dump = json.loads(text)
+    for volatile in ("environment", "pytest_version", "plugins", "ini"):
+        dump.pop(volatile, None)
+    # Builtin fixtures live under `${prefix}/lib/python3.13/...`, which moves with the
+    # interpreter's minor version.
+    return json.loads(re.sub(r"/python3\.\d+/", "/python3.x/", json.dumps(dump)))
 
 
 def _extract(suite: str, requirement: str) -> str:
