@@ -16,21 +16,18 @@ per-test subprocess tier · `skip`/`skipif`/`xfail` ·
 `@velox.fixture`) · `velox.use(...)` fixture declarations on a test module or a package
 `__init__.py` ·
 `unittest.mock` patch detection, solo scheduling and its reported cost ·
-selection by `path.py::test_name` id, `-k` and `@velox.tag` with `-m` · `-x`/`--maxfail`,
-`--serial`, `--collect-only`, `-v`/`-q` and `--durations` · assertion introspection with comparison
-diffs · stdout/stderr/logging capture and `tmp_path` · the reporter · `[tool.velox]` config ·
-`velox.fastapi` per-test dependency overrides.
+selection by `path.py::test_name` id, `-k` and `@velox.tag` with `-m` · `-x`/`--maxfail`
+and Ctrl-C, both cancelling what is in flight · `--serial`, `--collect-only`, `-v`/`-q` and
+`--durations` · assertion introspection with comparison
+diffs · stdout/stderr/logging capture and `tmp_path` · the event-loop watchdog and the failure a
+test earns for returning a value or dropping a coroutine un-awaited · the reporter ·
+`[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Next
 
 **Starvation-aware scheduling.** `exclusive=`/`@velox.solo` admission has no fairness guarantee: a
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
 seeing an opening.
-
-**Runtime safety.** A loop-starvation watchdog that names the blocking call instead of letting the
-suite mysteriously stall; failing a test that returns a value or leaves a coroutine un-awaited;
-cancelling in-flight tests, with time-boxed teardown, on Ctrl-C and when `--maxfail` is reached
-(which today stops new tests from starting and lets running ones finish).
 
 ## Later
 **Performance.** A persistent collection cache, `--lf`/`--ff`,

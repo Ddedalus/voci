@@ -354,6 +354,81 @@ clock at dispatch would turn "this test's setup/call/teardown took too long" and
 behind a contended resource" into the same `TIMEOUT` outcome, though they point at unrelated fixes:
 raise the budget or find the blocking call, versus reduce contention or accept the wait.
 
+**The worker pool is sized to at least `concurrency`, and never below Python's own default.**
+The floor at `concurrency` is what stops one sync test from waiting for a thread while its own
+`--timeout` budget runs down — the gate admits at most that many tests, so that many threads is
+enough for all of them. The floor at `min(32, cpu + 4)` is what stops the *other* direction from
+biting: this is the loop's default executor, so a test's own `asyncio.to_thread(...)` calls land
+in the same pool, and a pool sized to `--serial`'s single slot would deadlock any test that fans
+out over two threads and waits for both.
+
+**Stopping early cancels; it does not wait.** `--maxfail` and a Ctrl-C both mean the run is over,
+and a run that keeps waiting for the tests already in flight is only as fast to stop as its
+slowest one — under concurrency that is routinely the whole point of the flag, spent waiting.
+`StopController` cancels every admitted test instead, and a cancelled test reports `CANCELLED`
+rather than `FAILED`: velox stopped it, so it never got to say anything about the code under
+test, which is a different statement from "it works" and from "it doesn't". The exit code comes
+from what stopped the run — `--maxfail` implies the failures that reached the threshold, a Ctrl-C
+exits 2 — not from tallying cancellations. A test that has not started when the stop lands is
+dropped with no result at all, which is what the "not run" count is derived from.
+
+**A cancelled test's teardown is time-boxed; an ordinary one's is not.** The fixture holding a
+container or a connection pool deserves a real chance to release it even when the run is ending,
+so cancellation is not the end of the test's envelope. But the thing a cancelled test was waiting
+on is often the same thing its fixture will wait on, and an unbounded release would hand the run
+right back to whatever made it worth stopping. `DEFAULT_TEARDOWN_GRACE` splits the difference and
+says so on stderr when it runs out. Nothing bounds the call phase itself the same way: a test that
+swallows its cancellation cannot be taken off the loop, so velox names the tests still holding the
+run open and leaves the second Ctrl-C as the answer.
+
+**velox owns `SIGINT` for the duration of a run.** Left to Python's default handler a Ctrl-C
+raises `KeyboardInterrupt` wherever the main thread happens to be, which aborts the run mid-flight
+and throws away the report for everything that did finish — the most useful thing an interrupted
+run has. The handler installed here turns the first Ctrl-C into the same stop `--maxfail`
+performs, from the loop, so fixtures unwind and the reporter still prints. The second is the
+escape hatch for a test that ignores cancellation and for a loop too blocked to process the first,
+and it takes the abrupt path deliberately: `asyncio.Runner.close()` cancels what is left and then
+*waits* for it, which is exactly what a test that already ignored one cancellation will not
+honour, so the loop is closed out from under it instead. The handler is restored on the way out,
+and never installed off the main thread, where `signal.signal` is not allowed.
+
+## `_run/safety.py` — the loop watchdog and tests that check nothing
+
+**The watchdog reports from a thread, because the loop is the thing that cannot report.** A
+blocking call inside an `async def` test holds the one loop every concurrently dispatched test
+shares, and from the loop's own perspective nothing is happening at all — no callback can run to
+notice, which is why an unwatched stall reads as velox hanging rather than as a test misbehaving.
+A daemon thread reading a heartbeat the loop leaves behind is the only vantage point that still
+works while the loop is held, and `sys._current_frames()` is what turns "something is stuck" into
+a file, a line, and a test id. It warns and never fails a test: velox cannot tell a blocking call
+apart from a fixture that legitimately takes a while, and a diagnostic that can be wrong must not
+be able to fail a build.
+
+**A reported stack is cut at velox's own innermost frame.** Everything outside it is velox
+dispatching a test and asyncio dispatching velox — the same dozen frames on every report, none of
+which answer the question. Everything inside is the test's own call chain, which does.
+
+**Un-awaited coroutines ride CPython's own warning rather than a coroutine tracker.** The
+interpreter already reports every coroutine whose last reference goes away un-started, at the
+moment it goes away — which for one a test created is inside that test's own call phase. Routing
+`warnings.showwarning` to whichever test is running is a `ContextVar` read; tracking coroutine
+creation instead would mean a `sys.setprofile`-class hook on the hot path of every test in the
+suite to catch a mistake that, once caught, is a one-line fix. The trade is that a coroutine
+deliberately kept alive past the end of the test that made it is filed against whoever is running
+when it is finally collected. The filter is set to `always` rather than Python's default of once
+per source location, since a parametrized test forgets its `await` at the same line in every case.
+
+**A sync test stuck in a worker thread is named, not waited for.** Nothing in Python can interrupt
+a thread: cancelling the future that awaits one abandons the wait, not the call. So the executor
+never joins on shutdown — waiting there would make the end of a run, and a Ctrl-C especially, take
+exactly as long as the blocking call that made the run worth abandoning — and velox instead
+prints which test is still running and where it is blocked. The interpreter still cannot exit
+until that call returns; the difference is whether the user is told why.
+
+**A test that returns a value or drops a coroutine fails regardless of `@velox.xfail`.** `xfail`
+re-reads what the call phase *raised*. Neither of these raises anything: they are a test that ran
+to the end while checking nothing, which no mark can have predicted and no `raises=` can match.
+
 ## `_mocking.py` — `unittest.mock` patching
 
 **velox detects patching and schedules around it rather than shipping a patch API of its own.**

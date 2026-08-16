@@ -357,11 +357,23 @@ class ContextPropagatingExecutor(concurrent.futures.ThreadPoolExecutor):
     `submit` copies the calling task's `contextvars.Context` at submit time and runs
     `fn` inside it, so output from the executor thread is attributed to the test
     that submitted it.
+
+    `shutdown` never joins, whatever it is asked for: a worker thread is running a sync
+    test's body, and nothing in Python can interrupt one. Waiting for it would make the end
+    of a run -- a Ctrl-C especially -- hang for exactly as long as the blocking call that
+    made the run worth abandoning. `_run.run` names whatever is still running instead
+    (`_run.safety.stuck_calls`).
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         ctx = contextvars.copy_context()
         return super().submit(cast(Callable[..., Any], ctx.run), fn, *args, **kwargs)
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        # `wait` is accepted and ignored rather than dropped from the signature: this is
+        # also called by `asyncio.Runner.close()` -> `loop.shutdown_default_executor()`,
+        # which passes wait=True and would otherwise block the interpreter there.
+        super().shutdown(wait=False, cancel_futures=cancel_futures)
 
 
 # --------------------------------------------------------------------------- Concurrency slots

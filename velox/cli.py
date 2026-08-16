@@ -31,6 +31,7 @@ from velox._report import color as _color
 from velox._report import terminal as _report
 from velox._run import isolated as _isolated
 from velox._run import run as _run
+from velox._run import safety as _safety
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,6 +127,21 @@ def build_parser() -> argparse.ArgumentParser:
         "rather than FAILED/ERROR. Must be positive and finite. Default: no limit, or "
         "[tool.velox] timeout if set.",
     )
+    # Unlike --timeout, this one is on by default: it never fails a test, and a suite that
+    # has quietly gone serial behind one blocking call is exactly the kind of thing nobody
+    # thinks to switch a diagnostic on for. 0 disables it. None doubles as "unset", same
+    # trick as --concurrency above.
+    parser.add_argument(
+        "--loop-watchdog",
+        dest="loop_watchdog",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Warn when the event loop has been blocked this long, naming the call holding it. "
+        "A blocking call in an async test (or in a fixture) stalls every test at once. Pass 0 to "
+        f"switch it off. Default: {_safety.DEFAULT_LOOP_WATCHDOG}, or [tool.velox] "
+        f"loop_watchdog if set.",
+    )
     # stdout/stderr are routed through a per-test Sink by default and shown only for
     # failing tests. -s/--capture=no disables that buffering for a live pass-through,
     # prefixed per line with the test id so concurrent output stays readable -- unlike
@@ -154,16 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Shorthand for --concurrency=1: one test at a time, in collection order. The first "
         "step when a concurrent run behaves differently from a serial one.",
     )
-    # -x/--maxfail stop dispatching; they do not cancel what is already running (ROADMAP.md),
-    # which is why the help says "stop starting" rather than "stop".
     parser.add_argument(
         "--maxfail",
         type=int,
         default=None,
         metavar="N",
-        help="Stop starting new tests once N of them have failed. Tests already running are "
-        "left to finish, so slightly more than N failures can be reported. Default: run "
-        "everything.",
+        help="Stop the run once N tests have failed: tests that haven't started are dropped, and "
+        "tests still in flight are cancelled and reported as CANCELLED. Default: run everything.",
     )
     parser.add_argument(
         "-x",
@@ -524,6 +537,9 @@ def main(argv: list[str] | None = None) -> int:
         1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
     )
     effective_timeout = _resolve_layered(args.timeout, config.timeout)
+    effective_watchdog = _resolve_layered(
+        args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
+    )
 
     # Named by its actual source (the CLI flag, or the config file that set it) rather
     # than always saying --concurrency/--timeout -- a bad [tool.velox] concurrency
@@ -544,6 +560,20 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"velox: {source} must be a positive, finite number of seconds, got "
             f"{effective_timeout}",
+            file=sys.stderr,
+        )
+        return 4
+    # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
+    # negative and non-finite values are usage errors.
+    if not math.isfinite(effective_watchdog) or effective_watchdog < 0:
+        source = (
+            "--loop-watchdog"
+            if args.loop_watchdog is not None
+            else f"{config.source} 'loop_watchdog'"
+        )
+        print(
+            f"velox: {source} must be zero (off) or a positive, finite number of seconds, got "
+            f"{effective_watchdog}",
             file=sys.stderr,
         )
         return 4
@@ -724,6 +754,15 @@ def main(argv: list[str] | None = None) -> int:
             durations=args.durations,
         )
 
+        # Set by run_suite's own on_interrupt callback, from the loop, the first time a
+        # Ctrl-C lands. Everything the run did find is still reported below; this only
+        # decides what the last line says and which exit code goes with it.
+        interrupted = False
+
+        def on_interrupt() -> None:
+            nonlocal interrupted
+            interrupted = True
+
         results = _run.run_suite(
             collected.records,
             concurrency=effective_concurrency,
@@ -733,6 +772,10 @@ def main(argv: list[str] | None = None) -> int:
             basetemp=args.basetemp,
             unattributed_output=unattributed,
             on_result=reporter.on_result,
+            on_interrupt=on_interrupt,
+            # 0 means "off" at the CLI; run_suite spells that None, and treats a
+            # non-positive number the same way regardless.
+            loop_watchdog=effective_watchdog or None,
             # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
             # isolated test's subprocess must reproduce what this run actually decided
             # (a --assert=rewrite request can still fall back to plain), not re-derive
@@ -755,10 +798,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{error.path} {error_word}")
             print(error.message)
 
-        # run_suite returns one result per test that ran, so anything collection handed
-        # it that isn't in there is a test --maxfail stopped before it started.
+        # run_suite returns one result per test that ran -- a cancelled test included --
+        # so anything collection handed it that isn't in there is a test the run stopped
+        # before it ever started.
         not_run = len(collected.records) - len(results)
-        if not_run:
+        stopped_by = "interrupted" if interrupted else "--maxfail"
+        if interrupted:
+            print(_color.paint("INTERRUPTED (Ctrl-C)", _color.YELLOW, enabled=color_enabled))
+        elif not_run:
             print(
                 _color.paint(
                     f"stopped after {maxfail} failed (--maxfail)",
@@ -775,11 +822,25 @@ def main(argv: list[str] | None = None) -> int:
             wall_clock=wall_clock,
             unattributed_output=unattributed,
             not_run=not_run,
+            not_run_label=stopped_by,
             deselected=len(collected.deselected),
             collection_errors=len(collected.errors),
         )
 
+        # 2, not what the partial results happen to add up to: an interrupted run never
+        # got to the point of having a verdict, and exiting 0 because the tests that did
+        # finish passed would let a Ctrl-C read as success in CI.
+        if interrupted:
+            return 2
         return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
+    except KeyboardInterrupt:
+        # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second
+        # one (the deliberate "abort now" path), or one that landed while this call was
+        # still collecting. Nothing partial is worth printing at that point -- the run
+        # was abandoned, not finished.
+        print(file=sys.stdout, flush=True)
+        print("velox: aborted (Ctrl-C)", file=sys.stderr)
+        return 2
     finally:
         # main is called repeatedly in-process (this package's own test suite does
         # exactly that), and an embedding caller may too -- leaving the hook on

@@ -169,6 +169,21 @@ def test_timeout_rejects_a_bool(tmp_path: Path) -> None:
         resolve([tmp_path])
 
 
+def test_loop_watchdog_accepts_a_number_and_zero_for_off(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 2.5\n")
+    assert resolve([tmp_path]).loop_watchdog == 2.5
+
+    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 0\n")
+    assert resolve([tmp_path]).loop_watchdog == 0.0
+
+
+def test_loop_watchdog_must_be_a_number(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 'soon'\n")
+
+    with pytest.raises(ConfigError, match="loop_watchdog"):
+        resolve([tmp_path])
+
+
 def test_testpaths_must_be_a_list_of_strings(tmp_path: Path) -> None:
     Project(tmp_path).write_pyproject("[tool.velox]\ntestpaths = 'tests'\n")
 

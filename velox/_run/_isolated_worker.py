@@ -73,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=config["timeout"],
                 capture_passthrough=False,
                 basetemp=Path(config["basetemp"]),
+                # Both come from the parent's own run: a watchdog the user switched off
+                # stays off in here, and a cancelled test gets the same teardown budget on
+                # either side of the process boundary. `None` is `run_suite`'s own "use the
+                # default", which is what an older parent's config file leaves behind.
+                loop_watchdog=config.get("loop_watchdog"),
+                teardown_grace=config.get("teardown_grace") or _run.DEFAULT_TEARDOWN_GRACE,
                 already_isolated=True,
             )
             data = result_to_json(results[0])

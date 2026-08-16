@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
+import threading
 import time
+import warnings
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from unittest import mock
@@ -1786,3 +1789,387 @@ def test_the_patch_guard_does_not_outlive_the_run() -> None:
 
     with mock.patch("os.getcwd", return_value="/x"):
         assert os.getcwd() == "/x"
+
+
+# A call phase that raised nothing and still tested nothing: a returned value, or a coroutine
+# it never awaited. See `_run.safety.call_misuse` for the messages themselves.
+# ------------------------------------------------------------------------------------------
+
+
+async def _returns_a_value() -> int:
+    return 7
+
+
+async def _forgets_to_await() -> None:
+    _passes()  # pyrefly: ignore[unused-coroutine]  -- the whole point of these tests
+
+
+def _sync_forgets_to_await() -> None:
+    _passes()  # pyrefly: ignore[unused-coroutine]  -- the whole point of these tests
+
+
+def test_a_test_that_returns_a_value_fails() -> None:
+    (result,) = run_suite([_record(0, _returns_a_value, "test_returns")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary is not None
+    assert "returned 7" in result.failure_summary
+
+
+def test_a_test_that_forgets_an_await_fails() -> None:
+    (result,) = run_suite([_record(0, _forgets_to_await, "test_forgets")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary is not None
+    assert "never awaited" in result.failure_summary
+
+
+def test_a_sync_test_that_forgets_an_await_fails() -> None:
+    """A sync body runs in a worker thread, whose context is a copy of the dispatching task's
+    -- so the coroutine it drops is still filed against this test and no other."""
+    (result,) = run_suite([_record(0, _sync_forgets_to_await, "test_sync_forgets")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure_summary is not None
+    assert "never awaited" in result.failure_summary
+
+
+def test_one_test_forgetting_an_await_does_not_fail_its_concurrent_siblings() -> None:
+    records = [
+        _record(0, _forgets_to_await, "test_forgets"),
+        *[_record(i, _passes, f"test_ok_{i}") for i in range(1, 8)],
+    ]
+
+    results = run_suite(records, concurrency=8)
+
+    assert [result.outcome for result in results] == [Outcome.FAILED] + [Outcome.PASSED] * 7
+
+
+def test_an_xfail_mark_does_not_absorb_a_returned_value() -> None:
+    """`xfail` re-reads what the call phase *raised*; a returned value is not a failure the
+    mark could have predicted, so it is reported as one."""
+
+    async def test_returns() -> int:
+        return 7
+
+    marked = velox.xfail(reason="known")(test_returns)
+
+    (result,) = run_suite([_record(0, marked, "test_returns")])
+
+    assert result.outcome is Outcome.FAILED
+
+
+def test_the_unawaited_hook_does_not_outlive_the_run() -> None:
+    run_suite([_record(0, _passes, "test_passes")])
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _passes()  # pyrefly: ignore[unused-coroutine]  -- the whole point of these tests
+    assert any("was never awaited" in str(warning.message) for warning in caught)
+
+
+# Stopping early: `--maxfail` and a Ctrl-C both cancel what is in flight.
+# ----------------------------------------------------------------------
+
+
+async def _sleeps_a_long_time() -> None:
+    await asyncio.sleep(30)
+
+
+def test_maxfail_cancels_the_tests_still_in_flight() -> None:
+    """The point of cancelling rather than waiting: a run stopped by its first failure does
+    not sit through a 30-second sibling before it can report."""
+    records = [
+        _record(0, _sleeps_a_long_time, "test_slow_a"),
+        _record(1, _sleeps_a_long_time, "test_slow_b"),
+        _record(2, _fails, "test_fails"),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=3, maxfail=1)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10
+    by_id = {result.id: result.outcome for result in results}
+    assert by_id["mod.py::test_fails"] is Outcome.FAILED
+    assert by_id["mod.py::test_slow_a"] is Outcome.CANCELLED
+    assert by_id["mod.py::test_slow_b"] is Outcome.CANCELLED
+
+
+def test_a_cancelled_test_still_tears_its_fixtures_down() -> None:
+    torn_down: list[str] = []
+
+    @velox.fixture()
+    async def resource() -> AsyncIterator[str]:
+        yield "resource"
+        torn_down.append("resource")
+
+    async def test_slow(value: str = velox.Depends(resource)) -> None:
+        await asyncio.sleep(30)
+
+    records = [
+        _record(0, test_slow, "test_slow", plan=plan_for(test_slow)),
+        _record(1, _fails, "test_fails"),
+    ]
+
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert torn_down == ["resource"]
+    assert {result.outcome for result in results} == {Outcome.CANCELLED, Outcome.FAILED}
+
+
+def test_a_cancelled_tests_teardown_is_time_boxed() -> None:
+    """A fixture waiting on something that will never come must not hold a stopped run open
+    -- the release is waited on for `teardown_grace` and then given up on."""
+
+    @velox.fixture()
+    async def never_releases() -> AsyncIterator[str]:
+        yield "resource"
+        await asyncio.sleep(30)
+
+    async def test_slow(value: str = velox.Depends(never_releases)) -> None:
+        await asyncio.sleep(30)
+
+    records = [
+        _record(0, test_slow, "test_slow", plan=plan_for(test_slow)),
+        _record(1, _fails, "test_fails"),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, maxfail=1, teardown_grace=0.2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10
+    cancelled = next(result for result in results if result.outcome is Outcome.CANCELLED)
+    assert cancelled.failure is not None
+    assert "may not have been fully torn down" in cancelled.failure
+
+
+def test_a_cancelled_test_reports_why_it_was_cancelled() -> None:
+    records = [
+        _record(0, _sleeps_a_long_time, "test_slow"),
+        _record(1, _fails, "test_fails"),
+    ]
+
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    cancelled = next(result for result in results if result.outcome is Outcome.CANCELLED)
+    assert cancelled.failure_summary == "cancelled: the run stopped after --maxfail"
+
+
+def test_a_test_that_had_not_started_is_dropped_rather_than_cancelled() -> None:
+    """Two different things a stopped run does: what was running is cancelled and reports,
+    what never started leaves no result at all -- which is what `--maxfail`'s "not run" count
+    is derived from."""
+    records = [
+        _record(0, _fails, "test_fails"),
+        _record(1, _passes, "test_never_starts"),
+    ]
+
+    results = run_suite(records, concurrency=1, maxfail=1)
+
+    assert [result.id for result in results] == ["mod.py::test_fails"]
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("inf")])
+def test_run_suite_rejects_a_non_positive_teardown_grace(bad: float) -> None:
+    with pytest.raises(ValueError):
+        run_suite([_record(0, _passes, "test_passes")], teardown_grace=bad)
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_ctrl_c_cancels_the_run_and_reports_what_was_in_flight() -> None:
+    """The signal is sent from inside a test body, so it can only land while `run_suite`'s own
+    handler is installed -- which is also the only state this behavior exists in."""
+    interrupted: list[bool] = []
+
+    async def test_interrupts() -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(30)
+
+    records = [
+        _record(0, test_interrupts, "test_interrupts"),
+        _record(1, _sleeps_a_long_time, "test_slow"),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, on_interrupt=lambda: interrupted.append(True))
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10
+    assert interrupted == [True]
+    assert [result.outcome for result in results] == [Outcome.CANCELLED, Outcome.CANCELLED]
+    assert results[0].failure_summary == "cancelled: the run was interrupted (Ctrl-C)"
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_the_interrupt_handler_does_not_outlive_the_run() -> None:
+    before = signal.getsignal(signal.SIGINT)
+
+    run_suite([_record(0, _passes, "test_passes")])
+
+    assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_a_test_may_fan_out_over_more_threads_than_the_run_has_concurrency() -> None:
+    """The executor a run installs is also where a test's own `asyncio.to_thread(...)` lands,
+    so sizing it to `concurrency` alone would let a single test deadlock against itself under
+    `--serial`."""
+    barrier = threading.Barrier(2)
+
+    async def test_fans_out() -> None:
+        await asyncio.gather(
+            asyncio.to_thread(barrier.wait, 10), asyncio.to_thread(barrier.wait, 10)
+        )
+
+    (result,) = run_suite([_record(0, test_fans_out, "test_fans_out")], concurrency=1)
+
+    assert result.outcome is Outcome.PASSED
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_sigint_handler_velox_could_not_restore_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`signal.getsignal` returns `None` for a handler installed from outside Python. Velox
+    has nothing to put back afterwards, so it doesn't take the signal in the first place."""
+    installed: list[object] = []
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
+    monkeypatch.setattr(signal, "signal", lambda _signum, handler: installed.append(handler))
+
+    (result,) = run_suite([_record(0, _passes, "test_passes")])
+
+    assert result.outcome is Outcome.PASSED
+    assert installed == []
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_second_ctrl_c_aborts_and_leaves_no_watchdog_thread_behind() -> None:
+    """The `KeyboardInterrupt` the second Ctrl-C raises never resumes the coroutine driving
+    the run, so anything that coroutine would have stopped on its way out has to be stopped
+    from outside it too."""
+
+    async def test_interrupts_twice() -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+        try:
+            # Where the first Ctrl-C's cancellation lands, once the loop has run the
+            # callback the handler scheduled.
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            # The second Ctrl-C: raised as a KeyboardInterrupt by the handler itself, on
+            # the next bytecode after this line, since the run is already stopping.
+            os.kill(os.getpid(), signal.SIGINT)
+            raise
+
+    with pytest.raises(KeyboardInterrupt):
+        run_suite([_record(0, test_interrupts_twice, "test_interrupts_twice")], loop_watchdog=0.05)
+
+    assert not [thread for thread in threading.enumerate() if thread.name == "velox-loop-watchdog"]
+
+
+def test_a_stop_landing_during_teardown_leaves_the_tests_own_verdict_alone() -> None:
+    """The test had already answered; the run stopping mid-release is the run's doing, not a
+    teardown error the test should be blamed for."""
+
+    @velox.fixture()
+    async def slow_release() -> AsyncIterator[str]:
+        yield "resource"
+        await asyncio.sleep(30)
+
+    async def test_passes_then_releases(value: str = velox.Depends(slow_release)) -> None:
+        pass
+
+    async def test_fails_a_moment_later() -> None:
+        await asyncio.sleep(0.1)
+        raise AssertionError("nope")
+
+    records = [
+        _record(
+            0,
+            test_passes_then_releases,
+            "test_passes_then_releases",
+            plan=plan_for(test_passes_then_releases),
+        ),
+        _record(1, test_fails_a_moment_later, "test_fails"),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert time.monotonic() - started < 10
+    assert [result.outcome for result in results] == [Outcome.PASSED, Outcome.FAILED]
+
+
+def test_a_stop_landing_during_the_module_scope_flush_keeps_the_real_result() -> None:
+    """The last test of a module releases that module's fixtures on its way out, holding a
+    result it has already earned -- a cancellation there must not overwrite it."""
+
+    @velox.fixture(scope="module")
+    async def slow_module_release() -> AsyncIterator[str]:
+        yield "resource"
+        await asyncio.sleep(30)
+
+    async def test_fails_then_flushes(value: str = velox.Depends(slow_module_release)) -> None:
+        raise AssertionError("nope")
+
+    async def test_fails_a_moment_later() -> None:
+        await asyncio.sleep(0.1)
+        raise AssertionError("nope")
+
+    records = [
+        _record(
+            0,
+            test_fails_then_flushes,
+            "test_fails_then_flushes",
+            plan=plan_for(test_fails_then_flushes),
+            path=Path("first.py"),
+        ),
+        _record(1, test_fails_a_moment_later, "test_fails", path=Path("second.py")),
+    ]
+
+    started = time.monotonic()
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert time.monotonic() - started < 10
+    assert [result.outcome for result in results] == [Outcome.FAILED, Outcome.FAILED]
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="run_suite only takes SIGINT on the main thread",
+)
+def test_a_ctrl_c_during_a_maxfail_stop_is_not_the_abort() -> None:
+    """The abort is the second Ctrl-C of a run, counted by the handler itself -- not "some
+    stop was already under way", which `--maxfail` sets before any Ctrl-C is pressed."""
+
+    async def test_fails_immediately() -> None:
+        raise AssertionError("nope")
+
+    async def test_interrupts_when_cancelled() -> None:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            os.kill(os.getpid(), signal.SIGINT)
+            raise
+
+    records = [
+        _record(0, test_interrupts_when_cancelled, "test_interrupts_when_cancelled"),
+        _record(1, test_fails_immediately, "test_fails"),
+    ]
+
+    # No KeyboardInterrupt: the run ends by itself and still reports both tests.
+    results = run_suite(records, concurrency=2, maxfail=1)
+
+    assert [result.outcome for result in results] == [Outcome.CANCELLED, Outcome.FAILED]
