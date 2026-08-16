@@ -46,8 +46,8 @@ class Mark:
     """One mark applied to a test.
 
     Arguments are kept as the `repr` of their value, because a mark argument can be any object.
-    `origin` is the nodeid of the node the mark was written on — the test, its class, or its
-    module — and is `None` for a mark read off the test itself.
+    `origin` is the nodeid of the node the mark was written on — the test itself, its class, or
+    its module — and is `None` only in `Item.own_markers`, which records no origin.
     """
 
     name: str
@@ -220,13 +220,14 @@ class GroundTruth:
     fixture_defs: Mapping[str, FixtureDef]
     fixture_registry: Mapping[str, tuple[FixtureDef, ...]]
     items: tuple[Item, ...]
+    items_by_nodeid: Mapping[str, Item]
 
     def item(self, nodeid: str) -> Item:
         """The collected test with this nodeid. Raises `KeyError` if the suite has no such test."""
-        for item in self.items:
-            if item.nodeid == nodeid:
-                return item
-        raise KeyError(f"No test {nodeid!r} was collected in this extraction.")
+        try:
+            return self.items_by_nodeid[nodeid]
+        except KeyError:
+            raise KeyError(f"No test {nodeid!r} was collected in this extraction.") from None
 
     def ini_value(self, name: str) -> str | None:
         """The `repr`ed value of ini key `name`, under either its current or its former spelling.
@@ -314,6 +315,7 @@ def build(dump: Mapping) -> GroundTruth:
         fixture_defs=fixture_defs,
         fixture_registry=registry,
         items=items,
+        items_by_nodeid={item.nodeid: item for item in items},
     )
 
 

@@ -245,6 +245,48 @@ def test_a_clean_collection_records_a_clean_exit(dump: dict) -> None:
     assert dump["exit_status"] == 0
 
 
+def test_a_conftest_re_exporting_a_plugin_fixture_does_not_claim_the_plugins_own(
+    tmp_path: Path,
+) -> None:
+    # `from pytest_asyncio.plugin import event_loop` in a conftest is a common way to adjust a
+    # plugin fixture. The name then lives in the conftest's namespace without the plugin's own
+    # definition ceasing to be the plugin's — and visibility decides where a replacement goes.
+    (tmp_path / "myplug.py").write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef gf():\n    yield\n", encoding="utf-8"
+    )
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "conftest.py").write_text("from myplug import gf  # noqa: F401\n", encoding="utf-8")
+    (suite / "test_it.py").write_text("def test_ok(gf): pass\n", encoding="utf-8")
+
+    _run_plugin(suite, tmp_path, "-p", "myplug")
+
+    dump = schema.load(tmp_path / "dump.json")
+    visibility = [dump["fixture_defs"][key]["visibility"] for key in dump["fixture_registry"]["gf"]]
+
+    assert visibility[0] == ""
+
+
+def test_a_nested_test_class_keeps_the_class_it_is_nested_in(tmp_path: Path) -> None:
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_it.py").write_text(
+        "class TestOuter:\n    class TestInner:\n        def test_x(self): pass\n",
+        encoding="utf-8",
+    )
+
+    _run_plugin(suite, tmp_path)
+
+    assert schema.load(tmp_path / "dump.json")["items"][0]["cls"] == "TestOuter.TestInner"
+
+
+def test_scrubbing_stops_at_a_path_boundary() -> None:
+    normalize = extractor._PathNormalizer("/home/u/proj")
+
+    assert normalize.scrub("/home/u/project-notes/x.ini") == "/home/u/project-notes/x.ini"
+    assert normalize.scrub("/home/u/proj/x.ini") == "./x.ini"
+
+
 def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
     # It is copied into environments where only pytest is installed, so an import of a sibling
     # module would break exactly the case it exists for.
@@ -333,13 +375,14 @@ def test_a_suite_inside_the_environment_prefix_still_wins() -> None:
     assert normalize(f"{sys.prefix}/suite/conftest.py") == "conftest.py"
 
 
-def _run_plugin(suite: Path, workdir: Path) -> subprocess.CompletedProcess:
+def _run_plugin(suite: Path, workdir: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
             str(suite),
+            *extra,
             "-p",
             "velox_migrate.extractor",
             "--collect-only",

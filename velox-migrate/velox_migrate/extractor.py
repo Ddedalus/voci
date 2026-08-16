@@ -16,6 +16,7 @@ import inspect
 import json
 import os
 import platform
+import re
 import sys
 
 import pytest
@@ -141,9 +142,13 @@ class _PathNormalizer:
         return text.replace(os.sep, "/")
 
     def scrub(self, text):
-        """`text` with any machine path inside it replaced, for messages rather than paths."""
+        """`text` with any machine path inside it replaced, for messages rather than paths.
+
+        Bounded at a separator or the end of the path, so a sibling directory that merely starts
+        with the same characters is left alone.
+        """
         for prefix, token in self._roots:
-            text = text.replace(prefix, token or ".")
+            text = re.sub(re.escape(prefix) + r"(?=[/\\]|$|[^\w./\\-])", token or ".", text)
         return text
 
 
@@ -246,11 +251,22 @@ def _conftest_owners(config):
     record of which fixtures it contributed — including a fixture whose factory is a wrapper
     written in some other module, which its own location would misattribute.
     """
+    plugins = list(config.pluginmanager.list_name_plugin())
+    # Modules that are plugins in their own right. A conftest re-exporting one of their fixtures
+    # — `from pytest_asyncio.plugin import event_loop` — does not thereby own it.
+    plugin_modules = {
+        plugin.__name__
+        for name, plugin in plugins
+        if inspect.ismodule(plugin) and not str(name).endswith("conftest.py")
+    }
+
     owners = {}
-    for name, plugin in config.pluginmanager.list_name_plugin():
+    for name, plugin in plugins:
         if not (inspect.ismodule(plugin) and str(name).endswith("conftest.py")):
             continue
         for value in vars(plugin).values():
+            if getattr(value, "__module__", None) in plugin_modules:
+                continue
             # What `@pytest.fixture` leaves in the module is a definition object holding the
             # factory, not the factory itself, so the factory is reached through it.
             for candidate in (
@@ -439,7 +455,7 @@ def _item(item, table, relpath, fixturemanager):
         "path": relpath(getattr(item, "path", None)),
         "lineno": _item_lineno(item),
         "originalname": getattr(item, "originalname", None) or item.name,
-        "cls": item.cls.__name__ if getattr(item, "cls", None) else None,
+        "cls": item.cls.__qualname__ if getattr(item, "cls", None) else None,
         "own_markers": [_mark(m) for m in item.own_markers],
         "markers_with_origin": [
             {"from": node.nodeid, **_mark(mark)} for node, mark in item.iter_markers_with_node()
