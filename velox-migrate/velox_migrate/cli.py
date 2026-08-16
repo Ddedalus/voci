@@ -10,6 +10,7 @@ Nothing here imports pytest. `extract` shells out to it, and every other stage r
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -72,6 +73,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
+    if importlib.util.find_spec("pytest") is None:
+        print(
+            "velox-migrate: `extract` collects the suite with pytest, and this environment has "
+            "none. Install pytest here, or copy velox_migrate/extractor.py into the environment "
+            "the suite collects in and run it there.",
+            file=sys.stderr,
+        )
+        return 1
+
     command = [
         sys.executable,
         "-m",
@@ -88,8 +98,9 @@ def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
     completed = subprocess.run(command, check=False)
     if completed.returncode != 0:
         print(
-            "velox-migrate: pytest could not collect this suite, so there is no ground truth to "
-            "migrate from. Fix collection first — the output above is pytest's own.",
+            f"velox-migrate: pytest exited {completed.returncode} without collecting this suite, "
+            "so there is no ground truth to migrate from. Fix whatever the output above reports "
+            "— it is pytest's own.",
             file=sys.stderr,
         )
         return completed.returncode

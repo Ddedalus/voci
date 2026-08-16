@@ -23,7 +23,12 @@ REQUEST = "request"
 
 @dataclass(frozen=True, slots=True)
 class FuncLocation:
-    """Where a fixture's factory is written, after any decorator wrapping it was peeled off.
+    """Where a fixture's factory is written.
+
+    `wrapped` says whether a decorator was peeled off to get here. A decorator that does not set
+    `__wrapped__` cannot be peeled, and then this is the wrapper's own location — in whichever
+    module the decorator was written — with `wrapped` false. A fixture's owning conftest is given
+    by `FixtureDef.visibility`, which does not depend on this.
 
     `file` is relative to the suite's rootdir when the file is inside it, and otherwise carries a
     `${prefix}` token for the interpreter prefix; `GroundTruth.resolve_path` expands it.
@@ -123,6 +128,7 @@ class Item:
     names_closure: tuple[str, ...]
     chains: Mapping[str, tuple[FixtureDef, ...]]
     usefixtures: tuple[str, ...]
+    autouse_names: tuple[str, ...]
     own_markers: tuple[Mark, ...]
     markers_with_origin: tuple[Mark, ...]
     callspec: CallSpec | None
@@ -130,16 +136,6 @@ class Item:
     @property
     def is_parametrized(self) -> bool:
         return self.callspec is not None
-
-    @property
-    def autouse_names(self) -> tuple[str, ...]:
-        """The autouse fixtures reaching this test, in the order pytest sets them up.
-
-        Autouse names lead `initialnames`, which otherwise holds what the test asked for by
-        `usefixtures` and by parameter.
-        """
-        asked_for = set(self.argnames) | set(self.usefixtures)
-        return tuple(name for name in self.initialnames if name not in asked_for)
 
     def resolve(self, name: str) -> FixtureDef | None:
         """The definition `name` resolves to for this test, nearest-wins already applied."""
@@ -384,6 +380,7 @@ def _item(entry: Mapping, chain) -> Item:
         names_closure=tuple(entry.get("names_closure", ())),
         chains=chains,
         usefixtures=tuple(entry.get("usefixtures", ())),
+        autouse_names=tuple(entry.get("autouse", ())),
         own_markers=tuple(_mark(m) for m in entry.get("own_markers", ())),
         markers_with_origin=tuple(_mark(m) for m in entry.get("markers_with_origin", ())),
         callspec=callspec,

@@ -149,8 +149,9 @@ class _DefTable:
     rather than to fixtures times tests.
     """
 
-    def __init__(self, relpath):
+    def __init__(self, relpath, owners):
         self._relpath = relpath
+        self._owners = owners
         self._keys = {}
         self._defs = {}
         # `id()` is only unique among live objects, so the table keeps every definition alive
@@ -193,7 +194,7 @@ class _DefTable:
             "ids": encoded_ids,
             # `_autouse` since 8.4. Cross-checkable against `autouse_by_node`.
             "autouse": bool(getattr(fd, "_autouse", False)),
-            "visibility": _visibility(fd, func["file"]),
+            "visibility": _visibility(fd, self._owners, self._relpath),
             "kind": type(fd).__name__,
             "direct_param": _is_direct_param(fd),
             "argnames": list(getattr(fd, "argnames", ())),
@@ -228,20 +229,49 @@ def _raw_visibility(fd):
     return getattr(fd, "baseid", "") or ""
 
 
-def _visibility(fd, file):
+def _conftest_owners(config):
+    """The conftest each object in a conftest's namespace came from, keyed by object identity.
+
+    pytest registers a conftest as a plugin named by its path, so its module namespace is the
+    record of which fixtures it contributed — including a fixture whose factory is a wrapper
+    written in some other module, which its own location would misattribute.
+    """
+    owners = {}
+    for name, plugin in config.pluginmanager.list_name_plugin():
+        if not (inspect.ismodule(plugin) and str(name).endswith("conftest.py")):
+            continue
+        for value in vars(plugin).values():
+            # What `@pytest.fixture` leaves in the module is a definition object holding the
+            # factory, not the factory itself, so the factory is reached through it.
+            for candidate in (
+                value,
+                getattr(value, "_fixture_function", None),
+                getattr(value, "__wrapped__", None),
+            ):
+                if candidate is not None:
+                    owners.setdefault(id(candidate), str(name))
+    return owners
+
+
+def _visibility(fd, owners, relpath):
     """The node a fixture is visible from, spelled the same way whatever pytest produced it.
 
     pytest 9.1 gives the rootdir conftest its own node, `"."`, and reserves `""` for a fixture a
-    plugin registered globally. Earlier versions use `""` for both, so a conftest that lands
-    there is re-keyed to the directory it was written in — recovering the distinction rather than
-    discarding it, since where a fixture was defined decides where its replacement goes.
+    plugin registered globally. Earlier versions use `""` for both, so a fixture that lands there
+    but belongs to a conftest is re-keyed to that conftest's directory — recovering the
+    distinction rather than discarding it, since where a fixture is defined decides where its
+    replacement goes.
     """
     reported = _raw_visibility(fd)
     if reported:
         return reported
-    if not file or os.path.isabs(file) or not file.endswith("conftest.py"):
+    owner = owners.get(id(fd.func))
+    if owner is None:
         return reported
-    return os.path.dirname(file) or "."
+    relative = relpath(owner)
+    if not relative or os.path.isabs(relative):
+        return reported
+    return os.path.dirname(relative) or "."
 
 
 def _is_direct_param(fd):
@@ -284,6 +314,26 @@ def _autouse_by_node(fixturemanager):
     for nodeid, names in by_nodeid.items():
         merged.setdefault(nodeid or ".", []).extend(names)
     return {nodeid: _deduplicate(merged[nodeid]) for nodeid in sorted(merged)}
+
+
+def _item_autouse(fixturemanager, item):
+    """The autouse fixtures reaching one test, in the order pytest sets them up.
+
+    Asked of pytest rather than derived by subtracting what the test requested from what it
+    starts with: a test may also request an autouse fixture by name, and subtracting would drop
+    exactly that one.
+    """
+    getter = getattr(fixturemanager, "_getautousenames", None)
+    if getter is not None:
+        return _deduplicate(list(getter(item)))
+
+    fixtureinfo = getattr(item, "_fixtureinfo", None)
+    if fixtureinfo is None:
+        return []
+    requested = set(fixtureinfo.argnames) | {
+        name for _, mark in item.iter_markers_with_node(name="usefixtures") for name in mark.args
+    }
+    return [name for name in fixtureinfo.initialnames if name not in requested]
 
 
 def _deduplicate(names):
@@ -344,11 +394,13 @@ def _environment():
     }
 
 
-def _item(item, table, relpath):
+def _item(item, table, relpath, fixturemanager):
     record = {
         "nodeid": item.nodeid,
         "path": relpath(getattr(item, "path", None)),
-        "lineno": item.location[1] if getattr(item, "location", None) else None,
+        # `item.location` counts lines from zero; every other line number in the dump is a
+        # `co_firstlineno`, which counts from one.
+        "lineno": item.location[1] + 1 if getattr(item, "location", None) else None,
         "originalname": getattr(item, "originalname", None) or item.name,
         "cls": item.cls.__name__ if getattr(item, "cls", None) else None,
         "own_markers": [_mark(m) for m in item.own_markers],
@@ -364,6 +416,8 @@ def _item(item, table, relpath):
             for name in mark.args
         ],
     }
+
+    record["autouse"] = _item_autouse(fixturemanager, item)
 
     fixtureinfo = getattr(item, "_fixtureinfo", None)
     if fixtureinfo is not None:
@@ -393,7 +447,7 @@ def build_dump(session):
     config = session.config
     fixturemanager = session._fixturemanager
     relpath = _PathNormalizer(config.rootpath)
-    table = _DefTable(relpath)
+    table = _DefTable(relpath, _conftest_owners(config))
 
     # Built before the items so that keys run outer-to-inner over the registry, which keeps a
     # diff between two dumps of a barely-changed suite readable.
@@ -401,7 +455,7 @@ def build_dump(session):
         name: table.keys(defs)
         for name, defs in sorted(getattr(fixturemanager, "_arg2fixturedefs", {}).items())
     }
-    items = [_item(item, table, relpath) for item in session.items]
+    items = [_item(item, table, relpath, fixturemanager) for item in session.items]
 
     parser = getattr(config, "_parser", None)
     return {

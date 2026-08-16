@@ -1,14 +1,17 @@
-"""Root-level fixtures: plain fixtures, autouse, fixture params=, and a functools.wraps wrapper.
+"""Root-level fixtures: plain fixtures, autouse, fixture params=, and two wrapped fixtures.
 
 Contributes the base of the override-chain case (`settings`, overridden in `integration/`), the
 autouse-placement case (`root_autouse`), the fixture-params-become-callspec case (`backend`), the
-dynamic-fixture-use-is-invisible case (`dyn`, via `request.getfixturevalue`), and the
-see-through-the-wrapper case (`wrapped_fix`).
+dynamic-fixture-use-is-invisible case (`dyn`, via `request.getfixturevalue`), the
+see-through-the-wrapper case (`wrapped_fix`), and the wrapper-that-cannot-be-seen-through case
+(`opaque_fix`, whose factory lives in `helpers.py` while the fixture belongs to this conftest).
 """
 
 import functools
 
 import pytest
+
+from helpers import opaque
 
 
 @pytest.fixture(scope="session")
@@ -53,3 +56,9 @@ def _decorate(fn):
 @_decorate
 def wrapped_fix():
     return "wrapped-value"
+
+
+@pytest.fixture
+@opaque
+def opaque_fix():
+    return "opaque-value"

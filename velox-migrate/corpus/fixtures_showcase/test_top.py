@@ -35,3 +35,7 @@ class TestGroup:
 
     def test_method(self, settings):
         assert settings["dsn"] == "sqlite://"
+
+
+def test_requests_an_autouse_fixture_explicitly(root_autouse):
+    assert root_autouse is None

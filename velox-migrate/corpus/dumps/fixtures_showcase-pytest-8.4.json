@@ -142,7 +142,7 @@
     "module": "conftest",
     "qualname": "backend",
     "file": "conftest.py",
-    "lineno": 29,
+    "lineno": 32,
     "wrapped": false
    }
   },
@@ -320,7 +320,7 @@
     "module": "conftest",
     "qualname": "dyn",
     "file": "conftest.py",
-    "lineno": 39,
+    "lineno": 42,
     "wrapped": false
    }
   },
@@ -340,7 +340,7 @@
     "module": "conftest",
     "qualname": "engine",
     "file": "conftest.py",
-    "lineno": 19,
+    "lineno": 22,
     "wrapped": false
    }
   },
@@ -358,7 +358,7 @@
     "module": "conftest",
     "qualname": "hidden",
     "file": "conftest.py",
-    "lineno": 34,
+    "lineno": 37,
     "wrapped": false
    }
   },
@@ -399,6 +399,24 @@
    }
   },
   "f14": {
+   "argname": "opaque_fix",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "helpers",
+    "qualname": "opaque.<locals>.inner",
+    "file": "helpers.py",
+    "lineno": 9,
+    "wrapped": false
+   }
+  },
+  "f15": {
    "argname": "pytestconfig",
    "scope": "session",
    "params": null,
@@ -418,7 +436,7 @@
     "wrapped": false
    }
   },
-  "f15": {
+  "f16": {
    "argname": "record_property",
    "scope": "function",
    "params": null,
@@ -438,7 +456,7 @@
     "wrapped": false
    }
   },
-  "f16": {
+  "f17": {
    "argname": "record_testsuite_property",
    "scope": "session",
    "params": null,
@@ -458,7 +476,7 @@
     "wrapped": false
    }
   },
-  "f17": {
+  "f18": {
    "argname": "record_xml_attribute",
    "scope": "function",
    "params": null,
@@ -478,7 +496,7 @@
     "wrapped": false
    }
   },
-  "f18": {
+  "f19": {
    "argname": "recwarn",
    "scope": "function",
    "params": null,
@@ -496,7 +514,7 @@
     "wrapped": false
    }
   },
-  "f19": {
+  "f20": {
    "argname": "root_autouse",
    "scope": "function",
    "params": null,
@@ -510,11 +528,11 @@
     "module": "conftest",
     "qualname": "root_autouse",
     "file": "conftest.py",
-    "lineno": 24,
+    "lineno": 27,
     "wrapped": false
    }
   },
-  "f20": {
+  "f21": {
    "argname": "settings",
    "scope": "session",
    "params": null,
@@ -528,11 +546,11 @@
     "module": "conftest",
     "qualname": "settings",
     "file": "conftest.py",
-    "lineno": 14,
+    "lineno": 17,
     "wrapped": false
    }
   },
-  "f21": {
+  "f22": {
    "argname": "settings",
    "scope": "function",
    "params": null,
@@ -552,7 +570,7 @@
     "wrapped": false
    }
   },
-  "f22": {
+  "f23": {
    "argname": "tmp_path",
    "scope": "function",
    "params": null,
@@ -573,7 +591,7 @@
     "wrapped": false
    }
   },
-  "f23": {
+  "f24": {
    "argname": "tmp_path_factory",
    "scope": "session",
    "params": null,
@@ -593,7 +611,7 @@
     "wrapped": false
    }
   },
-  "f24": {
+  "f25": {
    "argname": "tmpdir",
    "scope": "function",
    "params": null,
@@ -613,7 +631,7 @@
     "wrapped": false
    }
   },
-  "f25": {
+  "f26": {
    "argname": "tmpdir_factory",
    "scope": "session",
    "params": null,
@@ -633,7 +651,7 @@
     "wrapped": false
    }
   },
-  "f26": {
+  "f27": {
    "argname": "wrapped_fix",
    "scope": "function",
    "params": null,
@@ -647,11 +665,11 @@
     "module": "conftest",
     "qualname": "wrapped_fix",
     "file": "conftest.py",
-    "lineno": 52,
+    "lineno": 55,
     "wrapped": true
    }
   },
-  "f27": {
+  "f28": {
    "argname": "n",
    "scope": "function",
    "params": null,
@@ -715,54 +733,61 @@
   "monkeypatch": [
    "f13"
   ],
-  "pytestconfig": [
+  "opaque_fix": [
    "f14"
   ],
-  "record_property": [
+  "pytestconfig": [
    "f15"
   ],
-  "record_testsuite_property": [
+  "record_property": [
    "f16"
   ],
-  "record_xml_attribute": [
+  "record_testsuite_property": [
    "f17"
   ],
-  "recwarn": [
+  "record_xml_attribute": [
    "f18"
   ],
-  "root_autouse": [
+  "recwarn": [
    "f19"
   ],
-  "settings": [
-   "f20",
-   "f21"
+  "root_autouse": [
+   "f20"
   ],
-  "tmp_path": [
+  "settings": [
+   "f21",
    "f22"
   ],
-  "tmp_path_factory": [
+  "tmp_path": [
    "f23"
   ],
-  "tmpdir": [
+  "tmp_path_factory": [
    "f24"
   ],
-  "tmpdir_factory": [
+  "tmpdir": [
    "f25"
   ],
-  "wrapped_fix": [
+  "tmpdir_factory": [
    "f26"
+  ],
+  "wrapped_fix": [
+   "f27"
   ]
  },
  "items": [
   {
    "nodeid": "integration/test_integration.py::test_engine",
    "path": "integration/test_integration.py",
-   "lineno": 7,
+   "lineno": 8,
    "originalname": "test_engine",
    "cls": null,
    "own_markers": [],
    "markers_with_origin": [],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse",
+    "integ_autouse"
+   ],
    "argnames": [
     "engine"
    ],
@@ -779,7 +804,7 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "integ_autouse": [
      "f12"
@@ -788,20 +813,24 @@
      "f10"
     ],
     "settings": [
-     "f20",
-     "f21"
+     "f21",
+     "f22"
     ]
    }
   },
   {
    "nodeid": "integration/test_integration.py::test_settings",
    "path": "integration/test_integration.py",
-   "lineno": 11,
+   "lineno": 12,
    "originalname": "test_settings",
    "cls": null,
    "own_markers": [],
    "markers_with_origin": [],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse",
+    "integ_autouse"
+   ],
    "argnames": [
     "settings"
    ],
@@ -817,21 +846,21 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "integ_autouse": [
      "f12"
     ],
     "settings": [
-     "f20",
-     "f21"
+     "f21",
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_top.py::test_direct[1]",
    "path": "test_top.py",
-   "lineno": 9,
+   "lineno": 10,
    "originalname": "test_direct",
    "cls": null,
    "own_markers": [
@@ -862,6 +891,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "n"
    ],
@@ -875,10 +907,10 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "n": [
-     "f27"
+     "f28"
     ]
    },
    "callspec": {
@@ -898,7 +930,7 @@
   {
    "nodeid": "test_top.py::test_direct[two]",
    "path": "test_top.py",
-   "lineno": 9,
+   "lineno": 10,
    "originalname": "test_direct",
    "cls": null,
    "own_markers": [
@@ -944,6 +976,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "n"
    ],
@@ -957,10 +992,10 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "n": [
-     "f27"
+     "f28"
     ]
    },
    "callspec": {
@@ -988,7 +1023,7 @@
   {
    "nodeid": "test_top.py::test_direct[3.5]",
    "path": "test_top.py",
-   "lineno": 9,
+   "lineno": 10,
    "originalname": "test_direct",
    "cls": null,
    "own_markers": [
@@ -1019,6 +1054,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "n"
    ],
@@ -1032,10 +1070,10 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "n": [
-     "f27"
+     "f28"
     ]
    },
    "callspec": {
@@ -1055,7 +1093,7 @@
   {
    "nodeid": "test_top.py::test_indirect[mysql]",
    "path": "test_top.py",
-   "lineno": 17,
+   "lineno": 18,
    "originalname": "test_indirect",
    "cls": null,
    "own_markers": [
@@ -1090,6 +1128,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "backend"
    ],
@@ -1104,7 +1145,7 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "backend": [
      "f0"
@@ -1127,7 +1168,7 @@
   {
    "nodeid": "test_top.py::test_params_fixture[lite]",
    "path": "test_top.py",
-   "lineno": 22,
+   "lineno": 23,
    "originalname": "test_params_fixture",
    "cls": null,
    "own_markers": [],
@@ -1140,6 +1181,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "backend"
    ],
@@ -1154,7 +1198,7 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "backend": [
      "f0"
@@ -1177,7 +1221,7 @@
   {
    "nodeid": "test_top.py::test_params_fixture[pg]",
    "path": "test_top.py",
-   "lineno": 22,
+   "lineno": 23,
    "originalname": "test_params_fixture",
    "cls": null,
    "own_markers": [],
@@ -1190,6 +1234,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "backend"
    ],
@@ -1204,7 +1251,7 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "backend": [
      "f0"
@@ -1227,7 +1274,7 @@
   {
    "nodeid": "test_top.py::test_uses",
    "path": "test_top.py",
-   "lineno": 26,
+   "lineno": 27,
    "originalname": "test_uses",
    "cls": null,
    "own_markers": [
@@ -1275,6 +1322,9 @@
    "usefixtures": [
     "wrapped_fix"
    ],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "dyn"
    ],
@@ -1291,10 +1341,10 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "wrapped_fix": [
-     "f26"
+     "f27"
     ],
     "dyn": [
      "f9"
@@ -1304,7 +1354,7 @@
   {
    "nodeid": "test_top.py::TestGroup::test_method",
    "path": "test_top.py",
-   "lineno": 35,
+   "lineno": 36,
    "originalname": "test_method",
    "cls": "TestGroup",
    "own_markers": [],
@@ -1323,6 +1373,9 @@
     }
    ],
    "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
    "argnames": [
     "settings"
    ],
@@ -1336,9 +1389,43 @@
    ],
    "name2fixturedefs": {
     "root_autouse": [
-     "f19"
+     "f20"
     ],
     "settings": [
+     "f21"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_top.py::test_requests_an_autouse_fixture_explicitly",
+   "path": "test_top.py",
+   "lineno": 40,
+   "originalname": "test_requests_an_autouse_fixture_explicitly",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [
+    {
+     "from": "test_top.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [
+    "root_autouse"
+   ],
+   "argnames": [
+    "root_autouse"
+   ],
+   "initialnames": [
+    "root_autouse"
+   ],
+   "names_closure": [
+    "root_autouse"
+   ],
+   "name2fixturedefs": {
+    "root_autouse": [
      "f20"
     ]
    }

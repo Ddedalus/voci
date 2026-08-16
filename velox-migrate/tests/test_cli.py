@@ -45,7 +45,7 @@ def test_extract_writes_a_loadable_dump(tmp_path: Path) -> None:
     code = cli.main(["extract", str(SUITE), "-o", str(out)])
 
     assert code == 0
-    assert len(schema.load(out)["items"]) == 10
+    assert len(schema.load(out)["items"]) == 11
 
 
 def test_arguments_after_a_double_dash_reach_pytest(tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ def test_arguments_after_a_double_dash_reach_pytest(tmp_path: Path) -> None:
     code = cli.main(["extract", str(SUITE), "-o", str(out), "--", "-p", "no:cacheprovider"])
 
     assert code == 0
-    assert len(schema.load(out)["items"]) == 10
+    assert len(schema.load(out)["items"]) == 11
 
 
 def test_a_pytest_option_keeps_its_value(tmp_path: Path) -> None:
@@ -68,7 +68,7 @@ def test_a_pytest_option_keeps_its_value(tmp_path: Path) -> None:
     )
 
     assert code == 0
-    assert len(schema.load(out)["items"]) == 8
+    assert len(schema.load(out)["items"]) == 9
 
 
 def test_a_pytest_option_that_looks_like_one_of_ours_is_not_intercepted(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_a_suite_that_cannot_be_collected_reports_pytests_own_exit_code(
     code = cli.main(["extract", str(tmp_path / "nonexistent"), "-o", str(tmp_path / "out.json")])
 
     assert code != 0
-    assert "Fix collection first" in capsys.readouterr().err
+    assert "without collecting this suite" in capsys.readouterr().err
 
 
 def test_no_command_prints_help_rather_than_failing_obscurely(

@@ -27,7 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -41,8 +41,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --all-packages
       - run: uv run pyrefly check
+      - run: uv run pyrefly check --progress-bar no velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
 
   test:
     name: Test
@@ -54,8 +55,22 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --all-packages
       - run: uv run pytest
+      - run: uv run pytest velox-migrate/tests
+
+  corpus-check:
+    name: Corpus check (velox-migrate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages
+      - run: uv run python velox-migrate/scripts/refresh_corpus_dumps.py --check
 
   vendor-check:
     name: Vendor check (pytest submodule)
@@ -68,7 +83,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --all-packages
       - run: uv run python scripts/vendor_assertion.py --check
 
   build:

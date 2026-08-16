@@ -13,7 +13,9 @@ import pytest
 from velox_migrate import model, schema
 from velox_migrate.schema import DumpError
 
-DUMPS = Path(__file__).resolve().parents[1] / "corpus" / "dumps"
+CORPUS = Path(__file__).resolve().parents[1] / "corpus"
+DUMPS = CORPUS / "dumps"
+SUITE = CORPUS / "fixtures_showcase"
 PYTEST_VERSIONS = ["8.4", "9.1"]
 
 INTEGRATION_ENGINE = "integration/test_integration.py::test_engine"
@@ -29,7 +31,7 @@ def ground_truth(request: pytest.FixtureRequest) -> model.GroundTruth:
 
 
 def test_every_corpus_dump_loads(ground_truth: model.GroundTruth) -> None:
-    assert len(ground_truth.items) == 10
+    assert len(ground_truth.items) == 11
     assert ground_truth.fixture_registry["settings"]
     assert ground_truth.environment["sys_platform"]
 
@@ -202,6 +204,49 @@ def test_marks_carry_the_node_they_were_written_on(ground_truth: model.GroundTru
 
     assert origins["classmark"] == "test_top.py::TestGroup"
     assert origins["modmark"] == "test_top.py"
+
+
+def test_a_fixture_belongs_to_its_conftest_even_when_its_factory_does_not_live_there(
+    ground_truth: model.GroundTruth,
+) -> None:
+    # `opaque_fix` is decorated by a wrapper from `helpers.py` that sets no `__wrapped__`, so its
+    # recorded location is that wrapper's. Which conftest owns the fixture is a separate question,
+    # and the answer must not move with the decorator.
+    opaque = ground_truth.fixture_registry["opaque_fix"][-1]
+
+    assert opaque.visibility == SUITE_ROOT
+    assert opaque.func.file == "helpers.py"
+    assert opaque.func.wrapped is False
+
+
+def test_an_autouse_fixture_the_test_also_requests_is_still_listed_as_autouse(
+    ground_truth: model.GroundTruth,
+) -> None:
+    # Deriving this by subtracting what the test asked for from what it starts with would drop
+    # exactly the fixture that is both.
+    item = ground_truth.item("test_top.py::test_requests_an_autouse_fixture_explicitly")
+
+    assert "root_autouse" in item.argnames
+    assert item.autouse_names == ("root_autouse",)
+
+
+def test_line_numbers_count_from_one(ground_truth: model.GroundTruth) -> None:
+    # A test's line comes from pytest's `location`, which counts from zero, and a fixture's from
+    # `co_firstlineno`, which counts from one. One field name, one convention.
+    item = ground_truth.item(INTEGRATION_ENGINE)
+    settings = ground_truth.fixture_registry["settings"][0]
+    assert item.path is not None and item.lineno is not None
+    assert settings.func.file is not None and settings.func.lineno is not None
+
+    test_source = (SUITE / item.path).read_text(encoding="utf-8").splitlines()
+    fixture_source = (SUITE / settings.func.file).read_text(encoding="utf-8").splitlines()
+
+    assert f"def {item.originalname}" in test_source[item.lineno - 1]
+    # A decorated fixture's line is its first decorator's, so the `def` is the line after.
+    decorator_and_def = "\n".join(
+        fixture_source[settings.func.lineno - 1 : settings.func.lineno + 1]
+    )
+    assert f"def {settings.argname}" in decorator_and_def
 
 
 def test_a_wrapped_fixture_points_at_the_function_under_the_decorator(

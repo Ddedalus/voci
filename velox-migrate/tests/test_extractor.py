@@ -45,7 +45,7 @@ def dump(tmp_path: Path) -> dict:
 
 def test_the_plugin_writes_a_dump_the_loader_accepts(dump: dict) -> None:
     assert dump["extractor_version"] == schema.EXTRACTOR_VERSION
-    assert len(dump["items"]) == 10
+    assert len(dump["items"]) == 11
 
 
 def test_the_output_path_is_relative_to_where_pytest_was_invoked(tmp_path: Path) -> None:

@@ -56,7 +56,15 @@ _FIXTURE_DEF_KEYS = frozenset(
 )
 
 _ITEM_KEYS = frozenset(
-    {"nodeid", "path", "originalname", "own_markers", "markers_with_origin", "usefixtures"}
+    {
+        "nodeid",
+        "path",
+        "originalname",
+        "own_markers",
+        "markers_with_origin",
+        "usefixtures",
+        "autouse",
+    }
 )
 
 
