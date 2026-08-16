@@ -41,12 +41,26 @@ version-file = "velox/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["velox"]
 
+# velox-migrate is a second distribution in this repo (docs/migration-tool-plan.md §2), kept in
+# the same workspace so its generated output can be exercised against velox itself in one CI run.
+[tool.uv.workspace]
+members = ["velox-migrate"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"
 # velox/_assertions/_vendor is kept byte-identical to upstream pytest so re-vendoring stays a
 # cheap, readable diff (spec/07 Q17). Formatting it would defeat that, so ruff never touches it.
-extend-exclude = ["pytest", "fastapi", "research", "spec", "velox/_assertions/_vendor"]
+# velox-migrate/corpus holds deliberately-unidiomatic pytest suites used as codegen input
+# fixtures, so linting them is meaningless.
+extend-exclude = [
+    "pytest",
+    "fastapi",
+    "research",
+    "spec",
+    "velox/_assertions/_vendor",
+    "velox-migrate/corpus",
+]
 
 [tool.ruff.lint]
 select = [
@@ -70,7 +84,7 @@ select = [
 extend-immutable-calls = ["velox.Depends", "Depends"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["velox"]
+known-first-party = ["velox", "velox_migrate"]
 # The `fastapi/` reference submodule at the repo root otherwise makes isort read the installed
 # `fastapi` package as first-party and file it next to velox's own imports.
 known-third-party = ["fastapi"]
@@ -80,9 +94,20 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.pyrefly]
-project-includes = ["velox/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
-# Vendored code is upstream's problem, checked by upstream's own CI.
-project-excludes = ["pytest/**", "research/**", "velox/_assertions/_vendor/**"]
+project-includes = [
+    "velox/**/*.py",
+    "tests/**/*.py",
+    "scripts/**/*.py",
+]
+# Vendored code is upstream's problem, checked by upstream's own CI. velox-migrate/corpus
+# holds deliberately-unidiomatic pytest suites used as codegen input fixtures, so type-checking
+# them is meaningless.
+project-excludes = [
+    "pytest/**",
+    "research/**",
+    "velox/_assertions/_vendor/**",
+    "velox-migrate/corpus/**",
+]
 # `tests/` has no `__init__.py`, so pytest's own rootpath insertion puts it on `sys.path` and
 # `tests/_support.py` is reachable as a bare `import _support` from every test file, subpackage
 # or flat. Pyrefly doesn't replicate that rootpath algorithm on its own, so it needs the same
