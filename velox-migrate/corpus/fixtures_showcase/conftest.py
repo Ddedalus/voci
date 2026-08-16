@@ -13,6 +13,10 @@ import pytest
 
 from helpers import opaque
 
+# Registering `helpers` as a plugin makes `opaque` a plugin module's decorator, which is the
+# case where a fixture's factory carries a module that is not the one that defines the fixture.
+pytest_plugins = ["helpers"]
+
 
 @pytest.fixture(scope="session")
 def settings():

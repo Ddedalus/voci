@@ -90,6 +90,7 @@
    "fixtures",
    "funcmanage",
    "helpconfig",
+   "helpers",
    "integration/conftest.py",
    "junitxml",
    "legacypath",
@@ -153,7 +154,7 @@
     "module": "conftest",
     "qualname": "backend",
     "file": "conftest.py",
-    "lineno": 32,
+    "lineno": 36,
     "wrapped": false
    }
   },
@@ -331,7 +332,7 @@
     "module": "conftest",
     "qualname": "dyn",
     "file": "conftest.py",
-    "lineno": 42,
+    "lineno": 46,
     "wrapped": false
    }
   },
@@ -351,7 +352,7 @@
     "module": "conftest",
     "qualname": "engine",
     "file": "conftest.py",
-    "lineno": 22,
+    "lineno": 26,
     "wrapped": false
    }
   },
@@ -369,7 +370,7 @@
     "module": "conftest",
     "qualname": "hidden",
     "file": "conftest.py",
-    "lineno": 37,
+    "lineno": 41,
     "wrapped": false
    }
   },
@@ -539,7 +540,7 @@
     "module": "conftest",
     "qualname": "root_autouse",
     "file": "conftest.py",
-    "lineno": 27,
+    "lineno": 31,
     "wrapped": false
    }
   },
@@ -557,7 +558,7 @@
     "module": "conftest",
     "qualname": "settings",
     "file": "conftest.py",
-    "lineno": 17,
+    "lineno": 21,
     "wrapped": false
    }
   },
@@ -696,7 +697,7 @@
     "module": "conftest",
     "qualname": "wrapped_fix",
     "file": "conftest.py",
-    "lineno": 55,
+    "lineno": 59,
     "wrapped": true
    }
   },

@@ -252,31 +252,49 @@ def _conftest_owners(config):
     written in some other module, which its own location would misattribute.
     """
     plugins = list(config.pluginmanager.list_name_plugin())
-    # Modules that are plugins in their own right. A conftest re-exporting one of their fixtures
-    # — `from pytest_asyncio.plugin import event_loop` — does not thereby own it.
-    plugin_modules = {
-        plugin.__name__
+    conftests = [
+        (str(name), plugin)
         for name, plugin in plugins
-        if inspect.ismodule(plugin) and not str(name).endswith("conftest.py")
-    }
+        if inspect.ismodule(plugin) and str(name).endswith("conftest.py")
+    ]
+
+    # The very objects that plugins in their own right hold. A conftest re-exporting one of
+    # their fixtures — `from pytest_asyncio.plugin import event_loop` — does not thereby own it.
+    # Compared by identity rather than by `__module__`, which a decorator supplied by a plugin
+    # stamps onto a factory the conftest really does define.
+    plugin_owned = set()
+    for name, plugin in plugins:
+        if inspect.ismodule(plugin) and not str(name).endswith("conftest.py"):
+            plugin_owned.update(_fixture_identities(vars(plugin).values()))
 
     owners = {}
-    for name, plugin in plugins:
-        if not (inspect.ismodule(plugin) and str(name).endswith("conftest.py")):
-            continue
+    for name, plugin in conftests:
         for value in vars(plugin).values():
-            if getattr(value, "__module__", None) in plugin_modules:
-                continue
-            # What `@pytest.fixture` leaves in the module is a definition object holding the
-            # factory, not the factory itself, so the factory is reached through it.
-            for candidate in (
-                value,
-                getattr(value, "_fixture_function", None),
-                getattr(value, "__wrapped__", None),
-            ):
-                if candidate is not None:
-                    owners.setdefault(id(candidate), str(name))
+            for candidate in _candidates(value):
+                if id(candidate) not in plugin_owned:
+                    owners.setdefault(id(candidate), name)
     return owners
+
+
+def _candidates(value):
+    """`value` and the factory it holds.
+
+    What `@pytest.fixture` leaves in a module is a definition object wrapping the factory, not
+    the factory itself, so both spellings have to be recognizable.
+    """
+    return [
+        candidate
+        for candidate in (
+            value,
+            getattr(value, "_fixture_function", None),
+            getattr(value, "__wrapped__", None),
+        )
+        if candidate is not None
+    ]
+
+
+def _fixture_identities(values):
+    return {id(candidate) for value in values for candidate in _candidates(value)}
 
 
 def _visibility(fd, owners, relpath):
@@ -362,17 +380,7 @@ def _item_autouse(fixturemanager, item):
     starts with: a test may also request an autouse fixture by name, and subtracting would drop
     exactly that one.
     """
-    getter = getattr(fixturemanager, "_getautousenames", None)
-    if getter is not None:
-        return _deduplicate(list(getter(item)))
-
-    fixtureinfo = getattr(item, "_fixtureinfo", None)
-    if fixtureinfo is None:
-        return []
-    requested = set(fixtureinfo.argnames) | {
-        name for _, mark in item.iter_markers_with_node(name="usefixtures") for name in mark.args
-    }
-    return [name for name in fixtureinfo.initialnames if name not in requested]
+    return _deduplicate(list(fixturemanager._getautousenames(item)))
 
 
 def _deduplicate(names):
