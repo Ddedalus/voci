@@ -33,6 +33,7 @@ _TOP_LEVEL: dict[str, type | tuple[type, ...]] = {
     "ini": dict,
     "ini_aliases": dict,
     "plugins": dict,
+    "exit_status": int,
     "collection_errors": list,
     "autouse_by_node": dict,
     "fixture_defs": dict,
@@ -66,6 +67,11 @@ _ITEM_KEYS = frozenset(
         "autouse",
     }
 )
+
+
+# pytest's own OK and "collected nothing", the two ways a collection finishes without going
+# wrong. An empty suite has nothing to migrate; a failed one has nothing trustworthy to migrate.
+_CLEAN_EXIT_STATUSES = frozenset({0, 5})
 
 
 class DumpError(Exception):
@@ -163,8 +169,17 @@ def _check_collection(dump: dict, source: str) -> None:
     A module pytest could not import contributes no tests, and nothing later in the pipeline can
     tell the difference between a suite that is missing them and a suite that never had them.
     """
+    # Named paths before a bare exit code: a failed collection usually sets both, and knowing
+    # which modules failed is what someone can act on.
     errors = dump["collection_errors"]
     if not errors:
+        status = dump["exit_status"]
+        if status not in _CLEAN_EXIT_STATUSES:
+            raise DumpError(
+                f"{source} was written from a pytest run that exited {status}, not from a "
+                "completed collection. Whatever pytest reported has to be fixed before the "
+                "suite has a ground truth to migrate from."
+            )
         return
     listing = "\n  ".join(str(nodeid) for nodeid in errors[:10])
     remainder = f"\n  ...and {len(errors) - 10} more" if len(errors) > 10 else ""

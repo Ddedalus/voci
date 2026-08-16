@@ -208,6 +208,43 @@ def test_a_test_with_no_line_number_does_not_abort_the_extraction(tmp_path: Path
     assert [item["lineno"] for item in dump["items"]] == [None]
 
 
+def test_a_fixture_named_by_usefixtures_twice_is_recorded_once(tmp_path: Path) -> None:
+    # pytest collects a mark from the module and from the test, and its own `initialnames` holds
+    # the name once. Two entries would read as two fixtures to place.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "conftest.py").write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef db():\n    yield\n", encoding="utf-8"
+    )
+    (suite / "test_it.py").write_text(
+        'import pytest\n\npytestmark = pytest.mark.usefixtures("db")\n\n\n'
+        '@pytest.mark.usefixtures("db")\ndef test_ok(): pass\n',
+        encoding="utf-8",
+    )
+
+    _run_plugin(suite, tmp_path)
+
+    item = schema.load(tmp_path / "dump.json")["items"][0]
+
+    assert item["usefixtures"] == ["db"]
+
+
+def test_a_run_that_never_reached_the_suite_is_refused(tmp_path: Path) -> None:
+    # pytest reports a mistyped path after collection has already "finished", so a dump taken at
+    # that point looks like a clean reading of a suite with no tests in it.
+    _run_plugin(tmp_path / "nonexistent", tmp_path)
+
+    written = json.loads((tmp_path / "dump.json").read_text(encoding="utf-8"))
+    assert written["items"] == []
+    assert written["exit_status"] != 0
+    with pytest.raises(schema.DumpError, match="not from a completed collection"):
+        schema.load(tmp_path / "dump.json")
+
+
+def test_a_clean_collection_records_a_clean_exit(dump: dict) -> None:
+    assert dump["exit_status"] == 0
+
+
 def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
     # It is copied into environments where only pytest is installed, so an import of a sibling
     # module would break exactly the case it exists for.

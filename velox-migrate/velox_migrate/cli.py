@@ -14,6 +14,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from velox_migrate import schema
 
@@ -81,6 +82,10 @@ def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # A failed run must not leave the previous run's dump behind: the next stage would read it
+    # as though it described the suite as it stands now.
+    Path(args.out).unlink(missing_ok=True)
 
     command = [
         sys.executable,

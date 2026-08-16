@@ -72,9 +72,9 @@ item.autouse_names  # autouse fixtures reaching it, in setup order
 ```
 
 `load` refuses a dump rather than reading it under the wrong assumptions: one written by a
-different version of the extractor, one from an unsupported pytest, and one taken from a run
-where some modules failed to collect — a suite pytest cannot collect in full has no ground truth
-to migrate from, and a partial dump would migrate part of a suite without saying so.
+different version of the extractor, one from an unsupported pytest, and one from a run that did
+not collect the suite cleanly — whether some modules failed to import or pytest never reached
+the suite at all. A partial dump would otherwise migrate part of a suite without saying so.
 
 ## Development
 

@@ -89,6 +89,20 @@ def test_a_suite_that_cannot_be_collected_reports_pytests_own_exit_code(
     assert "without collecting this suite" in capsys.readouterr().err
 
 
+def test_a_failed_extract_does_not_leave_the_previous_dump_readable(tmp_path: Path) -> None:
+    # A dump that outlives the run that failed to replace it is the worst outcome available: it
+    # describes the suite as it was, and nothing downstream can tell.
+    out = tmp_path / "ground-truth.json"
+    assert cli.main(["extract", str(SUITE), "-o", str(out)]) == 0
+    assert len(schema.load(out)["items"]) == 11
+
+    code = cli.main(["extract", str(tmp_path / "nonexistent"), "-o", str(out)])
+
+    assert code != 0
+    with pytest.raises(schema.DumpError):
+        schema.load(out)
+
+
 def test_no_command_prints_help_rather_than_failing_obscurely(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

@@ -74,13 +74,13 @@ def main(argv: list[str] | None = None) -> int:
 def _stable(text: str) -> object:
     """The part of a dump that describes the suite rather than the machine it was taken on.
 
-    A dump records its kernel, its interpreter's patch version and the exact pytest that `8.4.*`
-    resolved to, all of which differ between two correct runs on different machines. `--check`
+    A dump records its kernel, its interpreter's version and the plugins that happened to be
+    installed, all of which differ between two correct runs on different machines. `--check`
     exists to catch the extractor and the checked-in artifacts drifting apart, so it compares
     what the extractor decides and ignores what the environment decides.
     """
     dump = json.loads(text)
-    for volatile in ("environment", "pytest_version", "plugins", "ini"):
+    for volatile in ("environment", "pytest_version", "plugins"):
         dump.pop(volatile, None)
     # Builtin fixtures live under `${prefix}/lib/python3.13/...`, which moves with the
     # interpreter's minor version.

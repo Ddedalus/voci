@@ -73,6 +73,7 @@
  "ini_aliases": {
   "xfail_strict": "strict_xfail"
  },
+ "exit_status": 0,
  "collection_errors": [],
  "plugins": {
   "distinfo": [],

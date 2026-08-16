@@ -437,11 +437,11 @@ def _item(item, table, relpath, fixturemanager):
         # Emitted as real strings rather than left to be recovered from the mark's `repr`ed
         # arguments, and gathered the way pytest gathers them, so a `usefixtures` inherited from
         # the module or the class counts.
-        "usefixtures": [
+        "usefixtures": _deduplicate(
             name
             for _, mark in item.iter_markers_with_node(name="usefixtures")
             for name in mark.args
-        ],
+        ),
     }
 
     record["autouse"] = _item_autouse(fixturemanager, item)
@@ -469,7 +469,7 @@ def _item(item, table, relpath, fixturemanager):
     return record
 
 
-def build_dump(session):
+def build_dump(session, exitstatus=0):
     """The whole dump, as plain JSON-ready data."""
     config = session.config
     fixturemanager = session._fixturemanager
@@ -482,7 +482,7 @@ def build_dump(session):
         name: table.keys(defs)
         for name, defs in sorted(getattr(fixturemanager, "_arg2fixturedefs", {}).items())
     }
-    items = [_item(item, table, relpath, fixturemanager) for item in session.items]
+    items = [_item(item, table, relpath, fixturemanager) for item in getattr(session, "items", ())]
 
     parser = getattr(config, "_parser", None)
     return {
@@ -497,6 +497,9 @@ def build_dump(session):
         # Reading the alias map is how a later stage normalizes a suite's ini keys without
         # hardcoding pytest's rename history.
         "ini_aliases": dict(getattr(parser, "_ini_aliases", {}) or {}),
+        # What pytest itself made of the run. Anything but a clean collection means the dump
+        # describes less than the suite.
+        "exit_status": int(exitstatus),
         "collection_errors": sorted(set(_collection_errors)),
         "plugins": _plugins(config, relpath),
         "autouse_by_node": _autouse_by_node(fixturemanager),
@@ -513,10 +516,11 @@ def _out_path(config):
     return os.path.abspath(chosen or DEFAULT_OUT)
 
 
-def pytest_collection_finish(session):
-    # Collection-time, so `--collect-only` reaches here, and after
-    # `pytest_collection_modifyitems`, so marks and deselections plugins applied are reflected.
-    dump = build_dump(session)
+def pytest_sessionfinish(session, exitstatus):
+    # Not `pytest_collection_finish`, which also runs when pytest is about to fail with a usage
+    # error — a mistyped path there produces a clean dump describing no tests at all. By here
+    # the session's own verdict is known and travels with the dump.
+    dump = build_dump(session, exitstatus)
     out = _out_path(session.config)
     parent = os.path.dirname(out)
     if parent:
@@ -527,6 +531,11 @@ def pytest_collection_finish(session):
 
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
-        reporter.write_line(
-            f"velox-migrate: wrote ground truth for {len(dump['items'])} tests to {out}"
-        )
+        if exitstatus in (0, 5):
+            note = f"wrote ground truth for {len(dump['items'])} tests to {out}"
+        else:
+            note = (
+                f"pytest exited {exitstatus}, so {out} records an incomplete collection "
+                "and will be refused"
+            )
+        reporter.write_line(f"velox-migrate: {note}")
