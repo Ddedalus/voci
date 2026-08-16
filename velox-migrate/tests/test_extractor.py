@@ -102,10 +102,10 @@ def test_only_the_rootdir_is_recorded_as_a_path_on_this_machine(dump: dict) -> N
     # that produced it — and a dump is meant to be copied out of a container.
     described = {key: value for key, value in dump.items() if key not in ("rootpath", "args")}
 
+    # Matched anywhere in the string, not just at the start: pytest resolves a `paths`-typed ini
+    # key to absolute paths, which reach the dump inside a `repr` rather than as one.
     machine_paths = [
-        text
-        for text in _strings(described)
-        if text.startswith(sys.prefix) or text.startswith(str(SUITE))
+        text for text in _strings(described) if sys.prefix in text or str(SUITE) in text
     ]
 
     assert machine_paths == []
@@ -137,24 +137,7 @@ def test_a_suite_that_only_half_collects_is_recorded_as_such(tmp_path: Path) -> 
         "import a_module_that_is_not_installed\n", encoding="utf-8"
     )
 
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(suite),
-            "-p",
-            "velox_migrate.extractor",
-            "--collect-only",
-            "-q",
-            "--extractor-out",
-            "dump.json",
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    _run_plugin(suite, tmp_path)
 
     written = json.loads((tmp_path / "dump.json").read_text(encoding="utf-8"))
     assert written["collection_errors"]
@@ -178,29 +161,51 @@ def test_a_session_wide_usefixtures_lands_on_the_same_node_as_a_root_autouse(
     )
     (suite / "test_it.py").write_text("def test_ok(): pass\n", encoding="utf-8")
 
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(suite),
-            "-p",
-            "velox_migrate.extractor",
-            "--collect-only",
-            "-q",
-            "--extractor-out",
-            "dump.json",
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    _run_plugin(suite, tmp_path)
 
     autouse = schema.load(tmp_path / "dump.json")["autouse_by_node"]
 
     assert list(autouse) == ["."]
     assert sorted(autouse["."]) == ["auto", "db"]
+
+
+def test_a_path_valued_ini_key_is_recorded_portably(tmp_path: Path) -> None:
+    suite = tmp_path / "suite"
+    (suite / "src").mkdir(parents=True)
+    (suite / "pytest.ini").write_text("[pytest]\npythonpath = src\n", encoding="utf-8")
+    (suite / "test_it.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    _run_plugin(suite, tmp_path)
+
+    pythonpath = schema.load(tmp_path / "dump.json")["ini"]["pythonpath"]
+
+    assert pythonpath == "['src']"
+
+
+def test_a_test_with_no_line_number_does_not_abort_the_extraction(tmp_path: Path) -> None:
+    # A collector that is not reading Python reports no line. Losing one field is a degraded
+    # entry; raising here would lose the whole dump.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "conftest.py").write_text(
+        "import pytest\n\n\n"
+        "class Item(pytest.Item):\n"
+        "    def runtest(self):\n        pass\n\n\n"
+        "class File(pytest.File):\n"
+        "    def collect(self):\n"
+        "        yield Item.from_parent(self, name='item')\n\n\n"
+        "def pytest_collect_file(file_path, parent):\n"
+        "    if file_path.suffix == '.yaml':\n"
+        "        return File.from_parent(parent, path=file_path)\n",
+        encoding="utf-8",
+    )
+    (suite / "thing.yaml").write_text("a: 1\n", encoding="utf-8")
+
+    _run_plugin(suite, tmp_path)
+
+    dump = schema.load(tmp_path / "dump.json")
+
+    assert [item["lineno"] for item in dump["items"]] == [None]
 
 
 def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
@@ -275,6 +280,27 @@ def test_a_suite_inside_the_environment_prefix_still_wins() -> None:
     normalize = extractor._PathNormalizer(f"{sys.prefix}/suite")
 
     assert normalize(f"{sys.prefix}/suite/conftest.py") == "conftest.py"
+
+
+def _run_plugin(suite: Path, workdir: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(suite),
+            "-p",
+            "velox_migrate.extractor",
+            "--collect-only",
+            "-q",
+            "--extractor-out",
+            "dump.json",
+        ],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _suite_fixtures(dump: dict) -> dict[str, list[str]]:

@@ -316,6 +316,19 @@ def _autouse_by_node(fixturemanager):
     return {nodeid: _deduplicate(merged[nodeid]) for nodeid in sorted(merged)}
 
 
+def _item_lineno(item):
+    """Where a test is written, counting from one.
+
+    `item.location` counts from zero, unlike every other line number in the dump, and a collector
+    that is not reading Python has no line to report at all.
+    """
+    location = getattr(item, "location", None)
+    lineno = location[1] if location else None
+    if not isinstance(lineno, int) or lineno < 0:
+        return None
+    return lineno + 1
+
+
 def _item_autouse(fixturemanager, item):
     """The autouse fixtures reaching one test, in the order pytest sets them up.
 
@@ -342,14 +355,30 @@ def _deduplicate(names):
     return [name for name in names if not (name in seen or seen.add(name))]
 
 
-def _ini(config):
+def _ini_repr(value, relpath):
+    """`value` as source text, with any path it holds made portable.
+
+    pytest resolves a `paths`-typed ini key to absolute paths, which would otherwise be the one
+    part of a dump that still names the machine it was taken on.
+    """
+    if isinstance(value, os.PathLike):
+        return repr(relpath(os.fspath(value)))
+    if isinstance(value, (list, tuple)):
+        inner = ", ".join(_ini_repr(item, relpath) for item in value)
+        if isinstance(value, tuple):
+            return f"({inner},)" if len(value) == 1 else f"({inner})"
+        return f"[{inner}]"
+    return repr(value)
+
+
+def _ini(config, relpath):
     """Every registered ini key with its resolved value, plugin-contributed keys included."""
     parser = getattr(config, "_parser", None)
     inidict = getattr(parser, "_inidict", None) or {}
     resolved = {}
     for name in sorted(inidict):
         try:
-            resolved[name] = repr(config.getini(name))
+            resolved[name] = _ini_repr(config.getini(name), relpath)
         # A few ini keys only resolve against arguments this run did not get, and one key that
         # cannot be read is not worth losing the rest of the dump over.
         except Exception as exc:
@@ -398,9 +427,7 @@ def _item(item, table, relpath, fixturemanager):
     record = {
         "nodeid": item.nodeid,
         "path": relpath(getattr(item, "path", None)),
-        # `item.location` counts lines from zero; every other line number in the dump is a
-        # `co_firstlineno`, which counts from one.
-        "lineno": item.location[1] + 1 if getattr(item, "location", None) else None,
+        "lineno": _item_lineno(item),
         "originalname": getattr(item, "originalname", None) or item.name,
         "cls": item.cls.__name__ if getattr(item, "cls", None) else None,
         "own_markers": [_mark(m) for m in item.own_markers],
@@ -465,7 +492,7 @@ def build_dump(session):
         "rootpath": str(config.rootpath),
         "inipath": relpath(config.inipath) if config.inipath else None,
         "args": list(config.args),
-        "ini": _ini(config),
+        "ini": _ini(config, relpath),
         # 9.1 renamed `xfail_strict` to `strict_xfail` and kept the old spelling as an alias.
         # Reading the alias map is how a later stage normalizes a suite's ini keys without
         # hardcoding pytest's rename history.

@@ -28,8 +28,10 @@ EXTRACTOR = REPO_ROOT / "velox-migrate" / "velox_migrate" / "extractor.py"
 SUITES = ["fixtures_showcase"]
 
 # The ends of the supported range. A dump from each is what proves the version shims in
-# `extractor.py` absorb the differences rather than passing them downstream.
-PYTEST_VERSIONS = {"8.4": "pytest==8.4.*", "9.1": "pytest==9.1.*"}
+# `extractor.py` absorb the differences rather than passing them downstream. Pinned to exact
+# patches: a dump records line numbers inside pytest's own builtin fixtures, so a floating pin
+# would make the checked-in artifacts go stale on an upstream release that changed nothing here.
+PYTEST_VERSIONS = {"8.4": "pytest==8.4.2", "9.1": "pytest==9.1.1"}
 
 
 def main(argv: list[str] | None = None) -> int:
