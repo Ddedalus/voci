@@ -100,7 +100,14 @@ def _extract(suite: str, requirement: str) -> str:
         shutil.copy(EXTRACTOR, plugin_dir / "extractor.py")
         out = plugin_dir / "dump.json"
 
-        env = dict(os.environ, PYTHONPATH=str(plugin_dir))
+        # `PYTEST_ADDOPTS` and friends would reach into the isolated run and change what it
+        # collects, which is exactly what a reproducible artifact cannot have.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("PYTEST_") and key != "EXTRACTOR_OUT"
+        }
+        env["PYTHONPATH"] = str(plugin_dir)
         # `--isolated --no-project` keeps this run off the workspace environment, so the only
         # thing the extractor can import is the pytest named here.
         subprocess.run(
@@ -133,7 +140,8 @@ def _extract(suite: str, requirement: str) -> str:
     # happened. A checked-in dump would carry this machine's copy of the repo in it, so it is
     # replaced by the suite root it denotes.
     dump["rootpath"] = "."
-    dump["args"] = [suite]
+    # Anchored the same way as `rootpath`, which is the suite's own directory.
+    dump["args"] = ["."]
     return json.dumps(dump, indent=1, sort_keys=False) + "\n"
 
 

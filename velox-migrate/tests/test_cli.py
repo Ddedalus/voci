@@ -89,6 +89,17 @@ def test_a_suite_that_cannot_be_collected_reports_pytests_own_exit_code(
     assert "without collecting this suite" in capsys.readouterr().err
 
 
+def test_a_suite_narrowed_to_nothing_is_a_clean_result(tmp_path: Path) -> None:
+    # Collecting no tests is what pytest reports for an empty suite and for a filter that matches
+    # nothing. Neither is a failure to collect, and the dump the extractor writes is loadable.
+    out = tmp_path / "ground-truth.json"
+
+    code = cli.main(["extract", str(SUITE), "-o", str(out), "--", "-k", "matches_nothing_at_all"])
+
+    assert code == 0
+    assert schema.load(out)["items"] == []
+
+
 def test_a_failed_extract_does_not_leave_the_previous_dump_readable(tmp_path: Path) -> None:
     # A dump that outlives the run that failed to replace it is the worst outcome available: it
     # describes the suite as it was, and nothing downstream can tell.

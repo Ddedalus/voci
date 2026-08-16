@@ -71,7 +71,7 @@ _ITEM_KEYS = frozenset(
 
 # pytest's own OK and "collected nothing", the two ways a collection finishes without going
 # wrong. An empty suite has nothing to migrate; a failed one has nothing trustworthy to migrate.
-_CLEAN_EXIT_STATUSES = frozenset({0, 5})
+CLEAN_EXIT_STATUSES = frozenset({0, 5})
 
 
 class DumpError(Exception):
@@ -174,7 +174,7 @@ def _check_collection(dump: dict, source: str) -> None:
     errors = dump["collection_errors"]
     if not errors:
         status = dump["exit_status"]
-        if status not in _CLEAN_EXIT_STATUSES:
+        if status not in CLEAN_EXIT_STATUSES:
             raise DumpError(
                 f"{source} was written from a pytest run that exited {status}, not from a "
                 "completed collection. Whatever pytest reported has to be fixed before the "

@@ -11,7 +11,7 @@
  "rootpath": ".",
  "inipath": "pytest.ini",
  "args": [
-  "fixtures_showcase"
+  "."
  ],
  "ini": {
   "addopts": "[]",

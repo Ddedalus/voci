@@ -32,6 +32,10 @@ MAX_PYTEST_EXCLUSIVE = (10,)
 
 DEFAULT_OUT = os.path.join(".velox-migrate", "ground-truth.json")
 
+# pytest's own OK and "collected nothing": the two ways a collection finishes without going
+# wrong. Mirrored by `schema.CLEAN_EXIT_STATUSES`, which this file cannot import.
+CLEAN_EXIT_STATUSES = (0, 5)
+
 
 def pytest_addoption(parser):
     group = parser.getgroup("velox-migrate")
@@ -135,6 +139,12 @@ class _PathNormalizer:
                 tail = text[len(prefix) + 1 :].replace(os.sep, "/")
                 return f"{token}/{tail}" if token else tail
         return text.replace(os.sep, "/")
+
+    def scrub(self, text):
+        """`text` with any machine path inside it replaced, for messages rather than paths."""
+        for prefix, token in self._roots:
+            text = text.replace(prefix, token or ".")
+        return text
 
 
 # --- fixture defs -----------------------------------------------------------------------------
@@ -382,7 +392,7 @@ def _ini(config, relpath):
         # A few ini keys only resolve against arguments this run did not get, and one key that
         # cannot be read is not worth losing the rest of the dump over.
         except Exception as exc:
-            resolved[name] = f"<error: {type(exc).__name__}: {exc}>"
+            resolved[name] = relpath.scrub(f"<error: {type(exc).__name__}: {exc}>")
     return resolved
 
 
@@ -531,7 +541,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
-        if exitstatus in (0, 5):
+        if exitstatus in CLEAN_EXIT_STATUSES:
             note = f"wrote ground truth for {len(dump['items'])} tests to {out}"
         else:
             note = (

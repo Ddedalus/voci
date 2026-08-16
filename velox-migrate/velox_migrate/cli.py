@@ -101,14 +101,15 @@ def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
         args.out,
     ]
     completed = subprocess.run(command, check=False)
-    if completed.returncode != 0:
+    if completed.returncode not in schema.CLEAN_EXIT_STATUSES:
         print(
             f"velox-migrate: pytest exited {completed.returncode} without collecting this suite, "
             "so there is no ground truth to migrate from. Fix whatever the output above reports "
             "— it is pytest's own.",
             file=sys.stderr,
         )
-        return completed.returncode
+        # A signal-killed subprocess reports a negative code, which an exit status cannot carry.
+        return completed.returncode if completed.returncode > 0 else 1
 
     # The dump has to satisfy the same loader every later stage uses, and finding that out here
     # beats finding it out one command later.

@@ -259,6 +259,20 @@ def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
     assert "velox_migrate" not in imported
 
 
+def test_the_extractor_and_the_loader_agree_on_which_exits_are_clean() -> None:
+    assert set(extractor.CLEAN_EXIT_STATUSES) == set(schema.CLEAN_EXIT_STATUSES)
+
+
+def test_a_message_holding_a_machine_path_is_scrubbed_of_it() -> None:
+    # An ini key that fails to resolve has pytest's own message stored in its place, and those
+    # messages name files. A path inside a sentence is still a path off this machine.
+    normalize = extractor._PathNormalizer("/suite")
+
+    scrubbed = normalize.scrub(f"cannot read /suite/pytest.ini or {sys.prefix}/lib/thing.py")
+
+    assert scrubbed == "cannot read ./pytest.ini or ${prefix}/lib/thing.py"
+
+
 def test_the_extractor_and_the_loader_agree_on_the_dump_version() -> None:
     assert extractor.EXTRACTOR_VERSION == schema.EXTRACTOR_VERSION
 
