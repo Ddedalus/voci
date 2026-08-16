@@ -63,6 +63,7 @@
   "xfail_strict": "False"
  },
  "ini_aliases": {},
+ "collection_errors": [],
  "plugins": {
   "distinfo": [],
   "names": [

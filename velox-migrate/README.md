@@ -71,8 +71,10 @@ item.dependencies(settings)  # what it requests, resolved for this test
 item.autouse_names  # autouse fixtures reaching it, in setup order
 ```
 
-`load` refuses a dump written by a different version of the extractor rather than reading it
-under the wrong assumptions.
+`load` refuses a dump rather than reading it under the wrong assumptions: one written by a
+different version of the extractor, one from an unsupported pytest, and one taken from a run
+where some modules failed to collect — a suite pytest cannot collect in full has no ground truth
+to migrate from, and a partial dump would migrate part of a suite without saying so.
 
 ## Development
 

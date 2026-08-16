@@ -59,6 +59,18 @@ def pytest_configure(config):
         )
 
 
+# Nodeids whose collection failed. Module-level because pytest loads a plugin once per run, and
+# the report hook that fills it has no session to hang it off.
+_collection_errors = []
+
+
+def pytest_collectreport(report):
+    # A module that fails to import contributes no items, and a dump that did not say so would
+    # describe a smaller suite as though it were the whole one.
+    if report.failed:
+        _collection_errors.append(report.nodeid or ".")
+
+
 def _pytest_version_tuple():
     parts = []
     for field in pytest.__version__.split(".")[:2]:
@@ -414,6 +426,7 @@ def build_dump(session):
         # Reading the alias map is how a later stage normalizes a suite's ini keys without
         # hardcoding pytest's rename history.
         "ini_aliases": dict(getattr(parser, "_ini_aliases", {}) or {}),
+        "collection_errors": sorted(set(_collection_errors)),
         "plugins": _plugins(config, relpath),
         "autouse_by_node": _autouse_by_node(fixturemanager, relpath),
         "fixture_defs": table.as_dict(),

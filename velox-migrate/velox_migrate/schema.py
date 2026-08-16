@@ -33,6 +33,7 @@ _TOP_LEVEL: dict[str, type | tuple[type, ...]] = {
     "ini": dict,
     "ini_aliases": dict,
     "plugins": dict,
+    "collection_errors": list,
     "autouse_by_node": dict,
     "fixture_defs": dict,
     "fixture_registry": dict,
@@ -100,6 +101,7 @@ def loads(text: str, *, source: str = "<string>") -> dict:
     _check_version(dump, source)
     _check_top_level(dump, source)
     _check_pytest_version(dump, source)
+    _check_collection(dump, source)
     _check_fixture_defs(dump, source)
     _check_items(dump, source)
     return dump
@@ -145,6 +147,25 @@ def _check_pytest_version(dump: dict, source: str) -> None:
             f"{source} was extracted under pytest {raw}, outside the supported range "
             f"{supported}. Extract again under a supported pytest."
         )
+
+
+def _check_collection(dump: dict, source: str) -> None:
+    """Refuse a dump taken from a collection that did not finish.
+
+    A module pytest could not import contributes no tests, and nothing later in the pipeline can
+    tell the difference between a suite that is missing them and a suite that never had them.
+    """
+    errors = dump["collection_errors"]
+    if not errors:
+        return
+    listing = "\n  ".join(str(nodeid) for nodeid in errors[:10])
+    remainder = f"\n  ...and {len(errors) - 10} more" if len(errors) > 10 else ""
+    raise DumpError(
+        f"{source} was written from a collection that failed for {len(errors)} "
+        f"path(s):\n  {listing}{remainder}\n"
+        "The dump therefore describes only part of the suite. Fix collection under pytest and "
+        "extract again — a partial dump migrates a partial suite without saying so."
+    )
 
 
 def _check_fixture_defs(dump: dict, source: str) -> None:

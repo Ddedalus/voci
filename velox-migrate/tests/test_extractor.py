@@ -127,6 +127,41 @@ def test_an_environment_path_is_recorded_against_a_prefix_token(dump: dict) -> N
     assert tmp_path_fixture["func"]["file"].startswith("${")
 
 
+def test_a_suite_that_only_half_collects_is_recorded_as_such(tmp_path: Path) -> None:
+    # The dump is still written, because it is the thing to look at when diagnosing the failure,
+    # but it says which paths pytest could not collect so the loader can refuse it.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_fine.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+    (suite / "test_broken.py").write_text(
+        "import a_module_that_is_not_installed\n", encoding="utf-8"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(suite),
+            "-p",
+            "velox_migrate.extractor",
+            "--collect-only",
+            "-q",
+            "--extractor-out",
+            "dump.json",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    written = json.loads((tmp_path / "dump.json").read_text(encoding="utf-8"))
+    assert written["collection_errors"]
+    with pytest.raises(schema.DumpError, match="only part of the suite"):
+        schema.load(tmp_path / "dump.json")
+
+
 def test_the_extractor_imports_nothing_from_the_rest_of_the_package() -> None:
     # It is copied into environments where only pytest is installed, so an import of a sibling
     # module would break exactly the case it exists for.
