@@ -45,7 +45,7 @@ def findings(
 
 
 def _ini_findings(ground_truth: GroundTruth, root: Path | None) -> Iterator[Finding]:
-    written, source = _written_settings(ground_truth, root)
+    written, source = written_settings(ground_truth, root)
     where = Site(ground_truth.inipath) if ground_truth.inipath else Site()
     for key in sorted(written):
         code = matrix.INI_SETTINGS.get(key, "VX309")
@@ -65,8 +65,9 @@ def _ini_findings(ground_truth: GroundTruth, root: Path | None) -> Iterator[Find
         )
 
 
-def _written_settings(ground_truth: GroundTruth, root: Path | None) -> tuple[set[str], str]:
-    """The ini keys the suite set, read from its own config file where that file is reachable.
+def written_settings(ground_truth: GroundTruth, root: Path | None) -> tuple[set[str], str]:
+    """The ini keys the suite set, read from its own config file where that file is reachable,
+    paired with a name for where they were read from.
 
     A key is reported under the spelling the suite wrote, not the one the extracted pytest
     registered: pytest renames its settings and keeps the old name as an alias, and a report that

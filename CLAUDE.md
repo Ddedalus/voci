@@ -10,7 +10,7 @@ package (`tests/di/`, `tests/collection/`, ...); a test file that only exercises
 Second distribution: `velox-migrate/` (dist `velox-migrate`, import `velox_migrate`), a uv
 workspace member holding the pytest→velox migration tooling. velox never depends on it. Its
 tests are `velox-migrate/tests/`; `velox-migrate/corpus/` holds pytest suites that exist to be
-extracted from rather than run, so it is excluded from ruff and pyrefly, and
+extracted from and converted rather than run directly, so it is excluded from ruff and pyrefly, and
 `velox-migrate/corpus/dumps/` holds their checked-in ground-truth dumps, one per supported pytest
 — regenerate with `just corpus-dumps`, verify with `just corpus-check`. `velox_migrate/extractor.py`
 is a single file importing only stdlib and pytest so it can be copied into an environment where

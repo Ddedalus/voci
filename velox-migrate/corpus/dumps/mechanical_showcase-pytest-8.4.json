@@ -1,0 +1,2835 @@
+{
+ "extractor_version": 1,
+ "pytest_version": "8.4.2",
+ "environment": {
+  "sys_platform": "linux",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "python_version": "3.13.14",
+  "python_implementation": "CPython"
+ },
+ "rootpath": ".",
+ "inipath": "pytest.ini",
+ "args": [
+  "."
+ ],
+ "ini": {
+  "addopts": "[]",
+  "cache_dir": "'.pytest_cache'",
+  "collect_imported_tests": "True",
+  "consider_namespace_packages": "False",
+  "console_output_style": "'progress'",
+  "disable_test_id_escaping_and_forfeit_all_rights_to_community_support": "False",
+  "doctest_encoding": "'utf-8'",
+  "doctest_optionflags": "['ELLIPSIS']",
+  "empty_parameter_set_mark": "''",
+  "enable_assertion_pass_hook": "False",
+  "faulthandler_timeout": "0.0",
+  "filterwarnings": "[]",
+  "junit_duration_report": "'total'",
+  "junit_family": "'xunit2'",
+  "junit_log_passing_tests": "True",
+  "junit_logging": "'no'",
+  "junit_suite_name": "'pytest'",
+  "log_auto_indent": "None",
+  "log_cli": "False",
+  "log_cli_date_format": "None",
+  "log_cli_format": "None",
+  "log_cli_level": "None",
+  "log_date_format": "'%H:%M:%S'",
+  "log_file": "None",
+  "log_file_date_format": "None",
+  "log_file_format": "None",
+  "log_file_level": "None",
+  "log_file_mode": "'w'",
+  "log_format": "'%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s'",
+  "log_level": "None",
+  "markers": "[\"slow: one of the suite's own tags, read by -m and by nothing else.\", 'timeout: what pytest-timeout would read, registered here so this suite needs no plugin.', \"modmark: applied to every test in test_marks.py through the module's pytestmark.\", \"classmark: applied to TestGrouped's tests through the class's pytestmark.\", 'anyio: what an async runner reads to run a coroutine test.', 'filterwarnings(warning): add a warning filter to the given test. see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ', 'skip(reason=None): skip the given test function with an optional reason. Example: skip(reason=\"no way of currently testing this\") skips the test.', \"skipif(condition, ..., *, reason=...): skip the given test function if any of the conditions evaluate to True. Example: skipif(sys.platform == 'win32') skips the test if we are on the win32 platform. See https://docs.pytest.org/en/stable/reference/reference.html#pytest-mark-skipif\", \"xfail(condition, ..., *, reason=..., run=True, raises=None, strict=xfail_strict): mark the test function as an expected failure if any of the conditions evaluate to True. Optionally specify a reason for better reporting and run=False if you don't even want to execute the test function. If only specific exception(s) are expected, you can list them in raises, and if the test fails in other ways, it will be reported as a true failure. See https://docs.pytest.org/en/stable/reference/reference.html#pytest-mark-xfail\", \"parametrize(argnames, argvalues): call a test function multiple times passing in different arguments in turn. argvalues generally needs to be a list of values if argnames specifies only one name or a list of tuples of values if argnames specifies multiple names. Example: @parametrize('arg1', [1,2]) would lead to two calls of the decorated test function, one with arg1=1 and another with arg1=2.see https://docs.pytest.org/en/stable/how-to/parametrize.html for more info and examples.\", 'usefixtures(fixturename1, fixturename2, ...): mark tests as needing all of the specified fixtures. see https://docs.pytest.org/en/stable/explanation/fixtures.html#usefixtures ', 'tryfirst: mark a hook implementation function such that the plugin machinery will try to call it first/as early as possible. DEPRECATED, use @pytest.hookimpl(tryfirst=True) instead.', 'trylast: mark a hook implementation function such that the plugin machinery will try to call it last/as late as possible. DEPRECATED, use @pytest.hookimpl(trylast=True) instead.']",
+  "minversion": "''",
+  "norecursedirs": "['scratch']",
+  "python_classes": "['Test']",
+  "python_files": "['test_*.py', 'check_*.py']",
+  "python_functions": "['test']",
+  "pythonpath": "[]",
+  "required_plugins": "[]",
+  "testpaths": "['.']",
+  "tmp_path_retention_count": "3",
+  "tmp_path_retention_policy": "'all'",
+  "truncation_limit_chars": "None",
+  "truncation_limit_lines": "None",
+  "usefixtures": "[]",
+  "verbosity_assertions": "'auto'",
+  "verbosity_test_cases": "'auto'",
+  "xfail_strict": "False"
+ },
+ "ini_aliases": {},
+ "exit_status": 0,
+ "collection_errors": [],
+ "plugins": {
+  "distinfo": [],
+  "names": [
+   "alpha/conftest.py",
+   "api/conftest.py",
+   "assertion",
+   "beta/conftest.py",
+   "cacheprovider",
+   "capture",
+   "capturemanager",
+   "conftest.py",
+   "debugging",
+   "doctest",
+   "extractor",
+   "faulthandler",
+   "fixtures",
+   "freeze_support",
+   "funcmanage",
+   "helpconfig",
+   "junitxml",
+   "legacypath",
+   "legacypath-tmpdir",
+   "lfplugin",
+   "logging",
+   "logging-plugin",
+   "main",
+   "mark",
+   "monkeypatch",
+   "nfplugin",
+   "pastebin",
+   "pytestconfig",
+   "python",
+   "recwarn",
+   "reports",
+   "runner",
+   "session",
+   "setuponly",
+   "setupplan",
+   "skipping",
+   "stepwise",
+   "terminal",
+   "terminalreporter",
+   "threadexception",
+   "tmpdir",
+   "unittest",
+   "unraisableexception",
+   "warnings"
+  ]
+ },
+ "autouse_by_node": {
+  ".": []
+ },
+ "fixture_defs": {
+  "f0": {
+   "argname": "anyio_backend",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "test_async.py",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "test_async",
+    "qualname": "anyio_backend",
+    "file": "test_async.py",
+    "lineno": 13,
+    "wrapped": false
+   }
+  },
+  "f1": {
+   "argname": "backend",
+   "scope": "function",
+   "params": [
+    "'sqlite'",
+    "'postgres'"
+   ],
+   "ids": [
+    "'lite'",
+    "'pg'"
+   ],
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "backend",
+    "file": "conftest.py",
+    "lineno": 56,
+    "wrapped": false
+   }
+  },
+  "f2": {
+   "argname": "cache",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.cacheprovider",
+    "qualname": "cache",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/cacheprovider.py",
+    "lineno": 554,
+    "wrapped": false
+   }
+  },
+  "f3": {
+   "argname": "capfd",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capfd",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1090,
+    "wrapped": false
+   }
+  },
+  "f4": {
+   "argname": "capfdbinary",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capfdbinary",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1118,
+    "wrapped": false
+   }
+  },
+  "f5": {
+   "argname": "caplog",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.logging",
+    "qualname": "caplog",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/logging.py",
+    "lineno": 595,
+    "wrapped": false
+   }
+  },
+  "f6": {
+   "argname": "capsys",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capsys",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 999,
+    "wrapped": false
+   }
+  },
+  "f7": {
+   "argname": "capsysbinary",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capsysbinary",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1062,
+    "wrapped": false
+   }
+  },
+  "f8": {
+   "argname": "capteesys",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capteesys",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1027,
+    "wrapped": false
+   }
+  },
+  "f9": {
+   "argname": "channel",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "channel",
+    "file": "conftest.py",
+    "lineno": 49,
+    "wrapped": false
+   }
+  },
+  "f10": {
+   "argname": "class_scoped",
+   "scope": "class",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "class_scoped",
+    "file": "conftest.py",
+    "lineno": 71,
+    "wrapped": false
+   }
+  },
+  "f11": {
+   "argname": "client",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "alpha",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "client",
+    "file": "alpha/conftest.py",
+    "lineno": 11,
+    "wrapped": false
+   }
+  },
+  "f12": {
+   "argname": "client",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "beta",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "client",
+    "file": "beta/conftest.py",
+    "lineno": 6,
+    "wrapped": false
+   }
+  },
+  "f13": {
+   "argname": "clock",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "clock",
+    "file": "conftest.py",
+    "lineno": 44,
+    "wrapped": false
+   }
+  },
+  "f14": {
+   "argname": "connection",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "engine"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "connection",
+    "file": "conftest.py",
+    "lineno": 32,
+    "wrapped": false
+   }
+  },
+  "f15": {
+   "argname": "doctest_namespace",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.doctest",
+    "qualname": "doctest_namespace",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/doctest.py",
+    "lineno": 739,
+    "wrapped": false
+   }
+  },
+  "f16": {
+   "argname": "dsn",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "dsn",
+    "file": "conftest.py",
+    "lineno": 22,
+    "wrapped": false
+   }
+  },
+  "f17": {
+   "argname": "engine",
+   "scope": "module",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "dsn"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "engine",
+    "file": "conftest.py",
+    "lineno": 27,
+    "wrapped": false
+   }
+  },
+  "f18": {
+   "argname": "ledger",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "ledger",
+    "file": "conftest.py",
+    "lineno": 37,
+    "wrapped": false
+   }
+  },
+  "f19": {
+   "argname": "local_counter",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "test_wiring.py",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "test_wiring",
+    "qualname": "local_counter",
+    "file": "test_wiring.py",
+    "lineno": 13,
+    "wrapped": false
+   }
+  },
+  "f20": {
+   "argname": "monkeypatch",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.monkeypatch",
+    "qualname": "monkeypatch",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/monkeypatch.py",
+    "lineno": 30,
+    "wrapped": false
+   }
+  },
+  "f21": {
+   "argname": "package_scoped",
+   "scope": "package",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "package_scoped",
+    "file": "conftest.py",
+    "lineno": 76,
+    "wrapped": false
+   }
+  },
+  "f22": {
+   "argname": "payload",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "api",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "payload",
+    "file": "api/conftest.py",
+    "lineno": 11,
+    "wrapped": false
+   }
+  },
+  "f23": {
+   "argname": "probe",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "_probe",
+    "file": "conftest.py",
+    "lineno": 66,
+    "wrapped": false
+   }
+  },
+  "f24": {
+   "argname": "pytestconfig",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.fixtures",
+    "qualname": "pytestconfig",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/fixtures.py",
+    "lineno": 1424,
+    "wrapped": false
+   }
+  },
+  "f25": {
+   "argname": "record_property",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_property",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 276,
+    "wrapped": false
+   }
+  },
+  "f26": {
+   "argname": "record_testsuite_property",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_testsuite_property",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 337,
+    "wrapped": false
+   }
+  },
+  "f27": {
+   "argname": "record_xml_attribute",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_xml_attribute",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 299,
+    "wrapped": false
+   }
+  },
+  "f28": {
+   "argname": "recwarn",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.recwarn",
+    "qualname": "recwarn",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/recwarn.py",
+    "lineno": 33,
+    "wrapped": false
+   }
+  },
+  "f29": {
+   "argname": "retries",
+   "scope": "function",
+   "params": [
+    "1",
+    "2"
+   ],
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "retries",
+    "file": "conftest.py",
+    "lineno": 61,
+    "wrapped": false
+   }
+  },
+  "f30": {
+   "argname": "route",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "api",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "payload"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "route",
+    "file": "api/conftest.py",
+    "lineno": 16,
+    "wrapped": false
+   }
+  },
+  "f31": {
+   "argname": "tmp_path",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request",
+    "tmp_path_factory"
+   ],
+   "func": {
+    "module": "_pytest.tmpdir",
+    "qualname": "tmp_path",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "lineno": 254,
+    "wrapped": false
+   }
+  },
+  "f32": {
+   "argname": "tmp_path_factory",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.tmpdir",
+    "qualname": "tmp_path_factory",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "lineno": 239,
+    "wrapped": false
+   }
+  },
+  "f33": {
+   "argname": "tmpdir",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "tmp_path"
+   ],
+   "func": {
+    "module": "_pytest.legacypath",
+    "qualname": "LegacyTmpdirPlugin.tmpdir",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "lineno": 304,
+    "wrapped": false
+   }
+  },
+  "f34": {
+   "argname": "tmpdir_factory",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.legacypath",
+    "qualname": "LegacyTmpdirPlugin.tmpdir_factory",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "lineno": 297,
+    "wrapped": false
+   }
+  },
+  "f35": {
+   "argname": "label",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f36": {
+   "argname": "count",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f37": {
+   "argname": "value",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f38": {
+   "argname": "inner",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f39": {
+   "argname": "outer",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f40": {
+   "argname": "shard",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  },
+  "f41": {
+   "argname": "region",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1109,
+    "wrapped": false
+   }
+  }
+ },
+ "fixture_registry": {
+  "anyio_backend": [
+   "f0"
+  ],
+  "backend": [
+   "f1"
+  ],
+  "cache": [
+   "f2"
+  ],
+  "capfd": [
+   "f3"
+  ],
+  "capfdbinary": [
+   "f4"
+  ],
+  "caplog": [
+   "f5"
+  ],
+  "capsys": [
+   "f6"
+  ],
+  "capsysbinary": [
+   "f7"
+  ],
+  "capteesys": [
+   "f8"
+  ],
+  "channel": [
+   "f9"
+  ],
+  "class_scoped": [
+   "f10"
+  ],
+  "client": [
+   "f11",
+   "f12"
+  ],
+  "clock": [
+   "f13"
+  ],
+  "connection": [
+   "f14"
+  ],
+  "doctest_namespace": [
+   "f15"
+  ],
+  "dsn": [
+   "f16"
+  ],
+  "engine": [
+   "f17"
+  ],
+  "ledger": [
+   "f18"
+  ],
+  "local_counter": [
+   "f19"
+  ],
+  "monkeypatch": [
+   "f20"
+  ],
+  "package_scoped": [
+   "f21"
+  ],
+  "payload": [
+   "f22"
+  ],
+  "probe": [
+   "f23"
+  ],
+  "pytestconfig": [
+   "f24"
+  ],
+  "record_property": [
+   "f25"
+  ],
+  "record_testsuite_property": [
+   "f26"
+  ],
+  "record_xml_attribute": [
+   "f27"
+  ],
+  "recwarn": [
+   "f28"
+  ],
+  "retries": [
+   "f29"
+  ],
+  "route": [
+   "f30"
+  ],
+  "tmp_path": [
+   "f31"
+  ],
+  "tmp_path_factory": [
+   "f32"
+  ],
+  "tmpdir": [
+   "f33"
+  ],
+  "tmpdir_factory": [
+   "f34"
+  ]
+ },
+ "items": [
+  {
+   "nodeid": "alpha/test_alpha.py::test_client_and_package_scope",
+   "path": "alpha/test_alpha.py",
+   "lineno": 4,
+   "originalname": "test_client_and_package_scope",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "client",
+    "package_scoped"
+   ],
+   "initialnames": [
+    "client",
+    "package_scoped"
+   ],
+   "names_closure": [
+    "package_scoped",
+    "client"
+   ],
+   "name2fixturedefs": {
+    "client": [
+     "f11"
+    ],
+    "package_scoped": [
+     "f21"
+    ]
+   }
+  },
+  {
+   "nodeid": "api/test_api.py::test_fixture_and_helper_share_a_name",
+   "path": "api/test_api.py",
+   "lineno": 13,
+   "originalname": "test_fixture_and_helper_share_a_name",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "payload"
+   ],
+   "initialnames": [
+    "payload"
+   ],
+   "names_closure": [
+    "payload"
+   ],
+   "name2fixturedefs": {
+    "payload": [
+     "f22"
+    ]
+   }
+  },
+  {
+   "nodeid": "api/test_api.py::test_route_and_a_root_fixture",
+   "path": "api/test_api.py",
+   "lineno": 17,
+   "originalname": "test_route_and_a_root_fixture",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "route",
+    "dsn"
+   ],
+   "initialnames": [
+    "route",
+    "dsn"
+   ],
+   "names_closure": [
+    "dsn",
+    "route",
+    "payload"
+   ],
+   "name2fixturedefs": {
+    "route": [
+     "f30"
+    ],
+    "dsn": [
+     "f16"
+    ],
+    "payload": [
+     "f22"
+    ]
+   }
+  },
+  {
+   "nodeid": "beta/test_beta.py::test_client_and_a_root_fixture",
+   "path": "beta/test_beta.py",
+   "lineno": 4,
+   "originalname": "test_client_and_a_root_fixture",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "client",
+    "connection"
+   ],
+   "initialnames": [
+    "client",
+    "connection"
+   ],
+   "names_closure": [
+    "dsn",
+    "engine",
+    "client",
+    "connection"
+   ],
+   "name2fixturedefs": {
+    "client": [
+     "f12"
+    ],
+    "connection": [
+     "f14"
+    ],
+    "engine": [
+     "f17"
+    ],
+    "dsn": [
+     "f16"
+    ]
+   }
+  },
+  {
+   "nodeid": "check_bodies.py::test_raises",
+   "path": "check_bodies.py",
+   "lineno": 15,
+   "originalname": "test_raises",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "check_bodies.py::test_approx",
+   "path": "check_bodies.py",
+   "lineno": 23,
+   "originalname": "test_approx",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "check_bodies.py::test_capsys",
+   "path": "check_bodies.py",
+   "lineno": 27,
+   "originalname": "test_capsys",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "capsys"
+   ],
+   "initialnames": [
+    "capsys"
+   ],
+   "names_closure": [
+    "capsys",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "capsys": [
+     "f6"
+    ]
+   }
+  },
+  {
+   "nodeid": "check_bodies.py::test_caplog",
+   "path": "check_bodies.py",
+   "lineno": 33,
+   "originalname": "test_caplog",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "caplog"
+   ],
+   "initialnames": [
+    "caplog"
+   ],
+   "names_closure": [
+    "caplog",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "caplog": [
+     "f5"
+    ]
+   }
+  },
+  {
+   "nodeid": "check_bodies.py::test_skipif_string_condition",
+   "path": "check_bodies.py",
+   "lineno": 40,
+   "originalname": "test_skipif_string_condition",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "skipif",
+     "args": [
+      "\"sys.platform == 'nonexistent'\""
+     ],
+     "kwargs": {
+      "reason": "'written as a string expression'"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "check_bodies.py::test_skipif_string_condition",
+     "name": "skipif",
+     "args": [
+      "\"sys.platform == 'nonexistent'\""
+     ],
+     "kwargs": {
+      "reason": "'written as a string expression'"
+     }
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_async.py::test_async_fixtures",
+   "path": "test_async.py",
+   "lineno": 18,
+   "originalname": "test_async_fixtures",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "anyio",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_async.py::test_async_fixtures",
+     "name": "anyio",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "clock",
+    "channel"
+   ],
+   "initialnames": [
+    "clock",
+    "channel"
+   ],
+   "names_closure": [
+    "clock",
+    "channel"
+   ],
+   "name2fixturedefs": {
+    "clock": [
+     "f13"
+    ],
+    "channel": [
+     "f9"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_async.py::test_async_with_a_sync_fixture",
+   "path": "test_async.py",
+   "lineno": 25,
+   "originalname": "test_async_with_a_sync_fixture",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "anyio",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_async.py::test_async_with_a_sync_fixture",
+     "name": "anyio",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "connection"
+   ],
+   "initialnames": [
+    "connection"
+   ],
+   "names_closure": [
+    "dsn",
+    "engine",
+    "connection"
+   ],
+   "name2fixturedefs": {
+    "connection": [
+     "f14"
+    ],
+    "engine": [
+     "f17"
+    ],
+    "dsn": [
+     "f16"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_two_argnames[text-7]",
+   "path": "test_marks.py",
+   "lineno": 17,
+   "originalname": "test_parametrize_two_argnames",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'label,count'",
+      "[('text', 7), (None, True)]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_two_argnames[text-7]",
+     "name": "parametrize",
+     "args": [
+      "'label,count'",
+      "[('text', 7), (None, True)]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "label",
+    "count"
+   ],
+   "initialnames": [
+    "label",
+    "count"
+   ],
+   "names_closure": [
+    "label",
+    "count"
+   ],
+   "name2fixturedefs": {
+    "label": [
+     "f35"
+    ],
+    "count": [
+     "f36"
+    ]
+   },
+   "callspec": {
+    "id": "text-7",
+    "idlist": [
+     "text-7"
+    ],
+    "params": {
+     "label": "'text'",
+     "count": "7"
+    },
+    "indices": {
+     "label": 0,
+     "count": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_two_argnames[None-True]",
+   "path": "test_marks.py",
+   "lineno": 17,
+   "originalname": "test_parametrize_two_argnames",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'label,count'",
+      "[('text', 7), (None, True)]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_two_argnames[None-True]",
+     "name": "parametrize",
+     "args": [
+      "'label,count'",
+      "[('text', 7), (None, True)]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "label",
+    "count"
+   ],
+   "initialnames": [
+    "label",
+    "count"
+   ],
+   "names_closure": [
+    "label",
+    "count"
+   ],
+   "name2fixturedefs": {
+    "label": [
+     "f35"
+    ],
+    "count": [
+     "f36"
+    ]
+   },
+   "callspec": {
+    "id": "None-True",
+    "idlist": [
+     "None-True"
+    ],
+    "params": {
+     "label": "None",
+     "count": "True"
+    },
+    "indices": {
+     "label": 1,
+     "count": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_generated_ids[0.25]",
+   "path": "test_marks.py",
+   "lineno": 23,
+   "originalname": "test_parametrize_generated_ids",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_generated_ids[0.25]",
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "value"
+   ],
+   "initialnames": [
+    "value"
+   ],
+   "names_closure": [
+    "value"
+   ],
+   "name2fixturedefs": {
+    "value": [
+     "f37"
+    ]
+   },
+   "callspec": {
+    "id": "0.25",
+    "idlist": [
+     "0.25"
+    ],
+    "params": {
+     "value": "0.25"
+    },
+    "indices": {
+     "value": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_generated_ids[value1]",
+   "path": "test_marks.py",
+   "lineno": 23,
+   "originalname": "test_parametrize_generated_ids",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_generated_ids[value1]",
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "value"
+   ],
+   "initialnames": [
+    "value"
+   ],
+   "names_closure": [
+    "value"
+   ],
+   "name2fixturedefs": {
+    "value": [
+     "f37"
+    ]
+   },
+   "callspec": {
+    "id": "value1",
+    "idlist": [
+     "value1"
+    ],
+    "params": {
+     "value": "(1, 2)"
+    },
+    "indices": {
+     "value": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_generated_ids[explicit]",
+   "path": "test_marks.py",
+   "lineno": 23,
+   "originalname": "test_parametrize_generated_ids",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_generated_ids[explicit]",
+     "name": "parametrize",
+     "args": [
+      "'value'",
+      "[0.25, (1, 2), ParameterSet(values=('named',), marks=(), id='explicit')]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "value"
+   ],
+   "initialnames": [
+    "value"
+   ],
+   "names_closure": [
+    "value"
+   ],
+   "name2fixturedefs": {
+    "value": [
+     "f37"
+    ]
+   },
+   "callspec": {
+    "id": "explicit",
+    "idlist": [
+     "explicit"
+    ],
+    "params": {
+     "value": "'named'"
+    },
+    "indices": {
+     "value": 2
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_stacked[i1-o1]",
+   "path": "test_marks.py",
+   "lineno": 28,
+   "originalname": "test_parametrize_stacked",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i1-o1]",
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i1-o1]",
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "outer",
+    "inner"
+   ],
+   "initialnames": [
+    "outer",
+    "inner"
+   ],
+   "names_closure": [
+    "outer",
+    "inner"
+   ],
+   "name2fixturedefs": {
+    "inner": [
+     "f38"
+    ],
+    "outer": [
+     "f39"
+    ]
+   },
+   "callspec": {
+    "id": "i1-o1",
+    "idlist": [
+     "i1",
+     "o1"
+    ],
+    "params": {
+     "inner": "'i1'",
+     "outer": "'o1'"
+    },
+    "indices": {
+     "inner": 0,
+     "outer": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_stacked[i1-o2]",
+   "path": "test_marks.py",
+   "lineno": 28,
+   "originalname": "test_parametrize_stacked",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i1-o2]",
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i1-o2]",
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "outer",
+    "inner"
+   ],
+   "initialnames": [
+    "outer",
+    "inner"
+   ],
+   "names_closure": [
+    "outer",
+    "inner"
+   ],
+   "name2fixturedefs": {
+    "inner": [
+     "f38"
+    ],
+    "outer": [
+     "f39"
+    ]
+   },
+   "callspec": {
+    "id": "i1-o2",
+    "idlist": [
+     "i1",
+     "o2"
+    ],
+    "params": {
+     "inner": "'i1'",
+     "outer": "'o2'"
+    },
+    "indices": {
+     "inner": 1,
+     "outer": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_stacked[i2-o1]",
+   "path": "test_marks.py",
+   "lineno": 28,
+   "originalname": "test_parametrize_stacked",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i2-o1]",
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i2-o1]",
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "outer",
+    "inner"
+   ],
+   "initialnames": [
+    "outer",
+    "inner"
+   ],
+   "names_closure": [
+    "outer",
+    "inner"
+   ],
+   "name2fixturedefs": {
+    "inner": [
+     "f38"
+    ],
+    "outer": [
+     "f39"
+    ]
+   },
+   "callspec": {
+    "id": "i2-o1",
+    "idlist": [
+     "i2",
+     "o1"
+    ],
+    "params": {
+     "inner": "'i2'",
+     "outer": "'o1'"
+    },
+    "indices": {
+     "inner": 2,
+     "outer": 2
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_stacked[i2-o2]",
+   "path": "test_marks.py",
+   "lineno": 28,
+   "originalname": "test_parametrize_stacked",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i2-o2]",
+     "name": "parametrize",
+     "args": [
+      "'inner'",
+      "['i1', 'i2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_parametrize_stacked[i2-o2]",
+     "name": "parametrize",
+     "args": [
+      "'outer'",
+      "['o1', 'o2']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "outer",
+    "inner"
+   ],
+   "initialnames": [
+    "outer",
+    "inner"
+   ],
+   "names_closure": [
+    "outer",
+    "inner"
+   ],
+   "name2fixturedefs": {
+    "inner": [
+     "f38"
+    ],
+    "outer": [
+     "f39"
+    ]
+   },
+   "callspec": {
+    "id": "i2-o2",
+    "idlist": [
+     "i2",
+     "o2"
+    ],
+    "params": {
+     "inner": "'i2'",
+     "outer": "'o2'"
+    },
+    "indices": {
+     "inner": 3,
+     "outer": 3
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_single_case_axes[primary-eu]",
+   "path": "test_marks.py",
+   "lineno": 35,
+   "originalname": "test_parametrize_single_case_axes",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'shard'",
+      "['primary']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "parametrize",
+     "args": [
+      "'region'",
+      "['eu']"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_single_case_axes[primary-eu]",
+     "name": "parametrize",
+     "args": [
+      "'shard'",
+      "['primary']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_parametrize_single_case_axes[primary-eu]",
+     "name": "parametrize",
+     "args": [
+      "'region'",
+      "['eu']"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "region",
+    "shard"
+   ],
+   "initialnames": [
+    "region",
+    "shard"
+   ],
+   "names_closure": [
+    "region",
+    "shard"
+   ],
+   "name2fixturedefs": {
+    "shard": [
+     "f40"
+    ],
+    "region": [
+     "f41"
+    ]
+   },
+   "callspec": {
+    "id": "primary-eu",
+    "idlist": [
+     "primary",
+     "eu"
+    ],
+    "params": {
+     "shard": "'primary'",
+     "region": "'eu'"
+    },
+    "indices": {
+     "shard": 0,
+     "region": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_skip_without_a_reason",
+   "path": "test_marks.py",
+   "lineno": 42,
+   "originalname": "test_skip_without_a_reason",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "skip",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_skip_without_a_reason",
+     "name": "skip",
+     "args": [],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_skip_with_a_reason",
+   "path": "test_marks.py",
+   "lineno": 47,
+   "originalname": "test_skip_with_a_reason",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "skip",
+     "args": [],
+     "kwargs": {
+      "reason": "'the behaviour it covers is not written yet'"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_skip_with_a_reason",
+     "name": "skip",
+     "args": [],
+     "kwargs": {
+      "reason": "'the behaviour it covers is not written yet'"
+     }
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_skipif_boolean",
+   "path": "test_marks.py",
+   "lineno": 52,
+   "originalname": "test_skipif_boolean",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "skipif",
+     "args": [
+      "False"
+     ],
+     "kwargs": {
+      "reason": "'the body reads a 3.13 interpreter'"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_skipif_boolean",
+     "name": "skipif",
+     "args": [
+      "False"
+     ],
+     "kwargs": {
+      "reason": "'the body reads a 3.13 interpreter'"
+     }
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_xfail",
+   "path": "test_marks.py",
+   "lineno": 57,
+   "originalname": "test_xfail",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'the parser accepts a trailing comma it should reject'"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_xfail",
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'the parser accepts a trailing comma it should reject'"
+     }
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_xfail_not_strict",
+   "path": "test_marks.py",
+   "lineno": 62,
+   "originalname": "test_xfail_not_strict",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'fails on a filesystem without atomic rename'",
+      "strict": "False"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_xfail_not_strict",
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'fails on a filesystem without atomic rename'",
+      "strict": "False"
+     }
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_xfail_raises",
+   "path": "test_marks.py",
+   "lineno": 67,
+   "originalname": "test_xfail_raises",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'the loader rejects an empty document'",
+      "raises": "<class 'ValueError'>"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_xfail_raises",
+     "name": "xfail",
+     "args": [],
+     "kwargs": {
+      "reason": "'the loader rejects an empty document'",
+      "raises": "<class 'ValueError'>"
+     }
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_marks.py::test_tagged_and_timed",
+   "path": "test_marks.py",
+   "lineno": 72,
+   "originalname": "test_tagged_and_timed",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "timeout",
+     "args": [
+      "30"
+     ],
+     "kwargs": {}
+    },
+    {
+     "name": "slow",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_tagged_and_timed",
+     "name": "timeout",
+     "args": [
+      "30"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py::test_tagged_and_timed",
+     "name": "slow",
+     "args": [],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_wiring.py::test_module_fixture",
+   "path": "test_wiring.py",
+   "lineno": 18,
+   "originalname": "test_module_fixture",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "local_counter"
+   ],
+   "initialnames": [
+    "local_counter"
+   ],
+   "names_closure": [
+    "local_counter"
+   ],
+   "name2fixturedefs": {
+    "local_counter": [
+     "f19"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_fixture_chain",
+   "path": "test_wiring.py",
+   "lineno": 23,
+   "originalname": "test_fixture_chain",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "connection",
+    "probe"
+   ],
+   "initialnames": [
+    "connection",
+    "probe"
+   ],
+   "names_closure": [
+    "dsn",
+    "engine",
+    "connection",
+    "probe"
+   ],
+   "name2fixturedefs": {
+    "connection": [
+     "f14"
+    ],
+    "probe": [
+     "f23"
+    ],
+    "engine": [
+     "f17"
+    ],
+    "dsn": [
+     "f16"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_yield_teardown",
+   "path": "test_wiring.py",
+   "lineno": 28,
+   "originalname": "test_yield_teardown",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "ledger"
+   ],
+   "initialnames": [
+    "ledger"
+   ],
+   "names_closure": [
+    "ledger"
+   ],
+   "name2fixturedefs": {
+    "ledger": [
+     "f18"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_tmp_path",
+   "path": "test_wiring.py",
+   "lineno": 33,
+   "originalname": "test_tmp_path",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "tmp_path",
+    "tmp_path_factory"
+   ],
+   "initialnames": [
+    "tmp_path",
+    "tmp_path_factory"
+   ],
+   "names_closure": [
+    "tmp_path_factory",
+    "tmp_path",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "tmp_path": [
+     "f31"
+    ],
+    "tmp_path_factory": [
+     "f32"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_params_fixture_with_ids[lite]",
+   "path": "test_wiring.py",
+   "lineno": 42,
+   "originalname": "test_params_fixture_with_ids",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "backend"
+   ],
+   "initialnames": [
+    "backend"
+   ],
+   "names_closure": [
+    "backend",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "backend": [
+     "f1"
+    ]
+   },
+   "callspec": {
+    "id": "lite",
+    "idlist": [
+     "lite"
+    ],
+    "params": {
+     "backend": "'sqlite'"
+    },
+    "indices": {
+     "backend": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_params_fixture_with_ids[pg]",
+   "path": "test_wiring.py",
+   "lineno": 42,
+   "originalname": "test_params_fixture_with_ids",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "backend"
+   ],
+   "initialnames": [
+    "backend"
+   ],
+   "names_closure": [
+    "backend",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "backend": [
+     "f1"
+    ]
+   },
+   "callspec": {
+    "id": "pg",
+    "idlist": [
+     "pg"
+    ],
+    "params": {
+     "backend": "'postgres'"
+    },
+    "indices": {
+     "backend": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_params_fixture_without_ids[1]",
+   "path": "test_wiring.py",
+   "lineno": 46,
+   "originalname": "test_params_fixture_without_ids",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "retries"
+   ],
+   "initialnames": [
+    "retries"
+   ],
+   "names_closure": [
+    "retries",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "retries": [
+     "f29"
+    ]
+   },
+   "callspec": {
+    "id": "1",
+    "idlist": [
+     "1"
+    ],
+    "params": {
+     "retries": "1"
+    },
+    "indices": {
+     "retries": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::test_params_fixture_without_ids[2]",
+   "path": "test_wiring.py",
+   "lineno": 46,
+   "originalname": "test_params_fixture_without_ids",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "retries"
+   ],
+   "initialnames": [
+    "retries"
+   ],
+   "names_closure": [
+    "retries",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "retries": [
+     "f29"
+    ]
+   },
+   "callspec": {
+    "id": "2",
+    "idlist": [
+     "2"
+    ],
+    "params": {
+     "retries": "2"
+    },
+    "indices": {
+     "retries": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::TestGrouped::test_class_scoped",
+   "path": "test_wiring.py",
+   "lineno": 53,
+   "originalname": "test_class_scoped",
+   "cls": "TestGrouped",
+   "own_markers": [],
+   "markers_with_origin": [
+    {
+     "from": "test_wiring.py::TestGrouped",
+     "name": "classmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "class_scoped"
+   ],
+   "initialnames": [
+    "class_scoped"
+   ],
+   "names_closure": [
+    "class_scoped"
+   ],
+   "name2fixturedefs": {
+    "class_scoped": [
+     "f10"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::TestGrouped::test_module_fixture_from_a_method",
+   "path": "test_wiring.py",
+   "lineno": 56,
+   "originalname": "test_module_fixture_from_a_method",
+   "cls": "TestGrouped",
+   "own_markers": [],
+   "markers_with_origin": [
+    {
+     "from": "test_wiring.py::TestGrouped",
+     "name": "classmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "local_counter"
+   ],
+   "initialnames": [
+    "local_counter"
+   ],
+   "names_closure": [
+    "local_counter"
+   ],
+   "name2fixturedefs": {
+    "local_counter": [
+     "f19"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::TestOuter::test_outer",
+   "path": "test_wiring.py",
+   "lineno": 61,
+   "originalname": "test_outer",
+   "cls": "TestOuter",
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "dsn"
+   ],
+   "initialnames": [
+    "dsn"
+   ],
+   "names_closure": [
+    "dsn"
+   ],
+   "name2fixturedefs": {
+    "dsn": [
+     "f16"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_wiring.py::TestOuter::TestNested::test_nested",
+   "path": "test_wiring.py",
+   "lineno": 65,
+   "originalname": "test_nested",
+   "cls": "TestOuter.TestNested",
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "ledger"
+   ],
+   "initialnames": [
+    "ledger"
+   ],
+   "names_closure": [
+    "ledger"
+   ],
+   "name2fixturedefs": {
+    "ledger": [
+     "f18"
+    ]
+   }
+  }
+ ]
+}

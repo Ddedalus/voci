@@ -25,7 +25,7 @@ CORPUS = REPO_ROOT / "velox-migrate" / "corpus"
 DUMPS = CORPUS / "dumps"
 EXTRACTOR = REPO_ROOT / "velox-migrate" / "velox_migrate" / "extractor.py"
 
-SUITES = ["fixtures_showcase", "hazards_showcase"]
+SUITES = ["fixtures_showcase", "hazards_showcase", "mechanical_showcase"]
 
 # The ends of the supported range. A dump from each is what proves the version shims in
 # `extractor.py` absorb the differences rather than passing them downstream. Pinned to exact
