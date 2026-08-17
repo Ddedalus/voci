@@ -108,9 +108,10 @@ report sections and the markers left in converted source, so a number in the sum
 the report and a marker in a file are one thing seen three ways.
 
 `migration-report.md` is written to be read and forwarded: the verdict, then a section per construct
-that needs a decision with its file-and-line list, then the concurrency hazards, then the
-configuration and plugins, then what the audit cannot see. `findings.json` carries the same content
-for tooling, with the matrix rows for every code it uses.
+that needs a decision with its file-and-line list, then what converts with a caveat, the
+concurrency hazards, what the conversion rewires, the configuration and plugins, and last what the
+audit cannot see. `findings.json` carries the same content for tooling, with the matrix rows for
+every code it uses.
 
 ```console
 $ velox-migrate audit --dump ground-truth.json --root ../service --out audit/

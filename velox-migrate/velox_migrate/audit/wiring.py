@@ -196,15 +196,18 @@ def _downstream(item: Item, name: str, winner: FixtureDef) -> set[str]:
 
 
 def _autouse_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Finding]:
-    by_name = {
-        fixture.argname: fixture
+    # Keyed by the node a fixture is visible from as well as its name: two directories may each
+    # define an autouse fixture called `setup`, and the declaration for one goes in one of them.
+    autouse = [
+        fixture
         for fixture in ground_truth.fixture_defs.values()
         if fixture.autouse and in_suite(fixture)
-    }
+    ]
+    by_node = {(fixture.visibility, fixture.argname): fixture for fixture in autouse}
     for node, names in sorted(ground_truth.autouse_by_node.items()):
         covered = reach.tests_under(node)
         for name in names:
-            fixture = by_name.get(name)
+            fixture = by_node.get((node, name)) or _only(autouse, name)
             if fixture is None:
                 # An autouse fixture from a plugin, already classified where it was defined.
                 continue
@@ -222,8 +225,9 @@ def _autouse_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Findi
 
 def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
     # One finding per parametrized name per test function, rather than per case: the mark is
-    # written once and the generated fixtures are per value, not per case.
-    seen: set[tuple[str | None, str, str]] = set()
+    # written once and the generated fixtures are per value, not per case. The class counts too,
+    # since two classes in one module may each have a `test_it`.
+    seen: set[tuple[str | None, str | None, str, str]] = set()
     for item in ground_truth.items:
         for mark in item.markers_with_origin:
             if mark.name != "parametrize" or not mark.args:
@@ -232,14 +236,15 @@ def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
                 fixture = item.resolve(argname)
                 if fixture is None or fixture.direct_param:
                     continue
-                signature = (item.path, item.originalname, argname)
+                signature = (item.path, item.cls, item.originalname, argname)
                 if signature in seen:
                     continue
                 seen.add(signature)
                 cases = tuple(
                     other.nodeid
                     for other in ground_truth.items
-                    if other.path == item.path and other.originalname == item.originalname
+                    if (other.path, other.cls, other.originalname)
+                    == (item.path, item.cls, item.originalname)
                 )
                 yield Finding(
                     code="VX007",
@@ -275,6 +280,12 @@ def _providers(ground_truth: GroundTruth) -> dict[str, str]:
     return {
         plugin.name.split(".")[0]: plugin.dist for plugin in ground_truth.plugins if plugin.name
     }
+
+
+def _only(fixtures: list[FixtureDef], name: str) -> FixtureDef | None:
+    """The one fixture called `name`, or `None` when the suite has none or several."""
+    found = [fixture for fixture in fixtures if fixture.argname == name]
+    return found[0] if len(found) == 1 else None
 
 
 def _node(nodeid: str) -> str:

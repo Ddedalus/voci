@@ -2,8 +2,9 @@
 
 Contributes the per-case-mark case, the string skipif condition, both xfail shapes with no
 counterpart, a per-test warning filter, a scalar mark arriving twice (module-level `pytestmark`
-plus a decorator), a mark a plugin would act on, the `usefixtures`-on-one-test case, and the two
-class lifecycles velox does not provide.
+plus a decorator), a mark a plugin would act on, the `usefixtures`-on-one-test case, indirect
+parametrization of a method whose name a second class repeats, and the two class lifecycles velox
+does not provide.
 """
 
 import sys
@@ -67,6 +68,19 @@ class TestGrouped:
         assert package_scoped
 
     def test_two(self):
+        assert True
+
+
+class TestIndirect:
+    @pytest.mark.parametrize("backend", ["mysql", "sqlite"], indirect=True)
+    def test_it(self, backend):
+        assert backend
+
+
+class TestPlain:
+    # The same method name as `TestIndirect`'s, which is what tells a per-class finding from a
+    # per-module one.
+    def test_it(self):
         assert True
 
 

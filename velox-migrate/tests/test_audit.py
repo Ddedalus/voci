@@ -69,11 +69,11 @@ def test_every_source_the_dump_names_is_read(hazards: Audit) -> None:
 def test_the_suite_is_described_by_what_its_tests_reach(hazards: Audit) -> None:
     suite = hazards.suite
 
-    assert suite.tests == 44
+    assert suite.tests == 47
     assert suite.test_files == 4
     assert suite.async_tests == 2
     assert suite.conftests == 2
-    assert suite.overrides == 1
+    assert suite.overrides == 2
 
 
 def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
@@ -157,13 +157,19 @@ def test_an_override_is_refused_by_its_fan_out_and_allowed_by_a_bigger_budget(
     assert "VX006" not in codes(audit_of(HAZARDS, version, budget=10))
 
 
-def test_an_autouse_fixture_that_patches_the_process_serializes_the_whole_suite(
+def test_an_autouse_fixture_that_patches_the_process_serializes_what_it_reaches(
     hazards: Audit,
 ) -> None:
     # `patched_env` is autouse at the suite root and calls `monkeypatch.setenv`, so the hazard is
-    # written once and every test inherits it. That is the number that decides adoption.
-    assert hazards.summary.serialized_tests == hazards.suite.tests
-    assert hazards.summary.serialized_percent == 100.0
+    # written once and inherited by every test that resolves it — which is the number that decides
+    # adoption. Under `deep/` it is overridden by one that patches nothing, and those tests are
+    # not charged for it.
+    serialized = {
+        nodeid for finding in hazards.findings if finding.serialized for nodeid in finding.tests
+    }
+
+    assert hazards.summary.serialized_tests == 45
+    assert not any(nodeid.startswith("deep/") for nodeid in serialized)
 
 
 def test_a_hazard_in_a_test_body_reaches_that_test_alone(hazards: Audit) -> None:
@@ -179,13 +185,37 @@ def test_a_hazard_in_a_test_body_reaches_that_test_alone(hazards: Audit) -> None
     )
 
 
-def test_a_hazard_in_an_autouse_fixture_reaches_every_test(hazards: Audit) -> None:
+def test_a_hazard_in_an_autouse_fixture_reaches_the_tests_that_inherit_it(hazards: Audit) -> None:
     # `patched_env` clears an environment variable on teardown, and it is autouse at the root.
     (in_a_fixture,) = [
         finding for finding in by_code(hazards, "VX402") if finding.site.function == "patched_env"
     ]
 
-    assert len(in_a_fixture.tests) == hazards.suite.tests
+    assert len(in_a_fixture.tests) == 45
+
+
+def test_two_directories_declaring_the_same_autouse_name_are_told_apart(hazards: Audit) -> None:
+    # Both conftests define `patched_env`, and the `velox.use(...)` line for each goes where its
+    # own definition is, so a finding that sited both at one file would send someone to the
+    # wrong file.
+    sites = {
+        (str(finding.detail["node"]), finding.site.file): finding
+        for finding in by_code(hazards, "VX008")
+        if finding.detail["fixture"] == "patched_env"
+    }
+
+    assert set(sites) == {(".", "conftest.py"), ("deep", "deep/conftest.py")}
+
+
+def test_an_indirectly_parametrized_method_counts_its_own_cases(hazards: Audit) -> None:
+    # `TestPlain` has a `test_it` too, and it is not one of these cases.
+    (indirect,) = by_code(hazards, "VX007")
+
+    assert indirect.site.function == "TestIndirect.test_it"
+    assert indirect.tests == (
+        "test_shapes.py::TestIndirect::test_it[mysql]",
+        "test_shapes.py::TestIndirect::test_it[sqlite]",
+    )
 
 
 def test_a_finding_about_the_suite_names_no_test(hazards: Audit) -> None:

@@ -27,6 +27,7 @@ def markdown(audit: Audit) -> str:
         *_decisions(audit),
         *_caveats(audit),
         *_hazards(audit),
+        *_rewiring(audit),
         *_configuration(audit),
         *_blind_spots(audit),
     ]
@@ -161,6 +162,25 @@ def _hazards(audit: Audit) -> list[str]:
     ]
     # Most occurrences first: the biggest source of serial tests is the one worth fixing.
     for code, findings in sorted(groups, key=lambda group: (-len(group[1]), group[0])):
+        blocks += _group(code, findings)
+    return blocks
+
+
+def _rewiring(audit: Audit) -> list[str]:
+    groups = _grouped(
+        finding
+        for finding in ordered(audit.findings)
+        if finding.disposition is Disposition.MECHANICAL and finding.area is not Area.CONFIG
+    )
+    if not groups:
+        return []
+    blocks = [
+        "## What conversion rewires",
+        "These convert without anyone reading the diff line by line. They are listed because the "
+        "shape of the result is decided here: which fixtures are copied, where a declaration "
+        "lands, and which tests end up scheduled alone.",
+    ]
+    for code, findings in groups:
         blocks += _group(code, findings)
     return blocks
 

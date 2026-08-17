@@ -67,12 +67,42 @@ def engine(request):
 def test_a_finalizer_inside_a_block_names_the_block_it_is_under() -> None:
     finding = _only("""
 def engine(request):
-    with open("f") as handle:
-        request.addfinalizer(handle.close)
+    if wants_teardown:
+        request.addfinalizer(close)
 """)
 
     assert finding.code == "VX014"
-    assert "`with`" in finding.message
+    assert "`if`" in finding.message
+
+
+def test_a_finalizer_in_a_body_that_always_runs_is_unconditional() -> None:
+    # A `with` body and a `try` body both run, so a finalizer registered in one is registered
+    # every time, which is what `yield` teardown does.
+    source = """
+def engine(request):
+    with open("f") as handle:
+        request.addfinalizer(handle.close)
+
+def session(request):
+    try:
+        request.addfinalizer(close)
+    except OSError:
+        request.addfinalizer(other)
+"""
+
+    assert _codes(source) == ["VX013", "VX013", "VX014"]
+
+
+def test_a_finalizer_inside_a_match_case_is_conditional() -> None:
+    finding = _only("""
+def engine(request, mode):
+    match mode:
+        case "eager":
+            request.addfinalizer(close)
+""")
+
+    assert finding.code == "VX014"
+    assert "`case`" in finding.message
 
 
 def test_a_finalizer_in_a_nested_def_is_judged_by_that_def_s_own_body() -> None:
@@ -155,6 +185,26 @@ class TestGroup:
         ("VX019", "setup_function"),
         ("VX019", "TestGroup.teardown_method"),
     ]
+
+
+def test_a_familiar_name_outside_the_protocol_is_an_ordinary_function() -> None:
+    # pytest calls `setup_method` on a class and `setup_function` on a module. A fixture called
+    # `setup`, or a helper nested in a test, is neither, and reporting it would refuse tests that
+    # convert fine.
+    source = """
+import pytest
+@pytest.fixture
+def setup():
+    return object()
+def teardown_method(self):
+    pass
+def test_a():
+    def setup_method():
+        pass
+    setup_method()
+"""
+
+    assert _codes(source) == []
 
 
 def test_a_testcase_subclass_is_recognized_through_an_alias_or_a_direct_import() -> None:
@@ -613,6 +663,21 @@ def test_a():
     assert _codes(source) == ["VX411", "VX411"]
 
 
+def test_a_module_name_a_test_rebinds_for_itself_is_that_tests_own() -> None:
+    # This finding is `serialized`, so a false positive here inflates the headline share of the
+    # suite that has to run alone.
+    source = """
+CACHE = {}
+def test_a():
+    CACHE = {}
+    CACHE["key"] = 1
+def test_b(CACHE):
+    CACHE["key"] = 1
+"""
+
+    assert _codes(source) == []
+
+
 def test_seeded_randomness_and_sequence_counters_are_reported() -> None:
     source = """
 import numpy as np, random
@@ -697,7 +762,7 @@ def test_a_file_that_will_not_parse_costs_its_own_findings_and_no_others(tmp_pat
 
     scan = sources.scan([broken, fine], root=tmp_path)
 
-    assert (scan.unparsed, scan.files) == (("conftest.py",), 2)
+    assert (scan.unparsed, scan.files) == (("conftest.py",), 1)
     assert [f.code for f in scan.findings] == ["VX406"]
 
 

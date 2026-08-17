@@ -116,6 +116,9 @@
   ".": [
    "patched_env"
   ],
+  "deep": [
+   "patched_env"
+  ],
   "test_shapes.py::TestLegacyUnit": [
    "_unittest_setUpClass_fixture_TestLegacyUnit"
   ],
@@ -165,6 +168,26 @@
    }
   },
   "f2": {
+   "argname": "backend",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "backend",
+    "file": "conftest.py",
+    "lineno": 92,
+    "wrapped": false
+   }
+  },
+  "f3": {
    "argname": "cache",
    "scope": "function",
    "params": null,
@@ -184,7 +207,7 @@
     "wrapped": false
    }
   },
-  "f3": {
+  "f4": {
    "argname": "capfd",
    "scope": "function",
    "params": null,
@@ -204,7 +227,7 @@
     "wrapped": false
    }
   },
-  "f4": {
+  "f5": {
    "argname": "capfdbinary",
    "scope": "function",
    "params": null,
@@ -224,7 +247,7 @@
     "wrapped": false
    }
   },
-  "f5": {
+  "f6": {
    "argname": "caplog",
    "scope": "function",
    "params": null,
@@ -244,7 +267,7 @@
     "wrapped": false
    }
   },
-  "f6": {
+  "f7": {
    "argname": "capsys",
    "scope": "function",
    "params": null,
@@ -264,7 +287,7 @@
     "wrapped": false
    }
   },
-  "f7": {
+  "f8": {
    "argname": "capsysbinary",
    "scope": "function",
    "params": null,
@@ -284,7 +307,7 @@
     "wrapped": false
    }
   },
-  "f8": {
+  "f9": {
    "argname": "capteesys",
    "scope": "function",
    "params": null,
@@ -304,7 +327,7 @@
     "wrapped": false
    }
   },
-  "f9": {
+  "f10": {
    "argname": "class_scoped",
    "scope": "class",
    "params": null,
@@ -318,11 +341,11 @@
     "module": "conftest",
     "qualname": "class_scoped",
     "file": "conftest.py",
-    "lineno": 30,
+    "lineno": 31,
     "wrapped": false
    }
   },
-  "f10": {
+  "f11": {
    "argname": "closed",
    "scope": "function",
    "params": null,
@@ -338,11 +361,11 @@
     "module": "conftest",
     "qualname": "closed",
     "file": "conftest.py",
-    "lineno": 57,
+    "lineno": 58,
     "wrapped": false
    }
   },
-  "f11": {
+  "f12": {
    "argname": "computed",
    "scope": "function",
    "params": null,
@@ -358,11 +381,11 @@
     "module": "conftest",
     "qualname": "computed",
     "file": "conftest.py",
-    "lineno": 76,
+    "lineno": 77,
     "wrapped": false
    }
   },
-  "f12": {
+  "f13": {
    "argname": "doctest_namespace",
    "scope": "session",
    "params": null,
@@ -380,7 +403,7 @@
     "wrapped": false
    }
   },
-  "f13": {
+  "f14": {
    "argname": "layer_a",
    "scope": "function",
    "params": null,
@@ -396,11 +419,11 @@
     "module": "conftest",
     "qualname": "layer_a",
     "file": "conftest.py",
-    "lineno": 96,
+    "lineno": 102,
     "wrapped": false
    }
   },
-  "f14": {
+  "f15": {
    "argname": "layer_b",
    "scope": "function",
    "params": null,
@@ -416,11 +439,11 @@
     "module": "conftest",
     "qualname": "layer_b",
     "file": "conftest.py",
-    "lineno": 101,
+    "lineno": 107,
     "wrapped": false
    }
   },
-  "f15": {
+  "f16": {
    "argname": "layer_c",
    "scope": "function",
    "params": null,
@@ -436,11 +459,11 @@
     "module": "conftest",
     "qualname": "layer_c",
     "file": "conftest.py",
-    "lineno": 106,
+    "lineno": 112,
     "wrapped": false
    }
   },
-  "f16": {
+  "f17": {
    "argname": "layer_d",
    "scope": "function",
    "params": null,
@@ -456,11 +479,11 @@
     "module": "conftest",
     "qualname": "layer_d",
     "file": "conftest.py",
-    "lineno": 111,
+    "lineno": 117,
     "wrapped": false
    }
   },
-  "f17": {
+  "f18": {
    "argname": "layer_e",
    "scope": "function",
    "params": null,
@@ -476,11 +499,11 @@
     "module": "conftest",
     "qualname": "layer_e",
     "file": "conftest.py",
-    "lineno": 116,
+    "lineno": 122,
     "wrapped": false
    }
   },
-  "f18": {
+  "f19": {
    "argname": "layer_f",
    "scope": "function",
    "params": null,
@@ -496,11 +519,11 @@
     "module": "conftest",
     "qualname": "layer_f",
     "file": "conftest.py",
-    "lineno": 121,
+    "lineno": 127,
     "wrapped": false
    }
   },
-  "f19": {
+  "f20": {
    "argname": "legacy_dir",
    "scope": "function",
    "params": null,
@@ -516,11 +539,11 @@
     "module": "conftest",
     "qualname": "legacy_dir",
     "file": "conftest.py",
-    "lineno": 86,
+    "lineno": 87,
     "wrapped": false
    }
   },
-  "f20": {
+  "f21": {
    "argname": "literal",
    "scope": "function",
    "params": null,
@@ -536,11 +559,11 @@
     "module": "conftest",
     "qualname": "literal",
     "file": "conftest.py",
-    "lineno": 81,
+    "lineno": 82,
     "wrapped": false
    }
   },
-  "f21": {
+  "f22": {
    "argname": "monkeypatch",
    "scope": "function",
    "params": null,
@@ -558,7 +581,7 @@
     "wrapped": false
    }
   },
-  "f22": {
+  "f23": {
    "argname": "node_name",
    "scope": "function",
    "params": null,
@@ -574,11 +597,11 @@
     "module": "conftest",
     "qualname": "node_name",
     "file": "conftest.py",
-    "lineno": 47,
+    "lineno": 48,
     "wrapped": false
    }
   },
-  "f23": {
+  "f24": {
    "argname": "option",
    "scope": "function",
    "params": null,
@@ -594,11 +617,11 @@
     "module": "conftest",
     "qualname": "option",
     "file": "conftest.py",
-    "lineno": 52,
+    "lineno": 53,
     "wrapped": false
    }
   },
-  "f24": {
+  "f25": {
    "argname": "package_scoped",
    "scope": "package",
    "params": null,
@@ -612,11 +635,11 @@
     "module": "conftest",
     "qualname": "package_scoped",
     "file": "conftest.py",
-    "lineno": 35,
+    "lineno": 36,
     "wrapped": false
    }
   },
-  "f25": {
+  "f26": {
    "argname": "patched_env",
    "scope": "function",
    "params": null,
@@ -632,11 +655,29 @@
     "module": "conftest",
     "qualname": "patched_env",
     "file": "conftest.py",
-    "lineno": 40,
+    "lineno": 41,
     "wrapped": false
    }
   },
-  "f26": {
+  "f27": {
+   "argname": "patched_env",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": true,
+   "visibility": "deep",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "patched_env",
+    "file": "deep/conftest.py",
+    "lineno": 17,
+    "wrapped": false
+   }
+  },
+  "f28": {
    "argname": "pytestconfig",
    "scope": "session",
    "params": null,
@@ -656,7 +697,7 @@
     "wrapped": false
    }
   },
-  "f27": {
+  "f29": {
    "argname": "record_property",
    "scope": "function",
    "params": null,
@@ -676,7 +717,7 @@
     "wrapped": false
    }
   },
-  "f28": {
+  "f30": {
    "argname": "record_testsuite_property",
    "scope": "session",
    "params": null,
@@ -696,7 +737,7 @@
     "wrapped": false
    }
   },
-  "f29": {
+  "f31": {
    "argname": "record_xml_attribute",
    "scope": "function",
    "params": null,
@@ -716,7 +757,7 @@
     "wrapped": false
    }
   },
-  "f30": {
+  "f32": {
    "argname": "recwarn",
    "scope": "function",
    "params": null,
@@ -734,7 +775,7 @@
     "wrapped": false
    }
   },
-  "f31": {
+  "f33": {
    "argname": "settings",
    "scope": "session",
    "params": null,
@@ -748,11 +789,11 @@
     "module": "conftest",
     "qualname": "settings",
     "file": "conftest.py",
-    "lineno": 91,
+    "lineno": 97,
     "wrapped": false
    }
   },
-  "f32": {
+  "f34": {
    "argname": "settings",
    "scope": "function",
    "params": null,
@@ -766,11 +807,11 @@
     "module": "conftest",
     "qualname": "settings",
     "file": "deep/conftest.py",
-    "lineno": 10,
+    "lineno": 12,
     "wrapped": false
    }
   },
-  "f33": {
+  "f35": {
    "argname": "sometimes_closed",
    "scope": "function",
    "params": null,
@@ -787,11 +828,11 @@
     "module": "conftest",
     "qualname": "sometimes_closed",
     "file": "conftest.py",
-    "lineno": 68,
+    "lineno": 69,
     "wrapped": false
    }
   },
-  "f34": {
+  "f36": {
    "argname": "tmp_path",
    "scope": "function",
    "params": null,
@@ -812,7 +853,7 @@
     "wrapped": false
    }
   },
-  "f35": {
+  "f37": {
    "argname": "tmp_path_factory",
    "scope": "session",
    "params": null,
@@ -832,7 +873,7 @@
     "wrapped": false
    }
   },
-  "f36": {
+  "f38": {
    "argname": "tmpdir",
    "scope": "function",
    "params": null,
@@ -852,7 +893,7 @@
     "wrapped": false
    }
   },
-  "f37": {
+  "f39": {
    "argname": "tmpdir_factory",
    "scope": "session",
    "params": null,
@@ -872,7 +913,7 @@
     "wrapped": false
    }
   },
-  "f38": {
+  "f40": {
    "argname": "value",
    "scope": "function",
    "params": null,
@@ -900,111 +941,115 @@
   "_xunit_setup_method_fixture_TestLifecycle": [
    "f1"
   ],
-  "cache": [
+  "backend": [
    "f2"
   ],
-  "capfd": [
+  "cache": [
    "f3"
   ],
-  "capfdbinary": [
+  "capfd": [
    "f4"
   ],
-  "caplog": [
+  "capfdbinary": [
    "f5"
   ],
-  "capsys": [
+  "caplog": [
    "f6"
   ],
-  "capsysbinary": [
+  "capsys": [
    "f7"
   ],
-  "capteesys": [
+  "capsysbinary": [
    "f8"
   ],
-  "class_scoped": [
+  "capteesys": [
    "f9"
   ],
-  "closed": [
+  "class_scoped": [
    "f10"
   ],
-  "computed": [
+  "closed": [
    "f11"
   ],
-  "doctest_namespace": [
+  "computed": [
    "f12"
   ],
-  "layer_a": [
+  "doctest_namespace": [
    "f13"
   ],
-  "layer_b": [
+  "layer_a": [
    "f14"
   ],
-  "layer_c": [
+  "layer_b": [
    "f15"
   ],
-  "layer_d": [
+  "layer_c": [
    "f16"
   ],
-  "layer_e": [
+  "layer_d": [
    "f17"
   ],
-  "layer_f": [
+  "layer_e": [
    "f18"
   ],
-  "legacy_dir": [
+  "layer_f": [
    "f19"
   ],
-  "literal": [
+  "legacy_dir": [
    "f20"
   ],
-  "monkeypatch": [
+  "literal": [
    "f21"
   ],
-  "node_name": [
+  "monkeypatch": [
    "f22"
   ],
-  "option": [
+  "node_name": [
    "f23"
   ],
-  "package_scoped": [
+  "option": [
    "f24"
   ],
-  "patched_env": [
+  "package_scoped": [
    "f25"
   ],
-  "pytestconfig": [
-   "f26"
-  ],
-  "record_property": [
+  "patched_env": [
+   "f26",
    "f27"
   ],
-  "record_testsuite_property": [
+  "pytestconfig": [
    "f28"
   ],
-  "record_xml_attribute": [
+  "record_property": [
    "f29"
   ],
-  "recwarn": [
+  "record_testsuite_property": [
    "f30"
   ],
-  "settings": [
-   "f31",
+  "record_xml_attribute": [
+   "f31"
+  ],
+  "recwarn": [
    "f32"
   ],
-  "sometimes_closed": [
-   "f33"
-  ],
-  "tmp_path": [
+  "settings": [
+   "f33",
    "f34"
   ],
-  "tmp_path_factory": [
+  "sometimes_closed": [
    "f35"
   ],
-  "tmpdir": [
+  "tmp_path": [
    "f36"
   ],
-  "tmpdir_factory": [
+  "tmp_path_factory": [
    "f37"
+  ],
+  "tmpdir": [
+   "f38"
+  ],
+  "tmpdir_factory": [
+   "f39"
   ]
  },
  "items": [
@@ -1043,7 +1088,6 @@
    "names_closure": [
     "patched_env",
     "layer_f",
-    "monkeypatch",
     "layer_e",
     "layer_d",
     "layer_c",
@@ -1053,32 +1097,30 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26",
+     "f27"
     ],
     "layer_f": [
-     "f18"
-    ],
-    "monkeypatch": [
-     "f21"
+     "f19"
     ],
     "layer_e": [
-     "f17"
+     "f18"
     ],
     "layer_d": [
-     "f16"
+     "f17"
     ],
     "layer_c": [
-     "f15"
+     "f16"
     ],
     "layer_b": [
-     "f14"
+     "f15"
     ],
     "layer_a": [
-     "f13"
+     "f14"
     ],
     "settings": [
-     "f31",
-     "f32"
+     "f33",
+     "f34"
     ]
    }
   },
@@ -1117,22 +1159,19 @@
    "names_closure": [
     "patched_env",
     "layer_a",
-    "monkeypatch",
     "settings"
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26",
+     "f27"
     ],
     "layer_a": [
-     "f13"
-    ],
-    "monkeypatch": [
-     "f21"
+     "f14"
     ],
     "settings": [
-     "f31",
-     "f32"
+     "f33",
+     "f34"
     ]
    }
   },
@@ -1163,13 +1202,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "capsys": [
-     "f6"
+     "f7"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1200,13 +1239,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "caplog": [
-     "f5"
+     "f6"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1232,10 +1271,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1261,10 +1300,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1290,10 +1329,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1319,10 +1358,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1348,10 +1387,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1387,22 +1426,22 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "legacy_dir": [
-     "f19"
+     "f20"
     ],
     "tmpdir": [
-     "f36"
+     "f38"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ],
     "tmp_path": [
-     "f34"
+     "f36"
     ],
     "tmp_path_factory": [
-     "f35"
+     "f37"
     ]
    }
   },
@@ -1433,13 +1472,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "capfd": [
-     "f3"
+     "f4"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1469,13 +1508,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "recwarn": [
-     "f30"
+     "f32"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1506,13 +1545,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "node_name": [
-     "f22"
+     "f23"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1538,10 +1577,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1587,28 +1626,28 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "node_name": [
-     "f22"
-    ],
-    "option": [
      "f23"
     ],
+    "option": [
+     "f24"
+    ],
     "closed": [
-     "f10"
-    ],
-    "sometimes_closed": [
-     "f33"
-    ],
-    "computed": [
      "f11"
     ],
+    "sometimes_closed": [
+     "f35"
+    ],
+    "computed": [
+     "f12"
+    ],
     "literal": [
-     "f20"
+     "f21"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1634,10 +1673,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1666,10 +1705,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1695,10 +1734,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1724,10 +1763,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1753,10 +1792,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1782,10 +1821,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1811,10 +1850,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1840,10 +1879,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1869,10 +1908,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1898,10 +1937,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1927,10 +1966,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1956,10 +1995,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -1985,10 +2024,10 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
@@ -2014,17 +2053,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_cases[1]",
    "path": "test_shapes.py",
-   "lineno": 17,
+   "lineno": 18,
    "originalname": "test_cases",
    "cls": null,
    "own_markers": [
@@ -2074,13 +2113,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ],
     "value": [
-     "f38"
+     "f40"
     ]
    },
    "callspec": {
@@ -2100,7 +2139,7 @@
   {
    "nodeid": "test_shapes.py::test_cases[2]",
    "path": "test_shapes.py",
-   "lineno": 17,
+   "lineno": 18,
    "originalname": "test_cases",
    "cls": null,
    "own_markers": [
@@ -2165,13 +2204,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ],
     "value": [
-     "f38"
+     "f40"
     ]
    },
    "callspec": {
@@ -2199,7 +2238,7 @@
   {
    "nodeid": "test_shapes.py::test_cases[3]",
    "path": "test_shapes.py",
-   "lineno": 17,
+   "lineno": 18,
    "originalname": "test_cases",
    "cls": null,
    "own_markers": [
@@ -2249,13 +2288,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ],
     "value": [
-     "f38"
+     "f40"
     ]
    },
    "callspec": {
@@ -2275,7 +2314,7 @@
   {
    "nodeid": "test_shapes.py::test_string_condition",
    "path": "test_shapes.py",
-   "lineno": 24,
+   "lineno": 25,
    "originalname": "test_string_condition",
    "cls": null,
    "own_markers": [
@@ -2323,17 +2362,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_conditional_xfail",
    "path": "test_shapes.py",
-   "lineno": 29,
+   "lineno": 30,
    "originalname": "test_conditional_xfail",
    "cls": null,
    "own_markers": [
@@ -2381,17 +2420,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_never_run",
    "path": "test_shapes.py",
-   "lineno": 34,
+   "lineno": 35,
    "originalname": "test_never_run",
    "cls": null,
    "own_markers": [
@@ -2437,17 +2476,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_filtered_warnings",
    "path": "test_shapes.py",
-   "lineno": 39,
+   "lineno": 40,
    "originalname": "test_filtered_warnings",
    "cls": null,
    "own_markers": [
@@ -2491,17 +2530,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_two_timeouts",
    "path": "test_shapes.py",
-   "lineno": 44,
+   "lineno": 45,
    "originalname": "test_two_timeouts",
    "cls": null,
    "own_markers": [
@@ -2545,17 +2584,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_plugin_mark",
    "path": "test_shapes.py",
-   "lineno": 49,
+   "lineno": 50,
    "originalname": "test_plugin_mark",
    "cls": null,
    "own_markers": [
@@ -2595,17 +2634,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_tagged",
    "path": "test_shapes.py",
-   "lineno": 54,
+   "lineno": 55,
    "originalname": "test_tagged",
    "cls": null,
    "own_markers": [
@@ -2645,17 +2684,17 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::test_one_usefixtures_mark",
    "path": "test_shapes.py",
-   "lineno": 59,
+   "lineno": 60,
    "originalname": "test_one_usefixtures_mark",
    "cls": null,
    "own_markers": [
@@ -2704,20 +2743,20 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "node_name": [
-     "f22"
+     "f23"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::TestGrouped::test_one",
    "path": "test_shapes.py",
-   "lineno": 66,
+   "lineno": 67,
    "originalname": "test_one",
    "cls": "TestGrouped",
    "own_markers": [],
@@ -2761,23 +2800,23 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "class_scoped": [
-     "f9"
+     "f10"
     ],
     "package_scoped": [
-     "f24"
+     "f25"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::TestGrouped::test_two",
    "path": "test_shapes.py",
-   "lineno": 69,
+   "lineno": 70,
    "originalname": "test_two",
    "cls": "TestGrouped",
    "own_markers": [],
@@ -2817,20 +2856,220 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "class_scoped": [
-     "f9"
+     "f10"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_shapes.py::TestIndirect::test_it[mysql]",
+   "path": "test_shapes.py",
+   "lineno": 75,
+   "originalname": "test_it",
+   "cls": "TestIndirect",
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'backend'",
+      "['mysql', 'sqlite']"
+     ],
+     "kwargs": {
+      "indirect": "True"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_shapes.py::TestIndirect::test_it[mysql]",
+     "name": "parametrize",
+     "args": [
+      "'backend'",
+      "['mysql', 'sqlite']"
+     ],
+     "kwargs": {
+      "indirect": "True"
+     }
+    },
+    {
+     "from": "test_shapes.py",
+     "name": "timeout",
+     "args": [
+      "30"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [
+    "patched_env"
+   ],
+   "argnames": [
+    "backend"
+   ],
+   "initialnames": [
+    "patched_env",
+    "backend"
+   ],
+   "names_closure": [
+    "patched_env",
+    "backend",
+    "monkeypatch",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "patched_env": [
+     "f26"
+    ],
+    "backend": [
+     "f2"
+    ],
+    "monkeypatch": [
+     "f22"
+    ]
+   },
+   "callspec": {
+    "id": "mysql",
+    "idlist": [
+     "mysql"
+    ],
+    "params": {
+     "backend": "'mysql'"
+    },
+    "indices": {
+     "backend": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_shapes.py::TestIndirect::test_it[sqlite]",
+   "path": "test_shapes.py",
+   "lineno": 75,
+   "originalname": "test_it",
+   "cls": "TestIndirect",
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'backend'",
+      "['mysql', 'sqlite']"
+     ],
+     "kwargs": {
+      "indirect": "True"
+     }
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_shapes.py::TestIndirect::test_it[sqlite]",
+     "name": "parametrize",
+     "args": [
+      "'backend'",
+      "['mysql', 'sqlite']"
+     ],
+     "kwargs": {
+      "indirect": "True"
+     }
+    },
+    {
+     "from": "test_shapes.py",
+     "name": "timeout",
+     "args": [
+      "30"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [
+    "patched_env"
+   ],
+   "argnames": [
+    "backend"
+   ],
+   "initialnames": [
+    "patched_env",
+    "backend"
+   ],
+   "names_closure": [
+    "patched_env",
+    "backend",
+    "monkeypatch",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "patched_env": [
+     "f26"
+    ],
+    "backend": [
+     "f2"
+    ],
+    "monkeypatch": [
+     "f22"
+    ]
+   },
+   "callspec": {
+    "id": "sqlite",
+    "idlist": [
+     "sqlite"
+    ],
+    "params": {
+     "backend": "'sqlite'"
+    },
+    "indices": {
+     "backend": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_shapes.py::TestPlain::test_it",
+   "path": "test_shapes.py",
+   "lineno": 83,
+   "originalname": "test_it",
+   "cls": "TestPlain",
+   "own_markers": [],
+   "markers_with_origin": [
+    {
+     "from": "test_shapes.py",
+     "name": "timeout",
+     "args": [
+      "30"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [
+    "patched_env"
+   ],
+   "argnames": [],
+   "initialnames": [
+    "patched_env"
+   ],
+   "names_closure": [
+    "patched_env",
+    "monkeypatch"
+   ],
+   "name2fixturedefs": {
+    "patched_env": [
+     "f26"
+    ],
+    "monkeypatch": [
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::TestLifecycle::test_uses_setup",
    "path": "test_shapes.py",
-   "lineno": 80,
+   "lineno": 94,
    "originalname": "test_uses_setup",
    "cls": "TestLifecycle",
    "own_markers": [],
@@ -2862,20 +3101,20 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "_xunit_setup_method_fixture_TestLifecycle": [
      "f1"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   },
   {
    "nodeid": "test_shapes.py::TestLegacyUnit::test_unittest_style",
    "path": "test_shapes.py",
-   "lineno": 88,
+   "lineno": 102,
    "originalname": "test_unittest_style",
    "cls": "TestLegacyUnit",
    "own_markers": [],
@@ -2907,13 +3146,13 @@
    ],
    "name2fixturedefs": {
     "patched_env": [
-     "f25"
+     "f26"
     ],
     "_unittest_setUpClass_fixture_TestLegacyUnit": [
      "f0"
     ],
     "monkeypatch": [
-     "f21"
+     "f22"
     ]
    }
   }

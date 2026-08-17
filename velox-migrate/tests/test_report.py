@@ -45,6 +45,7 @@ REFUSED = "VX214"
 MARKED = "VX003"
 HAZARD = "VX401"
 SERIAL_HAZARD = "VX402"
+MECHANICAL = "VX005"
 CONFIG = "VX307"
 
 CODE_ROW = re.compile(r"^VX\d{3}\s")
@@ -88,7 +89,7 @@ def test_the_payload_totals_are_the_numbers_the_summary_computed() -> None:
         "refused": 1,
         "hazard": 2,
         "marker": 1,
-        "mechanical": 0,
+        "mechanical": 1,
     }
     assert totals["clean_tests"] == 5
     assert totals["marker_tests"] == 1
@@ -125,7 +126,7 @@ def test_the_payload_matrix_holds_exactly_the_codes_the_findings_use() -> None:
     data = payload(_mixed())
 
     assert list(data["matrix"]) == sorted(
-        {UNSUPPORTED, REFUSED, MARKED, HAZARD, SERIAL_HAZARD, CONFIG}
+        {UNSUPPORTED, REFUSED, MARKED, HAZARD, SERIAL_HAZARD, MECHANICAL, CONFIG}
     )
     assert data["matrix"][REFUSED]["disposition"] == "refused"
     assert data["matrix"][REFUSED]["area"] == "bodies"
@@ -205,8 +206,21 @@ def test_a_section_appears_for_every_disposition_the_audit_found() -> None:
     assert "## Converted with a caveat" in report
     assert "## Concurrency hazards" in report
     assert f"### {HAZARD} — " in report
+    assert "## What conversion rewires" in report
+    assert f"### {MECHANICAL} — " in report
     assert "## Plugins and configuration" in report
     assert f"### {CONFIG} — " in report
+
+
+def test_every_finding_reaches_a_section_of_the_report() -> None:
+    # A finding the audit raised and the report files nowhere is worse than no finding: the
+    # numbers in the verdict count it and the reader never sees where it is.
+    audit = _mixed()
+
+    report = markdown(audit)
+
+    for finding in audit.findings:
+        assert f"### {finding.code} — " in report, finding.code
 
 
 def test_a_caveat_names_the_marker_the_converted_source_carries() -> None:
@@ -392,6 +406,13 @@ def _findings() -> list[Finding]:
             line=45,
             function="test_env",
             tests=("tests/test_c.py::test_env",),
+        ),
+        _finding(
+            MECHANICAL,
+            file="tests/integration/conftest.py",
+            line=4,
+            function="settings",
+            tests=("tests/test_a.py::test_one",),
         ),
         Finding(code=CONFIG, message="filterwarnings = error"),
     ]

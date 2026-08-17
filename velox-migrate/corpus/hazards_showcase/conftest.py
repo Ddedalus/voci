@@ -2,9 +2,10 @@
 
 Contributes the hooks-have-nowhere-to-go case (`pytest_configure`,
 `pytest_collection_modifyitems`, `pytest_addoption`), the scopes-with-no-counterpart case
-(`class_scoped`, `package_scoped`), the process-global-state-in-a-fixture case (`patched_env`),
-the request-escape-hatch cases (`node_name`, `option`, `closed`, `sometimes_closed`, `computed`),
-the legacy-tmpdir case (`legacy_dir`), and the base of the over-budget override chain
+(`class_scoped`, `package_scoped`), the process-global-state-in-a-fixture case (`patched_env`,
+overridden under `deep/` so the two share a name), the request-escape-hatch cases (`node_name`,
+`option`, `closed`, `sometimes_closed`, `computed`), the legacy-tmpdir case (`legacy_dir`), the
+indirect-parametrization target (`backend`), and the base of the over-budget override chain
 (`settings` through `layer_f`, overridden under `deep/`).
 """
 
@@ -86,6 +87,11 @@ def literal(request):
 @pytest.fixture
 def legacy_dir(tmpdir):
     return tmpdir.join("legacy.txt")
+
+
+@pytest.fixture
+def backend(request):
+    return request.param
 
 
 @pytest.fixture(scope="session")

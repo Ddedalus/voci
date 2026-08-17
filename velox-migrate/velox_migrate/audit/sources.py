@@ -70,17 +70,11 @@ _MONKEYPATCH_EFFECTS: Mapping[str, str] = {
 }
 _MONKEYPATCH_OTHER = "changes state the whole process shares"
 
-_SETUP_PROTOCOL = frozenset(
-    {
-        "setup_method",
-        "teardown_method",
-        "setup_class",
-        "teardown_class",
-        "setup_function",
-        "teardown_function",
-        "setup",
-        "teardown",
-    }
+# pytest's xunit protocol, split by where a name means anything: a `setup_method` written inside
+# another function, or at module level, is an ordinary function with a familiar name.
+_CLASS_SETUP = frozenset({"setup_method", "teardown_method", "setup_class", "teardown_class"})
+_MODULE_SETUP = frozenset(
+    {"setup_function", "teardown_function", "setup_module", "teardown_module"}
 )
 
 _TEST_CASE = frozenset({"unittest.TestCase", "unittest.case.TestCase"})
@@ -212,11 +206,12 @@ def scan(paths: Iterable[Path], *, root: Path) -> Scan:
         except (OSError, UnicodeDecodeError):
             unparsed.append(relative)
             continue
-        files += 1
         try:
             findings.extend(scan_source(source, path=relative))
         except cst.ParserSyntaxError:
             unparsed.append(relative)
+            continue
+        files += 1
 
     return Scan(
         findings=tuple(sorted(findings, key=lambda finding: finding.sort_key)),
@@ -240,13 +235,15 @@ def scan_source(source: str, *, path: str) -> tuple[Finding, ...]:
 class _Frame:
     """One enclosing `def` or `class`, with what the scan needs while it is inside.
 
-    `blocks` are the `if`/`for`/`while`/`try`/`with` keywords entered since this frame opened,
-    which is what tells a conditionally registered finalizer from an unconditional one. `params`
-    is empty for a class, whose body sees no parameters.
+    `blocks` are the conditional constructs entered since this frame opened — the ones whose body
+    may not run — which is what tells a conditionally registered finalizer from an unconditional
+    one. A `with` or a `try` body is not among them: both run. `params` and `locals` are empty for
+    a class, whose body binds nothing a nested function sees.
     """
 
     name: str
     params: frozenset[str] = frozenset()
+    locals: frozenset[str] = frozenset()
     is_function: bool = False
     is_async: bool = False
     blocks: list[str] = field(default_factory=list)
@@ -281,15 +278,17 @@ class _Scanner(cst.CSTVisitor):
     def visit_FunctionDef(self, node: cst.FunctionDef) -> None:
         name = node.name.value
         at_module_level = len(self._stack) == 1
+        in_class = not at_module_level and not self._stack[-1].is_function
         self._stack.append(
             _Frame(
                 name=name,
                 params=_param_names(node.params),
+                locals=_assigned_names(node),
                 is_function=True,
                 is_async=node.asynchronous is not None,
             )
         )
-        if name in _SETUP_PROTOCOL:
+        if (name in _CLASS_SETUP and in_class) or (name in _MODULE_SETUP and at_module_level):
             self._report(
                 "VX019",
                 node.name,
@@ -347,20 +346,31 @@ class _Scanner(cst.CSTVisitor):
     def leave_While(self, original_node: cst.While) -> None:
         self._leave_block()
 
-    def visit_Try(self, node: cst.Try) -> None:
-        self._enter_block("try")
+    def visit_Else(self, node: cst.Else) -> None:
+        self._enter_block("else")
 
-    def leave_Try(self, original_node: cst.Try) -> None:
+    def leave_Else(self, original_node: cst.Else) -> None:
         self._leave_block()
 
-    def visit_TryStar(self, node: cst.TryStar) -> None:
-        self._enter_block("try")
+    def visit_ExceptHandler(self, node: cst.ExceptHandler) -> None:
+        self._enter_block("except")
 
-    def leave_TryStar(self, original_node: cst.TryStar) -> None:
+    def leave_ExceptHandler(self, original_node: cst.ExceptHandler) -> None:
+        self._leave_block()
+
+    def visit_ExceptStarHandler(self, node: cst.ExceptStarHandler) -> None:
+        self._enter_block("except")
+
+    def leave_ExceptStarHandler(self, original_node: cst.ExceptStarHandler) -> None:
+        self._leave_block()
+
+    def visit_MatchCase(self, node: cst.MatchCase) -> None:
+        self._enter_block("case")
+
+    def leave_MatchCase(self, original_node: cst.MatchCase) -> None:
         self._leave_block()
 
     def visit_With(self, node: cst.With) -> None:
-        self._enter_block("with")
         for item in node.items:
             entered = item.item
             if isinstance(entered, cst.Call) and _is_mock_patch(self._names(entered)):
@@ -370,9 +380,6 @@ class _Scanner(cst.CSTVisitor):
                     f"`{_render(entered)}` is entered inside the body, where nothing outside the "
                     "test can see it.",
                 )
-
-    def leave_With(self, original_node: cst.With) -> None:
-        self._leave_block()
 
     def visit_Import(self, node: cst.Import) -> bool:
         return False
@@ -705,7 +712,7 @@ class _Scanner(cst.CSTVisitor):
             and isinstance(target, cst.Attribute | cst.Subscript)
             and root is not None
             and root in self._module_names
-            and not self._takes(root)
+            and not self._binds(root)
         ):
             self._report(
                 "VX411",
@@ -740,6 +747,13 @@ class _Scanner(cst.CSTVisitor):
 
     def _takes(self, name: str) -> bool:
         return any(frame.is_function and name in frame.params for frame in self._stack)
+
+    def _binds(self, name: str) -> bool:
+        """Whether an enclosing function has a name of its own, so a module-level one is hidden."""
+        return any(
+            frame.is_function and (name in frame.params or name in frame.locals)
+            for frame in self._stack
+        )
 
     def _parent_attribute(self, node: cst.CSTNode) -> str | None:
         parent = self.get_metadata(ParentNodeProvider, node, None)
@@ -796,6 +810,51 @@ def _param_names(params: cst.Parameters) -> frozenset[str]:
         if isinstance(star, cst.Param):
             names.add(star.name.value)
     return frozenset(names)
+
+
+def _assigned_names(function: cst.FunctionDef) -> frozenset[str]:
+    """Every name `function`'s own body binds, nested functions excluded.
+
+    A test that assigns `CACHE = {}` before writing to it is writing its own dictionary, not the
+    module's, however the two are spelled.
+    """
+    collector = _Bindings()
+    function.body.visit(collector)
+    return frozenset(collector.names)
+
+
+class _Bindings(cst.CSTVisitor):
+    """The names one function body binds, gathered without descending into nested definitions."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: set[str] = set()
+
+    def visit_Assign(self, node: cst.Assign) -> None:
+        for target in node.targets:
+            self.names.update(_bound_names(target.target))
+
+    def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
+        self.names.update(_bound_names(node.target))
+
+    def visit_AugAssign(self, node: cst.AugAssign) -> None:
+        self.names.update(_bound_names(node.target))
+
+    def visit_NamedExpr(self, node: cst.NamedExpr) -> None:
+        self.names.update(_bound_names(node.target))
+
+    def visit_For(self, node: cst.For) -> None:
+        self.names.update(_bound_names(node.target))
+
+    def visit_AsName(self, node: cst.AsName) -> None:
+        if isinstance(node.name, cst.BaseExpression):
+            self.names.update(_bound_names(node.name))
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        return False
+
+    def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        return False
 
 
 def _bound_names(target: cst.BaseExpression) -> list[str]:
