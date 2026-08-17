@@ -15,3 +15,6 @@ __pypackages__
 .ruff_cache
 .pytest_cache
 .velox_cache
+
+# velox-migrate's work directory, written into the suite being migrated
+.velox-migrate

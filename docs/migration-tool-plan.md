@@ -46,8 +46,10 @@ velox-migrate/                    # workspace member; dist "velox-migrate", impo
     report/                       # terminal summary, migration-report.md, findings.json
     cli.py                        # extract | audit | convert | verify
   skills/                         # AI prefactor/postfactor skills (consume findings.json)
+  scripts/                        # artifact regeneration (corpus dumps)
+  corpus/                         # golden suites: before/, expected/, run-twice idempotency
+    dumps/                        # their ground-truth dumps, one per supported pytest
   tests/
-    corpus/                       # golden suites: before/, expected/, run-twice idempotency
 ```
 
 **Why a separate distribution:** the runtime must not carry LibCST, and the tool's lifecycle is
@@ -221,9 +223,17 @@ is dead). The disciplines adopted from prior art:
 
 Ordered by risk retired per unit of work; each phase has a checkable exit.
 
-- **Phase 0 — extractor + schema.** Harden the validated plugin (version shims, `_ini_aliases`,
-  platform stamp, `--extractor-out` option), freeze dump schema v1, write the loader/model.
-  *Exit: dumps from pytest 8.4 and 9.x load into one model; corpus suite dumps checked in.*
+- [x] **Phase 0 — extractor + schema.** Harden the validated plugin (version shims,
+  `_ini_aliases`, platform stamp, `--extractor-out` option), freeze dump schema v1, write the
+  loader/model. *Exit: dumps from pytest 8.4 and 9.x load into one model; corpus suite dumps
+  checked in.* Three things the build settled that this document had guessed at: the corpus
+  lives at `velox-migrate/corpus/`, not under `tests/`, because a `collect_ignore` in a parent
+  conftest also fires when pytest is pointed straight at the corpus; the dump deduplicates
+  fixture definitions into a `fixture_defs` table that chains reference by key, since inlining a
+  chain per test grows a dump with fixtures × tests; and visibility needed a shim the research
+  had not predicted — pytest 9.1 gives the rootdir conftest its own node (`"."`) while 8.4
+  spells it `""`, the same string it uses for globally-registered plugin fixtures, so an 8.4
+  conftest fixture is re-keyed to the directory it was written in.
 - **Phase 1 — audit.** Support matrix as data, static hazard scanners, report + findings.json.
   Standalone value: run it against two real OSS async suites and publish what it says.
   *Exit: audit of a real suite whose numbers survive manual spot-checks.*

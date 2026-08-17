@@ -7,9 +7,9 @@ default: list
 list:
     @just --list
 
-# Install/sync the dev environment
+# Install/sync the dev environment (both workspace members, editable)
 sync:
-    uv sync
+    uv sync --all-packages
 
 # Run the velox CLI (e.g. `just run --version`)
 run *args:
@@ -18,6 +18,18 @@ run *args:
 # Run the test suite (e.g. `just test -k cli`)
 test *args:
     uv run pytest "$@"
+
+# Run the velox-migrate test suite (e.g. `just test-migrate -k extractor`)
+test-migrate *args:
+    uv run pytest velox-migrate/tests "$@"
+
+# Regenerate the checked-in corpus ground-truth dumps, one per supported pytest
+corpus-dumps *args:
+    uv run python velox-migrate/scripts/refresh_corpus_dumps.py "$@"
+
+# Verify the checked-in corpus dumps still match what the extractor produces
+corpus-check:
+    uv run python velox-migrate/scripts/refresh_corpus_dumps.py --check
 
 # Lint with ruff (e.g. `just lint --fix`)
 lint *args:
@@ -31,9 +43,11 @@ fmt *args:
 fmt-check:
     uv run ruff format --check .
 
-# Type-check with pyrefly
+# Type-check with pyrefly. velox-migrate has its own pyproject.toml, which pyrefly reads as a
+# separate project and leaves out of the root one, so its sources are named explicitly.
 typecheck *args:
     uv run pyrefly check --progress-bar no "$@"
+    uv run pyrefly check --progress-bar no "$@" velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
 
 # Build the package (sdist + wheel)
 build:
@@ -71,6 +85,7 @@ check:
     run format     just fmt-check
     run typecheck  just typecheck
     run tests      just test
+    run migrate    just test-migrate
 
 # Refactor tools (summarize, move, rewire, init) — see refactor.justfile
 import 'refactor.justfile'

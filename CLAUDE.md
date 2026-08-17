@@ -7,9 +7,18 @@ public, and the rest have no roadmap growth pointing at a split. Tests: `tests/`
 package (`tests/di/`, `tests/collection/`, ...); a test file that only exercises the public
 `velox` surface, not a subpackage's internals, stays flat. Entrypoint: `velox.cli:main`.
 
+Second distribution: `velox-migrate/` (dist `velox-migrate`, import `velox_migrate`), a uv
+workspace member holding the pytest→velox migration tooling. velox never depends on it. Its
+tests are `velox-migrate/tests/`; `velox-migrate/corpus/` holds pytest suites that exist to be
+extracted from rather than run, so it is excluded from ruff and pyrefly, and
+`velox-migrate/corpus/dumps/` holds their checked-in ground-truth dumps, one per supported pytest
+— regenerate with `just corpus-dumps`, verify with `just corpus-check`. `velox_migrate/extractor.py`
+is a single file importing only stdlib and pytest so it can be copied into an environment where
+nothing else can be installed; keep it that way.
+
 Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recipes (`sync`, `run`,
-`test`, `lint`, `fmt`, `typecheck`, `build`, `check`). For splitting objects out of a file into
-their own module and repointing imports, see the `refactor-tools` skill.
+`test`, `test-migrate`, `lint`, `fmt`, `typecheck`, `build`, `check`). For splitting objects out
+of a file into their own module and repointing imports, see the `refactor-tools` skill.
 
 Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`. `pytest/`
 and `fastapi/` are git submodules. Never cite `spec/` outside `spec/` — it's a scratch design
