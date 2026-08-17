@@ -424,7 +424,8 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "VX110",
         "@pytest.mark.asyncio, @pytest.mark.anyio, event_loop fixtures",
         MECHANICAL,
-        "velox runs `async def` tests itself, so the mark and the loop fixtures go away.",
+        "velox runs `async def` tests itself, so the mark and the loop fixtures go away. A backend "
+        "parametrization the mark carried goes with it, and with it that segment of the test's id.",
         target="deleted",
     ),
     _row(
@@ -448,6 +449,26 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "velox raises when a scalar mark is applied twice, so this is a collection error rather "
         "than a last-one-wins.",
         action="Keep one, having decided which.",
+    ),
+    _row(
+        "VX114",
+        "a case id composed from more than one axis",
+        MARKER,
+        "pytest builds one id per case out of every axis that varies it — stacked `parametrize` "
+        "marks, or a mark over a `params=` fixture — so no single mark can carry the ids "
+        "verbatim, and velox composes its own from the values.",
+        target="@velox.parametrize without ids",
+        marker="case-ids",
+        action="Check any CI configuration, dashboard or `--last-failed` habit that names these "
+        "ids, and write an explicit `ids=` where one matters.",
+    ),
+    _row(
+        "VX115",
+        "pytestmark on a module or a class",
+        MECHANICAL,
+        "velox reads marks from the test function, and a mark on a class is a collection error, so "
+        "each mark the assignment applied becomes a decorator on every test it reached.",
+        target="the same mark on each test",
     ),
     # --- bodies and builtin fixtures -----------------------------------------------------------
     _row(
@@ -1019,10 +1040,14 @@ BUILTIN_FIXTURES: Mapping[str, str] = {
     "doctest_namespace": "VX021",
 }
 
-# pytest's own ini settings, each keyed to the row that classifies it. A setting a suite writes
-# that is not here belongs to a plugin, which is `VX309`.
+# pytest's own ini settings, each keyed to the row that classifies it, plus the one a plugin
+# registers that velox has a key for. A setting a suite writes that is not here belongs to a
+# plugin, which is `VX309`.
 INI_SETTINGS: Mapping[str, str] = {
     "testpaths": "VX301",
+    # pytest-timeout's, and the one plugin setting `[tool.velox]` has a home for, so it is
+    # classified by what becomes of it rather than by who registered it.
+    "timeout": "VX304",
     "python_files": "VX302",
     "python_classes": "VX302",
     "python_functions": "VX302",

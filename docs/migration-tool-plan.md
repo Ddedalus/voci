@@ -39,15 +39,15 @@ velox-migrate/                    # workspace member; dist "velox-migrate", impo
     model.py                      # fixture graph + item model built from the dump
     matrix.py                     # the support matrix: every pytest construct → classification
     audit/                        # LibCST static scanners: §6 hazards, request.* uses, §5 traps
-    rules/                        # VX001… LibCST codemod rules (the §5 mechanical layer)
+    convert/                      # the codegen: plan, layout, wiring swap, markers, edits, config
+      rules/                      # VX001… LibCST codemod rules (the §5 mechanical layer)
     prefactor/                    # pytest→pytest codemod rules (run while the suite is green)
-    layout.py                     # §4.5 planner: fixture-module placement, collisions, imports
     specialize.py                 # §4.2 chain generation + fan-out budget
     report/                       # terminal summary, migration-report.md, findings.json
     cli.py                        # extract | audit | convert | verify
   skills/                         # AI prefactor/postfactor skills (consume findings.json)
   scripts/                        # artifact regeneration (corpus dumps)
-  corpus/                         # golden suites: before/, expected/, run-twice idempotency
+  corpus/                         # pytest suites converted end to end, then run under velox
     dumps/                        # their ground-truth dumps, one per supported pytest
   tests/
 ```
@@ -105,7 +105,7 @@ static scan and classifies every construct against the support matrix:
 
 - *mechanical* — converted silently (the §5 table's clean rows);
 - *mechanical-with-marker* — converted, but semantics shifted enough to warrant a
-  `VELOX-TODO[category]` marker (capsys double-`readouterr`, caplog `set_level`, id-sensitive CI
+  `VELOX-TODO[VXnnn]` marker (capsys double-`readouterr`, caplog `set_level`, id-sensitive CI
   configs);
 - *refused* — convertible only by a human decision: over-budget override chains,
   `pytest.skip()` in a body (§5's most dangerous rename), computed `getfixturevalue`;
@@ -120,8 +120,8 @@ and it must work well *before* anyone commits to converting.
 (where each fixture module goes, every collision rename, every specialization chain with its
 fan-out) plus a unified diff; `--write` is explicit. Byte-faithful edits to existing files;
 freshly synthesized fixture modules are formatted once with the user's formatter and never
-touched again. Every non-mechanical site gets `# VELOX-TODO[category]: reason`, with an
-existence check making re-runs marker-idempotent.
+touched again. Every non-mechanical site gets `# VELOX-TODO[VXnnn]: reason` above the
+function it concerns, with an existence check making re-runs marker-idempotent.
 
 **`verify`** — runs pytest on the pre-migration tree and `velox --serial` on the converted tree,
 and compares outcomes test-for-test through the id map (trivial, since ids were emitted
@@ -268,10 +268,37 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     without reading a line of source; and because the dump carries the ids `pytest_generate_tests`
     generated, a suite that parametrizes through that hook converts to an explicit
     `@velox.parametrize` rather than being refused.
-- **Phase 2 — mechanical convert.** The §5 table, fixture/mark/parametrize/ids/config
+- [x] **Phase 2 — mechanical convert.** The §5 table, fixture/mark/parametrize/ids/config
   translation, layout planner, import emission — overrides refused wholesale at this phase.
   *Exit: the §1 bar on no-override corpus suites — collects and passes under `velox --serial`
-  with zero hand edits, twice-run byte-identical.*
+  with zero hand edits, twice-run byte-identical* — met against a third corpus suite written for
+  it, whose 40 tests convert with nothing refused, pass under `velox --serial`, and keep every one
+  of pytest's node ids. Six things the build settled:
+  - **The marker carries the code, not the category.** This document had said
+    `VELOX-TODO[category]`, but a category exists only for the rows that convert with a caveat, so
+    a refusal had none to name — and the code is what a report section, a finding and a rule
+    already reconcile against, which is the whole point of having one.
+  - **Refusal is the load-bearing half, and it travels.** A refused test keeps its pytest
+    signature, so velox reports it as a collection error naming that test: the partial migration
+    §10 asks for announces itself instead of running a test that means something new. And a
+    fixture nothing can translate refuses every fixture downstream of it and every test that
+    reaches it, because a `Depends()` naming an object nobody built is worse than no rewrite.
+  - **`convert` re-decides nothing; it reads the audit.** Every classification is already a
+    matrix row with a site and a blast radius, so a phase boundary is a list of codes rather than
+    a fork in the rewriter — Phase 3 takes a code out of `plan.DEFERRED` and adds its rule.
+  - **A fixture's binding name is not its argname, and only the source knows it.** The dump
+    records where a *factory* is, which a decorator can move to another module entirely, so the
+    owning file comes from visibility and the name to import comes from the module-level `def` in
+    it. A fixture written inside a class or a function binds nothing importable, and leaving it
+    out of that table is what refuses it.
+  - **Stacked `parametrize` marks have to be reversed, and that is what keeps §9's promise.**
+    pytest applies decorators bottom-up, so its innermost axis varies slowest and is written first
+    in a case id; velox reads its own list outermost-first. Reversing makes the two agree on both
+    the id and the case order, and changes nothing else. Where an id still cannot be attributed to
+    one axis, `VX114` says so — conservatively, since ids composed of plain strings agree anyway.
+  - **Signature whitespace survives unless the order has to change.** Injected parameters gain
+    defaults, and a parameter without one cannot follow them, so only a signature mixing fixtures
+    with `parametrize` argnames is reordered — velox binds by keyword, so that order is free.
 - **Phase 3 — the hard §4 machinery.** Specialization within budget, autouse placement, request
   elimination, `mock.patch` handling (decorator reorder + `@velox.solo` at context-manager
   sites). *Exit: corpus suites with overrides and autouse pass; over-budget cases refuse with

@@ -124,6 +124,56 @@ def _parser() -> argparse.ArgumentParser:
         help="write the artifacts without printing the summary",
     )
     audit.set_defaults(run=_audit)
+
+    convert = commands.add_parser(
+        "convert",
+        help="rewrite the suite as a velox one",
+        description=(
+            "Translate the suite's wiring, marks, bodies and configuration into their velox "
+            "spelling, refusing anything that needs a decision and naming it in the source. "
+            "Prints the plan and a diff; writes nothing without --write."
+        ),
+    )
+    convert.add_argument(
+        "-d",
+        "--dump",
+        default=DEFAULT_OUT,
+        metavar="PATH",
+        help=f"the ground-truth dump to read (default: {DEFAULT_OUT})",
+    )
+    convert.add_argument(
+        "-r",
+        "--root",
+        default=None,
+        metavar="PATH",
+        help="where the suite's sources are (default: the rootdir the dump records, else here)",
+    )
+    convert.add_argument(
+        "--write",
+        action="store_true",
+        help="apply the rewrite; without this the diff is printed and nothing changes",
+    )
+    convert.add_argument(
+        "--disable",
+        default="",
+        metavar="CODES",
+        help="comma-separated support-matrix codes whose rewrite rule to skip (e.g. VX101,VX204)",
+    )
+    convert.add_argument(
+        "--budget",
+        type=int,
+        default=DEFAULT_BUDGET,
+        metavar="N",
+        help="the override fan-out budget the audit behind this conversion uses (default: "
+        "%(default)s)",
+    )
+    convert.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="print the diff without the plan",
+    )
+    convert.set_defaults(run=_convert)
     return parser
 
 
@@ -176,23 +226,12 @@ def _extract(args: argparse.Namespace, passthrough: list[str]) -> int:
 
 
 def _audit(args: argparse.Namespace, passthrough: list[str]) -> int:
-    from velox_migrate import audit, model, report
+    from velox_migrate import audit, report
 
-    try:
-        ground_truth = model.load(args.dump)
-    except schema.DumpError as exc:
-        print(f"velox-migrate: {exc}", file=sys.stderr)
+    loaded = _load(args)
+    if loaded is None:
         return 1
-
-    root = _root_of(ground_truth, args.root)
-    if root is None:
-        print(
-            f"velox-migrate: none of the {len(sources_of(ground_truth))} source files the "
-            f"dump names are under {args.root or ground_truth.rootpath}, so the audit would see "
-            "no test bodies. Pass `--root` pointing at the suite.",
-            file=sys.stderr,
-        )
-        return 1
+    ground_truth, root = loaded
 
     result = audit.run(ground_truth, root=root, budget=args.budget)
 
@@ -206,6 +245,56 @@ def _audit(args: argparse.Namespace, passthrough: list[str]) -> int:
         print(report.terminal(result))
         print(f"\nwrote {report_path} and {findings_path}")
     return 0
+
+
+def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
+    from velox_migrate import audit, convert, report
+
+    loaded = _load(args)
+    if loaded is None:
+        return 1
+    ground_truth, root = loaded
+
+    result = convert.run(
+        audit.run(ground_truth, root=root, budget=args.budget),
+        ground_truth,
+        root=root,
+        disabled=[code.strip() for code in args.disable.split(",") if code.strip()],
+    )
+
+    if not args.quiet:
+        print(report.plan(result))
+        print()
+    diff = result.edits.diff()
+    print(diff if diff else "no change")
+
+    if args.write:
+        written = result.edits.apply(root)
+        print(f"\nwrote {len(written)} file(s) under {root}")
+    elif diff:
+        print("\nnothing written; pass --write to apply")
+    return 0
+
+
+def _load(args: argparse.Namespace) -> tuple[GroundTruth, Path] | None:
+    """The dump and the tree it describes, or `None` after reporting why neither can be read."""
+    from velox_migrate import model
+
+    try:
+        ground_truth = model.load(args.dump)
+    except schema.DumpError as exc:
+        print(f"velox-migrate: {exc}", file=sys.stderr)
+        return None
+    root = _root_of(ground_truth, args.root)
+    if root is None:
+        print(
+            f"velox-migrate: none of the {len(sources_of(ground_truth))} source files the "
+            f"dump names are under {args.root or ground_truth.rootpath}, so there are no test "
+            "bodies to read. Pass `--root` pointing at the suite.",
+            file=sys.stderr,
+        )
+        return None
+    return ground_truth, root
 
 
 def _root_of(ground_truth: GroundTruth, chosen: str | None) -> Path | None:
