@@ -53,7 +53,7 @@ When asked to work on docs, roadmap and other admin or plans, commit directly to
 When asked to do work on feature or larger refactor:
 1. Create a worktree off main
 2. Do the work. Commit.
-3. Spawn /code-review (default: medium, hard for very complex changes)
+3. Spawn /code-review <level> <branch> (default: medium, hard for very complex changes)
 4. Address all findings. Commit.
 5. Clean up docs roadmap etc.
 6. Merge into main. Delete the worktree.
