@@ -234,9 +234,40 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   had not predicted — pytest 9.1 gives the rootdir conftest its own node (`"."`) while 8.4
   spells it `""`, the same string it uses for globally-registered plugin fixtures, so an 8.4
   conftest fixture is re-keyed to the directory it was written in.
-- **Phase 1 — audit.** Support matrix as data, static hazard scanners, report + findings.json.
+- [x] **Phase 1 — audit.** Support matrix as data, static hazard scanners, report + findings.json.
   Standalone value: run it against two real OSS async suites and publish what it says.
-  *Exit: audit of a real suite whose numbers survive manual spot-checks.*
+  *Exit: audit of a real suite whose numbers survive manual spot-checks* — met against velox's own
+  891-test suite, where the monkeypatch, `pytest.skip()`, warning-filter and event-loop counts match
+  a grep of the tree exactly and the two discrepancies were the scan being right and the grep wrong.
+  The write-up of two OSS suites is still to do: it needs an environment per suite, since the
+  vendored `fastapi/` does not collect against the starlette in this workspace, and a suite that
+  cannot collect has no dump. Five things the build settled:
+  - **A finding needs a blast radius, not just a site.** The percent-of-suite-serialized number is
+    only meaningful if a hazard written in an autouse fixture is charged to every test that inherits
+    it, so `audit/reach.py` maps a `file:function` back onto node ids through the dump's own fixture
+    closures, walking enclosing scopes so a nested helper is charged to its test rather than to its
+    file. On the corpus suite this turns one `monkeypatch.setenv` in a root autouse fixture into
+    100% of the suite running alone, which is the whole point of quoting the number.
+  - **Every construct needs exactly one witness.** The dump and the scan can both see per-case
+    marks, string skipif conditions and `setup_method`; counting a construct twice inflates the
+    census. The rule that fell out: the dump is the census of the mechanical surface (fixtures,
+    cases, marks, configuration) and the scan is the trouble finder (anything inside a body), with
+    the scan owning the shapes whose *arguments* have to be read.
+  - **Constructs come at two scopes, and conflating them destroys the verdict.** A conftest hook or
+    an ini setting blocks no individual test, but charging it to every test in its file reported a
+    whole suite as unconvertible over one `conftest.py`. `Construct.suite_level` marks those rows
+    and their findings name no tests.
+  - **Configuration has to be read from the suite's own ini file, not from pytest's resolved
+    values,** which cannot distinguish a plugin's default from a line someone wrote — and reported
+    under the spelling the suite used, since pytest renames settings and keeps aliases, so the same
+    suite otherwise audits differently under 8.4 and 9.1. Two tables the plan had not foreseen make
+    the rest decidable: pytest's own builtin fixtures and its own ini keys, since "is this a
+    plugin's?" is only answerable by knowing what pytest itself provides.
+  - **The dump answers two constructs nobody expected it to.** pytest wraps a `setup_method` or a
+    `TestCase` in synthetic `_xunit_*`/`_unittest_*` fixtures, which name those class lifecycles
+    without reading a line of source; and because the dump carries the ids `pytest_generate_tests`
+    generated, a suite that parametrizes through that hook converts to an explicit
+    `@velox.parametrize` rather than being refused.
 - **Phase 2 — mechanical convert.** The §5 table, fixture/mark/parametrize/ids/config
   translation, layout planner, import emission — overrides refused wholesale at this phase.
   *Exit: the §1 bar on no-override corpus suites — collects and passes under `velox --serial`

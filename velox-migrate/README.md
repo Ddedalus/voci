@@ -76,6 +76,58 @@ different version of the extractor, one from an unsupported pytest, and one from
 not collect the suite cleanly — whether some modules failed to import or pytest never reached
 the suite at all. A partial dump would otherwise migrate part of a suite without saying so.
 
+## Auditing a suite
+
+`audit` answers the question that comes before any rewriting: what is this suite made of, and what
+would migrating it cost? It joins the dump with a static read of the suite's own sources, classifies
+every construct it finds, and writes what it concludes. It reads; it changes nothing.
+
+```console
+$ velox-migrate audit
+891 tests   692 clean (77.7%)   194 need review   5 blocked (0.6%)
+serial: 201 of 891 tests run alone, 22.6% of the suite
+101 findings over 14 constructs, 5 about the suite itself
+...
+wrote .velox-migrate/migration-report.md and .velox-migrate/findings.json
+```
+
+The four counts are the whole verdict, and every collected test lands in exactly one of them:
+
+- **clean** — converts with nobody reading the diff line by line;
+- **needs review** — converts, and something about it shifted enough that the converted source
+  carries a `VELOX-TODO[category]` marker, or the test behaves differently once tests overlap;
+- **blocked** — no conversion path as it stands, because the construct needs a human decision or
+  velox provides nothing like it;
+- **serial** — the share of the suite that ends up running alone, which is the part concurrency
+  cannot speed up. This one cuts across the other three: a test can convert untouched and still
+  have to run by itself.
+
+Every finding cites a code, `VX214` or `VX401`, that names one row of the support matrix: the pytest
+construct, what becomes of it, and what to do where the answer is "nothing". The same codes label
+report sections and the markers left in converted source, so a number in the summary, a paragraph in
+the report and a marker in a file are one thing seen three ways.
+
+`migration-report.md` is written to be read and forwarded: the verdict, then a section per construct
+that needs a decision with its file-and-line list, then what converts with a caveat, the
+concurrency hazards, what the conversion rewires, the configuration and plugins, and last what the
+audit cannot see. `findings.json` carries the same content for tooling, with the matrix rows for
+every code it uses.
+
+```console
+$ velox-migrate audit --dump ground-truth.json --root ../service --out audit/
+$ velox-migrate audit --budget 12     # allow longer generated override chains
+```
+
+A conftest fixture that overrides one from a parent directory has no counterpart in velox, where a
+dependency names one object: the override and everything between it and the tests that reach it are
+copied per overriding directory. `--budget` is how many fixtures one override may cause to be
+copied before the audit refuses it instead, and the report names the fan-out either way.
+
+An audit says what it does not know. Constructs no dump and no parse can see — test-order
+dependence, teardown timing, state behind application code — are named in the report rather than
+counted, and any source file that could not be read is listed with a note that the body-level counts
+are lower bounds while it is.
+
 ## Development
 
 ```console
@@ -85,5 +137,7 @@ $ just corpus-check        # verify those dumps match what the extractor produce
 ```
 
 `corpus/` holds pytest suites that exist to be extracted from, not run — feature-dense by design,
-since they are the input the tooling is tested against. `corpus/dumps/` holds their dumps, one per
-supported pytest version, which is what keeps a single model honest across both.
+since they are the input the tooling is tested against. `fixtures_showcase` is the wiring: overrides,
+autouse, parametrization, wrapped fixtures. `hazards_showcase` is everything that does not translate
+cleanly, one case per matrix row. `corpus/dumps/` holds their dumps, one per supported pytest
+version, which is what keeps a single model honest across both.
