@@ -142,7 +142,10 @@ def plan(
 
     `symbols` maps an owning file and a fixture's argname onto the name its factory is written
     under, which only the source can say. `consumers` maps each file onto the fixture keys the
-    code in it names. `source_of` reads a file's text, for the names a module already binds.
+    code in it names. `source_of` reads a file's text, for the names a module already binds and to
+    say whether a `fixtures.py` is already there.
+
+    A fixture whose module cannot be settled gets no `Home`, and refusing it is the caller's to do.
     """
     homes: dict[str, Home] = {}
     moves: dict[str, str] = {}
@@ -152,6 +155,11 @@ def plan(
         if source is None or symbol is None:
             continue
         module = home_module(source)
+        if module != source and source_of(module) is not None:
+            # The suite already has a `fixtures.py` in that directory, holding code of its own.
+            # Moving the conftest onto it would overwrite it, and the fixtures are worth less than
+            # whatever is already there.
+            continue
         homes[key] = Home(
             key=key, argname=fixture.argname, symbol=symbol, source=source, module=module
         )

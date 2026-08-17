@@ -57,6 +57,9 @@ _LISTS = frozenset({"testpaths", "test_file_patterns", "ignore"})
 # no rendering this writes, and it is dropped rather than mangled.
 _ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
+# fnmatch's metacharacters. An entry holding one is a pattern, not a directory name.
+_GLOB = re.compile(r"[*?\[\]]")
+
 _TABLE = re.compile(r"^\[tool\.velox(\.|\])", re.MULTILINE)
 _KEY = re.compile(r"^([A-Za-z0-9_-]+)\s*=")
 _SUBTABLE = re.compile(r"^\[tool\.velox\.([^\]]+)\]")
@@ -147,7 +150,22 @@ def _value(ground_truth: GroundTruth, pytest_key: str, velox_key: str) -> str | 
         value = ast.literal_eval(resolved)
     except (SyntaxError, TypeError, ValueError):
         return None
-    return _list(value) if velox_key in _LISTS else _number(value)
+    if velox_key not in _LISTS:
+        return _number(value)
+    return _list(_plain_names(value) if velox_key == "ignore" else value)
+
+
+def _plain_names(value: object) -> object:
+    """`norecursedirs` narrowed to the entries velox's `ignore` can honour.
+
+    pytest matches `norecursedirs` as fnmatch patterns against each directory it walks into;
+    velox's `ignore` is a set of directory names it compares exactly. A pattern carried across
+    verbatim would stop excluding what it excluded, so `.*`, `*.egg` and `build[0-9]` are dropped
+    and reported rather than written as names nothing will ever equal.
+    """
+    if not isinstance(value, list | tuple):
+        return value
+    return [item for item in value if not (isinstance(item, str) and _GLOB.search(item))]
 
 
 def _list(value: object) -> str | None:

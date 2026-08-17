@@ -58,8 +58,11 @@ def backend(request):
     return request.param
 
 
+# `request` is written last, after a fixture of its own. It becomes the bare `param` argument velox
+# binds a case to, which has no default and so cannot stay where it was written.
 @pytest.fixture(params=[1, 2])
-def retries(request):
+def retries(dsn, request):
+    assert dsn
     return request.param
 
 

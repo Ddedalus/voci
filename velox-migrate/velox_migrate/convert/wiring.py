@@ -30,6 +30,13 @@ from velox_migrate.model import REQUEST
 # The case argument velox binds a parametrized fixture's value to; there is no `request`.
 PARAM = "param"
 
+CAPLOG = "caplog"
+SET_LEVEL = "set_level"
+
+# The row that refuses a definition whose body still reads a renamed builtin. `caplog` is decided
+# per use, so it is not here.
+_STRANDED: Mapping[str, str] = {"capsys": "VX202"}
+
 _NO_SPACE = cst.SimpleWhitespace("")
 
 
@@ -46,13 +53,17 @@ class Result:
     refused: tuple[tuple[str, str], ...] = ()
 
 
-def apply(module: cst.Module, work: FileWork, *, needs: Collection[str] = ()) -> Result:
+def apply(
+    module: cst.Module, work: FileWork, *, needs: Collection[str] = (), touched: bool = False
+) -> Result:
     """`work`'s fixture and test rewrites, plus the imports they need, applied to `module`.
 
     `needs` are plain modules a rule's rewrite left the source reading — it writes no import of its
-    own, and imports belong to the one pass that owns them.
+    own, and imports belong to the one pass that owns them. `touched` says a rule already wrote a
+    `velox.` name into this module, which is what makes the import of `velox` needed even where
+    every signature here turns out to be refused.
     """
-    command = _Wiring(CodemodContext(), work, needs)
+    command = _Wiring(CodemodContext(), work, needs, touched)
     rewritten = command.transform_module(module)
     return Result(module=rewritten, refused=tuple(sorted(command.refused)))
 
@@ -79,7 +90,11 @@ class _Wiring(VisitorBasedCodemodCommand):
     """Rewrites one file's fixture definitions and test signatures, and queues its imports."""
 
     def __init__(
-        self, context: CodemodContext, work: FileWork, needs: Collection[str] = ()
+        self,
+        context: CodemodContext,
+        work: FileWork,
+        needs: Collection[str] = (),
+        touched: bool = False,
     ) -> None:
         super().__init__(context)
         self._fixtures: Mapping[str, FixtureWork] = {f.symbol: f for f in work.fixtures}
@@ -87,6 +102,8 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._needs = sorted(set(needs))
         self._work = work
         self._path: list[str] = []
+        self._wrote = touched
+        self._injected = False
         self.refused: set[tuple[str, str]] = set()
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -108,16 +125,28 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._path.pop()
         name = original_node.name.value
         fixture = self._fixtures.get(name) if len(self._path) == 0 else None
+        work = fixture or self._tests.get(qualname)
+        if work is None:
+            return updated_node
+        stranded = _stranded(updated_node, work.injections)
+        if stranded is not None:
+            # Renaming the parameter would leave the body reading a name nothing binds. The rules
+            # rewrite every use of `capsys` and `caplog` they have a velox spelling for, so a use
+            # still standing here is one of the shapes they declined.
+            self.refused.add((name, stranded))
+            return original_node
         if fixture is not None:
+            self._wrote = True
             return self._fixture(original_node, updated_node, fixture)
-        test = self._tests.get(qualname)
-        if test is not None:
-            return self._signature(updated_node, test.injections, name)
-        return updated_node
+        return self._signature(updated_node, work.injections, name)
 
     def leave_Module(self, original_node: cst.Module, updated_node: cst.Module) -> cst.Module:
-        if self._work.fixtures or self._work.tests:
+        # Imported on what was written, not on what was planned: a file whose every definition
+        # turned out to be refused keeps the source it had, and an unused import is not an edit
+        # anyone asked for.
+        if self._wrote:
             AddImportsVisitor.add_needed_import(self.context, "velox")
+        if self._injected:
             AddImportsVisitor.add_needed_import(self.context, "velox", "Depends")
         for module in self._needs:
             AddImportsVisitor.add_needed_import(self.context, module)
@@ -160,6 +189,8 @@ class _Wiring(VisitorBasedCodemodCommand):
             # injected. Rewriting the signature would change what the test can be called with.
             self.refused.add((name, "VX017"))
             return node
+        self._wrote = True
+        self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
         params, reordered = _rewrite(node.params.params, by_name)
         kwonly, _ = _rewrite(node.params.kwonly_params, by_name)
         if reordered:
@@ -175,20 +206,19 @@ def _rewrite(
     """`params` with each injected one given its `Depends()` default, and whether order moved.
 
     A parameter without a default cannot follow one that has it, so a signature that mixes
-    injected names with parametrized ones is split: the uninjected keep their relative order and
-    come first. Every other signature keeps the whitespace it was written with.
+    injected names with parametrized ones is split: the ones without a default keep their relative
+    order and come first. Every other signature keeps the whitespace it was written with.
+
+    What decides the split is whether the rewritten parameter ends up with a default, not whether
+    it was injected: a `params=` fixture's `request` becomes the bare `param` velox binds its case
+    to, so it belongs with the plain parameters however late it was written.
     """
     rewritten = [_inject(param, by_name.get(param.name.value)) for param in params]
-    injected = [param.name.value in by_name for param in params]
-    if not injected or all(injected) or not any(injected):
+    defaulted = [param.default is not None for param in rewritten]
+    if all(defaulted) or not any(defaulted) or defaulted == sorted(defaulted):
         return tuple(rewritten), False
-    already_valid = injected == sorted(injected)
-    if already_valid:
-        return tuple(rewritten), False
-    plain = [
-        param for param, is_injected in zip(rewritten, injected, strict=True) if not is_injected
-    ]
-    filled = [param for param, is_injected in zip(rewritten, injected, strict=True) if is_injected]
+    plain = [param for param, has in zip(rewritten, defaulted, strict=True) if not has]
+    filled = [param for param, has in zip(rewritten, defaulted, strict=True) if has]
     return tuple([*plain, *filled]), True
 
 
@@ -207,6 +237,43 @@ def _inject(param: cst.Param, injection: Injection | None) -> cst.Param:
         if param.annotation is None
         else cst.MaybeSentinel.DEFAULT,
     )
+
+
+def _stranded(node: cst.FunctionDef, injections: Sequence[Injection]) -> str | None:
+    """The matrix row refusing this definition, if renaming a parameter would strand its body.
+
+    A builtin whose velox counterpart is a different object is renamed with the parameter, and
+    every use the rules could translate is already translated by the time this runs. What is left
+    is a use with no velox spelling, and the row that says so depends on which one it is.
+    """
+    for injection in injections:
+        if not injection.renamed or injection.was == REQUEST:
+            continue
+        if not _mentions(node.body, injection.was):
+            continue
+        if injection.was == CAPLOG:
+            return "VX205" if _mentions(node.body, SET_LEVEL) else "VX206"
+        return _STRANDED.get(injection.was, "VX220")
+    return None
+
+
+def _mentions(body: cst.BaseSuite, name: str) -> bool:
+    visitor = _Mentions(name)
+    body.visit(visitor)
+    return visitor.found
+
+
+class _Mentions(cst.CSTVisitor):
+    """Whether a name is read anywhere in a body, as a bare name or an attribute's owner."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self._name = name
+        self.found = False
+
+    def visit_Name(self, node: cst.Name) -> None:
+        if node.value == self._name:
+            self.found = True
 
 
 def _is_fixture_decorator(expression: cst.BaseExpression) -> bool:

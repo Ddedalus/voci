@@ -178,6 +178,18 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         consumers=_consumers(ground_truth, converting, items, blocked_fixtures),
         source_of=sources.get,
     )
+
+    # A fixture the layout could not place has nowhere to be imported from, which refuses it and
+    # everything that reaches it exactly as any other refusal does.
+    unplaced = {key for key in converting if plan_layout.home(key) is None}
+    if unplaced:
+        blocked_fixtures = _propagate(ground_truth, translatable, blocked_fixtures | unplaced)
+        blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures)
+        converting = {
+            key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
+        }
+        items = _items_by_qualname(ground_truth, blocked_tests)
+
     return Plan(
         layout=plan_layout,
         work=_work(
@@ -198,8 +210,17 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
 
 
 def refused(finding: Finding) -> bool:
-    """Whether this finding's construct is one the conversion leaves alone."""
-    return not finding.construct.converts or finding.code in DEFERRED
+    """Whether this finding's construct is one the conversion leaves alone.
+
+    A hazard is not one of them. It is a behaviour change concurrency causes rather than syntax, so
+    the construct converts and the report says which tests end up needing `@velox.solo` — refusing
+    a fixture over an `os.environ` write in it would refuse most of a suite for something the
+    rewrite is not what fixes.
+    """
+    return finding.code in DEFERRED or finding.disposition in (
+        matrix.Disposition.REFUSED,
+        matrix.Disposition.UNSUPPORTED,
+    )
 
 
 def _sources(ground_truth: GroundTruth, root: Path) -> dict[str, str]:

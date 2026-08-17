@@ -20,12 +20,14 @@ import libcst as cst
 
 import pytest
 from velox_migrate import audit, convert, matrix, model
-from velox_migrate.convert import layout, markers, plan
+from velox_migrate.convert import config, layout, markers, plan, wiring
 from velox_migrate.convert.layout import Import
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
 DUMPS = CORPUS / "dumps"
 PYTEST_VERSIONS = ["8.4", "9.1"]
+
+STANDALONE = "test_it.py"
 
 MECHANICAL = "mechanical_showcase"
 FIXTURES = "fixtures_showcase"
@@ -362,3 +364,86 @@ def test_the_deferred_codes_are_all_rows_the_matrix_says_convert() -> None:
     # different explanations, for one construct.
     for code in plan.DEFERRED:
         assert matrix.construct(code).converts, code
+
+
+# --- what a rewrite backs out of ----------------------------------------------------------------
+
+
+def test_a_params_fixture_reordering_request_still_passes(version: str, tmp_path: Path) -> None:
+    # `request` becomes the bare `param` velox binds a case to, so it has no default and cannot
+    # stay after a fixture that does. Written the other way round this was a syntax error.
+    tree = tmp_path / MECHANICAL
+    converted(MECHANICAL, version, tree)
+
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "def retries(param, dsn=Depends(dsn)):" in body
+
+
+def test_a_test_needing_no_injection_does_not_import_depends(version: str, tmp_path: Path) -> None:
+    tree = tmp_path / MECHANICAL
+    converted(MECHANICAL, version, tree)
+
+    body = (tree / "test_marks.py").read_text(encoding="utf-8")
+
+    assert "import velox" in body
+    assert "Depends" not in body
+
+
+def test_a_capsys_use_no_rule_rewrites_refuses_the_test_rather_than_stranding_it() -> None:
+    # `capsys` is renamed with its parameter because `velox.capture` is a different object. A use
+    # the body rules decline would be left reading a name nothing binds, so the whole test stays as
+    # pytest wrote it and says why.
+    source = "def test_x(capsys):\n    assert capsys.readouterr()[0]\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x",
+                injections=(plan.Injection("capsys", "capture", "velox.capture"),),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert result.refused == (("test_x", "VX202"),)
+    assert result.module.code == source
+
+
+def test_a_conftest_never_moves_onto_a_fixtures_module_the_suite_already_has() -> None:
+    # Overwriting a hand-written `fixtures.py` would lose code worth more than the fixtures moving
+    # onto it, so the fixture gets no home and the caller refuses it.
+    sources = {
+        "api/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef payload():\n    ...\n",
+        "api/fixtures.py": "SHARED = 1\n",
+    }
+
+    placed = layout.plan(
+        {"k": _fixture_def("payload", "api")},
+        symbols={("api/conftest.py", "payload"): "payload"},
+        consumers={},
+        source_of=sources.get,
+    )
+
+    assert placed.moves == {}
+    assert placed.home("k") is None
+
+
+def test_a_hazard_is_converted_rather_than_refused() -> None:
+    # A hazard is what concurrency changes, not what syntax changes: `@velox.solo` is the answer and
+    # the report names the tests needing it. Refusing a session fixture over an `os.environ` write
+    # inside it would refuse everything downstream for something the rewrite does not fix.
+    hazard = audit.Finding(code="VX402", message="writes the environment")
+
+    assert not plan.refused(hazard)
+
+
+def test_a_norecursedirs_pattern_is_dropped_rather_than_carried_as_a_name() -> None:
+    # pytest matches `norecursedirs` as fnmatch patterns; velox's `ignore` compares directory names
+    # exactly, so `.*` carried across verbatim would stop excluding anything.
+    assert config._plain_names([".*", "build", "*.egg", "node_modules"]) == [
+        "build",
+        "node_modules",
+    ]

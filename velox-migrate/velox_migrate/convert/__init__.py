@@ -119,7 +119,10 @@ def _rewrite(
         applied.extend(result.applied)
 
     swapped = wiring.apply(
-        module, work, needs={needed for record in applied for needed in record.needs}
+        module,
+        work,
+        needs={needed for record in applied for needed in record.needs},
+        touched=bool(applied),
     )
     module = swapped.module
 

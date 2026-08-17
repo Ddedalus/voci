@@ -334,7 +334,7 @@
     "module": "conftest",
     "qualname": "class_scoped",
     "file": "conftest.py",
-    "lineno": 71,
+    "lineno": 74,
     "wrapped": false
    }
   },
@@ -536,7 +536,7 @@
     "module": "conftest",
     "qualname": "package_scoped",
     "file": "conftest.py",
-    "lineno": 76,
+    "lineno": 79,
     "wrapped": false
    }
   },
@@ -572,7 +572,7 @@
     "module": "conftest",
     "qualname": "_probe",
     "file": "conftest.py",
-    "lineno": 66,
+    "lineno": 69,
     "wrapped": false
    }
   },
@@ -687,13 +687,14 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [
+    "dsn",
     "request"
    ],
    "func": {
     "module": "conftest",
     "qualname": "retries",
     "file": "conftest.py",
-    "lineno": 61,
+    "lineno": 63,
     "wrapped": false
    }
   },
@@ -2656,12 +2657,16 @@
     "retries"
    ],
    "names_closure": [
+    "dsn",
     "retries",
     "request"
    ],
    "name2fixturedefs": {
     "retries": [
      "f29"
+    ],
+    "dsn": [
+     "f16"
     ]
    },
    "callspec": {
@@ -2695,12 +2700,16 @@
     "retries"
    ],
    "names_closure": [
+    "dsn",
     "retries",
     "request"
    ],
    "name2fixturedefs": {
     "retries": [
      "f29"
+    ],
+    "dsn": [
+     "f16"
     ]
    },
    "callspec": {
