@@ -239,7 +239,9 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   *Exit: audit of a real suite whose numbers survive manual spot-checks* — met against velox's own
   891-test suite, where the monkeypatch, `pytest.skip()`, warning-filter and event-loop counts match
   a grep of the tree exactly and the two discrepancies were the scan being right and the grep wrong.
-  Five things the build settled:
+  The write-up of two OSS suites is still to do: it needs an environment per suite, since the
+  vendored `fastapi/` does not collect against the starlette in this workspace, and a suite that
+  cannot collect has no dump. Five things the build settled:
   - **A finding needs a blast radius, not just a site.** The percent-of-suite-serialized number is
     only meaningful if a hazard written in an autouse fixture is charged to every test that inherits
     it, so `audit/reach.py` maps a `file:function` back onto node ids through the dump's own fixture
