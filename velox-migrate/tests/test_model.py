@@ -278,6 +278,15 @@ def test_an_ini_key_renamed_by_pytest_is_found_under_the_name_the_suite_uses(
     assert ground_truth.ini_value("xfail_strict") is not None
 
 
+def test_an_ini_key_the_extracted_pytest_never_had_is_not_silently_absent(
+    ground_truth: model.GroundTruth,
+) -> None:
+    # Returning nothing would read as "left at its default", which is a different fact from
+    # "this pytest has no such setting" and would be acted on the same way.
+    with pytest.raises(KeyError, match="registered no ini key"):
+        ground_truth.ini_value("not_a_pytest_setting")
+
+
 def test_fixture_paths_are_relative_to_the_suite(ground_truth: model.GroundTruth) -> None:
     settings = ground_truth.fixture_registry["settings"][0]
 

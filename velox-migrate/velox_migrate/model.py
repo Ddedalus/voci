@@ -229,16 +229,24 @@ class GroundTruth:
         except KeyError:
             raise KeyError(f"No test {nodeid!r} was collected in this extraction.") from None
 
-    def ini_value(self, name: str) -> str | None:
-        """The `repr`ed value of ini key `name`, under either its current or its former spelling.
+    def ini_value(self, name: str) -> str:
+        """The `repr`ed value of ini key `name`, under either spelling pytest knows it by.
 
-        pytest renames ini keys and keeps the old spelling working as an alias, so a suite's
-        config file and the dump can disagree about a setting's name; either name finds it.
+        pytest renames ini keys and keeps the old spelling as an alias, so a suite's config file
+        and the dump can disagree about a setting's name; either name finds it. Raises `KeyError`
+        when the extracted pytest had no such setting at all under any spelling, which is not the
+        same as the setting being left at its default.
         """
-        canonical = self.ini_aliases.get(name, name)
-        if canonical in self.ini:
-            return self.ini[canonical]
-        return self.ini.get(name)
+        for candidate in (name, self.ini_aliases.get(name), *self._aliases_of(name)):
+            if candidate is not None and candidate in self.ini:
+                return self.ini[candidate]
+        raise KeyError(
+            f"pytest {self.pytest_version} registered no ini key named {name!r}, under that "
+            "spelling or any it is aliased to."
+        )
+
+    def _aliases_of(self, name: str) -> tuple[str, ...]:
+        return tuple(alias for alias, canonical in self.ini_aliases.items() if canonical == name)
 
     def resolve_path(
         self, path: str | None, *, prefix: str | None = None, base_prefix: str | None = None

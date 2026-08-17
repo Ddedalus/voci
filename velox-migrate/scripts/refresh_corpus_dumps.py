@@ -140,8 +140,6 @@ def _extract(suite: str, requirement: str) -> str:
     # happened. A checked-in dump would carry this machine's copy of the repo in it, so it is
     # replaced by the suite root it denotes.
     dump["rootpath"] = "."
-    # Anchored the same way as `rootpath`, which is the suite's own directory.
-    dump["args"] = ["."]
     return json.dumps(dump, indent=1, sort_keys=False) + "\n"
 
 

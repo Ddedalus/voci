@@ -100,7 +100,7 @@ def test_only_the_rootdir_is_recorded_as_a_path_on_this_machine(dump: dict) -> N
     # Everything a later stage reads is anchored to the rootdir, which is recorded once. Leaving
     # absolute paths anywhere else would make a dump meaningless as soon as it left the machine
     # that produced it — and a dump is meant to be copied out of a container.
-    described = {key: value for key, value in dump.items() if key not in ("rootpath", "args")}
+    described = {key: value for key, value in dump.items() if key != "rootpath"}
 
     # Matched anywhere in the string, not just at the start: pytest resolves a `paths`-typed ini
     # key to absolute paths, which reach the dump inside a `repr` rather than as one.
@@ -237,12 +237,29 @@ def test_a_run_that_never_reached_the_suite_is_refused(tmp_path: Path) -> None:
     written = json.loads((tmp_path / "dump.json").read_text(encoding="utf-8"))
     assert written["items"] == []
     assert written["exit_status"] != 0
-    with pytest.raises(schema.DumpError, match="not from a completed collection"):
+    with pytest.raises(schema.DumpError, match="before finishing collection"):
         schema.load(tmp_path / "dump.json")
 
 
 def test_a_clean_collection_records_a_clean_exit(dump: dict) -> None:
     assert dump["exit_status"] == 0
+
+
+def test_a_failing_test_does_not_invalidate_the_dump(tmp_path: Path) -> None:
+    # A dump claims to describe how a suite is wired, not that the suite passes. Refusing one
+    # because a test failed would put migration out of reach of every suite that needs it.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_it.py").write_text(
+        "def test_ok(): pass\n\n\ndef test_bad(): assert False\n", encoding="utf-8"
+    )
+
+    _run_plugin(suite, tmp_path, run_tests=True)
+
+    dump = schema.load(tmp_path / "dump.json")
+
+    assert dump["exit_status"] == 1
+    assert len(dump["items"]) == 2
 
 
 def test_a_conftest_re_exporting_a_plugin_fixture_does_not_claim_the_plugins_own(
@@ -375,7 +392,9 @@ def test_a_suite_inside_the_environment_prefix_still_wins() -> None:
     assert normalize(f"{sys.prefix}/suite/conftest.py") == "conftest.py"
 
 
-def _run_plugin(suite: Path, workdir: Path, *extra: str) -> subprocess.CompletedProcess:
+def _run_plugin(
+    suite: Path, workdir: Path, *extra: str, run_tests: bool = False
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
@@ -385,7 +404,7 @@ def _run_plugin(suite: Path, workdir: Path, *extra: str) -> subprocess.Completed
             *extra,
             "-p",
             "velox_migrate.extractor",
-            "--collect-only",
+            *([] if run_tests else ["--collect-only"]),
             "-q",
             "--extractor-out",
             "dump.json",

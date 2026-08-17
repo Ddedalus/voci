@@ -47,7 +47,7 @@ fmt-check:
 # separate project and leaves out of the root one, so its sources are named explicitly.
 typecheck *args:
     uv run pyrefly check --progress-bar no "$@"
-    uv run pyrefly check --progress-bar no velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
+    uv run pyrefly check --progress-bar no "$@" velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
 
 # Build the package (sdist + wheel)
 build:

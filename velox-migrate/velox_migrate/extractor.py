@@ -33,9 +33,11 @@ MAX_PYTEST_EXCLUSIVE = (10,)
 
 DEFAULT_OUT = os.path.join(".velox-migrate", "ground-truth.json")
 
-# pytest's own OK and "collected nothing": the two ways a collection finishes without going
-# wrong. Mirrored by `schema.CLEAN_EXIT_STATUSES`, which this file cannot import.
-CLEAN_EXIT_STATUSES = (0, 5)
+# The exit statuses that mean collection reached the end: all passed, some test failed, and
+# nothing was collected. Interrupted, internal error and usage error are the ones that leave a
+# dump describing less than the suite. Mirrored by `schema.CLEAN_EXIT_STATUSES`, which this file
+# cannot import.
+CLEAN_EXIT_STATUSES = (0, 1, 5)
 
 
 def pytest_addoption(parser):
@@ -525,7 +527,7 @@ def build_dump(session, exitstatus=0):
         "environment": _environment(),
         "rootpath": str(config.rootpath),
         "inipath": relpath(config.inipath) if config.inipath else None,
-        "args": list(config.args),
+        "args": [relpath(arg) for arg in config.args],
         "ini": _ini(config, relpath),
         # 9.1 renamed `xfail_strict` to `strict_xfail` and kept the old spelling as an alias.
         # Reading the alias map is how a later stage normalizes a suite's ini keys without
@@ -569,7 +571,7 @@ def pytest_sessionfinish(session, exitstatus):
             note = f"wrote ground truth for {len(dump['items'])} tests to {out}"
         else:
             note = (
-                f"pytest exited {exitstatus}, so {out} records an incomplete collection "
-                "and will be refused"
+                f"pytest exited {exitstatus} before finishing collection, so {out} describes "
+                "less than the suite and will be refused"
             )
         reporter.write_line(f"velox-migrate: {note}")
