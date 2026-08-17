@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -121,3 +122,55 @@ def test_no_command_prints_help_rather_than_failing_obscurely(
 
     assert code == 2
     assert "extract" in capsys.readouterr().out
+
+
+def test_audit_writes_both_artifacts_beside_the_dump(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dump = tmp_path / "ground-truth.json"
+    assert cli.main(["extract", str(SUITE), "-o", str(dump)]) == 0
+
+    code = cli.main(["audit", "-d", str(dump), "-r", str(SUITE)])
+
+    assert code == 0
+    findings = json.loads((tmp_path / cli.FINDINGS_NAME).read_text(encoding="utf-8"))
+    assert findings["totals"]["tests"] == 11
+    assert (tmp_path / cli.REPORT_NAME).read_text(encoding="utf-8").startswith("# ")
+    assert cli.REPORT_NAME in capsys.readouterr().out
+
+
+def test_audit_writes_where_it_is_told_and_stays_quiet_when_asked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dump = tmp_path / "ground-truth.json"
+    assert cli.main(["extract", str(SUITE), "-o", str(dump)]) == 0
+    out = tmp_path / "elsewhere"
+
+    code = cli.main(["audit", "-d", str(dump), "-r", str(SUITE), "-o", str(out), "--quiet"])
+
+    assert code == 0
+    assert (out / cli.FINDINGS_NAME).is_file()
+    assert capsys.readouterr().out == ""
+
+
+def test_auditing_without_a_dump_says_how_to_get_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(["audit", "-d", str(tmp_path / "nothing.json")])
+
+    assert code == 1
+    assert "velox-migrate extract" in capsys.readouterr().err
+
+
+def test_auditing_against_the_wrong_tree_refuses_rather_than_reporting_no_hazards(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A root holding none of the suite's files would produce an audit with no test bodies in it,
+    # which reads as a clean suite.
+    dump = tmp_path / "ground-truth.json"
+    assert cli.main(["extract", str(SUITE), "-o", str(dump)]) == 0
+
+    code = cli.main(["audit", "-d", str(dump), "-r", str(tmp_path)])
+
+    assert code == 1
+    assert "--root" in capsys.readouterr().err

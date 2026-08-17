@@ -3,7 +3,9 @@ name = "velox-migrate"
 version = "0.0.0"
 description = "Migrate a pytest suite to velox."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "libcst>=1.9",
+]
 
 [project.scripts]
 velox-migrate = "velox_migrate.cli:main"

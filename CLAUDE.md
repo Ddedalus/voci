@@ -14,7 +14,10 @@ extracted from rather than run, so it is excluded from ruff and pyrefly, and
 `velox-migrate/corpus/dumps/` holds their checked-in ground-truth dumps, one per supported pytest
 — regenerate with `just corpus-dumps`, verify with `just corpus-check`. `velox_migrate/extractor.py`
 is a single file importing only stdlib and pytest so it can be copied into an environment where
-nothing else can be installed; keep it that way.
+nothing else can be installed; keep it that way. Everything else there may use LibCST, its one
+dependency. `velox_migrate/matrix.py` is the support matrix: one row per pytest construct, keyed by
+a `VXnnn` code that report sections, `VELOX-TODO` markers and rewrite rules all reconcile against —
+classification decisions belong in that table, not in the code that reads it.
 
 Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recipes (`sync`, `run`,
 `test`, `test-migrate`, `lint`, `fmt`, `typecheck`, `build`, `check`). For splitting objects out
