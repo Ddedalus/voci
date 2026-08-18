@@ -113,22 +113,12 @@ def _settings(conversion: Conversion) -> list[str]:
     if settings.conflict:
         return [f"[tool.velox]: left alone — {settings.conflict}"]
     lines += [f"  {key} = {value}" for key, value in settings.settings.items()]
-    # A setting velox has no key for is not always a setting the migration loses: `usefixtures`
-    # becomes a declaration and `xfail_strict` is written into each `@velox.xfail`, and reporting
-    # either as dropped would contradict the rest of this plan.
-    elsewhere = [key for key in settings.dropped if _rewritten(key)]
-    lost = [key for key in settings.dropped if key not in elsewhere]
-    if lost:
-        lines.append(f"  dropped: {', '.join(lost)}")
-    if elsewhere:
-        lines.append(f"  carried by the rewrite: {', '.join(elsewhere)}")
+    # Named for what this section can answer for, which is the table: a setting outside it is not
+    # necessarily a setting the migration loses — `usefixtures` becomes a declaration and
+    # `xfail_strict` is written into each `@velox.xfail`, both of which the sections above show.
+    if settings.dropped:
+        lines.append(f"  not carried here: {', '.join(settings.dropped)}")
     return lines
-
-
-def _rewritten(setting: str) -> bool:
-    """Whether the rewrite carries this pytest setting somewhere other than `[tool.velox]`."""
-    code = matrix.INI_SETTINGS.get(setting)
-    return code is not None and code not in DEFERRED and matrix.construct(code).converts
 
 
 def _gaps(conversion: Conversion) -> list[str]:

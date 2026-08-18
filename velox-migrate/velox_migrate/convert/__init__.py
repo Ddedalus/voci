@@ -60,11 +60,6 @@ class Conversion:
     def marked(self) -> int:
         return sum(len(work.marks) for work in self.plan.work.values())
 
-    @property
-    def declared(self) -> int:
-        """How many fixtures the conversion declares with `velox.use(...)`."""
-        return sum(len(work.declares) for work in self.plan.work.values())
-
 
 def run(
     audit: Audit,
@@ -103,11 +98,11 @@ def run(
         refused.extend((path, symbol, code) for symbol, code in backed_out)
         file_edits.append(_edit(root, work, module.code, source))
 
-    written = {edit.path for edit in file_edits}
+    claimed = {edit.path for edit in file_edits}
     file_edits.extend(
         Edit(path=path, new_text="", old_text=None)
         for path in built.packages
-        if path not in written and _read(root, path) is None
+        if path not in claimed and _read(root, path) is None
     )
     settings = config.translate(ground_truth, root=root)
     written = config.edit(settings, root=root)

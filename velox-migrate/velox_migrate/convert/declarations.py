@@ -92,7 +92,6 @@ def plan(
     return tuple(
         Declaration(container=container, keys=tuple(found))
         for container, found in sorted(keys.items())
-        if found
     )
 
 
