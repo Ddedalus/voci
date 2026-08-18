@@ -775,6 +775,63 @@
    }
   },
   {
+   "nodeid": "integration/test_declared.py::test_declared",
+   "path": "integration/test_declared.py",
+   "lineno": 12,
+   "originalname": "test_declared",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [
+    {
+     "from": "integration/test_declared.py",
+     "name": "usefixtures",
+     "args": [
+      "'client'"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [
+    "client"
+   ],
+   "autouse": [
+    "ledger"
+   ],
+   "argnames": [
+    "report"
+   ],
+   "initialnames": [
+    "ledger",
+    "client",
+    "report"
+   ],
+   "names_closure": [
+    "ledger",
+    "client",
+    "engine",
+    "settings",
+    "report"
+   ],
+   "name2fixturedefs": {
+    "ledger": [
+     "f10"
+    ],
+    "client": [
+     "f7"
+    ],
+    "engine": [
+     "f9"
+    ],
+    "settings": [
+     "f18",
+     "f19"
+    ],
+    "report": [
+     "f17"
+    ]
+   }
+  },
+  {
    "nodeid": "integration/test_integration.py::test_settings",
    "path": "integration/test_integration.py",
    "lineno": 6,

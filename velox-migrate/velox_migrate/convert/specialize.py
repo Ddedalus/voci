@@ -127,6 +127,7 @@ def plan(
             continue
         # Names are claimed against a copy of what the module binds, so an override that turns out
         # to be unspecializable leaves no name reserved behind it.
+        destination = source_of(host) or ""
         taken_here = set(claimed.setdefault(module, set(taken.get(module, frozenset()))))
         planned: list[Copy] = []
         for key in sorted(override.downstream):
@@ -140,10 +141,12 @@ def plan(
                 symbols=symbols,
                 source_of=source_of,
                 taken=taken_here,
+                destination=destination,
             )
             if copy is None:
-                # One of the chain has no source to copy, and half a chain wires the subtree to
-                # the definition the override exists to replace.
+                # One of the chain has no source to copy, or copying it would change what a name
+                # already means where it lands — and half a chain wires the subtree to the
+                # definition the override exists to replace.
                 planned = []
                 break
             planned.append(copy)
@@ -168,6 +171,7 @@ def _copy(
     symbols: Mapping[tuple[str, str], str],
     source_of: Callable[[str], str | None],
     taken: set[str],
+    destination: str,
 ) -> Copy | None:
     source = layout.owning_file(origin)
     symbol = symbols.get((source, origin.argname)) if source is not None else None
@@ -178,8 +182,10 @@ def _copy(
     written = _rebind(text, symbol, name)
     if written is None:
         return None
-    taken.add(name)
     carried, needs = _carried(text, symbol, home=layout.dotted(layout.home_module(source)))
+    if _clashes(destination, carried, needs):
+        return None
+    taken.add(name)
     return Copy(
         key=f"{origin.key}#{node}",
         origin=origin.key,
@@ -261,6 +267,32 @@ def _carried(text: str, symbol: str, *, home: str) -> tuple[tuple[Import, ...], 
     return tuple(imports), tuple(needs)
 
 
+def _clashes(destination: str, carried: Sequence[Import], needs: Sequence[str]) -> bool:
+    """Whether `destination` already binds one of the names a copy carries, and binds it to else.
+
+    The imports a copy needs are written into a module that has its own, so a `stamp` there
+    already meaning something is not a name this can take: rebinding it would change the module's
+    own fixtures as well as the copy.
+    """
+    bound = {name: _binds(statement, name) for statement, name in _bindings(destination)}
+    wanted = {item.bound: (item.module, item.symbol) for item in carried}
+    wanted |= {module.partition(".")[0]: (module, None) for module in needs}
+    return any(name in bound and bound[name] != source for name, source in wanted.items())
+
+
+def _binds(statement: ast.stmt, name: str) -> tuple[str, str | None] | None:
+    """What `statement` binds `name` to, in the shape a carried import is written as."""
+    match statement:
+        case ast.ImportFrom(module=str(source), level=0, names=names):
+            alias = next(a for a in names if (a.asname or a.name) == name)
+            return (source, alias.name)
+        case ast.Import(names=names):
+            alias = next(a for a in names if (a.asname or a.name.partition(".")[0]) == name)
+            return (alias.name, None) if alias.asname is None else (alias.name, alias.asname)
+        case _:
+            return None
+
+
 def _definition(text: str, symbol: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     try:
         tree = ast.parse(text)
@@ -273,12 +305,21 @@ def _definition(text: str, symbol: str) -> ast.FunctionDef | ast.AsyncFunctionDe
 
 
 def _bindings(text: str) -> Iterator[tuple[ast.stmt, str]]:
-    """Every top-level statement of `text` against each name it binds."""
+    """Every module-level statement of `text` against each name it binds."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return
-    for node in tree.body:
+    yield from _bound_in(tree.body)
+
+
+def _bound_in(body: Sequence[ast.stmt]) -> Iterator[tuple[ast.stmt, str]]:
+    """The bindings in `body`, reaching into the blocks a module puts imports inside.
+
+    An import written under `try:` or `if TYPE_CHECKING:` binds its name at module level like any
+    other, and a copy whose body reads that name needs it carried over just the same.
+    """
+    for node in body:
         match node:
             case ast.Import() | ast.ImportFrom():
                 for alias in node.names:
@@ -291,8 +332,21 @@ def _bindings(text: str) -> Iterator[tuple[ast.stmt, str]]:
                         yield node, target.id
             case ast.AnnAssign(target=ast.Name(id=name)):
                 yield node, name
+            case ast.If() | ast.Try() | ast.With() | ast.For() | ast.While():
+                for nested in _blocks(node):
+                    yield from _bound_in(nested)
             case _:
                 pass
+
+
+def _blocks(node: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
+    """Every statement list a module-level compound statement holds."""
+    for attribute in ("body", "orelse", "finalbody"):
+        found = getattr(node, attribute, None)
+        if found:
+            yield found
+    for handler in getattr(node, "handlers", ()):
+        yield handler.body
 
 
 def _free_names(definition: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:

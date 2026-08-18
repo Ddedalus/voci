@@ -77,7 +77,13 @@ class Override:
 
 
 def under(node: str, other: str) -> bool:
-    """Whether the visibility node `other` is `node` itself or somewhere inside it."""
+    """Whether the visibility node `other` is `node` itself or somewhere inside it.
+
+    The rootdir is spelled `"."` and a globally registered fixture's node is empty; both stand for
+    the whole session, so everything is inside them.
+    """
+    if node in ("", ".", "/"):
+        return True
     return other == node or other.startswith((f"{node}/", f"{node}::"))
 
 

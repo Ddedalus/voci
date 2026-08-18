@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 from velox_migrate import audit, convert, model
 from velox_migrate.audit import wiring
-from velox_migrate.convert import plan
+from velox_migrate.convert import plan, specialize
+from velox_migrate.convert.layout import Import
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
 DUMPS = CORPUS / "dumps"
@@ -193,5 +194,78 @@ def test_a_fixture_written_inside_the_overriding_directory_is_not_copied(version
     assert "report" not in downstream
 
 
+def test_a_declaration_inside_the_subtree_names_the_copy(tree: Path) -> None:
+    # A `usefixtures` mark hands a module a fixture it never names, and inside an overriding
+    # directory the object those tests get is that directory's copy.
+    body = source(tree, "integration/test_declared.py")
+
+    assert "velox.use(client_integration)" in body
+    assert "from integration.fixtures import client_integration" in body
+
+
 def test_specialization_is_the_row_the_matrix_says_it_is() -> None:
     assert "VX005" not in plan.DEFERRED
+
+
+# --- resolving a name from a node ---------------------------------------------------------------
+
+
+def fixture_def(argname: str, visibility: str) -> model.FixtureDef:
+    return model.FixtureDef(
+        key=f"{visibility}:{argname}",
+        argname=argname,
+        scope="function",
+        params=None,
+        ids=None,
+        autouse=False,
+        visibility=visibility,
+        kind="fixture",
+        direct_param=False,
+        argnames=(),
+        func=model.FuncLocation(None, None, None, None, False),
+    )
+
+
+def test_the_rootdir_node_holds_every_node_under_it() -> None:
+    # The rootdir is spelled `"."` and a globally registered fixture's node is empty; a fixture
+    # visible at either is visible to the whole suite.
+    assert wiring.under(".", "integration/test_it.py::test_x")
+    assert wiring.under("", "conftest.py")
+    assert wiring.under("integration", "integration/deep/test_it.py")
+    assert not wiring.under("integration", "leaf/test_it.py")
+
+
+def test_a_consumer_takes_the_nearest_definition_above_it() -> None:
+    root, override = fixture_def("settings", "."), fixture_def("settings", "integration")
+
+    assert plan._visible_at([root, override], ".") is root
+    assert plan._visible_at([root, override], "integration") is override
+
+
+def test_a_name_defined_only_below_the_consumer_is_the_one_it_gets() -> None:
+    # Only that subtree's tests can ask for a fixture written above them and wired to a name only
+    # they can see, and the definition they resolve is the one there is.
+    override = fixture_def("settings", "integration")
+
+    assert plan._visible_at([override], ".") is override
+    assert plan._visible_at([], ".") is None
+
+
+# --- what a copy carries ------------------------------------------------------------------------
+
+
+def test_a_name_a_module_binds_inside_a_block_is_bound_at_module_level() -> None:
+    text = "try:\n    from fast import blob\nexcept ImportError:\n    blob = None\n"
+
+    assert "blob" in {name for _, name in specialize._bindings(text)}
+
+
+def test_an_import_the_destination_already_spells_differently_stops_the_copy() -> None:
+    stamp = (Import("support", "stamp"),)
+
+    assert specialize._clashes("from other_support import stamp\n", stamp, ())
+    assert specialize._clashes("stamp = 1\n", stamp, ())
+    assert specialize._clashes("json = 1\n", (), ("json",))
+    assert not specialize._clashes("from support import stamp\n", stamp, ())
+    assert not specialize._clashes("import json\n", (), ("json",))
+    assert not specialize._clashes("", stamp, ("json",))

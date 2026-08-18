@@ -442,9 +442,9 @@ def _undeclarable(overrides: Sequence[audit_wiring.Override]) -> set[str]:
     """The overriding definitions whose subtree a declaration cannot be written for.
 
     A `velox.use(...)` names one object for a directory, so an autouse fixture that an override
-    changes would be declared once for each definition over tests that had exactly one. Leaving
-    the override alone refuses the subtree it rules and nothing else: the definition it overrode
-    is then what every converting test resolves, and is declared for them as any other is.
+    changes would be declared once for each definition over tests that had exactly one. Only the
+    overriding definition is named here; the refusal then travels as any other does, through
+    everything that depends on the overridden name.
     """
     return {override.winner.key for override in overrides if override.autouse}
 
@@ -561,7 +561,9 @@ def _consumers(
     """Per file, every fixture key the code in it will name — in a `Depends()` or a declaration."""
     consumers: dict[str, set[str]] = {}
     for declaration in placed:
-        consumers.setdefault(declaration.container, set()).update(declaration.keys)
+        consumers.setdefault(declaration.container, set()).update(
+            special.redirect(declaration.container, key) for key in declaration.keys
+        )
     for (path, _), cases in items.items():
         wanted = consumers.setdefault(path, set())
         item = cases[0]
@@ -658,7 +660,8 @@ def _work(
         )
 
     declares = {
-        declaration.container: _references(plan_layout, declaration) for declaration in placed
+        declaration.container: _references(plan_layout, declaration, special)
+        for declaration in placed
     }
     marks = _marks(refusals, markers)
     paths = set(fixtures_by_file) | set(tests_by_file) | set(marks) | set(declares)
@@ -707,10 +710,18 @@ def _imports_for(plan_layout: Layout, target: str, carried: Sequence[Import]) ->
     return tuple(dict.fromkeys([*plan_layout.imports_for(target), *carried]))
 
 
-def _references(plan_layout: Layout, declaration: Declaration) -> tuple[str, ...]:
-    """How the declaring module names each fixture it declares — its import, or its own binding."""
+def _references(
+    plan_layout: Layout, declaration: Declaration, special: Specialization
+) -> tuple[str, ...]:
+    """How the declaring module names each fixture it declares — its import, or its own binding.
+
+    A container inside a subtree an override rules declares that subtree's copy, for the same
+    reason a test inside it requests one: the object the container names is the object its tests
+    get, and there are two of them.
+    """
     found: list[str] = []
-    for key in declaration.keys:
+    for wanted in declaration.keys:
+        key = special.redirect(declaration.container, wanted)
         home = plan_layout.home(key)
         if home is None:
             continue
@@ -764,13 +775,15 @@ def _chains_reaching(
 
 
 def _visible_at(chain: Sequence[FixtureDef], node: str) -> FixtureDef | None:
-    """The definition in `chain` that a consumer written at `node` gets: the nearest above it."""
-    found = [
-        fixture
-        for fixture in chain
-        if fixture.visibility in ("", ".") or audit_wiring.under(fixture.visibility, node)
-    ]
-    return found[-1] if found else None
+    """The definition in `chain` that a consumer written at `node` gets: the nearest above it.
+
+    A name defined only *below* `node` is one that only that subtree's tests can ask for, and the
+    nearest definition is what every one of them resolves — so the chain's own winner answers it.
+    """
+    found = [fixture for fixture in chain if audit_wiring.under(fixture.visibility, node)]
+    if found:
+        return found[-1]
+    return chain[-1] if chain else None
 
 
 def _injections(
