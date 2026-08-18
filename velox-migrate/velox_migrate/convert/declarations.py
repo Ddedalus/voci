@@ -41,14 +41,12 @@ class Declaration:
     """One `velox.use(...)` line: where it goes, and the fixtures it names.
 
     `container` is the module that declares — a package `__init__.py`, or a test module for a
-    fixture that only ever reached its own file. `keys` are fixture keys in the order pytest set
-    them up, and `nodes` the visibility nodes this one line stands in for, which is more than one
-    where a module's `usefixtures` mark names a fixture its package already declares.
+    fixture that only ever reached its own file. `keys` are fixture keys, in the order pytest set
+    the fixtures up in.
     """
 
     container: str
     keys: tuple[str, ...]
-    nodes: tuple[str, ...]
 
     @property
     def directory(self) -> str | None:
@@ -85,18 +83,14 @@ def plan(
     tests a fixture on its behalf would be a widening nobody gets anything from.
     """
     keys: dict[str, list[str]] = {}
-    nodes: dict[str, list[str]] = {}
-    for container, node, key in _wanted(_converting(ground_truth, blocked), ground_truth):
+    for container, key in _wanted(_converting(ground_truth, blocked), ground_truth):
         if key not in available:
             continue
         found = keys.setdefault(container, [])
         if key not in found:
             found.append(key)
-        seen = nodes.setdefault(container, [])
-        if node not in seen:
-            seen.append(node)
     return tuple(
-        Declaration(container=container, keys=tuple(found), nodes=tuple(nodes[container]))
+        Declaration(container=container, keys=tuple(found))
         for container, found in sorted(keys.items())
         if found
     )
@@ -142,10 +136,8 @@ def apply(module: cst.Module, references: Sequence[str]) -> cst.Module:
     return module.with_changes(body=body)
 
 
-def _wanted(
-    converting: Sequence[Item], ground_truth: GroundTruth
-) -> Iterator[tuple[str, str, str]]:
-    """Every (container, node, fixture key) this suite's implicit wiring asks for."""
+def _wanted(converting: Sequence[Item], ground_truth: GroundTruth) -> Iterator[tuple[str, str]]:
+    """Every (container, fixture key) this suite's implicit wiring asks for."""
     for node, names in sorted(ground_truth.autouse_by_node.items()):
         container = container_for(node)
         if container is None:
@@ -154,7 +146,7 @@ def _wanted(
         for name in names:
             key = _resolved(covered, name)
             if key is not None:
-                yield container, node, key
+                yield container, key
 
     for item in converting:
         if item.path is None:
@@ -162,7 +154,7 @@ def _wanted(
         for name in item.usefixtures:
             key = _resolved((item,), name)
             if key is not None:
-                yield item.path, item.path, key
+                yield item.path, key
 
 
 def _converting(ground_truth: GroundTruth, blocked: Container[str]) -> tuple[Item, ...]:
@@ -261,10 +253,12 @@ def _where(body: Sequence[cst.BaseStatement], references: Sequence[str]) -> int:
     the declaration names something the module defines itself, in which case it goes last, since
     the name is not bound until the `def` it comes from has been read. A module that already
     declares gets this one underneath, because declarations apply in the order they are written.
+    A module with neither imports nor declarations still keeps its docstring first, which is the
+    one statement whose position is part of what it means.
     """
     if _defines_any(body, references):
         return len(body)
-    last = 0
+    last = 1 if body and _is_docstring(body[0]) else 0
     for index, statement in enumerate(body):
         if not isinstance(statement, cst.SimpleStatementLine):
             continue
@@ -273,6 +267,14 @@ def _where(body: Sequence[cst.BaseStatement], references: Sequence[str]) -> int:
         ):
             last = index + 1
     return last
+
+
+def _is_docstring(statement: cst.BaseStatement) -> bool:
+    match statement:
+        case cst.SimpleStatementLine(body=[cst.Expr(value=cst.SimpleString()), *_]):
+            return True
+        case _:
+            return False
 
 
 def _defines_any(body: Sequence[cst.BaseStatement], references: Sequence[str]) -> bool:

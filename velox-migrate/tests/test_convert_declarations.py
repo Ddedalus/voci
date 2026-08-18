@@ -7,6 +7,7 @@ small modules, where the property that matters is that a second run adds nothing
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import libcst as cst
@@ -93,18 +94,22 @@ def test_every_directory_between_a_declaration_and_a_test_becomes_a_package(
     version: str,
 ) -> None:
     # velox walks up from the test file and stops at the first directory that is not a package, so
-    # a missing `api/__init__.py` would leave the rootdir's declaration unread under `api/`.
+    # a missing `api/deep/__init__.py` would leave both declarations above it unread.
     conversion = conversion_of(DECLARATIONS, version)
 
-    assert conversion.plan.packages == ("__init__.py", "api/__init__.py")
+    assert conversion.plan.packages == (
+        "__init__.py",
+        "api/__init__.py",
+        "api/deep/__init__.py",
+    )
 
 
-def test_the_packages_a_conversion_creates_are_written_empty(version: str, tmp_path: Path) -> None:
+def test_a_package_written_for_the_chain_alone_holds_nothing(version: str) -> None:
     conversion = conversion_of(DECLARATIONS, version)
     created = {edit.path: edit for edit in conversion.edits.changes if edit.kind == "create"}
 
-    assert created["api/__init__.py"].new_text is not None
-    assert "velox.use(api_seed)" in created["api/__init__.py"].new_text
+    assert created["api/deep/__init__.py"].new_text == ""
+    assert "velox.use(api_seed)\n" in (created["api/__init__.py"].new_text or "")
 
 
 # --- what is left out -------------------------------------------------------------------------
@@ -126,6 +131,26 @@ def test_a_usefixtures_only_a_refused_test_asked_for_is_not_declared(version: st
     assert declared_in(conversion, "test_top.py") == ()
 
 
+# --- writing into a file that is already there --------------------------------------------------
+
+
+def test_an_empty_package_the_suite_already_has_is_written_like_any_other_file(
+    version: str, tmp_path: Path
+) -> None:
+    # An `__init__.py` a suite keeps for packaging is the common way a declaration's container is
+    # already there, and a file ending without a newline is not what any of this writes.
+    tree = tmp_path / DECLARATIONS
+    shutil.copytree(CORPUS / DECLARATIONS, tree)
+    (tree / "api" / "__init__.py").write_text("", encoding="utf-8")
+
+    ground_truth = model.load(DUMPS / f"{DECLARATIONS}-pytest-{version}.json")
+    convert.run(audit.run(ground_truth, root=tree), ground_truth, root=tree).edits.apply(tree)
+
+    assert (
+        (tree / "api" / "__init__.py").read_text(encoding="utf-8").endswith("velox.use(api_seed)\n")
+    )
+
+
 # --- the writer -------------------------------------------------------------------------------
 
 
@@ -138,6 +163,14 @@ def test_a_declaration_lands_after_the_imports() -> None:
         '"""Doc."""\n\nimport velox\nfrom fixtures import db\n\nvelox.use(db)\n\n\n'
         "def test_x():\n    pass\n"
     )
+
+
+def test_a_module_with_nothing_to_follow_keeps_its_docstring_first() -> None:
+    module = cst.parse_module('"""Doc."""\n')
+
+    written = declarations.apply(module, ["db"])
+
+    assert written.code == '"""Doc."""\n\nvelox.use(db)\n'
 
 
 def test_a_declaration_naming_the_modules_own_fixture_lands_after_it() -> None:

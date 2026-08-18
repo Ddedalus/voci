@@ -176,16 +176,15 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
     }
     items = _items_by_qualname(ground_truth, blocked_tests)
-    placed = declarations.plan(ground_truth, available=converting, blocked=blocked_tests)
-    _read_containers(placed, sources, root)
+    symbols = {
+        (file, argname): symbol
+        for file, found in declared.items()
+        for argname, symbol in found.items()
+    }
     plan_layout = layout.plan(
         converting,
-        symbols={
-            (file, argname): symbol
-            for file, found in declared.items()
-            for argname, symbol in found.items()
-        },
-        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, placed),
+        symbols=symbols,
+        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, ()),
         source_of=sources.get,
     )
 
@@ -199,7 +198,19 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
         }
         items = _items_by_qualname(ground_truth, blocked_tests)
-        placed = declarations.plan(ground_truth, available=converting, blocked=blocked_tests)
+
+    # Declarations are placed once every refusal is settled, since a refused test is one nothing is
+    # declared for — and then the layout is planned again, because a declaring module names the
+    # fixtures it declares and so needs their imports like any other consumer. Placing fixtures is
+    # not affected: what a second pass adds is imports.
+    placed = declarations.plan(ground_truth, available=converting, blocked=blocked_tests)
+    _read_containers(placed, sources, root)
+    plan_layout = layout.plan(
+        converting,
+        symbols=symbols,
+        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, placed),
+        source_of=sources.get,
+    )
 
     return Plan(
         layout=plan_layout,

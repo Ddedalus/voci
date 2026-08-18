@@ -93,9 +93,9 @@ def run(
         except cst.ParserSyntaxError:
             unreadable.append(path)
             continue
-        if source is None:
-            # A file parsed from nothing ends without a newline, and every file this writes from
-            # nothing is one nobody has written a line of yet.
+        if not source:
+            # A module parsed from nothing ends without a newline, whether the file was missing or
+            # empty, and a file this writes a declaration into ends like any other.
             module = module.with_changes(has_trailing_newline=True)
 
         module, produced, backed_out = _rewrite(module, work, active)

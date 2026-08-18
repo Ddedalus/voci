@@ -744,6 +744,50 @@
  },
  "items": [
   {
+   "nodeid": "api/deep/test_deep.py::test_a_declaration_two_directories_up_still_reaches_here",
+   "path": "api/deep/test_deep.py",
+   "lineno": 8,
+   "originalname": "test_a_declaration_two_directories_up_still_reaches_here",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [
+    "audited",
+    "root_stamp",
+    "api_seed"
+   ],
+   "argnames": [
+    "ledger"
+   ],
+   "initialnames": [
+    "audited",
+    "root_stamp",
+    "api_seed",
+    "ledger"
+   ],
+   "names_closure": [
+    "audited",
+    "root_stamp",
+    "api_seed",
+    "ledger"
+   ],
+   "name2fixturedefs": {
+    "audited": [
+     "f1"
+    ],
+    "root_stamp": [
+     "f20"
+    ],
+    "api_seed": [
+     "f0"
+    ],
+    "ledger": [
+     "f13"
+    ]
+   }
+  },
+  {
    "nodeid": "api/test_api.py::test_both_directories_declarations_reach_this_test",
    "path": "api/test_api.py",
    "lineno": 9,
