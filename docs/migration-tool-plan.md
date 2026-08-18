@@ -366,6 +366,33 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     through `literal_eval`, since a dump records `repr(obj)` and that is not always source. Both
     codes sit in `plan.DEFERRED` without being named in Phase 3's headline; if they wait, Phase 3
     closes at Chunk 3 and this becomes a Phase 4 item.
+
+  Chunks 1 and 2 are built as one pass, since the general case subsumes the fan-out gate and a
+  finding-level seam bought nothing once the copies existed. The subject is a fifth corpus suite
+  whose ten tests convert with nothing refused, pass under `velox --serial` and keep every node
+  id, with `--budget 2` turning its three-fixture chain into a refusal quoting the fan-out the
+  audit computed. Five things that build settled:
+  - **A copy is a re-binding, not a rewrite.** The duplicated `def` is spliced into its new module
+    in the pytest spelling it was written in, before a single rule runs, so the ordinary
+    conversion translates it exactly as it translates the definitions already there. Nothing in
+    the specialization pass reads a fixture body, and there is one code path for a fixture a
+    person wrote and one the tool wrote.
+  - **A `Depends()` is read where its `def` is, so placement is ordering.** A copy goes below
+    everything it names and above everything that names it, which lands the chain between the
+    override it specializes and the fixtures written beside that override which consume it.
+  - **A fixture's edges resolve from where its object is written, not from whichever test reached
+    it first.** Once overrides convert, asking any test how `engine` resolves `settings` can
+    answer with the override — which wires the root object to a subtree's definition and leaves
+    the two fixture modules importing each other. The chain carries every definition; the node
+    doing the asking picks one.
+  - **A fixture written at or below the override is wired to it, not copied for it.** Every test
+    that can see such a fixture already resolves the override, so a copy would be a second object
+    nothing names, and counting it would spend budget on a duplicate that never gets written.
+  - **An autouse fixture anywhere in the chain has no honest translation.** A `velox.use(...)`
+    names one object for a directory, so two definitions of an autouse name would both be
+    declared over tests that had exactly one. `VX027` refuses the overriding definition and only
+    that one: what the subtree loses is a conversion, and what the rest of the suite keeps is the
+    definition it overrode, declared for the tests that converge on it.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*

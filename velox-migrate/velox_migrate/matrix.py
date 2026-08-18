@@ -337,6 +337,15 @@ CONSTRUCTS: tuple[Construct, ...] = (
         target="the param argument",
     ),
     _row(
+        "VX027",
+        "conftest override reaching an autouse fixture",
+        REFUSED,
+        "A specialized chain gives the subtree its own objects, and a `velox.use(...)` declares "
+        "one of them for a directory — so an autouse fixture the override changes would be "
+        "declared twice over the same tests, once for each definition.",
+        action="Request the fixture by name where it is needed, or unwind the override.",
+    ),
+    _row(
         "VX030",
         "a fixture an installed plugin provides",
         UNSUPPORTED,

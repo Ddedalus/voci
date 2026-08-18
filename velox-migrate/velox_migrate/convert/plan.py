@@ -21,10 +21,11 @@ from pathlib import Path
 from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
-from velox_migrate.convert import declarations, layout
+from velox_migrate.convert import declarations, layout, specialize
 from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
 from velox_migrate.convert.rules import Context
+from velox_migrate.convert.specialize import Specialization
 from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
 
 # Codes a later phase of the tool converts. Until then they behave exactly as a refusal: the
@@ -33,7 +34,6 @@ from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
 # here rather than in the matrix.
 DEFERRED: frozenset[str] = frozenset(
     {
-        "VX005",  # specialized override chains
         "VX007",  # indirect parametrization
         "VX011",  # getfixturevalue with a literal name
         "VX013",  # addfinalizer
@@ -103,6 +103,19 @@ class FixtureWork:
 
 
 @dataclass(frozen=True, slots=True)
+class Duplicate:
+    """One fixture's source, re-bound for the subtree an override rules, to write into a module.
+
+    `after` are the names this copy references, which is what decides where it goes: a `Depends()`
+    is read when the `def` under it is, so a copy is written below everything it names.
+    """
+
+    symbol: str
+    code: str
+    after: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class TestWork:
     """One collected test to translate, named as it is written in its module."""
 
@@ -119,6 +132,9 @@ class FileWork:
     qualname it belongs above and empty for one about the module itself. `declares` are the
     fixtures this file names in a `velox.use(...)`, as the expressions naming them here, and a
     file with declarations and nothing else is one the conversion writes from nothing.
+    `duplicates` are specialized copies appended to the target before anything else runs, so the
+    rewrite translates them exactly as it translates the definitions already written there, and
+    `needs` are the modules those copies read plainly.
     """
 
     path: str
@@ -128,6 +144,8 @@ class FileWork:
     imports: tuple[Import, ...] = ()
     marks: tuple[tuple[str, str], ...] = ()
     declares: tuple[str, ...] = ()
+    duplicates: tuple[Duplicate, ...] = ()
+    needs: tuple[str, ...] = ()
     context: Context = field(default_factory=lambda: Context(path=""))
 
     @property
@@ -152,6 +170,7 @@ class Plan:
     markers: tuple[Finding, ...]
     declarations: tuple[Declaration, ...] = ()
     packages: tuple[str, ...] = ()
+    specialized: Specialization = specialize.NONE
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -169,7 +188,8 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
 
     translatable = _translatable(ground_truth)
     refusals, markers = _sorted_findings(audit)
-    blocked_fixtures = _blocked_fixtures(ground_truth, translatable, refusals, declared)
+    overrides = audit_wiring.overrides(ground_truth)
+    blocked_fixtures = _blocked_fixtures(ground_truth, translatable, refusals, declared, overrides)
     blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures)
 
     converting = {
@@ -184,7 +204,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     plan_layout = layout.plan(
         converting,
         symbols=symbols,
-        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, ()),
+        consumers=_consumers(ground_truth, converting, items, (), specialize.NONE),
         source_of=sources.get,
     )
 
@@ -199,6 +219,20 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         }
         items = _items_by_qualname(ground_truth, blocked_tests)
 
+    # Specialization comes after every refusal is settled, since a chain is only worth copying
+    # where every fixture in it converts, and before the layout, which places the copies.
+    special = specialize.plan(
+        ground_truth,
+        overrides,
+        converting=converting,
+        symbols=symbols,
+        source_of=sources.get,
+        taken={
+            layout.home_module(file): layout.module_level_names(text)
+            for file, text in sources.items()
+        },
+    )
+
     # Declarations are placed once every refusal is settled, since a refused test is one nothing is
     # declared for — and then the layout is planned again, because a declaring module names the
     # fixtures it declares and so needs their imports like any other consumer. Placing fixtures is
@@ -208,8 +242,9 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     plan_layout = layout.plan(
         converting,
         symbols=symbols,
-        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, placed),
+        consumers=_consumers(ground_truth, converting, items, placed, special),
         source_of=sources.get,
+        placed=special.homes,
     )
 
     return Plan(
@@ -224,6 +259,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             refusals=refusals,
             markers=markers,
             placed=placed,
+            special=special,
         ),
         blocked_tests=blocked_tests,
         blocked_fixtures=frozenset(blocked_fixtures),
@@ -231,6 +267,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         markers=markers,
         declarations=placed,
         packages=declarations.packages(ground_truth, placed, blocked=blocked_tests),
+        specialized=special,
     )
 
 
@@ -367,15 +404,17 @@ def _blocked_fixtures(
     translatable: Mapping[str, FixtureDef],
     refusals: tuple[Finding, ...],
     declared: Mapping[str, Mapping[str, str]],
+    overrides: Sequence[audit_wiring.Override],
 ) -> set[str]:
     """Every fixture this conversion leaves as pytest wrote it.
 
-    Three reasons, and the third is why this is a fixpoint: a refusal landed inside its factory;
-    nothing in the suite binds an object to import for it; or something it depends on is already
-    blocked, which makes a correct `Depends()` impossible to write.
+    Four reasons, and the last is why this is a fixpoint: a refusal landed inside its factory;
+    its chain runs an autouse fixture, which makes both definitions of the overridden name
+    undeclarable; nothing in the suite binds an object to import for it; or something it depends
+    on is already blocked, which makes a correct `Depends()` impossible to write.
     """
     by_site = _fixtures_by_site(ground_truth)
-    blocked: set[str] = set()
+    blocked: set[str] = _undeclarable(overrides)
 
     for finding in refusals:
         site = finding.site
@@ -397,6 +436,17 @@ def _blocked_fixtures(
             blocked.add(key)
 
     return _propagate(ground_truth, translatable, blocked)
+
+
+def _undeclarable(overrides: Sequence[audit_wiring.Override]) -> set[str]:
+    """The overriding definitions whose subtree a declaration cannot be written for.
+
+    A `velox.use(...)` names one object for a directory, so an autouse fixture that an override
+    changes would be declared once for each definition over tests that had exactly one. Leaving
+    the override alone refuses the subtree it rules and nothing else: the definition it overrode
+    is then what every converting test resolves, and is declared for them as any other is.
+    """
+    return {override.winner.key for override in overrides if override.autouse}
 
 
 def _at_site(by_site: Mapping[tuple[str, str], frozenset[str]], site: Site) -> frozenset[str]:
@@ -505,8 +555,8 @@ def _consumers(
     ground_truth: GroundTruth,
     converting: Mapping[str, FixtureDef],
     items: Mapping[tuple[str, str], tuple[Item, ...]],
-    blocked_fixtures: set[str],
     placed: Sequence[Declaration],
+    special: Specialization,
 ) -> dict[str, set[str]]:
     """Per file, every fixture key the code in it will name — in a `Depends()` or a declaration."""
     consumers: dict[str, set[str]] = {}
@@ -518,30 +568,25 @@ def _consumers(
         for name in item.argnames:
             resolved = item.resolve(name)
             if resolved is not None and resolved.key in converting:
-                wanted.add(resolved.key)
+                wanted.add(special.redirect(path, resolved.key))
 
-    for key, fixture in converting.items():
+    for fixture in converting.values():
         source = layout.owning_file(fixture)
         if source is None:
             continue
-        wanted = consumers.setdefault(layout.home_module(source), set())
-        for edge in _edges_of(ground_truth, key, blocked_fixtures):
-            if edge in converting:
-                wanted.add(edge)
+        module = layout.home_module(source)
+        wanted = consumers.setdefault(module, set())
+        for edge in _resolved_at(ground_truth, fixture, fixture.visibility).values():
+            if edge is not None and edge.key in converting:
+                wanted.add(special.redirect(module, edge.key))
+
+    for copy in special.copies.values():
+        wanted = consumers.setdefault(copy.module, set())
+        origin = ground_truth.fixture_defs[copy.origin]
+        for edge in _resolved_at(ground_truth, origin, copy.node).values():
+            if edge is not None and edge.key in converting:
+                wanted.add(special.redirect(copy.module, edge.key))
     return consumers
-
-
-def _edges_of(ground_truth: GroundTruth, key: str, blocked_fixtures: set[str]) -> frozenset[str]:
-    """The fixture keys `key` depends on, as every test that reaches it resolves them."""
-    found: set[str] = set()
-    for item in ground_truth.items:
-        fixture = next((f for f in item.walk() if f.key == key), None)
-        if fixture is None:
-            continue
-        for edge in item.dependencies(fixture):
-            if edge.fixture is not None and edge.fixture.key not in blocked_fixtures:
-                found.add(edge.fixture.key)
-    return frozenset(found)
 
 
 def _work(
@@ -555,6 +600,7 @@ def _work(
     refusals: tuple[Finding, ...],
     markers: tuple[Finding, ...],
     placed: Sequence[Declaration],
+    special: Specialization,
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
@@ -568,17 +614,46 @@ def _work(
                 argname=fixture.argname,
                 symbol=home.symbol,
                 scope=SCOPES.get(fixture.scope, "function"),
-                injections=_injections(ground_truth, plan_layout, key, home.module, converting),
+                injections=_injections(
+                    ground_truth, plan_layout, key, home.module, converting, special
+                ),
                 parametrized=fixture.is_parametrized,
             )
         )
+
+    duplicates: dict[str, list[Duplicate]] = {}
+    carried: dict[str, list[Import]] = {}
+    needs: dict[str, set[str]] = {}
+    for copy in sorted(special.copies.values(), key=lambda copy: (copy.module, copy.symbol)):
+        injections = _injections(
+            ground_truth, plan_layout, copy.origin, copy.module, converting, special, node=copy.node
+        )
+        fixtures_by_file.setdefault(copy.host, []).append(
+            FixtureWork(
+                key=copy.key,
+                argname=copy.symbol,
+                symbol=copy.symbol,
+                scope=SCOPES.get(copy.scope, "function"),
+                injections=injections,
+                parametrized=copy.parametrized,
+            )
+        )
+        duplicates.setdefault(copy.host, []).append(
+            Duplicate(
+                symbol=copy.symbol,
+                code=copy.code,
+                after=tuple(injection.reference for injection in injections),
+            )
+        )
+        carried.setdefault(copy.host, []).extend(copy.imports)
+        needs.setdefault(copy.host, set()).update(copy.needs)
 
     tests_by_file: dict[str, list[TestWork]] = {}
     for (path, qualname), cases in sorted(items.items()):
         tests_by_file.setdefault(path, []).append(
             TestWork(
                 qualname=qualname,
-                injections=_test_injections(cases[0], plan_layout, path, converting),
+                injections=_test_injections(cases[0], plan_layout, path, converting, special),
             )
         )
 
@@ -597,12 +672,39 @@ def _work(
             target=target,
             fixtures=tuple(fixtures_by_file.get(path, ())),
             tests=tuple(tests_by_file.get(path, ())),
-            imports=plan_layout.imports_for(target),
+            imports=_imports_for(plan_layout, target, carried.get(path, ())),
             marks=tuple(sorted(marks.get(path, set()))),
             declares=declares.get(path, ()),
+            duplicates=_ordered(duplicates.get(path, ())),
+            needs=tuple(sorted(needs.get(path, set()))),
             context=_context(ground_truth, path, items, blocked_tests),
         )
     return work
+
+
+def _ordered(duplicates: Sequence[Duplicate]) -> tuple[Duplicate, ...]:
+    """`duplicates` with each copy behind the copies it names, which is the order they go in.
+
+    A copy of a chain names the copy of the fixture below it, so writing them in the order the
+    fixture graph keyed them would leave a `Depends()` reading a name nothing has bound.
+    """
+    remaining = list(duplicates)
+    written: list[Duplicate] = []
+    placed: set[str] = set()
+    while remaining:
+        pending = {copy.symbol for copy in remaining}
+        ready = [copy for copy in remaining if not (pending & set(copy.after)) - placed]
+        # A fixture graph is acyclic, so this only guards against writing nothing forever.
+        ready = ready or remaining[:1]
+        written.extend(ready)
+        placed |= {copy.symbol for copy in ready}
+        remaining = [copy for copy in remaining if copy not in ready]
+    return tuple(written)
+
+
+def _imports_for(plan_layout: Layout, target: str, carried: Sequence[Import]) -> tuple[Import, ...]:
+    """The imports `target` needs, the wiring's own and the ones a copied body reads."""
+    return tuple(dict.fromkeys([*plan_layout.imports_for(target), *carried]))
 
 
 def _references(plan_layout: Layout, declaration: Declaration) -> tuple[str, ...]:
@@ -617,25 +719,81 @@ def _references(plan_layout: Layout, declaration: Declaration) -> tuple[str, ...
     return tuple(found)
 
 
+def _resolved_at(
+    ground_truth: GroundTruth, fixture: FixtureDef, node: str
+) -> Mapping[str, FixtureDef | None]:
+    """The definition each parameter of `fixture`'s factory resolves to, asked from `node`.
+
+    Resolution is per test in pytest, and an object is per node here: the copy of a fixture placed
+    in an overriding directory reaches that directory's definitions, and the original reaches the
+    ones visible where it is written. Asking the dump's chains from a node is what turns the one
+    into the other, since a chain carries every definition of the name and nothing else decides
+    which of them a consumer at a given depth gets.
+    """
+    chains = _chains_reaching(ground_truth, fixture.key, node)
+    resolved: dict[str, FixtureDef | None] = {}
+    for name in fixture.argnames:
+        if name == REQUEST:
+            continue
+        chain = chains.get(name, ())
+        if name == fixture.argname:
+            # A fixture requesting its own name is asking for the definition it overrides.
+            position = next((i for i, f in enumerate(chain) if f.key == fixture.key), 0)
+            resolved[name] = chain[position - 1] if position else None
+        else:
+            resolved[name] = _visible_at(chain, node)
+    return resolved
+
+
+def _chains_reaching(
+    ground_truth: GroundTruth, key: str, node: str
+) -> Mapping[str, tuple[FixtureDef, ...]]:
+    """The fixture chains of a test under `node` that reaches `key`, or of any test that does.
+
+    A test outside the subtree has a shorter chain for an overridden name — it never saw the
+    override — so a copy asks a test that did.
+    """
+    fallback: Mapping[str, tuple[FixtureDef, ...]] = {}
+    for item in ground_truth.items:
+        if not any(fixture.key == key for fixture in item.walk()):
+            continue
+        if audit_wiring.under(node, item.nodeid):
+            return item.chains
+        fallback = fallback or item.chains
+    return fallback
+
+
+def _visible_at(chain: Sequence[FixtureDef], node: str) -> FixtureDef | None:
+    """The definition in `chain` that a consumer written at `node` gets: the nearest above it."""
+    found = [
+        fixture
+        for fixture in chain
+        if fixture.visibility in ("", ".") or audit_wiring.under(fixture.visibility, node)
+    ]
+    return found[-1] if found else None
+
+
 def _injections(
     ground_truth: GroundTruth,
     plan_layout: Layout,
     key: str,
     consumer: str,
     converting: Mapping[str, FixtureDef],
+    special: Specialization,
+    *,
+    node: str | None = None,
 ) -> tuple[Injection, ...]:
-    """What each parameter of the fixture `key`'s factory becomes."""
+    """What each parameter of the fixture `key`'s factory becomes, seen from `node`."""
     fixture = ground_truth.fixture_defs[key]
-    resolved: dict[str, FixtureDef | None] = {}
-    for item in ground_truth.items:
-        found = next((f for f in item.walk() if f.key == key), None)
-        if found is None:
-            continue
-        for edge in item.dependencies(found):
-            resolved.setdefault(edge.name, edge.fixture)
-        break
+    resolved = _resolved_at(ground_truth, fixture, node if node is not None else fixture.visibility)
     return _from_names(
-        fixture.argnames, resolved, plan_layout, consumer, converting, fixture.is_parametrized
+        fixture.argnames,
+        resolved,
+        plan_layout,
+        consumer,
+        converting,
+        fixture.is_parametrized,
+        special,
     )
 
 
@@ -644,9 +802,10 @@ def _test_injections(
     plan_layout: Layout,
     consumer: str,
     converting: Mapping[str, FixtureDef],
+    special: Specialization,
 ) -> tuple[Injection, ...]:
     resolved = {name: item.resolve(name) for name in item.argnames}
-    return _from_names(item.argnames, resolved, plan_layout, consumer, converting, False)
+    return _from_names(item.argnames, resolved, plan_layout, consumer, converting, False, special)
 
 
 def _from_names(
@@ -656,6 +815,7 @@ def _from_names(
     consumer: str,
     converting: Mapping[str, FixtureDef],
     parametrized: bool,
+    special: Specialization,
 ) -> tuple[Injection, ...]:
     found: list[Injection] = []
     for name in names:
@@ -667,10 +827,12 @@ def _from_names(
         if fixture is None or fixture.direct_param:
             continue
         if fixture.key in converting:
-            home = plan_layout.home(fixture.key)
+            # Inside the subtree an override rules, the object is that subtree's copy.
+            key = special.redirect(consumer, fixture.key)
+            home = plan_layout.home(key)
             if home is None:
                 continue
-            imported = plan_layout.importing(consumer, fixture.key)
+            imported = plan_layout.importing(consumer, key)
             reference = imported.bound if imported is not None else home.symbol
             found.append(Injection(was=name, param=name, reference=reference))
             continue

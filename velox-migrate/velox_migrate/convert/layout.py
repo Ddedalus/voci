@@ -137,17 +137,20 @@ def plan(
     symbols: Mapping[tuple[str, str], str],
     consumers: Mapping[str, Iterable[str]],
     source_of: Callable[[str], str | None],
+    placed: Mapping[str, Home] = {},
 ) -> Layout:
     """Place `fixtures`, given the symbol each is bound to and who imports it.
 
     `symbols` maps an owning file and a fixture's argname onto the name its factory is written
     under, which only the source can say. `consumers` maps each file onto the fixture keys the
     code in it names. `source_of` reads a file's text, for the names a module already binds and to
-    say whether a `fixtures.py` is already there.
+    say whether a `fixtures.py` is already there. `placed` are fixtures whose module the caller
+    has already settled — a specialized copy is written into the module its override lives in —
+    and they are imported like any other.
 
     A fixture whose module cannot be settled gets no `Home`, and refusing it is the caller's to do.
     """
-    homes: dict[str, Home] = {}
+    homes: dict[str, Home] = dict(placed)
     moves: dict[str, str] = {}
     for key, fixture in sorted(fixtures.items()):
         source = owning_file(fixture)

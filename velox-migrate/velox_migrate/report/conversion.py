@@ -20,6 +20,7 @@ def plan(conversion: Conversion) -> str:
     groups = [
         _counts(conversion),
         _layout(conversion),
+        _specialized(conversion),
         _declared(conversion),
         _translated(conversion),
         _refused(conversion),
@@ -55,6 +56,22 @@ def _layout(conversion: Conversion) -> list[str]:
         if item.alias
     ]
     lines += [f"  {consumer}: {item}" for consumer, item in aliased[:_NAMED]]
+    return lines
+
+
+def _specialized(conversion: Conversion) -> list[str]:
+    """Every fixture an override caused to be written twice, since that is the diff's bulk."""
+    copies = conversion.plan.specialized.copies
+    if not copies:
+        return []
+    by_node: dict[str, list[str]] = {}
+    for copy in copies.values():
+        by_node.setdefault(copy.node, []).append(copy.symbol)
+    lines = [f"specialized chains: {len(copies)} fixture(s) copied for {len(by_node)} override(s)"]
+    for node, symbols in sorted(by_node.items())[:_NAMED]:
+        lines.append(f"  {node}: {', '.join(sorted(symbols))}")
+    if len(by_node) > _NAMED:
+        lines.append(f"  …and {len(by_node) - _NAMED} more")
     return lines
 
 
