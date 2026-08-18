@@ -20,6 +20,7 @@ def plan(conversion: Conversion) -> str:
     groups = [
         _counts(conversion),
         _layout(conversion),
+        _declared(conversion),
         _translated(conversion),
         _refused(conversion),
         _settings(conversion),
@@ -54,6 +55,28 @@ def _layout(conversion: Conversion) -> list[str]:
         if item.alias
     ]
     lines += [f"  {consumer}: {item}" for consumer, item in aliased[:_NAMED]]
+    return lines
+
+
+def _declared(conversion: Conversion) -> list[str]:
+    """Where each `velox.use(...)` goes, since a declaration reaches tests that never name it."""
+    built = conversion.plan
+    if not built.declarations:
+        return []
+    lines = ["declarations:"]
+    for declaration in built.declarations[:_NAMED]:
+        work = built.work.get(declaration.container)
+        names = ", ".join(work.declares if work is not None else ())
+        lines.append(f"  {declaration.container}: velox.use({names})")
+    if len(built.declarations) > _NAMED:
+        lines.append(f"  …and {len(built.declarations) - _NAMED} more")
+    created = [
+        edit.path
+        for edit in conversion.edits.changes
+        if edit.kind == "create" and edit.path in built.packages
+    ]
+    if created:
+        lines.append(f"  packages created: {', '.join(created[:_NAMED])}")
     return lines
 
 

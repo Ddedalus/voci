@@ -30,6 +30,7 @@ PYTEST_VERSIONS = ["8.4", "9.1"]
 STANDALONE = "test_it.py"
 
 MECHANICAL = "mechanical_showcase"
+DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
 HAZARDS = "hazards_showcase"
 
@@ -96,6 +97,37 @@ def test_the_converted_mechanical_suite_passes_under_velox(version: str, tmp_pat
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_the_declarations_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(DECLARATIONS, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_declarations_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for declarations specifically: every fixture these tests get without naming one is
+    # constructed for them, in the order pytest constructed it, through a package chain that was
+    # not there before the conversion wrote it.
+    tree = tmp_path / DECLARATIONS
+    converted(DECLARATIONS, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_declarations_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / DECLARATIONS
+    converted(DECLARATIONS, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / DECLARATIONS)
+
+
 def test_the_converted_suite_keeps_every_pytest_node_id(version: str, tmp_path: Path) -> None:
     # §9's promise, and why `@velox.parametrize` is emitted with pytest's own ids: a CI config, a
     # flaky-test dashboard or a `--last-failed` habit that names an id keeps working.
@@ -146,11 +178,14 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-def test_converting_an_already_converted_tree_changes_nothing(version: str, tmp_path: Path) -> None:
-    tree = tmp_path / MECHANICAL
-    converted(MECHANICAL, version, tree)
+@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS])
+def test_converting_an_already_converted_tree_changes_nothing(
+    suite: str, version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / suite
+    converted(suite, version, tree)
 
-    again = conversion_of(MECHANICAL, version, root=tree)
+    again = conversion_of(suite, version, root=tree)
 
     assert again.edits.diff() == ""
 
@@ -173,7 +208,10 @@ def test_a_partial_conversion_is_idempotent_too(suite: str, version: str, tmp_pa
 def test_a_conftest_fixture_moves_to_the_fixtures_module_beside_it(version: str) -> None:
     result = conversion_of(FIXTURES, version)
 
-    assert result.plan.layout.moves == {"conftest.py": "fixtures.py"}
+    assert result.plan.layout.moves == {
+        "conftest.py": "fixtures.py",
+        "integration/conftest.py": "integration/fixtures.py",
+    }
 
 
 def test_a_fixture_written_under_a_decorator_is_placed_by_the_conftest_that_owns_it(
@@ -260,11 +298,15 @@ def test_an_override_refuses_the_fixtures_downstream_of_it(version: str) -> None
     assert {"settings", "engine"} <= blocked
 
 
-def test_an_autouse_fixture_refuses_every_test_it_covers(version: str) -> None:
+def test_a_refusal_travels_to_the_tests_that_reach_it(version: str) -> None:
+    # The override chain refuses `settings` and `engine`, and with them every test resolving one:
+    # both of `integration/`'s, and the three cases of the test parametrizing through `settings`.
     result = conversion_of(FIXTURES, version)
-    ground_truth = model.load(DUMPS / f"{FIXTURES}-pytest-{version}.json")
 
-    assert len(result.plan.blocked_tests) == len(ground_truth.items)
+    assert {test for test in result.plan.blocked_tests if test.startswith("integration/")} == {
+        "integration/test_integration.py::test_engine",
+        "integration/test_integration.py::test_settings",
+    }
 
 
 def test_a_refused_test_keeps_its_pytest_signature(version: str, tmp_path: Path) -> None:

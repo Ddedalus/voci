@@ -100,6 +100,41 @@ def test_disabling_nothing_is_the_whole_set() -> None:
     assert rules.enabled(()) == rules.RULES
 
 
+# --- VX009 usefixtures -------------------------------------------------------------------------
+
+
+def test_a_usefixtures_mark_goes_away() -> None:
+    # The fixture it named is declared with `velox.use(...)` on the module, which is placed from
+    # the dump rather than from this mark -- all the rule has to do is take the mark away.
+    before = """import pytest
+
+
+@pytest.mark.usefixtures("engine")
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX009", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX009"]
+
+
+def test_a_usefixtures_mark_on_a_refused_test_stays_with_it() -> None:
+    source = """import pytest
+
+
+@pytest.mark.usefixtures("engine")
+def test_x():
+    pass
+"""
+    assert _untouched("VX009", source, _context("test_x", blocked=["test_x"])) == ()
+
+
 # --- VX101 parametrize -------------------------------------------------------------------------
 
 
@@ -857,7 +892,7 @@ def test_x():
 def test_a_pytestmark_holding_one_mark_no_rule_writes_stays_whole() -> None:
     source = """import pytest
 
-pytestmark = [pytest.mark.slow, pytest.mark.usefixtures("engine")]
+pytestmark = [pytest.mark.slow, pytest.mark.filterwarnings("error")]
 
 
 def test_x():
@@ -865,7 +900,7 @@ def test_x():
 """
     applied = _untouched("VX115", source, _context("test_x"))
 
-    assert _codes(applied) == ["VX009"]
+    assert _codes(applied) == ["VX108"]
 
 
 def test_a_pytestmark_reaching_no_converted_test_stays_where_it_is() -> None:

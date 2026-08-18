@@ -9,8 +9,9 @@ The order per file is fixed and matters. Each enabled rule goes first, in code o
 matching only a pytest source form its own rewrite eliminates — and each reading the parameter
 names the suite wrote, which is why they run before the swap rather than after it: a body saying
 `capsys.readouterr()` is recognized by the `capsys` its enclosing signature still declares. Then
-the wiring swap, which owns signatures, fixture decorators and imports; then the markers, which
-are comments and disturb nothing.
+the wiring swap, which owns signatures, fixture decorators and imports; then the `velox.use(...)`
+declarations, which name what the swap has just imported; then the markers, which are comments and
+disturb nothing.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import libcst as cst
 
 from velox_migrate import matrix
 from velox_migrate.audit import Audit
-from velox_migrate.convert import config, markers, plan, rules, wiring
+from velox_migrate.convert import config, declarations, markers, plan, rules, wiring
 from velox_migrate.convert.edits import Edit, EditSet
 from velox_migrate.convert.plan import DEFERRED, FileWork, Plan
 from velox_migrate.model import GroundTruth
@@ -59,6 +60,11 @@ class Conversion:
     def marked(self) -> int:
         return sum(len(work.marks) for work in self.plan.work.values())
 
+    @property
+    def declared(self) -> int:
+        """How many fixtures the conversion declares with `velox.use(...)`."""
+        return sum(len(work.declares) for work in self.plan.work.values())
+
 
 def run(
     audit: Audit,
@@ -79,20 +85,30 @@ def run(
     for path in built.files:
         work = built.work[path]
         source = _read(root, path)
-        if source is None:
+        if source is None and not work.declares:
             unreadable.append(path)
             continue
         try:
-            module = cst.parse_module(source)
+            module = cst.parse_module(source or "")
         except cst.ParserSyntaxError:
             unreadable.append(path)
             continue
+        if source is None:
+            # A file parsed from nothing ends without a newline, and every file this writes from
+            # nothing is one nobody has written a line of yet.
+            module = module.with_changes(has_trailing_newline=True)
 
         module, produced, backed_out = _rewrite(module, work, active)
         applied.extend(produced)
         refused.extend((path, symbol, code) for symbol, code in backed_out)
         file_edits.append(_edit(root, work, module.code, source))
 
+    written = {edit.path for edit in file_edits}
+    file_edits.extend(
+        Edit(path=path, new_text="", old_text=None)
+        for path in built.packages
+        if path not in written and _read(root, path) is None
+    )
     settings = config.translate(ground_truth, root=root)
     written = config.edit(settings, root=root)
     if written is not None:
@@ -122,10 +138,14 @@ def _rewrite(
         module,
         work,
         needs={needed for record in applied for needed in record.needs},
-        touched=bool(applied),
+        touched=bool(applied) or bool(work.declares),
     )
     module = swapped.module
 
+    if work.declares:
+        # After the swap, which is what puts the imports the declaration names in the module, and
+        # what turns the file's own autouse fixtures into the objects it declares.
+        module = declarations.apply(module, work.declares)
     if work.fixtures or work.tests:
         module = wiring.tidy(module)
     module = markers.mark(module, _wanted(work, applied, swapped.refused))
@@ -149,7 +169,7 @@ def _wanted(
     return wanted
 
 
-def _edit(root: Path, work: FileWork, new_text: str, source: str) -> Edit:
+def _edit(root: Path, work: FileWork, new_text: str, source: str | None) -> Edit:
     if not work.moved:
         return Edit(path=work.path, new_text=new_text, old_text=source)
     return Edit(
