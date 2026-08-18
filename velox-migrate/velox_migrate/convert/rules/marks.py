@@ -46,7 +46,7 @@ _DROPPED = frozenset({"asyncio", "anyio"})
 _SCALARS = frozenset({"skip", "xfail", "timeout"})
 
 # Marks another area of the matrix owns, keyed to the row that answers for them.
-_ELSEWHERE: dict[str, str] = {"usefixtures": "VX009", "filterwarnings": "VX108"}
+_ELSEWHERE: dict[str, str] = {"filterwarnings": "VX108"}
 
 # The names pytest puts in scope when it evaluates a string condition, beyond the module's own.
 _CONDITION_NAMES = frozenset({"os", "sys", "platform"})
@@ -118,6 +118,15 @@ class _MarkPass(RuleTransformer):
                 owner="VX110",
                 code="VX110",
                 message=f"`{render(mark.node)}` goes away: velox runs `async def` tests itself.",
+            )
+        if mark.name == "usefixtures":
+            return _Translated(
+                owner="VX009",
+                code="VX009",
+                message=(
+                    f"`{render(mark.node)}` goes away: a `velox.use(...)` declaration on the "
+                    "module gives the same tests the same fixtures."
+                ),
             )
         if mark.name in matrix.PLUGIN_MARKS:
             distribution = matrix.PLUGIN_MARKS[mark.name]
@@ -679,10 +688,8 @@ class _CustomMark(_MarkPass):
         return self.rewrite(original_node, updated_node)
 
 
-class _AsyncMark(_MarkPass):
-    """VX110: `@pytest.mark.asyncio` and `@pytest.mark.anyio`, which go away."""
-
-    CODE = "VX110"
+class _DroppedMark(_MarkPass):
+    """A mark with no velox decorator to become: the rewrite is removing it."""
 
     def leave_FunctionDef(
         self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
@@ -703,6 +710,23 @@ class _AsyncMark(_MarkPass):
         result = self.drop(original_node, updated_node, dropped)
         assert isinstance(result, cst.FunctionDef)
         return result
+
+
+class _UseFixtures(_DroppedMark):
+    """VX009: `@pytest.mark.usefixtures`, which a `velox.use(...)` declaration replaces.
+
+    A wiring row rather than a mark one, and here anyway: the construct is a mark wherever it is
+    written, and the declaration that answers for it is placed by `convert.declarations`, which
+    reads the dump rather than the source. This rule only takes the mark away.
+    """
+
+    CODE = "VX009"
+
+
+class _AsyncMark(_DroppedMark):
+    """VX110: `@pytest.mark.asyncio` and `@pytest.mark.anyio`, which go away."""
+
+    CODE = "VX110"
 
 
 class _Timeout(_MarkPass):
@@ -1067,6 +1091,7 @@ def _is_nonpositive(node: cst.BaseExpression) -> bool:
 
 
 RULES: tuple[TransformerRule, ...] = (
+    rule(_UseFixtures),
     rule(_Parametrize),
     rule(_StringSkipIf),
     rule(_Skips),

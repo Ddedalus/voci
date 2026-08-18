@@ -39,7 +39,7 @@ velox-migrate/                    # workspace member; dist "velox-migrate", impo
     model.py                      # fixture graph + item model built from the dump
     matrix.py                     # the support matrix: every pytest construct → classification
     audit/                        # LibCST static scanners: §6 hazards, request.* uses, §5 traps
-    convert/                      # the codegen: plan, layout, wiring swap, markers, edits, config
+    convert/                      # the codegen: plan, layout, wiring, declarations, markers, edits
       rules/                      # VX001… LibCST codemod rules (the §5 mechanical layer)
     prefactor/                    # pytest→pytest codemod rules (run while the suite is green)
     specialize.py                 # §4.2 chain generation + fan-out budget
@@ -197,7 +197,9 @@ name collisions stay rare because the directory keyed them apart in pytest too. 
 rootdir-relative absolute — never relative — because test modules load under synthetic
 `velox_tests.*` names. `velox.use` placement comes straight from the dump's autouse map: a
 visibility node of `integration` becomes a declaration in `integration/__init__.py`, created if
-absent, importing from the sibling `fixtures.py`.
+absent, importing from the sibling `fixtures.py` — along with an `__init__.py` in every directory
+between it and each test it covers, since velox reads a package declaration by walking up from the
+test file and stops at the first directory that is not a package.
 
 ## 8. Codegen platform and discipline
 
@@ -302,7 +304,28 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
 - **Phase 3 — the hard §4 machinery.** Specialization within budget, autouse placement, request
   elimination, `mock.patch` handling (decorator reorder + `@velox.solo` at context-manager
   sites). *Exit: corpus suites with overrides and autouse pass; over-budget cases refuse with
-  correct fan-out numbers.*
+  correct fan-out numbers.* Declaration placement — autouse fixtures and `usefixtures`, `VX008`
+  through `VX010` — is built, against a fourth corpus suite whose tests convert with nothing
+  refused, pass under `velox --serial` and keep every node id. Five things that build settled:
+  - **Autouse and `usefixtures` are one construct in two spellings, and the dump says so.** Both
+    ask for a fixture the test never names, and pytest keys both by the node they became visible
+    at, so both are answered by placing one `velox.use(...)` on the module or the package that
+    node stands for. The mark rule that takes `@pytest.mark.usefixtures` away writes nothing in
+    its place; where the declaration goes is read from the dump, not from the mark.
+  - **The ini file's `usefixtures` needs no case of its own.** pytest registers it at the session
+    node, which the extractor already folds into the rootdir, and the fixture it names is autouse
+    nowhere — so resolving a node's names against the tests that node covers, rather than against
+    the table of autouse definitions, answers it and the plugin-registered fixture together.
+  - **A declaration is code, so it obeys import order.** It goes after the imports, where a reader
+    looks for what a module pulls in — except in a module declaring a fixture written in its own
+    body, where a `velox.use` above the `def` would read a name nothing has bound yet.
+  - **The package chain is part of the placement.** velox reads a package's declarations by
+    walking up from the test file, so an `__init__.py` missing anywhere between a declaring
+    directory and a test under it is a declaration that silently reaches nothing. The conversion
+    writes the empty ones as well as the declaring ones.
+  - **A declaration a refused test asked for is not written.** That test keeps the mark it was
+    written with and is reported as refused, and declaring on its behalf would widen a fixture
+    onto the module's other tests for nobody's benefit.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*

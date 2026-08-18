@@ -20,6 +20,7 @@ def plan(conversion: Conversion) -> str:
     groups = [
         _counts(conversion),
         _layout(conversion),
+        _declared(conversion),
         _translated(conversion),
         _refused(conversion),
         _settings(conversion),
@@ -57,6 +58,28 @@ def _layout(conversion: Conversion) -> list[str]:
     return lines
 
 
+def _declared(conversion: Conversion) -> list[str]:
+    """Where each `velox.use(...)` goes, since a declaration reaches tests that never name it."""
+    built = conversion.plan
+    if not built.declarations:
+        return []
+    lines = ["declarations:"]
+    for declaration in built.declarations[:_NAMED]:
+        work = built.work.get(declaration.container)
+        names = ", ".join(work.declares if work is not None else ())
+        lines.append(f"  {declaration.container}: velox.use({names})")
+    if len(built.declarations) > _NAMED:
+        lines.append(f"  …and {len(built.declarations) - _NAMED} more")
+    created = [
+        edit.path
+        for edit in conversion.edits.changes
+        if edit.kind == "create" and edit.path in built.packages
+    ]
+    if created:
+        lines.append(f"  packages created: {', '.join(created[:_NAMED])}")
+    return lines
+
+
 def _translated(conversion: Conversion) -> list[str]:
     counted = _tally(record.code for record in conversion.applied)
     if not counted:
@@ -90,8 +113,11 @@ def _settings(conversion: Conversion) -> list[str]:
     if settings.conflict:
         return [f"[tool.velox]: left alone — {settings.conflict}"]
     lines += [f"  {key} = {value}" for key, value in settings.settings.items()]
+    # Named for what this section can answer for, which is the table: a setting outside it is not
+    # necessarily a setting the migration loses — `usefixtures` becomes a declaration and
+    # `xfail_strict` is written into each `@velox.xfail`, both of which the sections above show.
     if settings.dropped:
-        lines.append(f"  dropped: {', '.join(settings.dropped)}")
+        lines.append(f"  not carried here: {', '.join(settings.dropped)}")
     return lines
 
 

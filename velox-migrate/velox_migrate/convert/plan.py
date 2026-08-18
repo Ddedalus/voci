@@ -14,14 +14,15 @@ emitting a `Depends()` that names an object nobody built.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
-from velox_migrate.convert import layout
+from velox_migrate.convert import declarations, layout
+from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
 from velox_migrate.convert.rules import Context
 from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
@@ -34,9 +35,6 @@ DEFERRED: frozenset[str] = frozenset(
     {
         "VX005",  # specialized override chains
         "VX007",  # indirect parametrization
-        "VX008",  # autouse placement
-        "VX009",  # usefixtures covering a module
-        "VX010",  # usefixtures covering some of a module
         "VX011",  # getfixturevalue with a literal name
         "VX013",  # addfinalizer
         "VX024",  # cases a pytest_generate_tests hook produced
@@ -118,7 +116,9 @@ class FileWork:
 
     `target` differs from `path` for a `conftest.py`, whose whole content moves to the
     `fixtures.py` beside it. `marks` are the `VELOX-TODO` comments to attach, each keyed by the
-    qualname it belongs above and empty for one about the module itself.
+    qualname it belongs above and empty for one about the module itself. `declares` are the
+    fixtures this file names in a `velox.use(...)`, as the expressions naming them here, and a
+    file with declarations and nothing else is one the conversion writes from nothing.
     """
 
     path: str
@@ -127,6 +127,7 @@ class FileWork:
     tests: tuple[TestWork, ...] = ()
     imports: tuple[Import, ...] = ()
     marks: tuple[tuple[str, str], ...] = ()
+    declares: tuple[str, ...] = ()
     context: Context = field(default_factory=lambda: Context(path=""))
 
     @property
@@ -136,7 +137,12 @@ class FileWork:
 
 @dataclass(frozen=True, slots=True)
 class Plan:
-    """What one conversion of a suite does, decided before a single character is rewritten."""
+    """What one conversion of a suite does, decided before a single character is rewritten.
+
+    `packages` are the `__init__.py` files a declaration needs in place to be read at all, empty
+    ones included: velox walks up from a test file and stops at the first directory that is not a
+    package, so a gap in the chain is a declaration that silently reaches nothing.
+    """
 
     layout: Layout
     work: Mapping[str, FileWork]
@@ -144,6 +150,8 @@ class Plan:
     blocked_fixtures: frozenset[str]
     refusals: tuple[Finding, ...]
     markers: tuple[Finding, ...]
+    declarations: tuple[Declaration, ...] = ()
+    packages: tuple[str, ...] = ()
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -168,14 +176,15 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
     }
     items = _items_by_qualname(ground_truth, blocked_tests)
+    symbols = {
+        (file, argname): symbol
+        for file, found in declared.items()
+        for argname, symbol in found.items()
+    }
     plan_layout = layout.plan(
         converting,
-        symbols={
-            (file, argname): symbol
-            for file, found in declared.items()
-            for argname, symbol in found.items()
-        },
-        consumers=_consumers(ground_truth, converting, items, blocked_fixtures),
+        symbols=symbols,
+        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, ()),
         source_of=sources.get,
     )
 
@@ -190,6 +199,19 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         }
         items = _items_by_qualname(ground_truth, blocked_tests)
 
+    # Declarations are placed once every refusal is settled, since a refused test is one nothing is
+    # declared for — and then the layout is planned again, because a declaring module names the
+    # fixtures it declares and so needs their imports like any other consumer. Placing fixtures is
+    # not affected: what a second pass adds is imports.
+    placed = declarations.plan(ground_truth, available=converting, blocked=blocked_tests)
+    _read_containers(placed, sources, root)
+    plan_layout = layout.plan(
+        converting,
+        symbols=symbols,
+        consumers=_consumers(ground_truth, converting, items, blocked_fixtures, placed),
+        source_of=sources.get,
+    )
+
     return Plan(
         layout=plan_layout,
         work=_work(
@@ -201,11 +223,14 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             blocked_tests=blocked_tests,
             refusals=refusals,
             markers=markers,
+            placed=placed,
         ),
         blocked_tests=blocked_tests,
         blocked_fixtures=frozenset(blocked_fixtures),
         refusals=refusals,
         markers=markers,
+        declarations=placed,
+        packages=declarations.packages(ground_truth, placed, blocked=blocked_tests),
     )
 
 
@@ -240,6 +265,24 @@ def _sources(ground_truth: GroundTruth, root: Path) -> dict[str, str]:
         except OSError:
             continue
     return found
+
+
+def _read_containers(placed: Sequence[Declaration], sources: dict[str, str], root: Path) -> None:
+    """Add every declaration container to `sources`, empty for one that is not there yet.
+
+    A package `__init__.py` is usually a file the conversion creates, and the layout still has to
+    know what it binds: a suite that already has one, holding names of its own, is where an
+    imported fixture needs an alias exactly as in any other module.
+    """
+    for declaration in placed:
+        if declaration.container in sources:
+            continue
+        try:
+            sources[declaration.container] = Path(root, declaration.container).read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            sources[declaration.container] = ""
 
 
 def _sorted_findings(audit: Audit) -> tuple[tuple[Finding, ...], tuple[Finding, ...]]:
@@ -463,9 +506,12 @@ def _consumers(
     converting: Mapping[str, FixtureDef],
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     blocked_fixtures: set[str],
+    placed: Sequence[Declaration],
 ) -> dict[str, set[str]]:
-    """Per file, every fixture key the code in it will name in a `Depends()`."""
+    """Per file, every fixture key the code in it will name — in a `Depends()` or a declaration."""
     consumers: dict[str, set[str]] = {}
+    for declaration in placed:
+        consumers.setdefault(declaration.container, set()).update(declaration.keys)
     for (path, _), cases in items.items():
         wanted = consumers.setdefault(path, set())
         item = cases[0]
@@ -508,6 +554,7 @@ def _work(
     blocked_tests: frozenset[str],
     refusals: tuple[Finding, ...],
     markers: tuple[Finding, ...],
+    placed: Sequence[Declaration],
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
@@ -535,8 +582,11 @@ def _work(
             )
         )
 
+    declares = {
+        declaration.container: _references(plan_layout, declaration) for declaration in placed
+    }
     marks = _marks(refusals, markers)
-    paths = set(fixtures_by_file) | set(tests_by_file) | set(marks)
+    paths = set(fixtures_by_file) | set(tests_by_file) | set(marks) | set(declares)
     work: dict[str, FileWork] = {}
     for path in sorted(paths):
         if path not in sources:
@@ -549,9 +599,22 @@ def _work(
             tests=tuple(tests_by_file.get(path, ())),
             imports=plan_layout.imports_for(target),
             marks=tuple(sorted(marks.get(path, set()))),
+            declares=declares.get(path, ()),
             context=_context(ground_truth, path, items, blocked_tests),
         )
     return work
+
+
+def _references(plan_layout: Layout, declaration: Declaration) -> tuple[str, ...]:
+    """How the declaring module names each fixture it declares — its import, or its own binding."""
+    found: list[str] = []
+    for key in declaration.keys:
+        home = plan_layout.home(key)
+        if home is None:
+            continue
+        imported = plan_layout.importing(declaration.container, key)
+        found.append(imported.bound if imported is not None else home.symbol)
+    return tuple(found)
 
 
 def _injections(
