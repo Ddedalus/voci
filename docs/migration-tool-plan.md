@@ -326,6 +326,46 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   - **A declaration a refused test asked for is not written.** That test keeps the mark it was
     written with and is reported as refused, and declaring on its behalf would widen a fixture
     onto the module's other tests for nobody's benefit.
+
+  What remains is sequenced in four chunks, each with its own corpus suite and exit bar:
+
+  - **Chunk 1 — specialization I: the override itself** (`VX005` at fan-out 1, `VX006`). The
+    overriding fixture becomes its own object in the overriding directory's `fixtures.py`, and
+    every test under that node imports it instead of the base. The load-bearing detail is the
+    super pattern: an override requesting its own name resolves to `chains[-2]`, which
+    `Item._super_of` already answers, so the emitted `Depends()` names the base object; the
+    layout's directory-aliasing already handles both landing in one importing module. The design
+    call it forces is that `plan.refused()` gates per code, and converting only fan-out-1
+    overrides needs a finding-level gate reading `detail["fan_out"]` — the seam that makes Chunk 2
+    an increment rather than a rewrite. *Exit: a leaf-override suite converts with nothing
+    refused, passes `velox --serial`, keeps every node id, and runs twice byte-identical, while
+    `fixtures_showcase` still refuses `engine`'s chain.*
+  - **Chunk 2 — specialization II: the chain copies** (`VX005` in general). `specialize.py`: for
+    each override, copy every fixture strictly between it and each test resolving through it,
+    named by scope (`settings_integration`, `engine_integration`), placed in the overriding
+    directory's fixture module, with the whole subtree's imports rewired to the copies. The
+    fan-out gate goes, leaving the budget refusal as the only boundary. *Exit:
+    `fixtures_showcase`'s override half converts, an over-budget chain refuses with the fan-out
+    the audit computed, and `--budget` moves that line end to end.* This is the piece §10 calls
+    uncalibrated — no prior art for fixture-graph specialization — and if it overruns, the honest
+    fallback is a low default budget and more suites refusing.
+  - **Chunk 3 — what the body scanner found** (`VX011`, `VX013`, `VX217`, `VX218`).
+    `request.getfixturevalue("literal")` becomes an ordinary `Depends()` parameter, since the
+    dump's closure already resolved the name; an unconditional `request.addfinalizer(fn)` becomes
+    `yield` teardown, with `VX014`'s conditional form still refused; `mock.patch` as a decorator
+    keeps its patch and gains `@velox.solo`, with injected parameters emitted after the mock
+    arguments the decorator fills positionally — an extension of the signature reordering Phase 2
+    already does — and as a context manager it gains `@velox.solo` alone. `_propagate` and
+    `wiring._request_is_only_param` both have to learn that a `request` used only for these
+    shapes is eliminable.
+  - **Chunk 4 — parametrize completion** (`VX007`, `VX024`). Indirect parametrize: the matrix row
+    says "one generated fixture per value", and a generated `params=` fixture carrying the values
+    is the closer match to what indirect means — settling that row is the chunk's first job.
+    `pytest_generate_tests` cases become an explicit `@velox.parametrize` from the dump's frozen
+    callspecs with pytest's own ids, refusing cases whose `repr`ed values do not round-trip
+    through `literal_eval`, since a dump records `repr(obj)` and that is not always source. Both
+    codes sit in `plan.DEFERRED` without being named in Phase 3's headline; if they wait, Phase 3
+    closes at Chunk 3 and this becomes a Phase 4 item.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*
