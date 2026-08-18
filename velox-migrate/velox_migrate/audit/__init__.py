@@ -151,7 +151,7 @@ def _suite(
         fixtures=len(own),
         plugin_fixtures=len(reached) - len(own),
         conftests=len(conftests),
-        overrides=sum(1 for finding in findings if finding.code in ("VX005", "VX006")),
+        overrides=sum(1 for finding in findings if finding.code in wiring.OVERRIDE_CODES),
         autouse_nodes=len(
             {finding.detail.get("node") for finding in findings if finding.code == "VX008"}
         ),

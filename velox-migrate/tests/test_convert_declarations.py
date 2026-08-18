@@ -115,12 +115,16 @@ def test_a_package_written_for_the_chain_alone_holds_nothing(version: str) -> No
 # --- what is left out -------------------------------------------------------------------------
 
 
-def test_a_fixture_the_conversion_refuses_is_not_declared(version: str) -> None:
-    # `integ_autouse` converts, but every test under `integration/` resolves the refused override
-    # chain and keeps its pytest source -- so there is nobody left for the declaration to serve.
-    conversion = conversion_of(FIXTURES, version)
+def test_a_fixture_only_refused_tests_would_get_is_not_declared(version: str) -> None:
+    # A refused test keeps its pytest source, so it is served by the mark it was written with;
+    # declaring on its behalf would hand the fixture to the module's other tests for nobody.
+    ground_truth = model.load(DUMPS / f"{DECLARATIONS}-pytest-{version}.json")
+    under_api = {item.nodeid for item in ground_truth.items if item.nodeid.startswith("api/")}
 
-    assert "integration/__init__.py" not in {d.container for d in conversion.plan.declarations}
+    placed = declarations.plan(ground_truth, available=ground_truth.fixture_defs, blocked=under_api)
+
+    assert "api/__init__.py" not in {declaration.container for declaration in placed}
+    assert "__init__.py" in {declaration.container for declaration in placed}
 
 
 def test_a_usefixtures_only_a_refused_test_asked_for_is_not_declared(version: str) -> None:

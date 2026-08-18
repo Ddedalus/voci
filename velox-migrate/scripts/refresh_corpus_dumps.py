@@ -30,6 +30,7 @@ SUITES = [
     "fixtures_showcase",
     "hazards_showcase",
     "mechanical_showcase",
+    "overrides_showcase",
 ]
 
 # The ends of the supported range. A dump from each is what proves the version shims in

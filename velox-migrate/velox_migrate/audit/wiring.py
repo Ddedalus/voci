@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 from velox_migrate import matrix
 from velox_migrate.audit.findings import Finding, Site
 from velox_migrate.audit.reach import Reach
 from velox_migrate.model import FixtureDef, GroundTruth, Item
+
+# What a conftest override is reported as: specialized, over budget, or undeclarable.
+OVERRIDE_CODES = ("VX005", "VX006", "VX027")
 
 # The default fan-out budget: how many fixtures one override may cause to be duplicated before
 # specializing the chain stops producing a reviewable diff.
@@ -44,6 +48,43 @@ def findings(
     found += _autouse_findings(ground_truth, reach)
     found += _indirect_findings(ground_truth)
     return found
+
+
+@dataclass(frozen=True, slots=True)
+class Override:
+    """One fixture redefined in a directory below the one that first defined it.
+
+    `downstream` are the fixture keys that reach `winner` from tests under it and are written
+    further out, which is what a specialized chain has to copy; `fan_out` counts them together
+    with the override itself, and is what the budget is spent against. `autouse` says the chain
+    runs a fixture no test names.
+    """
+
+    winner: FixtureDef
+    overridden: FixtureDef
+    downstream: frozenset[str]
+    tests: tuple[str, ...]
+    autouse: bool
+
+    @property
+    def fan_out(self) -> int:
+        return len(self.downstream) + 1
+
+    @property
+    def node(self) -> str:
+        """The visibility node the override rules, which is where its copies are written."""
+        return self.winner.visibility
+
+
+def under(node: str, other: str) -> bool:
+    """Whether the visibility node `other` is `node` itself or somewhere inside it.
+
+    The rootdir is spelled `"."` and a globally registered fixture's node is empty; both stand for
+    the whole session, so everything is inside them.
+    """
+    if node in ("", ".", "/"):
+        return True
+    return other == node or other.startswith((f"{node}/", f"{node}::"))
 
 
 def in_suite(fixture: FixtureDef) -> bool:
@@ -124,12 +165,13 @@ def _foreign_fixture(
     )
 
 
-def _override_findings(
-    ground_truth: GroundTruth, reach: Reach, *, budget: int
-) -> Iterator[Finding]:
-    # Keyed by the overriding definition, since one override serves every test under its
-    # directory and the fan-out is the union of what those tests reach through it.
-    specialized: dict[str, set[str]] = {}
+def overrides(ground_truth: GroundTruth) -> tuple[Override, ...]:
+    """Every conftest override in this suite, with the chain a specialized copy would duplicate.
+
+    Keyed by the overriding definition, since one override serves every test under its directory
+    and its fan-out is the union of what those tests reach through it.
+    """
+    downstream: dict[str, set[str]] = {}
     overridden: dict[str, FixtureDef] = {}
     tests: dict[str, set[str]] = {}
 
@@ -142,33 +184,59 @@ def _override_findings(
                 continue
             overridden.setdefault(winner.key, chain[-2])
             tests.setdefault(winner.key, set()).add(item.nodeid)
-            specialized.setdefault(winner.key, set()).update(_downstream(item, name, winner))
+            downstream.setdefault(winner.key, set()).update(_downstream(item, name, winner))
 
-    for key, copies in sorted(specialized.items()):
-        winner = ground_truth.fixture_defs[key]
-        parent = overridden[key]
-        fan_out = len(copies) + 1
-        over_budget = fan_out > budget
+    return tuple(
+        Override(
+            winner=ground_truth.fixture_defs[key],
+            overridden=overridden[key],
+            downstream=frozenset(copies),
+            tests=tuple(sorted(tests[key])),
+            autouse=_reaches_autouse(ground_truth, key, overridden[key], copies),
+        )
+        for key, copies in sorted(downstream.items())
+    )
+
+
+def _override_findings(
+    ground_truth: GroundTruth, reach: Reach, *, budget: int
+) -> Iterator[Finding]:
+    for override in overrides(ground_truth):
+        winner = override.winner
         where = _node(winner.visibility)
+        detail = {
+            "fixture": winner.argname,
+            "scope": where,
+            "fan_out": override.fan_out,
+            "budget": budget,
+            "duplicated": ", ".join(
+                sorted(ground_truth.fixture_defs[copy].argname for copy in override.downstream)
+            ),
+        }
+        overrides_what = f"overrides the one from {_node(override.overridden.visibility)}"
+        if override.autouse:
+            yield Finding(
+                code="VX027",
+                message=(
+                    f"`{winner.argname}` in {where} {overrides_what}, and the chain runs an "
+                    "autouse fixture that both definitions would be declared for."
+                ),
+                site=_fixture_site(winner),
+                tests=override.tests,
+                detail=detail,
+            )
+            continue
+        over_budget = override.fan_out > budget
         yield Finding(
             code="VX006" if over_budget else "VX005",
             message=(
-                f"`{winner.argname}` in {where} overrides the one from "
-                f"{_node(parent.visibility)}, so {fan_out} fixture(s) are copied for "
-                f"{len(tests[key])} test(s)"
+                f"`{winner.argname}` in {where} {overrides_what}, so {override.fan_out} "
+                f"fixture(s) are copied for {len(override.tests)} test(s)"
                 + (f", past the budget of {budget}." if over_budget else ".")
             ),
             site=_fixture_site(winner),
-            tests=tuple(sorted(tests[key])),
-            detail={
-                "fixture": winner.argname,
-                "scope": where,
-                "fan_out": fan_out,
-                "budget": budget,
-                "duplicated": ", ".join(
-                    sorted(ground_truth.fixture_defs[copy].argname for copy in copies)
-                ),
-            },
+            tests=override.tests,
+            detail=detail,
         )
 
 
@@ -176,7 +244,9 @@ def _downstream(item: Item, name: str, winner: FixtureDef) -> set[str]:
     """The fixtures this test reaches that resolve `name` through `winner`, transitively.
 
     These are the copies a specialized chain needs: nothing about them changes except which
-    definition of `name` they end up wired to, which in velox is a different object.
+    definition of `name` they end up wired to, which in velox is a different object. A fixture
+    written at or below the overriding node is left out — every test that can see it resolves the
+    override already, so it is wired to it rather than duplicated for it.
     """
     edges = {
         fixture.key: tuple(
@@ -192,7 +262,24 @@ def _downstream(item: Item, name: str, winner: FixtureDef) -> set[str]:
             if key not in found and any(target in found for target in requested):
                 found.add(key)
                 changed = True
-    return found - {winner.key}
+    reached = {fixture.key: fixture for fixture in item.walk()}
+    return {
+        key for key in found - {winner.key} if not under(winner.visibility, reached[key].visibility)
+    }
+
+
+def _reaches_autouse(
+    ground_truth: GroundTruth, key: str, overridden: FixtureDef, downstream: set[str]
+) -> bool:
+    """Whether an autouse fixture sits anywhere in this override's chain or below it."""
+    return any(
+        fixture.autouse
+        for fixture in (
+            ground_truth.fixture_defs[key],
+            overridden,
+            *(ground_truth.fixture_defs[copy] for copy in downstream),
+        )
+    )
 
 
 def _autouse_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Finding]:

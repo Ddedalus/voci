@@ -33,6 +33,7 @@ MECHANICAL = "mechanical_showcase"
 DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
 HAZARDS = "hazards_showcase"
+OVERRIDES = "overrides_showcase"
 
 
 @pytest.fixture(params=PYTEST_VERSIONS, ids=[f"pytest{v}" for v in PYTEST_VERSIONS])
@@ -40,10 +41,12 @@ def version(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
-def conversion_of(suite: str, version: str, *, root: Path | None = None) -> convert.Conversion:
+def conversion_of(
+    suite: str, version: str, *, root: Path | None = None, budget: int = audit.DEFAULT_BUDGET
+) -> convert.Conversion:
     ground_truth = model.load(DUMPS / f"{suite}-pytest-{version}.json")
     where = root if root is not None else CORPUS / suite
-    return convert.run(audit.run(ground_truth, root=where), ground_truth, root=where)
+    return convert.run(audit.run(ground_truth, root=where, budget=budget), ground_truth, root=where)
 
 
 def converted(suite: str, version: str, destination: Path) -> convert.Conversion:
@@ -128,6 +131,36 @@ def test_the_converted_declarations_suite_keeps_every_pytest_node_id(
     assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / DECLARATIONS)
 
 
+def test_the_overrides_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(OVERRIDES, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_overrides_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for specialization: a name that meant two things depending on where a test lived is
+    # two objects here, and each test gets the one its own directory resolved.
+    tree = tmp_path / OVERRIDES
+    converted(OVERRIDES, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_overrides_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / OVERRIDES
+    converted(OVERRIDES, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / OVERRIDES)
+
+
 def test_the_converted_suite_keeps_every_pytest_node_id(version: str, tmp_path: Path) -> None:
     # §9's promise, and why `@velox.parametrize` is emitted with pytest's own ids: a CI config, a
     # flaky-test dashboard or a `--last-failed` habit that names an id keeps working.
@@ -178,7 +211,7 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS])
+@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES])
 def test_converting_an_already_converted_tree_changes_nothing(
     suite: str, version: str, tmp_path: Path
 ) -> None:
@@ -288,25 +321,29 @@ def test_the_alias_names_the_directory_the_fixture_came_from() -> None:
 # --- refusal --------------------------------------------------------------------------------
 
 
-def test_an_override_refuses_the_fixtures_downstream_of_it(version: str) -> None:
+def test_an_override_is_specialized_rather_than_refused(version: str) -> None:
     # `engine` is written once and needs no rewrite of its own, but under `integration/` it
-    # resolves a `settings` that has two definitions — so no single `Depends()` is right for it.
+    # resolves a `settings` that has two definitions — so it becomes two objects, one per
+    # definition, and nothing about it is refused.
     result = conversion_of(FIXTURES, version)
     ground_truth = model.load(DUMPS / f"{FIXTURES}-pytest-{version}.json")
     blocked = {ground_truth.fixture_defs[key].argname for key in result.plan.blocked_fixtures}
 
-    assert {"settings", "engine"} <= blocked
+    assert not {"settings", "engine"} & blocked
+    assert {copy.symbol for copy in result.plan.specialized.copies.values()} == {
+        "engine_integration"
+    }
 
 
 def test_a_refusal_travels_to_the_tests_that_reach_it(version: str) -> None:
-    # The override chain refuses `settings` and `engine`, and with them every test resolving one:
-    # both of `integration/`'s, and the three cases of the test parametrizing through `settings`.
+    # `dyn` reads a fixture by a name decided at run time, which nothing static resolves, so the
+    # fixture is left alone and with it the test that requests it.
     result = conversion_of(FIXTURES, version)
+    ground_truth = model.load(DUMPS / f"{FIXTURES}-pytest-{version}.json")
+    blocked = {ground_truth.fixture_defs[key].argname for key in result.plan.blocked_fixtures}
 
-    assert {test for test in result.plan.blocked_tests if test.startswith("integration/")} == {
-        "integration/test_integration.py::test_engine",
-        "integration/test_integration.py::test_settings",
-    }
+    assert blocked == {"dyn"}
+    assert "test_top.py::test_uses" in result.plan.blocked_tests
 
 
 def test_a_refused_test_keeps_its_pytest_signature(version: str, tmp_path: Path) -> None:
