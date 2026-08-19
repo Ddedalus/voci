@@ -4,3 +4,33 @@
 [submodule "pytest"]
 	path = oss/pytest
 	url = https://github.com/pytest-dev/pytest.git
+[submodule "oss/attrs"]
+	path = oss/attrs
+	url = https://github.com/python-attrs/attrs.git
+[submodule "oss/click"]
+	path = oss/click
+	url = https://github.com/pallets/click.git
+[submodule "oss/flask"]
+	path = oss/flask
+	url = https://github.com/pallets/flask.git
+[submodule "oss/httpx"]
+	path = oss/httpx
+	url = https://github.com/encode/httpx.git
+[submodule "oss/jinja"]
+	path = oss/jinja
+	url = https://github.com/pallets/jinja.git
+[submodule "oss/marshmallow"]
+	path = oss/marshmallow
+	url = https://github.com/marshmallow-code/marshmallow.git
+[submodule "oss/rich"]
+	path = oss/rich
+	url = https://github.com/Textualize/rich.git
+[submodule "oss/starlette"]
+	path = oss/starlette
+	url = https://github.com/encode/starlette.git
+[submodule "oss/structlog"]
+	path = oss/structlog
+	url = https://github.com/hynek/structlog.git
+[submodule "oss/uvicorn"]
+	path = oss/uvicorn
+	url = https://github.com/encode/uvicorn.git
