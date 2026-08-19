@@ -241,6 +241,7 @@ class _Use:
     cases: tuple[Item, ...]
     axis: Axis
     alone: bool
+    owned: bool
 
     @property
     def item(self) -> Item:
@@ -271,7 +272,13 @@ def _reading(
             if found is None:
                 continue
             uses.setdefault(found.key, []).append(
-                _Use(site=site, cases=tuple(cases), axis=axis, alone=own == 1)
+                _Use(
+                    site=site,
+                    cases=tuple(cases),
+                    axis=axis,
+                    alone=own == 1,
+                    owned=_own_mark(cases[0], axis.argnames[0]),
+                )
             )
         _read_generated(reading, site, cases, classified)
     for key, found in sorted(uses.items()):
@@ -332,6 +339,11 @@ def _uncarriable(
             return f"the ids of `{name}`'s cases are composed with another axis of the same test"
         if not use.alone:
             return f"`{name}` shares its test with another parametrized fixture"
+        if not use.owned:
+            return (
+                f"the values reach `{name}` from somewhere other than the test's own decorator, "
+                "which is the only place a rewrite takes a mark away from"
+            )
     if any(literal(row[0]) is None for row in first.values):
         return f"a value `{name}` is given has no literal spelling"
     reached = {
@@ -410,6 +422,19 @@ def _unlistable(classified: Sequence[tuple[Axis, Kind]], hooked: Sequence[Axis])
                 if literal(value) is None:
                     return f"`{value}` is a value with no literal spelling"
     return None
+
+
+def _own_mark(item: Item, name: str) -> bool:
+    """Whether the `indirect` mark covering `name` is written on this test's own `def`.
+
+    A mark on a class, in a `pytestmark`, or no mark at all — a hook calling
+    `metafunc.parametrize(..., indirect=True)` — leaves the rewrite with no decorator to take
+    away, and a `params=` written while the mark stays would parametrize the fixture twice over.
+    """
+    for mark in item.markers_with_origin:
+        if mark.name == "parametrize" and mark.args and name in _named(mark.args[0]):
+            return mark.origin == item.nodeid
+    return False
 
 
 def _kind_of(item: Item, axis: Axis) -> Kind:

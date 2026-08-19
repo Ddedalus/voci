@@ -21,7 +21,7 @@ import libcst as cst
 
 import pytest
 from velox_migrate import audit, convert, matrix, model
-from velox_migrate.convert import config, layout, markers, plan, wiring
+from velox_migrate.convert import config, layout, markers, parametrize, plan, wiring
 from velox_migrate.convert.layout import Import
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
@@ -768,6 +768,38 @@ def test_a_capsys_use_no_rule_rewrites_refuses_the_test_rather_than_stranding_it
 
     assert result.refused == (("test_x", "VX202"),)
     assert result.module.code == source
+
+
+def test_a_carried_case_list_replaces_what_the_decorator_said_about_cases() -> None:
+    # pytest tolerates an `ids=` with no `params=` beside it, and velox raises on one. The cases
+    # are the mark's now, so what the decorator said about cases of its own goes with it.
+    source = """import pytest
+
+
+@pytest.fixture(ids=["only"])
+def backend(request):
+    return request.param
+"""
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        fixtures=(
+            plan.FixtureWork(
+                key="f0",
+                argname="backend",
+                symbol="backend",
+                scope="function",
+                injections=(plan.Injection("request", "param", ""),),
+                parametrized=True,
+                carried=parametrize.Carried(values=("'mysql'",), ids=("mysql",)),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert '@velox.fixture(params=["mysql"], ids=["mysql"])' in result.module.code
+    assert '"only"' not in result.module.code
 
 
 def test_a_conftest_never_moves_onto_a_fixtures_module_the_suite_already_has() -> None:

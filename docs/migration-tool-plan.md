@@ -440,7 +440,9 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     A hook's cases have no source to copy, and a mark's values are written in a test module while
     the `params=` they become is read in whichever module holds the fixture — so what travels is
     the value pytest passed, spelled as a literal, and a `repr` that does not read back as one is
-    a case this refuses.
+    a case this refuses. What the mark itself has to be is a decorator on the test's own `def`,
+    since that is the only place the rewrite takes one away — a mark on a class or in a
+    `pytestmark` would leave the fixture parametrized twice over.
   - **A `params=` fixture has one case list, so the whole suite has to agree on it.** pytest
     decides a fixture's cases per test, and what makes the move honest is that every test reaching
     that fixture asked for the same ones — including the tests that reach it without naming it,

@@ -336,8 +336,8 @@ def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
                 yield Finding(
                     code="VX007",
                     message=(
-                        f"`{argname}` is parametrized indirectly, so each value it is given "
-                        f"becomes its own fixture."
+                        f"`{argname}` is parametrized indirectly, so the values it is given "
+                        "become the fixture's own `params=`."
                     ),
                     site=Site(item.path, item.lineno, _qualname(item)),
                     tests=cases,

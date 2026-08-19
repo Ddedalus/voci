@@ -148,14 +148,16 @@ def test_a_fixture_with_cases_of_its_own_cannot_take_a_call_sites_as_well() -> N
     [
         pytest.param("values", "different values", id="disagreeing-values"),
         pytest.param("reach", "without parametrizing it", id="unparametrized-consumer"),
+        pytest.param("group", "the test's own decorator", id="mark-on-a-group"),
     ],
 )
 def test_an_indirect_mark_a_params_fixture_cannot_answer_for_is_refused(
     edit: str, expected: str
 ) -> None:
-    # Two shapes a green pytest suite can hold that one case list cannot: the same fixture given
-    # different values by two tests, and a test reaching it that named no values at all — which
-    # would silently gain the cases the other tests chose.
+    # Three shapes a green pytest suite can hold that one case list cannot: the same fixture given
+    # different values by two tests, a test reaching it that named no values at all — which would
+    # silently gain the cases the other tests chose — and a mark written for a group of tests,
+    # where the rewrite has no decorator on the test to take away.
     dump = json.loads((DUMPS / f"{PARAMETRIZE}-pytest-9.1.json").read_text(encoding="utf-8"))
     through = [
         entry
@@ -164,6 +166,11 @@ def test_an_indirect_mark_a_params_fixture_cannot_answer_for_is_refused(
     ]
     if edit == "values":
         through[0]["callspec"]["params"]["backend"] = "'postgres'"
+    elif edit == "group":
+        for entry in dump["items"]:
+            for mark in entry["markers_with_origin"]:
+                if mark["name"] == "parametrize":
+                    mark["from"] = "test_indirect.py"
     else:
         dump["items"].remove(through[1])
         through[0]["callspec"] = None

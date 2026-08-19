@@ -371,10 +371,13 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     args: list[cst.Arg] = []
     if work.scope != "function":
         args.append(_kwarg("scope", cst.SimpleString(f'"{work.scope}"')))
+    written = ("name",) if work.carried is not None else ("name", "params", "ids")
     if work.carried is not None:
+        # The cases are the mark's, so anything the decorator said about cases of its own is gone
+        # with it — pytest tolerates an `ids=` with no `params=` beside it, and velox does not.
         args.append(_kwarg("params", _values(work.carried.values)))
         args.append(_kwarg("ids", _strings(work.carried.ids)))
-    for keyword in ("name", "params", "ids"):
+    for keyword in written:
         carried = existing.get(keyword)
         if carried is not None:
             args.append(_kwarg(keyword, carried.value))
