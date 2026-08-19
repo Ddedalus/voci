@@ -1366,10 +1366,10 @@
    }
   },
   {
-   "nodeid": "test_bodies.py::test_approx_sequence",
+   "nodeid": "test_bodies.py::test_approx_generator",
    "path": "test_bodies.py",
    "lineno": 53,
-   "originalname": "test_approx_sequence",
+   "originalname": "test_approx_generator",
    "cls": null,
    "own_markers": [],
    "markers_with_origin": [],

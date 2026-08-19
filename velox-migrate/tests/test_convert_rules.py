@@ -1357,12 +1357,90 @@ def test_x():
     _rewrite("VX212", before, after, _context("test_x"))
 
 
-def test_approx_over_a_sequence_is_refused() -> None:
-    source = """import pytest
+def test_approx_over_a_list_becomes_velox_approx() -> None:
+    before = """import pytest
 
 
 def test_x():
     assert values == pytest.approx([0.1, 0.2])
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx([0.1, 0.2])
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX212"]
+
+
+def test_approx_over_a_tuple_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx((0.1, 0.2), rel=1e-6)
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx((0.1, 0.2), rel=1e-6)
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX212"]
+
+
+def test_approx_over_a_dict_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({"a": 0.1, "b": 0.2})
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx({"a": 0.1, "b": 0.2})
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX212"]
+
+
+def test_approx_over_a_set_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({0.1, 0.2})
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_generator_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx(x for x in [0.1, 0.2])
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_numpy_array_is_refused() -> None:
+    source = """import numpy as np, pytest
+
+
+def test_x():
+    assert values == pytest.approx(np.array([0.1, 0.2]))
 """
     applied = _untouched("VX212", source, _context("test_x"))
 

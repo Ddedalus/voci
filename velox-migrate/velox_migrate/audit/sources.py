@@ -148,13 +148,8 @@ _BLOCKING = frozenset(
 _ENVIRON_WRITES = frozenset({"update", "setdefault", "pop", "clear"})
 
 _APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
-    cst.List: "a list",
-    cst.Tuple: "a tuple",
     cst.Set: "a set",
-    cst.Dict: "a dict",
-    cst.ListComp: "a list comprehension",
     cst.SetComp: "a set comprehension",
-    cst.DictComp: "a dict comprehension",
     cst.GeneratorExp: "a generator expression",
 }
 

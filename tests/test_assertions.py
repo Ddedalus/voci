@@ -62,6 +62,61 @@ def test_approx_repr_is_built_from_the_default_constants() -> None:
     assert repr(velox.approx(0.3)) == f"approx(0.3 ±{velox.Approx.DEFAULT_REL!r})"
 
 
+def test_approx_compares_a_list_elementwise() -> None:
+    assert [0.1 + 0.2, 0.2 + 0.4] == velox.approx([0.3, 0.6])  # noqa: SIM300
+    assert (0.1 + 0.2, 0.2 + 0.4) == velox.approx((0.3, 0.6))  # noqa: SIM300
+
+
+def test_approx_over_a_list_fails_on_mismatched_length() -> None:
+    assert velox.approx([1.0, 2.0]) != [1.0, 2.0, 3.0]
+    assert velox.approx([1.0, 2.0]) != [1.0]
+
+
+def test_approx_over_a_list_fails_on_a_value_outside_tolerance() -> None:
+    assert velox.approx([1.0, 2.0]) != [1.0, 2.1]
+
+
+def test_approx_compares_a_dict_elementwise() -> None:
+    assert {"a": 0.1 + 0.2, "b": 0.2 + 0.4} == velox.approx({"a": 0.3, "b": 0.6})  # noqa: SIM300
+
+
+def test_approx_over_a_dict_fails_on_mismatched_keys() -> None:
+    assert velox.approx({"a": 0.3, "b": 0.6}) != {"a": 0.3, "c": 0.6}
+    assert velox.approx({"a": 0.3, "b": 0.6}) != {"a": 0.3}
+
+
+def test_approx_over_a_nested_list_raises() -> None:
+    with pytest.raises(TypeError, match="nested"):
+        velox.approx([1.0, [2.0, 3.0]])
+
+
+def test_approx_over_a_nested_dict_raises() -> None:
+    with pytest.raises(TypeError, match="nested"):
+        velox.approx({"a": 1.0, "b": {"c": 2.0}})
+
+
+def test_approx_over_a_set_raises() -> None:
+    """Sets are unordered, so there is no position to compare by."""
+    with pytest.raises(TypeError):
+        velox.approx({1.0, 2.0})  # type: ignore[arg-type]
+
+
+def test_approx_over_a_collection_honors_rel_abs_and_nan_ok_per_element() -> None:
+    assert [1.0, float("nan")] == velox.approx([1.0, float("nan")], nan_ok=True)
+    assert velox.approx([1.0, float("nan")]) != [1.0, float("nan")]
+    assert [1000.0] == velox.approx([1000.0001], rel=1e-3)  # noqa: SIM300
+    assert velox.approx([1000.0001], rel=1e-12) != [1000.0]
+    assert {"a": 1.0000000000001} == velox.approx({"a": 1.0}, abs=1e-13)  # noqa: SIM300
+    assert velox.approx({"a": 1.0}, abs=1e-13) != {"a": 1.0000001}
+
+
+def test_approx_over_a_collection_is_symmetric() -> None:
+    assert [0.3] == velox.approx([0.1 + 0.2])  # noqa: SIM300
+    assert velox.approx([0.1 + 0.2]) == [0.3]
+    assert {"a": 0.3} == velox.approx({"a": 0.1 + 0.2})  # noqa: SIM300
+    assert velox.approx({"a": 0.1 + 0.2}) == {"a": 0.3}
+
+
 def test_exception_info_value_raises_loudly_before_the_block_completes() -> None:
     """Reading `.value` before the block completes raises `RuntimeError`, not the `AttributeError`
     that `hasattr`/`getattr` would swallow."""

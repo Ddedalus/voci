@@ -3,7 +3,7 @@
 Contributes the capture-snapshot case (`readouterr` twice), the caplog cases (`set_level` and
 `.text`), the dangerous-rename case (`pytest.skip()` as a statement), and the no-counterpart cases
 (`importorskip`, `warns`, a `raises` object stashed rather than entered or called, `approx` over
-a sequence, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape
+a generator, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape
 hatch the root conftest wires up.
 """
 
@@ -50,8 +50,8 @@ def test_legacy_raises():
     stashed = pytest.raises(ValueError)
 
 
-def test_approx_sequence():
-    assert [0.1 + 0.2] == pytest.approx([0.3])
+def test_approx_generator():
+    stashed = pytest.approx(x for x in [0.3])
 
 
 def test_legacy_tmpdir(legacy_dir, tmpdir):

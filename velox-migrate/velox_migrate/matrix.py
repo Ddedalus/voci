@@ -581,10 +581,13 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX213",
-        "pytest.approx over a sequence, mapping or array",
-        UNSUPPORTED,
-        "`velox.approx` compares scalars.",
-        action="Compare element by element, or keep a helper that does.",
+        "pytest.approx over a list, tuple, or dict",
+        MECHANICAL,
+        "Becomes `velox.approx`, which compares a list or tuple elementwise by position and a "
+        "dict elementwise by key, all under the same tolerances. Left unconverted for a set or a "
+        "generator expression, which have no position to compare by, and for a numpy array, "
+        "which velox has no dependency to compare.",
+        target="velox.approx",
     ),
     _row(
         "VX214",

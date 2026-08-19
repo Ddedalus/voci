@@ -7,8 +7,8 @@ parameter, since a local called `caplog` is not pytest's. Renaming the parameter
 
 `pytest.raises` and `pytest.approx` are read through `QualifiedNameProvider` instead, and each is
 rewritten only in the shapes velox has: a `raises` entered by a `with` or called with the
-exception it expects and the callable it wraps, and an `approx` over a scalar. Anything else is
-left as it was written, with the row that refuses it recorded.
+exception it expects and the callable it wraps, and an `approx` over a scalar, a list, a tuple, or
+a dict. Anything else is left as it was written, with the row that refuses it recorded.
 """
 
 from __future__ import annotations
@@ -46,13 +46,8 @@ _LOG_ATTRS = frozenset({"records", "messages"})
 _APPROX_POSITIONAL = ("rel", "abs", "nan_ok")
 
 _APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
-    cst.List: "a list",
-    cst.Tuple: "a tuple",
     cst.Set: "a set",
-    cst.Dict: "a dict",
-    cst.ListComp: "a list comprehension",
     cst.SetComp: "a set comprehension",
-    cst.DictComp: "a dict comprehension",
     cst.GeneratorExp: "a generator expression",
 }
 
@@ -322,7 +317,8 @@ class _Raises(_BodyPass):
 
 
 class _Approx(_BodyPass):
-    """VX212: `pytest.approx` over a scalar, which is what `velox.approx` compares."""
+    """VX212: `pytest.approx` over a scalar, a list, a tuple, or a dict, which is what
+    `velox.approx` compares."""
 
     CODE = "VX212"
 
@@ -340,7 +336,7 @@ class _Approx(_BodyPass):
         if kind is not None:
             self.record(
                 f"`{render(original_node)}` is left as it is: it is given {kind}, and "
-                "`velox.approx` compares scalars.",
+                "`velox.approx` has no position to compare it by.",
                 code="VX213",
             )
             return updated_node

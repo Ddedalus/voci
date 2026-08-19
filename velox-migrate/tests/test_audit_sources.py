@@ -407,17 +407,31 @@ async def test_a():
     assert _codes(source) == ["VX211"]
 
 
-def test_approx_over_a_collection_or_an_array_is_reported_and_over_a_scalar_is_not() -> None:
+def test_approx_over_a_set_a_generator_or_an_array_is_reported() -> None:
     source = """
 import numpy as np, pytest
 def test_a():
-    assert a == pytest.approx([1.0, 2.0])
-    assert b == pytest.approx({"x": 1.0})
+    assert a == pytest.approx({1.0, 2.0})
+    assert b == pytest.approx(x for x in [1.0])
     assert c == pytest.approx(np.array([1.0]))
-    assert d == pytest.approx(1.0, rel=1e-6)
 """
 
     assert _codes(source) == ["VX213"] * 3
+
+
+def test_approx_over_a_list_tuple_or_dict_is_not_reported() -> None:
+    source = """
+import pytest
+def test_a():
+    assert a == pytest.approx([1.0, 2.0])
+    assert b == pytest.approx((1.0, 2.0))
+    assert c == pytest.approx({"x": 1.0})
+    assert d == pytest.approx([x for x in [1.0]])
+    assert e == pytest.approx({x: x for x in [1.0]})
+    assert f == pytest.approx(1.0, rel=1e-6)
+"""
+
+    assert _codes(source) == []
 
 
 def test_an_imperative_skip_is_reported_wherever_it_is_reached_and_a_mark_is_not() -> None:
