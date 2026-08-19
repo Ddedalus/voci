@@ -1,9 +1,7 @@
 # Docs site plan
 
 Internal working document. Plans a narrative-docs-plus-reference site for velox, structured and
-themed like [FastAPI's docs](../oss/fastapi/docs/en) (cloned at `oss/fastapi/` for reference —
-that clone is not part of the published package). This is a plan, not an implementation; nothing
-here is built yet.
+themed like [FastAPI's docs](../oss/fastapi/docs/en) (cloned at `oss/fastapi/` for reference). 
 
 ## What "same look and feel" means
 
@@ -20,20 +18,11 @@ kinds of page:
 
 Adopting this for velox means: mkdocs-material as the site generator and theme, the same four-way
 split, and mkdocstrings for the reference section so it stays truthful to the source instead of
-hand-duplicated. It does not mean matching FastAPI's scale — velox's public surface
-(`velox/__init__.py`) is ~30 names; FastAPI's tutorial alone is 38 pages. The plan below is sized
-to what velox actually has, per [ROADMAP.md](../ROADMAP.md)'s "Working today" list, not to
-FastAPI's page count. It also skips everything in FastAPI's setup that's there for reasons velox
-doesn't share: 13 language translations, a sponsor/newsletter/people apparatus, a
-`deployment/` section (velox isn't a service you deploy), and `release-notes.md` (no versioned
-releases yet — pre-v0.1 per `README.md`).
+hand-duplicated.
 
 ## Where the site lives
 
-Internal working documents (this file included) live in `plans/`, not `docs/` — see
-`plans/docsite-plan.md`'s own move for precedent, and `CLAUDE.md`'s `plans/` entry. That leaves
-`docs/` free to be exactly the mkdocs `docs_dir`, with nothing in it that isn't part of the
-published site:
+Internal working documents (this file included) live in `plans/`, not `docs/`.
 
 ```
 docs/
@@ -48,9 +37,8 @@ docs/
 ```
 
 `docs_dir: .` in `mkdocs.yml` (relative to the config file, which sits in `docs/`) points mkdocs
-straight at `docs/` — no nested `docs/docs/` or `docs/site/docs/` nesting, and no `docs/en/`
-locale layer either, since velox ships one language and the extra nesting FastAPI carries for
-i18n has nothing to do here.
+straight at `docs/`and no `docs/en/`
+locale layer either.
 
 `rationale.md` needs no symlink or move: it already sits inside `docs_dir`, at the path README
 and `CLAUDE.md` already cite, and the site's nav just groups it under **About** without touching
@@ -108,16 +96,9 @@ verbatim from source.
 
 ## Code samples: reuse `examples/`, don't build a parallel `docs_src/`
 
-FastAPI's `docs_src/` exists because FastAPI didn't already have a curated set of runnable,
-tested example programs. velox does: `examples/01-fastapi-crud`, `02-async-library`,
-`03-shared-resources` are runnable, already exercise the features above, and are exactly what
-`README.md`'s "Where to go next" points at today.
-
 Plan: guide pages carry short, hand-written inline snippets (a fixture, a test — a few lines,
 matching the density already in `README.md`'s own example), and each page links out to the
-`examples/` suite that demonstrates the fully worked version. This is smaller than FastAPI's
-`docs_src/` + snippet-test pipeline and reuses infrastructure that already exists and is already
-covered by `just test`.
+`examples/` suite that demonstrates the fully worked version.
 
 Trade-off accepted: inline snippets aren't independently test-run the way `docs_src/` files are
 in FastAPI. Mitigation — keep every inline snippet short enough to eyeball against the
@@ -127,8 +108,6 @@ over writing a new one from scratch.
 
 Embedding mechanism: `pymdownx.snippets` (ships with `pymdown-extensions`, a mkdocs-material
 dependency already) to pull a marked block out of an `examples/` file into a fenced code block.
-No custom markdown extension needed — FastAPI's `{* path *}` include syntax is a project-specific
-macro; `pymdownx.snippets`' `--8<--` syntax does the same job with nothing to maintain.
 
 ## Reference pages: mkdocstrings
 
@@ -177,9 +156,7 @@ Drop: `alternate:` (translation switcher), the social-icon row (no public accoun
 6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up
    decision once the repo is public — out of scope here.
 
-Each phase is a reviewable unit on its own branch, per the worktree workflow (this is
-infrastructure — new dependency group, generated-reference scaffolding, dozens of new files —
-not the kind of small doc edit the direct-commit workflow covers).
+Each phase is a reviewable unit on its own branch, per the worktree workflow.
 
 ## Open questions
 
