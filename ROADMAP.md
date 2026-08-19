@@ -57,7 +57,7 @@ that keeps the wiring visible at the call site, or nothing at all.
 
 Migration codegen depends on the outcome: with no override mechanism, a translated conftest
 override needs a full specialized fixture chain per override scope, which
-[docs/migration-problem-statement.md](docs/migration-problem-statement.md) §4.2 measures as the
+[plans/migration-problem-statement.md](plans/migration-problem-statement.md) §4.2 measures as the
 largest single source of hand edits in a migrated suite.
 
 ## Not planned

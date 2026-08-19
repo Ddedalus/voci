@@ -30,34 +30,31 @@ releases yet — pre-v0.1 per `README.md`).
 
 ## Where the site lives
 
+Internal working documents (this file included) live in `plans/`, not `docs/` — see
+`plans/docsite-plan.md`'s own move for precedent, and `CLAUDE.md`'s `plans/` entry. That leaves
+`docs/` free to be exactly the mkdocs `docs_dir`, with nothing in it that isn't part of the
+published site:
+
 ```
 docs/
+  mkdocs.yml
   rationale.md                    existing, unchanged — canonical WHY doc, cited by README/CLAUDE.md
-  initial-research.md             existing, unchanged — internal
-  migration-*.md, oss-refactors-plan.md   existing, unchanged — internal
-  docsite-plan.md                 this file
-  site/                           new: the docs site root
-    mkdocs.yml
-    docs/                         mkdocs `docs_dir`
-      index.md                    home page, adapted from README.md
-      guide/                      = FastAPI's tutorial/
-      how-to/
-      reference/
-      about/
-      img/  css/  js/
-    docs_src/                     runnable snippets the guide pages embed (see below)
+  index.md                        home page, adapted from README.md
+  guide/                          = FastAPI's tutorial/
+  how-to/
+  reference/
+  about/
+  img/  css/  js/
 ```
 
-`docs_dir` is `docs/site/docs`, not `docs/` itself, so mkdocs never scans the existing internal
-planning docs at `docs/*.md` — they stay exactly where they are, with no risk of turning into
-orphan pages in a built site. The one exception is `rationale.md`: it belongs in the site's
-**About** section, but `docs/rationale.md` is the single citable path (README, CLAUDE.md, and
-this skill's own rules point at it) and must not move or fork. `docs/site/docs/about/rationale.md`
-is a relative symlink to `../../../rationale.md` — mkdocs reads through symlinks, so the site gets
-the page and the canonical path stays canonical.
+`docs_dir: .` in `mkdocs.yml` (relative to the config file, which sits in `docs/`) points mkdocs
+straight at `docs/` — no nested `docs/docs/` or `docs/site/docs/` nesting, and no `docs/en/`
+locale layer either, since velox ships one language and the extra nesting FastAPI carries for
+i18n has nothing to do here.
 
-No `docs/en/` locale layer — velox ships one language, so the extra nesting FastAPI carries for
-i18n has nothing to do.
+`rationale.md` needs no symlink or move: it already sits inside `docs_dir`, at the path README
+and `CLAUDE.md` already cite, and the site's nav just groups it under **About** without touching
+where the file lives.
 
 ## Navigation
 
@@ -65,7 +62,7 @@ Each page here is real content mapped to something velox already does — nothin
 describes unbuilt behavior (`ROADMAP.md` stays the only place that happens).
 
 ```
-Home                    site/docs/index.md
+Home                    index.md
 Guide                   ("" section, mirrors tutorial/)
   guide/index.md          install, first test, shape of a suite
   guide/first-steps.md    a test file, `velox`, reading the report
@@ -100,7 +97,7 @@ Reference               (mkdocstrings, one page per __init__.py export group)
                             has no docstrings to render)
 About
   about/index.md           orientation, links to guide/reference
-  about/rationale.md        symlink -> docs/rationale.md
+  rationale.md             already at docs/rationale.md — nav just groups it under About
   about/alternatives.md    the one neutral pytest comparison from README.md, not expanded
                             ("Don't argue with pytest" — velox-docs skill)
 ```
@@ -160,8 +157,8 @@ Drop: `alternate:` (translation switcher), the social-icon row (no public accoun
 
 - `pyproject.toml`: new `[dependency-groups] docs` — `mkdocs`, `mkdocs-material`,
   `mkdocstrings[python]`.
-- `justfile`: `docs-serve` (`mkdocs serve -f docs/site/mkdocs.yml`), `docs-build` (`mkdocs build
-  -f docs/site/mkdocs.yml --strict`), `docs-check` (`gen_cli_reference.py --check`, then
+- `justfile`: `docs-serve` (`mkdocs serve -f docs/mkdocs.yml`), `docs-build` (`mkdocs build
+  -f docs/mkdocs.yml --strict`), `docs-check` (`gen_cli_reference.py --check`, then
   `docs-build`) — same shape as the existing `vendor`/`vendor-check` pair.
 - `--strict` makes a broken internal link or an unresolved `nav` entry fail the build, standing in
   for the doc tests FastAPI's own CI runs.
@@ -176,7 +173,7 @@ Drop: `alternate:` (translation switcher), the social-icon row (no public accoun
 3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching
    `examples/` suite.
 4. **How-to** — the four recipe pages, each derived from a specific `examples/` file.
-5. **About** — `index.md`, the `rationale.md` symlink, `alternatives.md`.
+5. **About** — `index.md`, a nav entry for the existing `rationale.md`, `alternatives.md`.
 6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up
    decision once the repo is public — out of scope here.
 
