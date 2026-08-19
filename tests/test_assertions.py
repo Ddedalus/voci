@@ -101,6 +101,21 @@ def test_approx_over_a_set_raises() -> None:
         velox.approx({1.0, 2.0})  # type: ignore[arg-type]
 
 
+def test_approx_over_a_list_nested_in_a_dict_raises() -> None:
+    with pytest.raises(TypeError, match="nested"):
+        velox.approx({"a": [1.0, 2.0]})
+
+
+def test_approx_over_a_tuple_nested_in_a_list_raises() -> None:
+    with pytest.raises(TypeError, match="nested"):
+        velox.approx([1.0, (2.0, 3.0)])
+
+
+def test_approx_over_a_dict_nested_in_a_list_raises() -> None:
+    with pytest.raises(TypeError, match="nested"):
+        velox.approx([1.0, {"a": 2.0}])
+
+
 def test_approx_over_a_collection_honors_rel_abs_and_nan_ok_per_element() -> None:
     assert [1.0, float("nan")] == velox.approx([1.0, float("nan")], nan_ok=True)
     assert velox.approx([1.0, float("nan")]) != [1.0, float("nan")]

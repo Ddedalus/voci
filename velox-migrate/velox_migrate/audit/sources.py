@@ -153,6 +153,10 @@ _APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
     cst.GeneratorExp: "a generator expression",
 }
 
+# The literal container types one level of nesting refuses, inside a list, tuple, or dict literal
+# passed to `pytest.approx` — the same shape `velox_migrate.convert.rules.bodies._Approx` refuses.
+_APPROX_NESTED_LITERALS = (cst.List, cst.Tuple, cst.Dict, cst.Set)
+
 _FAKERS = frozenset({"Faker", "faker"})
 _ADDRESS = re.compile(r"(?:localhost|127\.0\.0\.1):\d+")
 _FIXED_PATHS = ("/tmp/", "/var/tmp/")
@@ -430,9 +434,10 @@ class _Scanner(cst.CSTVisitor):
                     "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."
                 )
         elif "pytest.approx" in names and positional:
-            kind = self._approx_kind(positional[0].value)
-            if kind is not None:
-                self._report("VX213", node, f"`pytest.approx` is given {kind}.")
+            found = self._approx_kind(positional[0].value)
+            if found is not None:
+                code, message = found
+                self._report(code, node, message)
         elif "pytest.param" in names:
             marks = _keyword(node, "marks")
             if marks is not None:
@@ -465,16 +470,31 @@ class _Scanner(cst.CSTVisitor):
                     "`@pytest.mark.xfail(run=False)` expects a failure without running the test.",
                 )
 
-    def _approx_kind(self, argument: cst.BaseExpression) -> str | None:
+    def _approx_kind(self, argument: cst.BaseExpression) -> tuple[str, str] | None:
+        """The code and message for why `pytest.approx(argument)` will not convert to
+        `velox.approx`, or `None` where it will.
+
+        VX221 for a set, a set comprehension, a generator expression, or a numpy array — there is
+        no position to compare any of those by. VX213 for a list, tuple, or dict literal with a
+        list, tuple, dict, or set literal nested one level inside it, the same shape
+        `velox_migrate.convert.rules.bodies._Approx` refuses to convert.
+        """
         kind = _APPROX_KINDS.get(type(argument))
         if kind is not None:
-            return kind
+            return "VX221", f"`pytest.approx` is given {kind}."
         if isinstance(argument, cst.Call):
             called = _dotted(argument.func) or ""
             if called.split(".")[0] in ("np", "numpy") or any(
                 name.startswith("numpy.") for name in self._names(argument)
             ):
-                return "a `numpy` array"
+                return "VX221", "`pytest.approx` is given a `numpy` array."
+        nested = _approx_nested(argument)
+        if nested is not None:
+            return (
+                "VX213",
+                f"`pytest.approx` is given `{_render(argument)}`, with `{_render(nested)}` "
+                "nested inside it.",
+            )
         return None
 
     def _fixture_call(self, node: cst.Call) -> None:
@@ -894,6 +914,25 @@ def _dotted(node: cst.CSTNode) -> str | None:
         return None
     parts.append(node.value)
     return ".".join(reversed(parts))
+
+
+def _approx_nested(argument: cst.BaseExpression) -> cst.BaseExpression | None:
+    """The first literal nested one level inside `argument`, if `argument` is a list, tuple, or
+    dict literal and one of its own elements is itself a list, tuple, dict, or set literal.
+
+    A comprehension's runtime shape cannot be inspected this way, so it is left unchecked.
+    """
+    if isinstance(argument, cst.List | cst.Tuple):
+        values: Iterable[cst.BaseExpression] = (
+            element.value for element in argument.elements if isinstance(element, cst.Element)
+        )
+    elif isinstance(argument, cst.Dict):
+        values = (
+            element.value for element in argument.elements if isinstance(element, cst.DictElement)
+        )
+    else:
+        return None
+    return next((value for value in values if isinstance(value, _APPROX_NESTED_LITERALS)), None)
 
 
 def _positional(node: cst.Call) -> list[cst.Arg]:

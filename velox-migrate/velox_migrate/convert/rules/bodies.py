@@ -51,6 +51,14 @@ _APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
     cst.GeneratorExp: "a generator expression",
 }
 
+# The shapes of `pytest.approx`'s first argument that convert under VX213 rather than the default
+# VX212 (a scalar). A literal's own elements are what bug 2's nesting check walks; a comprehension's
+# runtime shape cannot be inspected that way, so it converts unchecked.
+_APPROX_CONTAINER_SHAPES = (cst.List, cst.ListComp, cst.Tuple, cst.Dict, cst.DictComp)
+
+# The literal container types one level of nesting refuses, inside a list, tuple, or dict literal.
+_NESTED_LITERALS = (cst.List, cst.Tuple, cst.Dict, cst.Set)
+
 # `velox.raises` refuses to catch a cancellation, which is how a timeout stops a runaway test, so
 # it refuses every type a cancellation is an instance of.
 _UNCATCHABLE = frozenset(
@@ -317,8 +325,14 @@ class _Raises(_BodyPass):
 
 
 class _Approx(_BodyPass):
-    """VX212: `pytest.approx` over a scalar, a list, a tuple, or a dict, which is what
-    `velox.approx` compares."""
+    """VX212: `pytest.approx` over a scalar, which is the default this class's own `CODE` files
+    under. VX213: `pytest.approx` over a list, a tuple, or a dict — an explicit `code=` override
+    on every `record` below, used whenever the first argument has one of those shapes (its own
+    comprehension forms included), success and refusal alike; a list, tuple, dict, or set nested
+    one level inside a list/tuple/dict literal is one such refusal, since `velox.approx` only
+    walks one level. VX221: a set, a set comprehension, a generator expression, or a numpy array,
+    which stay refused — there is no position to compare any of those by.
+    """
 
     CODE = "VX212"
 
@@ -326,37 +340,55 @@ class _Approx(_BodyPass):
         if self.is_blocked or "pytest.approx" not in self.names(original_node):
             return updated_node
         given = positional(original_node)
+        code = self._code(given[0].value) if given else None
         if starred(original_node) or not given:
             self.record(
                 f"`{render(original_node)}` is left as it is: `velox.approx` takes the expected "
-                "value itself."
+                "value itself.",
+                code=code,
             )
             return updated_node
-        kind = self._kind(given[0].value)
+        expected = given[0].value
+        kind = self._kind(expected)
         if kind is not None:
             self.record(
                 f"`{render(original_node)}` is left as it is: it is given {kind}, and "
                 "`velox.approx` has no position to compare it by.",
-                code="VX213",
+                code="VX221",
+            )
+            return updated_node
+        nested = self._nested(expected)
+        if nested is not None:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `{render(nested)}` is nested "
+                "inside it, and `velox.approx` has no position to compare a nested container by.",
+                code=code,
             )
             return updated_node
         unknown = keywords(original_node) - set(_APPROX_POSITIONAL)
         if unknown or len(given) > 1 + len(_APPROX_POSITIONAL):
             self.record(
                 f"`{render(original_node)}` is left as it is: `velox.approx` takes `rel`, `abs` "
-                "and `nan_ok`."
+                "and `nan_ok`.",
+                code=code,
             )
             return updated_node
         args = list(original_node.args)
         for position, name in zip(given[1:], _APPROX_POSITIONAL, strict=False):
             if keyword(original_node, name) is not None:
                 self.record(
-                    f"`{render(original_node)}` is left as it is: it passes `{name}` twice."
+                    f"`{render(original_node)}` is left as it is: it passes `{name}` twice.",
+                    code=code,
                 )
                 return updated_node
             args = [argument(arg.value, name) if arg is position else arg for arg in args]
-        self.record(f"`{render(original_node)}` becomes `velox.approx`.")
+        self.record(f"`{render(original_node)}` becomes `velox.approx`.", code=code)
         return updated_node.with_changes(func=velox("approx"), args=args)
+
+    def _code(self, expected: cst.BaseExpression) -> str | None:
+        """`"VX213"` where `expected` is list/tuple/dict shaped, else `None` (the default
+        `VX212`, a scalar)."""
+        return "VX213" if isinstance(expected, _APPROX_CONTAINER_SHAPES) else None
 
     def _kind(self, expected: cst.BaseExpression) -> str | None:
         """What `expected` is, where it is something `velox.approx` does not compare."""
@@ -368,6 +400,27 @@ class _Approx(_BodyPass):
         ):
             return "a `numpy` array"
         return None
+
+    def _nested(self, expected: cst.BaseExpression) -> cst.BaseExpression | None:
+        """The first literal nested one level inside `expected`, if `expected` is a list, tuple,
+        or dict literal and one of its own elements is itself a list, tuple, dict, or set
+        literal.
+
+        A comprehension's runtime shape cannot be inspected this way, so it is left unchecked.
+        """
+        if isinstance(expected, cst.List | cst.Tuple):
+            values: Sequence[cst.BaseExpression] = [
+                element.value for element in expected.elements if isinstance(element, cst.Element)
+            ]
+        elif isinstance(expected, cst.Dict):
+            values = [
+                element.value
+                for element in expected.elements
+                if isinstance(element, cst.DictElement)
+            ]
+        else:
+            return None
+        return next((value for value in values if isinstance(value, _NESTED_LITERALS)), None)
 
 
 def _out_and_err() -> cst.BaseExpression:

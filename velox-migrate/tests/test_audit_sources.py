@@ -416,7 +416,7 @@ def test_a():
     assert c == pytest.approx(np.array([1.0]))
 """
 
-    assert _codes(source) == ["VX213"] * 3
+    assert _codes(source) == ["VX221"] * 3
 
 
 def test_approx_over_a_list_tuple_or_dict_is_not_reported() -> None:
@@ -432,6 +432,18 @@ def test_a():
 """
 
     assert _codes(source) == []
+
+
+def test_approx_over_a_nested_container_is_reported() -> None:
+    source = """
+import pytest
+def test_a():
+    assert a == pytest.approx([0.1, [0.2, 0.3]])
+    assert b == pytest.approx({"x": (0.1, 0.2)})
+    assert c == pytest.approx((0.1, {"x": 0.2}))
+"""
+
+    assert _codes(source) == ["VX213"] * 3
 
 
 def test_an_imperative_skip_is_reported_wherever_it_is_reached_and_a_mark_is_not() -> None:

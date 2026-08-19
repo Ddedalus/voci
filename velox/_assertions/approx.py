@@ -16,9 +16,9 @@ class Approx:
     """Tolerant numeric comparison. Compare with `==` in either direction.
 
     A list or tuple compares elementwise by position and a dict compares elementwise by key, both
-    under the same `rel`/`abs`/`nan_ok` tolerances applied to every element. A list, tuple, or dict
-    nested inside one of the same kind raises `TypeError`, and so does a set: there is no position
-    to compare it by.
+    under the same `rel`/`abs`/`nan_ok` tolerances applied to every element. A list, tuple, dict,
+    or set nested inside a list, tuple, or dict raises `TypeError`, since `approx` only walks one
+    level, and so does a set at the top level: there is no position to compare it by.
     """
 
     __slots__ = ("_abs", "_expected", "_nan_ok", "_rel")
@@ -111,13 +111,18 @@ def _reject_unsupported(expected: ApproxExpected) -> None:
         )
     if isinstance(expected, dict):
         for key, value in expected.items():
-            if isinstance(value, dict):
-                raise TypeError(f"approx() does not support nested dicts: {key!r}: {value!r}")
+            if isinstance(value, list | tuple | dict | set | frozenset):
+                raise TypeError(
+                    f"approx() does not support a {type(value).__name__} nested inside a dict, "
+                    f"because it only walks one level: {key!r}: {value!r}"
+                )
     elif isinstance(expected, list | tuple):
         for index, value in enumerate(expected):
-            if isinstance(value, type(expected)):
+            if isinstance(value, list | tuple | dict | set | frozenset):
                 raise TypeError(
-                    f"approx() does not support nested sequences: {value!r} at index {index}"
+                    f"approx() does not support a {type(value).__name__} nested inside a "
+                    f"{type(expected).__name__}, because it only walks one level: "
+                    f"{value!r} at index {index}"
                 )
 
 
@@ -131,6 +136,7 @@ def approx(
     """`assert value == velox.approx(0.3)`.
 
     `expected` is a number, or a list, tuple, or dict of numbers compared elementwise under the
-    same tolerances. A set raises `TypeError`, as does a nested list, tuple, or dict.
+    same tolerances. A set raises `TypeError`, as does a container nested inside a list, tuple,
+    or dict.
     """
     return Approx(expected, rel=rel, abs=abs, nan_ok=nan_ok)

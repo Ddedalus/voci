@@ -1372,7 +1372,7 @@ def test_x():
 """
     applied = _rewrite("VX212", before, after, _context("test_x"))
 
-    assert _codes(applied) == ["VX212"]
+    assert _codes(applied) == ["VX213"]
 
 
 def test_approx_over_a_tuple_becomes_velox_approx() -> None:
@@ -1390,7 +1390,7 @@ def test_x():
 """
     applied = _rewrite("VX212", before, after, _context("test_x"))
 
-    assert _codes(applied) == ["VX212"]
+    assert _codes(applied) == ["VX213"]
 
 
 def test_approx_over_a_dict_becomes_velox_approx() -> None:
@@ -1408,7 +1408,25 @@ def test_x():
 """
     applied = _rewrite("VX212", before, after, _context("test_x"))
 
-    assert _codes(applied) == ["VX212"]
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_list_comprehension_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx([x for x in [0.1, 0.2]])
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx([x for x in [0.1, 0.2]])
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
 
 
 def test_approx_over_a_set_is_refused() -> None:
@@ -1420,7 +1438,7 @@ def test_x():
 """
     applied = _untouched("VX212", source, _context("test_x"))
 
-    assert _codes(applied) == ["VX213"]
+    assert _codes(applied) == ["VX221"]
 
 
 def test_approx_over_a_generator_is_refused() -> None:
@@ -1432,7 +1450,7 @@ def test_x():
 """
     applied = _untouched("VX212", source, _context("test_x"))
 
-    assert _codes(applied) == ["VX213"]
+    assert _codes(applied) == ["VX221"]
 
 
 def test_approx_over_a_numpy_array_is_refused() -> None:
@@ -1441,6 +1459,42 @@ def test_approx_over_a_numpy_array_is_refused() -> None:
 
 def test_x():
     assert values == pytest.approx(np.array([0.1, 0.2]))
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX221"]
+
+
+def test_approx_over_a_list_nested_in_a_list_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx([0.1, [0.2, 0.3]])
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_tuple_nested_in_a_dict_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({"a": (0.1, 0.2)})
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_dict_nested_in_a_tuple_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx((0.1, {"a": 0.2}))
 """
     applied = _untouched("VX212", source, _context("test_x"))
 

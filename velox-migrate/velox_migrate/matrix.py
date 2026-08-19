@@ -584,9 +584,9 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "pytest.approx over a list, tuple, or dict",
         MECHANICAL,
         "Becomes `velox.approx`, which compares a list or tuple elementwise by position and a "
-        "dict elementwise by key, all under the same tolerances. Left unconverted for a set or a "
-        "generator expression, which have no position to compare by, and for a numpy array, "
-        "which velox has no dependency to compare.",
+        "dict elementwise by key, all under the same tolerances. Left unconverted where a list, "
+        "tuple, dict, or set is nested one level inside it: `velox.approx` only walks one level, "
+        "so there is no position to compare a nested container by.",
         target="velox.approx",
     ),
     _row(
@@ -648,6 +648,15 @@ CONSTRUCTS: tuple[Construct, ...] = (
         UNSUPPORTED,
         "These fixtures expose pytest's own configuration, cache and self-test machinery.",
         action="Drop the use, or read the value from configuration.",
+    ),
+    _row(
+        "VX221",
+        "pytest.approx over a set or a generator expression",
+        UNSUPPORTED,
+        "Neither has a position to compare by: a set is unordered, and a generator is spent after "
+        "one read. A numpy array is left unconverted here too, since velox has no numpy "
+        "dependency to compare it with.",
+        action="Compare a sorted sequence instead of a set, or a list instead of a generator.",
     ),
     # --- configuration and plugins -------------------------------------------------------------
     _row(
