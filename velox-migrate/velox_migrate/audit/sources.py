@@ -422,6 +422,14 @@ class _Scanner(cst.CSTVisitor):
                     "positional argument for it to call, so its result is being stashed for "
                     "later.",
                 )
+            elif not entered and len(positional) >= 2 and _keyword(node, "match") is not None:
+                self._report(
+                    "VX210",
+                    node,
+                    "`pytest.raises` is called with `match=` and a callable to call: pytest "
+                    "forwards `match` to the callable there, but `velox.raises` always "
+                    "intercepts it to match the exception.",
+                )
             if positional and self._names(positional[0].value) & _CANCELLED:
                 self._report(
                     "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."

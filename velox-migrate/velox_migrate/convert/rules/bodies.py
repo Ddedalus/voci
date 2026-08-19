@@ -238,7 +238,9 @@ class _Raises(_BodyPass):
     rewrite to `velox.raises` unchanged but for the name. A `pytest.raises(E)` that is neither —
     entered by nothing, called with no second positional argument — is a raises object being
     stashed for later, which still reports VX210: there is no `with` and no `func` for a rewrite
-    to key off of.
+    to key off of. A callable form passing `match=` is left alone too: pytest forwards it to
+    `func` there, but `velox.raises` always intercepts it, so the two forms disagree on what the
+    call means.
     """
 
     CODE = "VX209"
@@ -284,6 +286,13 @@ class _Raises(_BodyPass):
             self.record(
                 f"`{render(original_node)}` is left as it is: `velox.raises` is a context "
                 "manager, and this call is not entered by a `with`.",
+                code="VX210",
+            )
+            return updated_node
+        if "match" in keywords(original_node):
+            self.record(
+                f"`{render(original_node)}` is left as it is: pytest forwards `match` to `func` "
+                "in this form, but `velox.raises` always intercepts it to match the exception.",
                 code="VX210",
             )
             return updated_node

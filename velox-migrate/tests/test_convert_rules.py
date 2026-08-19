@@ -1244,6 +1244,21 @@ def test_x():
     assert _codes(applied) == ["VX210"]
 
 
+def test_a_raises_called_with_match_is_refused() -> None:
+    """pytest's callable form forwards `match=` to `func` as one of its `**kwargs`; velox's
+    callable form always intercepts `match` to match the exception instead. The two forms
+    disagree on what the call means, so this is not a safe mechanical rewrite."""
+    source = """import pytest
+
+
+def test_x():
+    pytest.raises(ValueError, boom, 1, match="bad")
+"""
+    applied = _untouched("VX209", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
 def test_a_raises_called_over_a_cancellation_is_refused() -> None:
     source = """import asyncio
 

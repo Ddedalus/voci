@@ -382,6 +382,19 @@ def test_c():
     assert _codes(source) == ["VX210"]
 
 
+def test_a_callable_raises_with_match_is_reported() -> None:
+    """pytest's callable form forwards `match=` to the callable rather than matching against the
+    exception, unlike `velox.raises`'s callable form, which always intercepts it -- so this shape
+    is flagged even though the plain callable form above is not."""
+    source = """
+import pytest
+def test_a():
+    pytest.raises(ValueError, boom, 1, match="boom")
+"""
+
+    assert _codes(source) == ["VX210"]
+
+
 def test_catching_a_cancellation_is_recognized_through_an_import_of_the_exception() -> None:
     source = """
 import pytest

@@ -560,7 +560,9 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "pytest.raises(E, func, *args)",
         MECHANICAL,
         "Becomes `velox.raises`, which has the same callable form: it calls `func(*args, "
-        "**kwargs)` under the hood and returns the resulting `ExceptionInfo`.",
+        "**kwargs)` under the hood and returns the resulting `ExceptionInfo`. Left unconverted "
+        "when `match=` is among the kwargs: pytest forwards it to `func` there, but "
+        "`velox.raises` always intercepts it.",
         target="velox.raises",
     ),
     _row(
