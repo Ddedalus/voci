@@ -47,6 +47,11 @@ class Context:
     nothing on anything else, so a mark rule touches a function only if it is named there.
     `blocked` are the qualnames whose source stays verbatim, refused functions and everything
     downstream of a refusal, and no rule writes inside one or on its decorators.
+
+    `requested` and `finalizers` carry what the plan decided about the bodies in this file, keyed
+    by qualname: which name a `request.getfixturevalue` becomes the parameter of, and whose
+    `request.addfinalizer` calls become the teardown after a `yield`. A rule writes only where
+    they say so — the shapes that decide it are the audit's to read, not a rewrite's.
     """
 
     path: str
@@ -54,6 +59,8 @@ class Context:
     tests: frozenset[str] = frozenset()
     blocked: frozenset[str] = frozenset()
     xfail_strict: bool = False
+    requested: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    finalizers: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +171,11 @@ class RuleTransformer(cst.CSTTransformer):
     def is_blocked(self) -> bool:
         """Whether this site sits in something `Context.blocked` names."""
         return any(frame.qualname in self.context.blocked for frame in self._stack[1:])
+
+    @property
+    def at_module_level(self) -> bool:
+        """Whether the `def` being left is written at module level rather than inside anything."""
+        return len(self._stack) == 2
 
     @property
     def is_test(self) -> bool:

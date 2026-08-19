@@ -393,6 +393,42 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     declared over tests that had exactly one. `VX027` refuses the overriding definition and only
     that one: what the subtree loses is a conversion, and what the rest of the suite keeps is the
     definition it overrode, declared for the tests that converge on it.
+
+  Chunk 3 is built against a sixth corpus suite, whose eleven tests convert with nothing refused,
+  pass under `velox --serial`, keep every node id and run twice byte-identical. Six things that
+  build settled:
+  - **A `request` parameter goes away whole or not at all.** The rewrite's product is a signature
+    without it, so it can only be written where every use of `request` in that body has an answer:
+    a factory reading a literal `getfixturevalue` *and* `request.node` converts neither. That made
+    the scan's silence load-bearing, and it was not silent enough — an attribute with no row of
+    its own was reported by nothing, so `VX015` now covers every attribute of `request` rather
+    than the five that were named.
+  - **The rules decide none of this; the plan does, and reads source to do it.** Whether a name
+    means one fixture is a question about the whole suite, and whether a factory has one place a
+    `yield` can go is a question about a shape no dump carries — so the plan answers both, from
+    the audit and from the `ast` it already parses for binding names, and hands each rule the
+    sites it may write in. A rule that re-derived either would be a second opinion in the one
+    stage that has no oracle behind it.
+  - **A literal name is static only where the suite defines it once.** pytest resolves
+    `getfixturevalue` against the test that is running, so a name defined in two directories
+    reaches two objects and a parameter names one. `VX028` refuses those, and a body sitting
+    somewhere no signature can grow — a helper, a fixture written in a class — with it.
+  - **A finalizer is a teardown only where the body has one place to yield from.** A `return`
+    inside a branch would become a `yield` the body then runs past, so what converts is a factory
+    with no `yield` of its own and no `return` except as its last statement; everything else is
+    `VX014`, whose row grew to say so. The calls are written after the `yield` in the reverse of
+    the order they were registered in, which is the order pytest ran them in.
+  - **A specialized copy carries the body's answers too.** A copy is the original's source under
+    another name, so the name that body asked for is injected into the copy, with the import that
+    reference needs, and the copy's finalizer becomes its own teardown. Keying what the plan
+    decided by the name the file binds — rather than by the definition it was decided about — is
+    what makes the two the same code path.
+  - **The decorator form of `mock.patch` needed no mark at all.** velox reads a test's patching off
+    the function object while collecting and schedules that test alone, so what the conversion owes
+    it is a signature: the mock arrives first and positionally, and the injected parameters follow
+    it — which is what Phase 2's reordering already writes, since an injected parameter is the one
+    that has a default. Only a patch entered inside a body needs `@velox.solo`, and it goes on the
+    tests the audit charged the site to, which are not always in the file the patch is written in.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*

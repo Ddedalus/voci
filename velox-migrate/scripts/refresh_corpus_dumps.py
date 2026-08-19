@@ -26,6 +26,7 @@ DUMPS = CORPUS / "dumps"
 EXTRACTOR = REPO_ROOT / "velox-migrate" / "velox_migrate" / "extractor.py"
 
 SUITES = [
+    "bodies_showcase",
     "declarations_showcase",
     "fixtures_showcase",
     "hazards_showcase",

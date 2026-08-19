@@ -26,6 +26,8 @@ def _context(
     blocked: Iterable[str] = (),
     axis_ids: Mapping[tuple[str, str], tuple[str, ...]] | None = None,
     xfail_strict: bool = False,
+    requested: Mapping[str, Mapping[str, str]] | None = None,
+    finalizers: Iterable[str] = (),
 ) -> rules.Context:
     return rules.Context(
         path=PATH,
@@ -33,6 +35,8 @@ def _context(
         tests=frozenset(tests),
         blocked=frozenset(blocked),
         xfail_strict=xfail_strict,
+        requested=requested or {},
+        finalizers=frozenset(finalizers),
     )
 
 
@@ -993,6 +997,152 @@ def test_x():
 
     assert result.module.code == after
     assert _all(after, context).module.code == after
+
+
+# --- VX011 getfixturevalue --------------------------------------------------------------------
+
+
+def test_a_literal_getfixturevalue_becomes_the_name_of_the_parameter_it_injects() -> None:
+    before = """def engine(request):
+    return {"dsn": request.getfixturevalue("settings")["dsn"]}
+"""
+    after = """def engine(request):
+    return {"dsn": settings["dsn"]}
+"""
+    applied = _rewrite(
+        "VX011", before, after, _context(requested={"engine": {"settings": "settings"}})
+    )
+
+    assert _codes(applied) == ["VX011"]
+
+
+def test_a_getfixturevalue_of_a_renamed_builtin_becomes_the_name_velox_binds() -> None:
+    before = """def test_x(request):
+    assert request.getfixturevalue("tmp_path").is_dir()
+"""
+    after = """def test_x(request):
+    assert tmp_path.is_dir()
+"""
+    _rewrite(
+        "VX011",
+        before,
+        after,
+        _context("test_x", requested={"test_x": {"tmp_path": "tmp_path"}}),
+    )
+
+
+def test_a_getfixturevalue_the_plan_did_not_attribute_is_left_where_it_is() -> None:
+    # The name may mean two fixtures, or the definition may be one nothing can grow a parameter
+    # on. Either way the plan says so, and this rule writes only where it does.
+    source = """def engine(request):
+    return request.getfixturevalue("settings")
+"""
+
+    assert _untouched("VX011", source, _context()) == ()
+
+
+# --- VX013 addfinalizer -----------------------------------------------------------------------
+
+
+def test_an_unconditional_finalizer_becomes_the_teardown_after_a_yield() -> None:
+    before = """def ledger(request):
+    entries = []
+
+    request.addfinalizer(entries.clear)
+    return entries
+"""
+    after = """def ledger(request):
+    entries = []
+
+    yield entries
+    entries.clear()
+"""
+    applied = _rewrite("VX013", before, after, _context(finalizers=["ledger"]))
+
+    assert _codes(applied) == ["VX013"]
+
+
+def test_finalizers_run_in_the_reverse_of_the_order_they_were_registered_in() -> None:
+    # pytest runs them last-registered-first, and a `yield` fixture runs its teardown top to
+    # bottom, so the order the calls are written in is the reverse of the order they were made in.
+    before = """def journal(request, log):
+    request.addfinalizer(lambda: log.append("outer"))
+    request.addfinalizer(close)
+    return {"open": True}
+"""
+    after = """def journal(request, log):
+    yield {"open": True}
+    close()
+    (lambda: log.append("outer"))()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["journal"]))
+
+
+def test_a_factory_that_hands_nothing_back_yields_nothing() -> None:
+    before = """def audited(request, log):
+    log.append("setup")
+    request.addfinalizer(close)
+"""
+    after = """def audited(request, log):
+    log.append("setup")
+    yield
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["audited"]))
+
+
+def test_a_factory_ending_in_a_bare_return_yields_nothing_in_its_place() -> None:
+    before = """def audited(request, log):
+    log.append("setup")
+    request.addfinalizer(close)
+    return
+"""
+    after = """def audited(request, log):
+    log.append("setup")
+    yield
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["audited"]))
+
+
+def test_a_return_sharing_its_line_with_another_statement_still_becomes_the_yield() -> None:
+    before = """def ledger(request):
+    request.addfinalizer(close)
+    entries = []; return entries
+"""
+    after = """def ledger(request):
+    entries = []; yield entries
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["ledger"]))
+
+
+def test_a_finalizer_registered_inside_a_with_block_leaves_the_block_behind() -> None:
+    before = """def handle(request):
+    with open("f") as file:
+        request.addfinalizer(file.close)
+    return file
+"""
+    after = """def handle(request):
+    with open("f") as file:
+        pass
+    yield file
+    file.close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["handle"]))
+
+
+def test_a_registration_inside_a_nested_def_stays_where_it_was_written() -> None:
+    # What a nested function registers is registered only when something calls it, which is not
+    # the shape the plan attributes a site for — so the fixture around it is not one either.
+    source = """def ledger(request):
+    def register():
+        request.addfinalizer(close)
+
+    return register
+"""
+
+    assert _untouched("VX013", source, _context(finalizers=["ledger.register"])) == ()
 
 
 # --- VX201 capsys -----------------------------------------------------------------------------

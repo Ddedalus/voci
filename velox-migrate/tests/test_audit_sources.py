@@ -44,6 +44,8 @@ def engine(request):
 
     assert finding.code == "VX011"
     assert "database" in finding.message
+    # The name is what the conversion injects, so it travels as data rather than as prose.
+    assert finding.detail == {"requested": "database"}
 
 
 def test_a_computed_fixture_name_is_a_different_row_from_a_literal_one() -> None:
@@ -75,9 +77,11 @@ def engine(request):
     assert "`if`" in finding.message
 
 
-def test_a_finalizer_in_a_body_that_always_runs_is_unconditional() -> None:
-    # A `with` body and a `try` body both run, so a finalizer registered in one is registered
-    # every time, which is what `yield` teardown does.
+def test_a_finalizer_in_a_with_body_is_unconditional_and_one_in_a_try_body_is_not() -> None:
+    # Entering a `with` can raise, but then nothing after it runs either, so a registration in one
+    # happens exactly when the fixture succeeds. A `try` body is different: its own handler can
+    # swallow the failure that stopped it halfway and let the rest of the fixture run without the
+    # finalizer that line would have registered.
     source = """
 def engine(request):
     with open("f") as handle:
@@ -90,7 +94,7 @@ def session(request):
         request.addfinalizer(other)
 """
 
-    assert _codes(source) == ["VX013", "VX013", "VX014"]
+    assert _codes(source) == ["VX013", "VX014", "VX014"]
 
 
 def test_a_finalizer_inside_a_match_case_is_conditional() -> None:
@@ -127,6 +131,28 @@ def engine(request):
 """
 
     assert _codes(source) == ["VX015"] * 3
+
+
+def test_an_attribute_of_request_with_no_row_of_its_own_is_still_reported() -> None:
+    # Whether `request` survives the rewrite is what decides if the parameter can go, so an
+    # attribute nothing has a translation for has to be seen rather than passed over.
+    finding = _only("""
+def engine(request):
+    request.applymarker(slow)
+""")
+
+    assert finding.code == "VX015"
+    assert "request.applymarker" in finding.message
+
+
+def test_the_three_request_shapes_a_rewrite_answers_are_not_reported_as_survivals() -> None:
+    source = """
+def engine(request):
+    request.addfinalizer(close)
+    return request.getfixturevalue("database"), request.param
+"""
+
+    assert _codes(source) == ["VX013", "VX011"]
 
 
 def test_reading_a_command_line_flag_is_reported_as_the_flag_and_nothing_else() -> None:

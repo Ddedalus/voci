@@ -12,8 +12,8 @@ matching only a pytest source form its own rewrite eliminates — and each readi
 names the suite wrote, which is why they run before the swap rather than after it: a body saying
 `capsys.readouterr()` is recognized by the `capsys` its enclosing signature still declares. Then
 the wiring swap, which owns signatures, fixture decorators and imports; then the `velox.use(...)`
-declarations, which name what the swap has just imported; then the markers, which are comments and
-disturb nothing.
+declarations, which name what the swap has just imported; then `@velox.solo` on the tests that take
+the run to themselves; then the markers, which are comments and disturb nothing.
 """
 
 from __future__ import annotations
@@ -26,7 +26,16 @@ import libcst as cst
 
 from velox_migrate import matrix
 from velox_migrate.audit import Audit
-from velox_migrate.convert import config, declarations, layout, markers, plan, rules, wiring
+from velox_migrate.convert import (
+    config,
+    declarations,
+    layout,
+    markers,
+    plan,
+    rules,
+    solo,
+    wiring,
+)
 from velox_migrate.convert.edits import Edit, EditSet
 from velox_migrate.convert.plan import DEFERRED, FileWork, Plan
 from velox_migrate.model import GroundTruth
@@ -135,10 +144,12 @@ def _rewrite(
         module,
         work,
         needs={*work.needs, *(needed for record in applied for needed in record.needs)},
-        touched=bool(applied) or bool(work.declares),
+        touched=bool(applied) or bool(work.declares) or bool(work.solo),
     )
     module = swapped.module
 
+    if work.solo:
+        module = solo.apply(module, work.solo)
     if work.declares:
         # After the swap, which is what puts the imports the declaration names in the module, and
         # what turns the file's own autouse fixtures into the objects it declares.

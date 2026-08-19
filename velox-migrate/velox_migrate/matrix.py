@@ -228,15 +228,17 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX014",
-        "request.addfinalizer under a condition",
+        "request.addfinalizer where no single yield can take its place",
         REFUSED,
-        "A `yield` fixture always runs its teardown, so a conditionally registered finalizer "
-        "would start running where it did not.",
-        action="Make the finalizer unconditional, moving the condition inside it.",
+        "A `yield` fixture hands its value over at one point in the body and tears down after "
+        "it, so a finalizer registered under a condition, from inside another function, or from "
+        "somewhere that is not a fixture has nowhere to move to.",
+        action="Register the finalizer unconditionally in the fixture's own body, moving any "
+        "condition inside it.",
     ),
     _row(
         "VX015",
-        "request.node, request.config, request.cls, request.instance, request.fixturenames",
+        "request.node, request.config, request.cls, and every other attribute of request",
         MARKER,
         "`velox.test_info` carries the test's id, tags, timeout and worker. Anything else these "
         "reach — a node's own marks, ini values, the owning class — has no counterpart.",
@@ -344,6 +346,16 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "one of them for a directory — so an autouse fixture the override changes would be "
         "declared twice over the same tests, once for each definition.",
         action="Request the fixture by name where it is needed, or unwind the override.",
+    ),
+    _row(
+        "VX028",
+        "request.getfixturevalue of a name a parameter cannot carry",
+        REFUSED,
+        "A parameter names one object for the whole definition, so a name the suite defines in "
+        "more than one directory, or one asked for where there is no signature to grow, has no "
+        "parameter to become.",
+        action="Request the fixture in the signature, or unwind the override that gives the "
+        "name two meanings.",
     ),
     _row(
         "VX030",
