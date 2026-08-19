@@ -1,0 +1,988 @@
+{
+ "extractor_version": 1,
+ "pytest_version": "9.1.1",
+ "environment": {
+  "sys_platform": "linux",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "python_version": "3.13.14",
+  "python_implementation": "CPython"
+ },
+ "rootpath": ".",
+ "inipath": "pytest.ini",
+ "args": [
+  "."
+ ],
+ "ini": {
+  "addopts": "[]",
+  "assertion_text_diff_style": "'ndiff'",
+  "cache_dir": "'.pytest_cache'",
+  "collect_imported_tests": "True",
+  "consider_namespace_packages": "False",
+  "console_output_style": "'progress'",
+  "disable_test_id_escaping_and_forfeit_all_rights_to_community_support": "False",
+  "doctest_encoding": "'utf-8'",
+  "doctest_optionflags": "['ELLIPSIS']",
+  "empty_parameter_set_mark": "''",
+  "enable_assertion_pass_hook": "False",
+  "faulthandler_exit_on_timeout": "False",
+  "faulthandler_timeout": "0.0",
+  "filterwarnings": "[]",
+  "junit_duration_report": "'total'",
+  "junit_family": "'xunit2'",
+  "junit_log_passing_tests": "True",
+  "junit_logging": "'no'",
+  "junit_suite_name": "'pytest'",
+  "log_auto_indent": "None",
+  "log_cli": "False",
+  "log_cli_date_format": "None",
+  "log_cli_format": "None",
+  "log_cli_level": "None",
+  "log_date_format": "'%H:%M:%S'",
+  "log_file": "None",
+  "log_file_date_format": "None",
+  "log_file_format": "None",
+  "log_file_level": "None",
+  "log_file_mode": "'w'",
+  "log_format": "'%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s'",
+  "log_level": "None",
+  "markers": "['filterwarnings(warning): add a warning filter to the given test. see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ', 'skip(reason=None): skip the given test function with an optional reason. Example: skip(reason=\"no way of currently testing this\") skips the test.', \"skipif(condition, ..., *, reason=...): skip the given test function if any of the conditions evaluate to True. Example: skipif(sys.platform == 'win32') skips the test if we are on the win32 platform. See https://docs.pytest.org/en/stable/reference/reference.html#pytest-mark-skipif\", \"xfail(condition, ..., *, reason=..., run=True, raises=None, strict=strict_xfail): mark the test function as an expected failure if any of the conditions evaluate to True. Optionally specify a reason for better reporting and run=False if you don't even want to execute the test function. If only specific exception(s) are expected, you can list them in raises, and if the test fails in other ways, it will be reported as a true failure. See https://docs.pytest.org/en/stable/reference/reference.html#pytest-mark-xfail\", \"parametrize(argnames, argvalues): call a test function multiple times passing in different arguments in turn. argvalues generally needs to be a list of values if argnames specifies only one name or a list of tuples of values if argnames specifies multiple names. Example: @parametrize('arg1', [1,2]) would lead to two calls of the decorated test function, one with arg1=1 and another with arg1=2.see https://docs.pytest.org/en/stable/how-to/parametrize.html for more info and examples.\", 'usefixtures(fixturename1, fixturename2, ...): mark tests as needing all of the specified fixtures. see https://docs.pytest.org/en/stable/explanation/fixtures.html#usefixtures ', 'tryfirst: mark a hook implementation function such that the plugin machinery will try to call it first/as early as possible. DEPRECATED, use @pytest.hookimpl(tryfirst=True) instead.', 'trylast: mark a hook implementation function such that the plugin machinery will try to call it last/as late as possible. DEPRECATED, use @pytest.hookimpl(trylast=True) instead.']",
+  "max_warnings": "''",
+  "minversion": "''",
+  "norecursedirs": "['*.egg', '.*', '_darcs', 'build', 'CVS', 'dist', 'node_modules', 'venv', '{arch}']",
+  "python_classes": "['Test']",
+  "python_files": "['test_*.py', '*_test.py']",
+  "python_functions": "['test']",
+  "pythonpath": "[]",
+  "required_plugins": "[]",
+  "strict": "False",
+  "strict_config": "None",
+  "strict_markers": "None",
+  "strict_parametrization_ids": "None",
+  "strict_xfail": "None",
+  "testpaths": "['.']",
+  "tmp_path_retention_count": "'3'",
+  "tmp_path_retention_policy": "'all'",
+  "truncation_limit_chars": "None",
+  "truncation_limit_lines": "None",
+  "usefixtures": "[]",
+  "verbosity_assertions": "'auto'",
+  "verbosity_subtests": "'auto'",
+  "verbosity_test_cases": "'auto'"
+ },
+ "ini_aliases": {
+  "xfail_strict": "strict_xfail"
+ },
+ "exit_status": 0,
+ "collection_errors": [],
+ "plugins": {
+  "distinfo": [],
+  "names": [
+   "assertion",
+   "cacheprovider",
+   "capture",
+   "capturemanager",
+   "conftest.py",
+   "debugging",
+   "doctest",
+   "extractor",
+   "faulthandler",
+   "fixtures",
+   "funcmanage",
+   "helpconfig",
+   "junitxml",
+   "legacypath",
+   "legacypath-tmpdir",
+   "lfplugin",
+   "logging",
+   "logging-plugin",
+   "main",
+   "mark",
+   "monkeypatch",
+   "nfplugin",
+   "pastebin",
+   "pytestconfig",
+   "python",
+   "recwarn",
+   "reports",
+   "runner",
+   "session",
+   "setuponly",
+   "setupplan",
+   "skipping",
+   "stepwise",
+   "subtests",
+   "terminal",
+   "terminalreporter",
+   "threadexception",
+   "tmpdir",
+   "unittest",
+   "unraisableexception",
+   "warnings"
+  ]
+ },
+ "autouse_by_node": {
+  ".": []
+ },
+ "fixture_defs": {
+  "f0": {
+   "argname": "cache",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.cacheprovider",
+    "qualname": "cache",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/cacheprovider.py",
+    "lineno": 559,
+    "wrapped": false
+   }
+  },
+  "f1": {
+   "argname": "capfd",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capfd",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1097,
+    "wrapped": false
+   }
+  },
+  "f2": {
+   "argname": "capfdbinary",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capfdbinary",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1125,
+    "wrapped": false
+   }
+  },
+  "f3": {
+   "argname": "caplog",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.logging",
+    "qualname": "caplog",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/logging.py",
+    "lineno": 610,
+    "wrapped": false
+   }
+  },
+  "f4": {
+   "argname": "capsys",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capsys",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1006,
+    "wrapped": false
+   }
+  },
+  "f5": {
+   "argname": "capsysbinary",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capsysbinary",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1069,
+    "wrapped": false
+   }
+  },
+  "f6": {
+   "argname": "capteesys",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.capture",
+    "qualname": "capteesys",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "lineno": 1034,
+    "wrapped": false
+   }
+  },
+  "f7": {
+   "argname": "doctest_namespace",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.doctest",
+    "qualname": "doctest_namespace",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/doctest.py",
+    "lineno": 720,
+    "wrapped": false
+   }
+  },
+  "f8": {
+   "argname": "engine",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "engine",
+    "file": "conftest.py",
+    "lineno": 23,
+    "wrapped": false
+   }
+  },
+  "f9": {
+   "argname": "journal",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request",
+    "teardowns"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "journal",
+    "file": "conftest.py",
+    "lineno": 39,
+    "wrapped": false
+   }
+  },
+  "f10": {
+   "argname": "ledger",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request",
+    "teardowns"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "ledger",
+    "file": "conftest.py",
+    "lineno": 28,
+    "wrapped": false
+   }
+  },
+  "f11": {
+   "argname": "monkeypatch",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.monkeypatch",
+    "qualname": "monkeypatch",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/monkeypatch.py",
+    "lineno": 35,
+    "wrapped": false
+   }
+  },
+  "f12": {
+   "argname": "pytestconfig",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.fixtures",
+    "qualname": "pytestconfig",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/fixtures.py",
+    "lineno": 1563,
+    "wrapped": false
+   }
+  },
+  "f13": {
+   "argname": "record_property",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_property",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 274,
+    "wrapped": false
+   }
+  },
+  "f14": {
+   "argname": "record_testsuite_property",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_testsuite_property",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 335,
+    "wrapped": false
+   }
+  },
+  "f15": {
+   "argname": "record_xml_attribute",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.junitxml",
+    "qualname": "record_xml_attribute",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "lineno": 297,
+    "wrapped": false
+   }
+  },
+  "f16": {
+   "argname": "recwarn",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "_pytest.recwarn",
+    "qualname": "recwarn",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/recwarn.py",
+    "lineno": 36,
+    "wrapped": false
+   }
+  },
+  "f17": {
+   "argname": "settings",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "settings",
+    "file": "conftest.py",
+    "lineno": 13,
+    "wrapped": false
+   }
+  },
+  "f18": {
+   "argname": "subtests",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.subtests",
+    "qualname": "subtests",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/subtests.py",
+    "lineno": 135,
+    "wrapped": false
+   }
+  },
+  "f19": {
+   "argname": "teardowns",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "teardowns",
+    "file": "conftest.py",
+    "lineno": 18,
+    "wrapped": false
+   }
+  },
+  "f20": {
+   "argname": "tmp_path",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request",
+    "tmp_path_factory"
+   ],
+   "func": {
+    "module": "_pytest.tmpdir",
+    "qualname": "tmp_path",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "lineno": 290,
+    "wrapped": false
+   }
+  },
+  "f21": {
+   "argname": "tmp_path_factory",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.tmpdir",
+    "qualname": "tmp_path_factory",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "lineno": 275,
+    "wrapped": false
+   }
+  },
+  "f22": {
+   "argname": "tmpdir",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "tmp_path"
+   ],
+   "func": {
+    "module": "_pytest.legacypath",
+    "qualname": "LegacyTmpdirPlugin.tmpdir",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "lineno": 304,
+    "wrapped": false
+   }
+  },
+  "f23": {
+   "argname": "tmpdir_factory",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.legacypath",
+    "qualname": "LegacyTmpdirPlugin.tmpdir_factory",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "lineno": 297,
+    "wrapped": false
+   }
+  },
+  "f24": {
+   "argname": "attempt",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "DirectParamFixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "lineno": 1154,
+    "wrapped": false
+   }
+  }
+ },
+ "fixture_registry": {
+  "cache": [
+   "f0"
+  ],
+  "capfd": [
+   "f1"
+  ],
+  "capfdbinary": [
+   "f2"
+  ],
+  "caplog": [
+   "f3"
+  ],
+  "capsys": [
+   "f4"
+  ],
+  "capsysbinary": [
+   "f5"
+  ],
+  "capteesys": [
+   "f6"
+  ],
+  "doctest_namespace": [
+   "f7"
+  ],
+  "engine": [
+   "f8"
+  ],
+  "journal": [
+   "f9"
+  ],
+  "ledger": [
+   "f10"
+  ],
+  "monkeypatch": [
+   "f11"
+  ],
+  "pytestconfig": [
+   "f12"
+  ],
+  "record_property": [
+   "f13"
+  ],
+  "record_testsuite_property": [
+   "f14"
+  ],
+  "record_xml_attribute": [
+   "f15"
+  ],
+  "recwarn": [
+   "f16"
+  ],
+  "settings": [
+   "f17"
+  ],
+  "subtests": [
+   "f18"
+  ],
+  "teardowns": [
+   "f19"
+  ],
+  "tmp_path": [
+   "f20"
+  ],
+  "tmp_path_factory": [
+   "f21"
+  ],
+  "tmpdir": [
+   "f22"
+  ],
+  "tmpdir_factory": [
+   "f23"
+  ]
+ },
+ "items": [
+  {
+   "nodeid": "test_bodies.py::test_patch_decorator",
+   "path": "test_bodies.py",
+   "lineno": 15,
+   "originalname": "test_patch_decorator",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "engine"
+   ],
+   "initialnames": [
+    "engine"
+   ],
+   "names_closure": [
+    "engine",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "engine": [
+     "f8"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_patch_decorator_parametrized[1]",
+   "path": "test_bodies.py",
+   "lineno": 22,
+   "originalname": "test_patch_decorator_parametrized",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'attempt'",
+      "[1, 2]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_bodies.py::test_patch_decorator_parametrized[1]",
+     "name": "parametrize",
+     "args": [
+      "'attempt'",
+      "[1, 2]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "attempt",
+    "settings"
+   ],
+   "initialnames": [
+    "attempt",
+    "settings"
+   ],
+   "names_closure": [
+    "settings",
+    "attempt"
+   ],
+   "name2fixturedefs": {
+    "settings": [
+     "f17"
+    ],
+    "attempt": [
+     "f24"
+    ]
+   },
+   "callspec": {
+    "id": "1",
+    "idlist": [
+     "1"
+    ],
+    "params": {
+     "attempt": "1"
+    },
+    "indices": {
+     "attempt": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_patch_decorator_parametrized[2]",
+   "path": "test_bodies.py",
+   "lineno": 22,
+   "originalname": "test_patch_decorator_parametrized",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'attempt'",
+      "[1, 2]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_bodies.py::test_patch_decorator_parametrized[2]",
+     "name": "parametrize",
+     "args": [
+      "'attempt'",
+      "[1, 2]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "attempt",
+    "settings"
+   ],
+   "initialnames": [
+    "attempt",
+    "settings"
+   ],
+   "names_closure": [
+    "settings",
+    "attempt"
+   ],
+   "name2fixturedefs": {
+    "settings": [
+     "f17"
+    ],
+    "attempt": [
+     "f24"
+    ]
+   },
+   "callspec": {
+    "id": "2",
+    "idlist": [
+     "2"
+    ],
+    "params": {
+     "attempt": "2"
+    },
+    "indices": {
+     "attempt": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_patch_context_manager",
+   "path": "test_bodies.py",
+   "lineno": 30,
+   "originalname": "test_patch_context_manager",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "engine"
+   ],
+   "initialnames": [
+    "engine"
+   ],
+   "names_closure": [
+    "engine",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "engine": [
+     "f8"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_patch_dict_context_manager",
+   "path": "test_bodies.py",
+   "lineno": 36,
+   "originalname": "test_patch_dict_context_manager",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_bodies.py::test_started_patcher",
+   "path": "test_bodies.py",
+   "lineno": 41,
+   "originalname": "test_started_patcher",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_bodies.py::test_finalizers_are_registered",
+   "path": "test_bodies.py",
+   "lineno": 49,
+   "originalname": "test_finalizers_are_registered",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "ledger",
+    "journal"
+   ],
+   "initialnames": [
+    "ledger",
+    "journal"
+   ],
+   "names_closure": [
+    "teardowns",
+    "ledger",
+    "request",
+    "journal"
+   ],
+   "name2fixturedefs": {
+    "ledger": [
+     "f10"
+    ],
+    "teardowns": [
+     "f19"
+    ],
+    "journal": [
+     "f9"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_getfixturevalue_by_name",
+   "path": "test_bodies.py",
+   "lineno": 54,
+   "originalname": "test_getfixturevalue_by_name",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "request"
+   ],
+   "initialnames": [
+    "request"
+   ],
+   "names_closure": [
+    "request"
+   ],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "test_bodies.py::test_teardown_ran_in_reverse",
+   "path": "test_bodies.py",
+   "lineno": 58,
+   "originalname": "test_teardown_ran_in_reverse",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "teardowns"
+   ],
+   "initialnames": [
+    "teardowns"
+   ],
+   "names_closure": [
+    "teardowns"
+   ],
+   "name2fixturedefs": {
+    "teardowns": [
+     "f19"
+    ]
+   }
+  }
+ ]
+}
