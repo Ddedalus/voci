@@ -21,7 +21,7 @@ import libcst as cst
 
 import pytest
 from velox_migrate import audit, convert, matrix, model
-from velox_migrate.convert import config, layout, markers, plan, wiring
+from velox_migrate.convert import config, layout, markers, parametrize, plan, wiring
 from velox_migrate.convert.layout import Import
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
@@ -36,6 +36,7 @@ DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
 HAZARDS = "hazards_showcase"
 OVERRIDES = "overrides_showcase"
+PARAMETRIZE = "parametrize_showcase"
 
 
 @pytest.fixture(params=PYTEST_VERSIONS, ids=[f"pytest{v}" for v in PYTEST_VERSIONS])
@@ -300,6 +301,103 @@ def test_the_converted_overrides_suite_keeps_every_pytest_node_id(
     assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / OVERRIDES)
 
 
+def test_the_parametrize_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(PARAMETRIZE, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_parametrize_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for the two call-site parametrizations: a fixture an `indirect` mark chose cases for
+    # builds each of them, and a test a hook built cases for runs the list the hook produced.
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_parametrize_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / PARAMETRIZE)
+
+
+def test_an_indirect_marks_values_become_the_fixtures_own_cases(
+    version: str, tmp_path: Path
+) -> None:
+    # The mark is written in the test module and the `params=` is read in the fixture module, so
+    # what travels is the value pytest passed — with the ids it composed, which is what keeps the
+    # node ids. Both tests reaching `backend` lose the mark, including the one that never named it.
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    fixtures = (tree / "fixtures.py").read_text(encoding="utf-8")
+    tests = (tree / "test_indirect.py").read_text(encoding="utf-8")
+
+    assert '@velox.fixture(params=["mysql", "sqlite"], ids=["mysql", "sqlite"])' in fixtures
+    assert "def backend(param):" in fixtures
+    assert "indirect" not in tests
+    assert "def test_backend_through_engine(engine=Depends(engine)):" in tests
+
+
+def test_a_hook_that_built_cases_leaves_them_written_on_each_test(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    body = (tree / "test_generated.py").read_text(encoding="utf-8")
+
+    assert '@velox.parametrize("width,height", [(2, 3), (5, 8)], ids=["small", "large"])' in body
+    assert '@velox.parametrize("letter", ["a", "b"], ids=["a", "b"])' in body
+    assert "VELOX-TODO[VX024]" in body
+
+
+def test_an_indirect_mark_on_a_fixture_with_cases_of_its_own_refuses_the_test(
+    version: str, tmp_path: Path
+) -> None:
+    # `backend` is a `params=` fixture that one test also parametrizes indirectly. One case list
+    # cannot be both, so the fixture keeps the cases every other test reaches it for and the test
+    # that asked for different ones keeps its pytest source.
+    tree = tmp_path / FIXTURES
+    result = converted(FIXTURES, version, tree)
+
+    body = (tree / "test_top.py").read_text(encoding="utf-8")
+
+    assert [f.code for f in result.plan.refusals if f.code == "VX029"] == ["VX029"]
+    assert "test_top.py::test_indirect[mysql]" in result.plan.blocked_tests
+    assert '@pytest.mark.parametrize("backend", ["mysql"], indirect=True)' in body
+    assert "VELOX-TODO[VX029]" in body
+    assert 'ids=["lite", "pg"]' in (tree / "fixtures.py").read_text(encoding="utf-8")
+
+
+def test_a_generated_value_with_no_literal_spelling_refuses_the_test() -> None:
+    # A frozen case list is written from the value each case was given, and a `repr` that reads
+    # back as nothing is not a value this can write down.
+    dump = json.loads((DUMPS / f"{PARAMETRIZE}-pytest-9.1.json").read_text(encoding="utf-8"))
+    for entry in dump["items"]:
+        params = (entry.get("callspec") or {}).get("params", {})
+        if "letter" in params:
+            params["letter"] = "<Backend object at 0x1>"
+    ground_truth = model.build(dump)
+    root = CORPUS / PARAMETRIZE
+
+    result = convert.run(audit.run(ground_truth, root=root), ground_truth, root=root)
+
+    assert [f.code for f in result.plan.refusals] == ["VX031"]
+    assert "test_generated.py::test_letters[a]" in result.plan.blocked_tests
+    assert "test_generated.py::test_area[small]" not in result.plan.blocked_tests
+
+
 def test_the_converted_suite_keeps_every_pytest_node_id(version: str, tmp_path: Path) -> None:
     # §9's promise, and why `@velox.parametrize` is emitted with pytest's own ids: a CI config, a
     # flaky-test dashboard or a `--last-failed` habit that names an id keeps working.
@@ -350,7 +448,7 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES])
+@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE])
 def test_converting_an_already_converted_tree_changes_nothing(
     suite: str, version: str, tmp_path: Path
 ) -> None:
@@ -670,6 +768,38 @@ def test_a_capsys_use_no_rule_rewrites_refuses_the_test_rather_than_stranding_it
 
     assert result.refused == (("test_x", "VX202"),)
     assert result.module.code == source
+
+
+def test_a_carried_case_list_replaces_what_the_decorator_said_about_cases() -> None:
+    # pytest tolerates an `ids=` with no `params=` beside it, and velox raises on one. The cases
+    # are the mark's now, so what the decorator said about cases of its own goes with it.
+    source = """import pytest
+
+
+@pytest.fixture(ids=["only"])
+def backend(request):
+    return request.param
+"""
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        fixtures=(
+            plan.FixtureWork(
+                key="f0",
+                argname="backend",
+                symbol="backend",
+                scope="function",
+                injections=(plan.Injection("request", "param", ""),),
+                parametrized=True,
+                carried=parametrize.Carried(values=("'mysql'",), ids=("mysql",)),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert '@velox.fixture(params=["mysql"], ids=["mysql"])' in result.module.code
+    assert '"only"' not in result.module.code
 
 
 def test_a_conftest_never_moves_onto_a_fixtures_module_the_suite_already_has() -> None:

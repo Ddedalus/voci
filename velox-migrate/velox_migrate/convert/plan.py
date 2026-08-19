@@ -21,23 +21,19 @@ from pathlib import Path
 from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
-from velox_migrate.convert import declarations, layout, specialize
+from velox_migrate.convert import declarations, layout, parametrize, specialize
 from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
+from velox_migrate.convert.parametrize import Carried, Decision
 from velox_migrate.convert.rules import Context
 from velox_migrate.convert.specialize import Specialization
 from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
 
-# Codes a later phase of the tool converts. Until then they behave exactly as a refusal: the
-# construct is real, the translation is not written, and the source says so. Each is a support
-# matrix row whose disposition already says conversion is possible, which is why the list lives
-# here rather than in the matrix.
-DEFERRED: frozenset[str] = frozenset(
-    {
-        "VX007",  # indirect parametrization
-        "VX024",  # cases a pytest_generate_tests hook produced
-    }
-)
+# Codes a later phase of the tool converts, which behave exactly as a refusal while they are
+# listed: the construct is real, the translation is not written, and the source says so. A code
+# here is a support matrix row whose disposition already says conversion is possible, which is why
+# the list lives in the code rather than in the matrix — a phase boundary is a list of codes.
+DEFERRED: frozenset[str] = frozenset()
 
 # What the body scan says about `request` in one definition: the two shapes a rewrite answers, the
 # rows that mean the parameter outlives the rewrite whatever else is written beside them, and the
@@ -115,7 +111,12 @@ class Body:
 
 @dataclass(frozen=True, slots=True)
 class FixtureWork:
-    """One fixture definition to translate, in the file its factory is written in."""
+    """One fixture definition to translate, in the file its factory is written in.
+
+    `carried` is the case list an indirect parametrization moves onto this fixture, and `None` for
+    every fixture whose cases are its own or which has none: `params=` and `ids=` a suite wrote
+    itself travel with the decorator rather than through here.
+    """
 
     key: str
     argname: str
@@ -123,6 +124,7 @@ class FixtureWork:
     scope: str
     injections: tuple[Injection, ...]
     parametrized: bool
+    carried: Carried | None = None
 
     @property
     def request_param(self) -> Injection | None:
@@ -223,18 +225,24 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
 
     # What a body asked for by name, attributed to the definition that asked: a site the rewrite
     # cannot answer for is a refusal like any other, and travels like one.
+    every_item = _items_by_qualname(ground_truth, frozenset())
     bodies, unattributed = _bodies(
         audit,
         ground_truth,
         declared=declared,
         yieldable=_yieldable_factories(sources),
-        items=_items_by_qualname(ground_truth, frozenset()),
+        items=every_item,
         translatable=translatable,
     )
-    refusals = (*refusals, *unattributed)
+
+    # Where a case list a call site decided ends up, decided before anything is blocked: a fixture
+    # that is about to carry `params=` is one whose `request` has an answer, and one that is not is
+    # a refusal like any other.
+    cases = parametrize.decide(ground_truth, items=every_item, translatable=translatable)
+    refusals = (*refusals, *unattributed, *cases.findings)
 
     blocked_fixtures = _blocked_fixtures(
-        ground_truth, translatable, refusals, declared, overrides, bodies
+        ground_truth, translatable, refusals, declared, overrides, bodies, cases.carried
     )
     blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures, bodies)
 
@@ -259,7 +267,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     unplaced = {key for key in converting if plan_layout.home(key) is None}
     if unplaced:
         blocked_fixtures = _propagate(
-            ground_truth, translatable, blocked_fixtures | unplaced, bodies
+            ground_truth, translatable, blocked_fixtures | unplaced, bodies, cases.carried
         )
         blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures, bodies)
         converting = {
@@ -314,6 +322,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             special=special,
             bodies=bodies,
             solo=_solo(audit, items),
+            decided=cases,
         ),
         blocked_tests=blocked_tests,
         blocked_fixtures=frozenset(blocked_fixtures),
@@ -676,6 +685,7 @@ def _blocked_fixtures(
     declared: Mapping[str, Mapping[str, str]],
     overrides: Sequence[audit_wiring.Override],
     bodies: Mapping[tuple[str, str], Body],
+    carried: Mapping[str, Carried] = {},
 ) -> set[str]:
     """Every fixture this conversion leaves as pytest wrote it.
 
@@ -706,7 +716,7 @@ def _blocked_fixtures(
             # No source declares it under a name a `Depends()` could import.
             blocked.add(key)
 
-    return _propagate(ground_truth, translatable, blocked, bodies)
+    return _propagate(ground_truth, translatable, blocked, bodies, carried)
 
 
 def _undeclarable(overrides: Sequence[audit_wiring.Override]) -> set[str]:
@@ -736,6 +746,7 @@ def _propagate(
     translatable: Mapping[str, FixtureDef],
     blocked: set[str],
     bodies: Mapping[tuple[str, str], Body],
+    carried: Mapping[str, Carried] = {},
 ) -> set[str]:
     """Grow `blocked` until every fixture depending on a blocked one is blocked too."""
     edges: dict[str, set[str]] = {}
@@ -758,9 +769,15 @@ def _propagate(
                 elif edge.name != REQUEST:
                     # A name the dump cannot resolve is a dependency nothing can name.
                     blocked.add(fixture.key)
-            if REQUEST in fixture.argnames and not fixture.is_parametrized and body is None:
-                # `request` has no counterpart except as a `params=` fixture's own case, or where
-                # the scan accounted for every use of it and the rewrite takes them all away.
+            if (
+                REQUEST in fixture.argnames
+                and not fixture.is_parametrized
+                and fixture.key not in carried
+                and body is None
+            ):
+                # `request` has no counterpart except as a parametrized fixture's own case —
+                # whether the cases are the fixture's own or an indirect mark's — or where the
+                # scan accounted for every use of it and the rewrite takes them all away.
                 blocked.add(fixture.key)
 
     changed = True
@@ -910,6 +927,7 @@ def _work(
     special: Specialization,
     bodies: Mapping[tuple[str, str], Body],
     solo: Mapping[str, frozenset[str]],
+    decided: Decision,
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
@@ -924,9 +942,17 @@ def _work(
                 symbol=home.symbol,
                 scope=SCOPES.get(fixture.scope, "function"),
                 injections=_injections(
-                    ground_truth, plan_layout, key, home.module, converting, special, bodies=bodies
+                    ground_truth,
+                    plan_layout,
+                    key,
+                    home.module,
+                    converting,
+                    special,
+                    bodies=bodies,
+                    carried=decided.carried,
                 ),
-                parametrized=fixture.is_parametrized,
+                parametrized=fixture.is_parametrized or key in decided.carried,
+                carried=decided.carried.get(key),
             )
         )
 
@@ -943,7 +969,11 @@ def _work(
             special,
             node=copy.node,
             bodies=bodies,
+            carried=decided.carried,
         )
+        # A copy is the original's source under another name, so a case list the original carries
+        # is the copy's too: every test the copy serves reached the original's cases before.
+        borrowed = decided.carried.get(copy.origin)
         fixtures_by_file.setdefault(copy.host, []).append(
             FixtureWork(
                 key=copy.key,
@@ -951,7 +981,8 @@ def _work(
                 symbol=copy.symbol,
                 scope=SCOPES.get(copy.scope, "function"),
                 injections=injections,
-                parametrized=copy.parametrized,
+                parametrized=copy.parametrized or borrowed is not None,
+                carried=borrowed,
             )
         )
         duplicates.setdefault(copy.host, []).append(
@@ -997,7 +1028,7 @@ def _work(
             duplicates=_ordered(duplicates.get(path, ())),
             needs=tuple(sorted(needs.get(path, set()))),
             solo=tuple(sorted(solo.get(path, ()))),
-            context=_context(ground_truth, path, items, blocked_tests, bodies, special),
+            context=_context(ground_truth, path, items, blocked_tests, bodies, special, decided),
         )
     return work
 
@@ -1113,9 +1144,11 @@ def _injections(
     *,
     node: str | None = None,
     bodies: Mapping[tuple[str, str], Body] = {},
+    carried: Mapping[str, Carried] = {},
 ) -> tuple[Injection, ...]:
     """What each parameter of the fixture `key`'s factory becomes, seen from `node`."""
     fixture = ground_truth.fixture_defs[key]
+    parametrized = fixture.is_parametrized or key in carried
     body = _body_of(bodies, fixture)
     resolved = dict(
         _resolved_at(ground_truth, fixture, node if node is not None else fixture.visibility)
@@ -1127,11 +1160,11 @@ def _injections(
         plan_layout,
         consumer,
         converting,
-        fixture.is_parametrized,
+        parametrized,
         special,
         asked=_by_name(fixture.argnames, names),
     )
-    return _without_request(found, fixture.argnames, body, parametrized=fixture.is_parametrized)
+    return _without_request(found, fixture.argnames, body, parametrized=parametrized)
 
 
 def _test_injections(
@@ -1257,6 +1290,7 @@ def _context(
     blocked_tests: frozenset[str],
     bodies: Mapping[tuple[str, str], Body] = {},
     special: Specialization = specialize.NONE,
+    cases: Decision | None = None,
 ) -> Context:
     tests = {qualname for (file, qualname) in items if file == path}
     blocked = {
@@ -1265,9 +1299,12 @@ def _context(
         if item.path == path and item.nodeid in blocked_tests
     }
     named = _bodies_in(bodies, path, ground_truth, special)
+    decided = cases if cases is not None else parametrize.Decision({}, {}, {}, ())
     return Context(
         path=path,
-        axis_ids=_axis_ids(items, path),
+        axis_ids=parametrize.ids_by_axis(items, path),
+        indirect=_at_path(decided.dropped, path),
+        generated=_at_path(decided.generated, path),
         tests=frozenset(tests),
         blocked=frozenset(blocked),
         xfail_strict=_xfail_strict(ground_truth),
@@ -1310,78 +1347,9 @@ def _param_of(ground_truth: GroundTruth, key: str, name: str) -> str:
     return builtin[0] if builtin is not None else name
 
 
-def _axis_ids(
-    items: Mapping[tuple[str, str], tuple[Item, ...]], path: str
-) -> Mapping[tuple[str, str], tuple[str, ...]]:
-    """pytest's own ids for each parametrize axis in `path`, where one axis explains them.
-
-    A case id is composed from every axis that varies the test, so an id can only be written onto
-    one `parametrize` mark when exactly one position in pytest's own id list moves with that
-    axis's index and stands still within it. Where no position does, the axis is `VX114` and the
-    ids are velox's to generate.
-    """
-    found: dict[tuple[str, str], tuple[str, ...]] = {}
-    for (file, qualname), cases in items.items():
-        if file != path:
-            continue
-        specs = [item.callspec for item in cases if item.callspec is not None]
-        if len(specs) != len(cases) or not specs:
-            continue
-        for argnames in _axes(specs):
-            ids = _ids_for_axis(specs, argnames)
-            if ids is not None:
-                found[(qualname, ",".join(argnames))] = ids
-    return found
-
-
-def _axes(specs: list) -> Iterator[tuple[str, ...]]:
-    """Every set of argnames that moves together across the cases.
-
-    One `parametrize` mark over `"a,b"` gives `a` and `b` the same index in every case, so the
-    names that share an index everywhere are the names one mark covers. They are kept in the order
-    the dump lists them, which is the order pytest registered them and so the order the mark was
-    written in — the order a rule looking an axis up by its argnames spells them in.
-    """
-    names = list(specs[0].indices)
-    grouped: dict[tuple[int, ...], list[str]] = {}
-    for name in names:
-        signature = tuple(spec.indices.get(name, -1) for spec in specs)
-        grouped.setdefault(signature, []).append(name)
-    for group in grouped.values():
-        yield tuple(group)
-
-
-def _ids_for_axis(specs: list, argnames: tuple[str, ...]) -> tuple[str, ...] | None:
-    by_index: dict[int, list] = {}
-    for spec in specs:
-        index = spec.indices.get(argnames[0])
-        if index is None:
-            return None
-        by_index.setdefault(index, []).append(spec)
-    if len(by_index) < 2 and len(specs) > 1:
-        # An axis with one value explains nothing about which id part is its own.
-        return None
-    width = len(specs[0].idlist)
-    if any(len(spec.idlist) != width for spec in specs):
-        return None
-    candidates = [
-        position
-        for position in range(width)
-        if _constant_within(by_index, position) and _distinct_across(by_index, position)
-    ]
-    if len(candidates) != 1:
-        return None
-    position = candidates[0]
-    return tuple(by_index[index][0].idlist[position] for index in sorted(by_index))
-
-
-def _constant_within(by_index: Mapping[int, list], position: int) -> bool:
-    return all(len({spec.idlist[position] for spec in group}) == 1 for group in by_index.values())
-
-
-def _distinct_across(by_index: Mapping[int, list], position: int) -> bool:
-    seen = [group[0].idlist[position] for group in by_index.values()]
-    return len(set(seen)) == len(seen)
+def _at_path[T](found: Mapping[tuple[str, str], T], path: str) -> Mapping[str, T]:
+    """`found`, keyed by site, narrowed to one file and re-keyed by the qualname alone."""
+    return {qualname: value for (file, qualname), value in found.items() if file == path}
 
 
 def _xfail_strict(ground_truth: GroundTruth) -> bool:

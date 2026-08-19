@@ -142,6 +142,7 @@ autouse, parametrization, wrapped fixtures. `hazards_showcase` is everything tha
 cleanly, one case per matrix row. The rest are the conversion's own bars, each converted and then
 run under velox: `mechanical_showcase` for the constructs that translate one for one,
 `declarations_showcase` for the fixtures a test gets without naming them, `overrides_showcase` for
-the specialized chains, and `bodies_showcase` for what only a body shows — patching, and a fixture
-asked for by name. `corpus/dumps/` holds their dumps, one per supported pytest version, which is
-what keeps a single model honest across both.
+the specialized chains, `bodies_showcase` for what only a body shows — patching, and a fixture
+asked for by name — and `parametrize_showcase` for the cases a call site decided rather than the
+fixture: an `indirect` mark, and a `pytest_generate_tests` hook. `corpus/dumps/` holds their
+dumps, one per supported pytest version, which is what keeps a single model honest across both.

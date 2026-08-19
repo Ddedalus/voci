@@ -384,12 +384,7 @@ class _MarkPass(RuleTransformer):
                 f"`{render(mark.node)}` is not `parametrize(argnames, argvalues)`.",
             )
         if keyword(call, "indirect") is not None:
-            return _refuses(
-                "VX101",
-                "VX007",
-                f"`{render(mark.node)}` is `indirect`, so each value chooses a fixture rather "
-                "than being one.",
-            )
+            return self._indirect(mark, _argnames(given[0].value), qualname=qualname)
         unknown = keywords(call) - {"ids"}
         if unknown:
             return _refuses(
@@ -440,6 +435,33 @@ class _MarkPass(RuleTransformer):
             code="VX101" if not note else "VX114",
             expression=expression,
             message=f"`{render(mark.node)}` becomes `@velox.parametrize`.{note}",
+        )
+
+    def _indirect(
+        self, mark: _Mark, names: tuple[str, ...] | None, *, qualname: str | None
+    ) -> _Translated:
+        """An `indirect` mark: gone where the fixture it names is about to carry its values.
+
+        Whether it is depends on every test in the suite that reaches that fixture, which is the
+        plan's answer and not a rule's — so all this reads is whether this axis is one the plan
+        listed.
+        """
+        axis = ",".join(names) if names else None
+        allowed = self.context.indirect.get(qualname or "", frozenset())
+        if axis is not None and axis in allowed:
+            return _Translated(
+                owner="VX007",
+                code="VX007",
+                message=(
+                    f"`{render(mark.node)}` goes away: `{axis}` carries these values as its own "
+                    "`params=`."
+                ),
+            )
+        return _refuses(
+            "VX101",
+            "VX029",
+            f"`{render(mark.node)}` gives `{axis or 'a fixture'}` values a `params=` of its own "
+            "cannot hold for every test that reaches it.",
         )
 
     def _unwrap(
@@ -701,7 +723,7 @@ class _DroppedMark(_MarkPass):
             mark = self.mark_of(decorator.decorator)
             if mark is None:
                 continue
-            translated = self.translate(mark)
+            translated = self.translate(mark, qualname=self.qualname)
             if translated.owner == self.CODE and not translated.refused:
                 dropped.append(decorator)
                 self.record(translated.message)
@@ -727,6 +749,18 @@ class _AsyncMark(_DroppedMark):
     """VX110: `@pytest.mark.asyncio` and `@pytest.mark.anyio`, which go away."""
 
     CODE = "VX110"
+
+
+class _Indirect(_DroppedMark):
+    """VX007: `@pytest.mark.parametrize(..., indirect=True)`, whose values the fixture takes over.
+
+    A wiring row rather than a mark one, and here for the same reason `VX009` is: the construct is
+    a mark, and what answers for it is written elsewhere — the `params=` and the ids go onto the
+    fixture during the wiring swap, from the case list the plan read out of the dump. This rule
+    only takes the mark away.
+    """
+
+    CODE = "VX007"
 
 
 class _Timeout(_MarkPass):
@@ -1091,6 +1125,7 @@ def _is_nonpositive(node: cst.BaseExpression) -> bool:
 
 
 RULES: tuple[TransformerRule, ...] = (
+    rule(_Indirect),
     rule(_UseFixtures),
     rule(_Parametrize),
     rule(_StringSkipIf),

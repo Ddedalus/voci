@@ -175,9 +175,9 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "VX007",
         "@pytest.mark.parametrize(..., indirect=True)",
         MECHANICAL,
-        "Each value used becomes its own fixture object, since the case is chosen at the call "
-        "site rather than by the fixture.",
-        target="one generated fixture per value",
+        "The values move onto the fixture as `params=`: indirect parametrization is a call site "
+        "choosing a fixture's case, and a velox fixture carries its own cases.",
+        target="@velox.fixture(params=...)",
     ),
     _row(
         "VX008",
@@ -358,12 +358,32 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "name two meanings.",
     ),
     _row(
+        "VX029",
+        "indirect parametrization a params= fixture cannot carry",
+        REFUSED,
+        "A `params=` fixture has one case list for every test that reaches it, so a name given "
+        "different values in different tests, one parametrized alongside a direct axis, one "
+        "whose fixture already has cases of its own, and one whose values have no literal "
+        "spelling all have nowhere to go.",
+        action="Give the fixture the cases it always has with `params=`, or take the "
+        "parametrization off the fixture and pass the value to the test.",
+    ),
+    _row(
         "VX030",
         "a fixture an installed plugin provides",
         UNSUPPORTED,
         "The fixture lives in a distribution, not in the suite, so there is no source to move and "
         "nothing registers it under velox.",
         action="Write the fixture into the suite, or drop the tests that need it.",
+    ),
+    _row(
+        "VX031",
+        "a generated case an explicit parametrize cannot list",
+        REFUSED,
+        "A frozen case list is written from the value each case was given, so a value with no "
+        "literal spelling, and an axis the hook composed with one the test was written with, "
+        "have nothing this can write.",
+        action="Write the cases out as a `@pytest.mark.parametrize` before converting.",
     ),
     # --- marks and parametrization -------------------------------------------------------------
     _row(
