@@ -24,6 +24,8 @@ from typing import Protocol, final
 import libcst as cst
 from libcst.metadata import MetadataWrapper, ParentNodeProvider, QualifiedNameProvider
 
+from velox_migrate.convert.parametrize import Generated
+
 __all__ = [
     "RULES",
     "Applied",
@@ -52,6 +54,11 @@ class Context:
     by qualname: which name a `request.getfixturevalue` becomes the parameter of, and whose
     `request.addfinalizer` calls become the teardown after a `yield`. A rule writes only where
     they say so — the shapes that decide it are the audit's to read, not a rewrite's.
+
+    `indirect` and `generated` carry the same answer about the cases a call site decided: which
+    `indirect` marks the fixture they name is about to carry as `params=`, as the argnames each
+    covers, and which axes a `pytest_generate_tests` hook produced become a parametrize of their
+    own, outermost first.
     """
 
     path: str
@@ -61,6 +68,8 @@ class Context:
     xfail_strict: bool = False
     requested: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     finalizers: frozenset[str] = frozenset()
+    indirect: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    generated: Mapping[str, Sequence[Generated]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,12 +398,12 @@ def _param_names(params: cst.Parameters) -> frozenset[str]:
 def _collect() -> tuple[Rule, ...]:
     """Every rule, in code order.
 
-    Imported here rather than at the top of the module: `marks` and `bodies` are written in this
+    Imported here rather than at the top of the module: every rule module is written in this
     module's vocabulary, so they are loaded once it holds all of it.
     """
-    from velox_migrate.convert.rules import bodies, marks
+    from velox_migrate.convert.rules import bodies, cases, marks
 
-    return tuple(sorted((*marks.RULES, *bodies.RULES), key=lambda rule: rule.code))
+    return tuple(sorted((*marks.RULES, *bodies.RULES, *cases.RULES), key=lambda rule: rule.code))
 
 
 RULES: tuple[Rule, ...] = _collect()

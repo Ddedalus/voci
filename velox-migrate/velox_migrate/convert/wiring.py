@@ -20,6 +20,7 @@ rules rewrote arrives as an injection with no parameter left and stops being one
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -28,6 +29,7 @@ from libcst.codemod import CodemodContext, VisitorBasedCodemodCommand
 from libcst.codemod.visitors import AddImportsVisitor, RemoveImportsVisitor
 
 from velox_migrate import model
+from velox_migrate.convert import parametrize
 from velox_migrate.convert.plan import FileWork, FixtureWork, Injection, TestWork
 from velox_migrate.model import REQUEST
 
@@ -356,6 +358,10 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     `scope` is written only where it is not velox's default, `params` and `ids` come across
     verbatim, and `autouse` has no counterpart — a declaration replaces it, which is why an
     autouse fixture never reaches here.
+
+    A fixture an `indirect` mark chose cases for has no `params=` of its own to carry over, so the
+    case list the plan took off those marks is written here — with the ids pytest composed from
+    it, which is what keeps each test's node id where it was.
     """
     existing = {
         arg.keyword.value: arg
@@ -365,6 +371,9 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     args: list[cst.Arg] = []
     if work.scope != "function":
         args.append(_kwarg("scope", cst.SimpleString(f'"{work.scope}"')))
+    if work.carried is not None:
+        args.append(_kwarg("params", _values(work.carried.values)))
+        args.append(_kwarg("ids", _strings(work.carried.ids)))
     for keyword in ("name", "params", "ids"):
         carried = existing.get(keyword)
         if carried is not None:
@@ -372,6 +381,22 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     return cst.Call(
         func=cst.Attribute(value=cst.Name("velox"), attr=cst.Name("fixture")),
         args=[arg.with_changes(comma=cst.MaybeSentinel.DEFAULT) for arg in args],
+    )
+
+
+def _values(spelled: Sequence[str]) -> cst.List:
+    """The case list as one literal, each value written from the `repr` the dump carries."""
+    elements = []
+    for text in spelled:
+        value = parametrize.literal(text)
+        assert value is not None, text
+        elements.append(cst.Element(value))
+    return cst.List(elements)
+
+
+def _strings(texts: Sequence[str]) -> cst.List:
+    return cst.List(
+        [cst.Element(cst.SimpleString(json.dumps(text, ensure_ascii=False))) for text in texts]
     )
 
 

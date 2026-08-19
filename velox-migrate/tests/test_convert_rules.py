@@ -9,12 +9,13 @@ unrepeatable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 import libcst as cst
 
 import pytest
 from velox_migrate.convert import rules
+from velox_migrate.convert.parametrize import Generated
 
 PATH = "tests/test_suite.py"
 
@@ -28,6 +29,8 @@ def _context(
     xfail_strict: bool = False,
     requested: Mapping[str, Mapping[str, str]] | None = None,
     finalizers: Iterable[str] = (),
+    indirect: Mapping[str, frozenset[str]] | None = None,
+    generated: Mapping[str, Sequence[Generated]] | None = None,
 ) -> rules.Context:
     return rules.Context(
         path=PATH,
@@ -37,6 +40,8 @@ def _context(
         xfail_strict=xfail_strict,
         requested=requested or {},
         finalizers=frozenset(finalizers),
+        indirect=indirect or {},
+        generated=generated or {},
     )
 
 
@@ -305,7 +310,9 @@ def test_x(value):
     assert _codes(applied) == ["VX102"]
 
 
-def test_an_indirect_parametrize_is_the_fixture_per_value_row() -> None:
+def test_an_indirect_parametrize_the_plan_did_not_list_stays_where_it_was() -> None:
+    # Whether the fixture can carry these values is a question about every test in the suite that
+    # reaches it, so a rule told nothing about it writes nothing.
     source = """import pytest
 
 
@@ -315,7 +322,66 @@ def test_x(value):
 """
     applied = _untouched("VX101", source, _context("test_x"))
 
+    assert _codes(applied) == ["VX029"]
+
+
+def test_an_indirect_parametrize_the_plan_listed_goes_away() -> None:
+    # The values are written onto the fixture by the wiring swap, so what is left here is a mark
+    # with nothing to become.
+    before = """import pytest
+
+
+@pytest.mark.parametrize("value", [1, 2], indirect=True)
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite(
+        "VX007", before, after, _context("test_x", indirect={"test_x": frozenset({"value"})})
+    )
+
     assert _codes(applied) == ["VX007"]
+
+
+def test_the_cases_a_hook_produced_are_written_out_with_pytests_own_ids() -> None:
+    before = """def test_x(width, height):
+    assert width * height
+"""
+    after = """@velox.parametrize("width,height", [(2, 3), (5, 8)], ids=["small", "large"])
+def test_x(width, height):
+    assert width * height
+"""
+    generated = {
+        "test_x": [
+            Generated(
+                argnames=("width", "height"),
+                values=(("2", "3"), ("5", "8")),
+                ids=("small", "large"),
+            )
+        ]
+    }
+    applied = _rewrite("VX024", before, after, _context("test_x", generated=generated))
+
+    assert _codes(applied) == ["VX024"]
+
+
+def test_a_generated_axis_whose_ids_no_one_position_explains_says_so() -> None:
+    before = """def test_x(letter):
+    assert letter
+"""
+    after = """@velox.parametrize("letter", ["a", "b"])
+def test_x(letter):
+    assert letter
+"""
+    generated = {"test_x": [Generated(argnames=("letter",), values=(("'a'",), ("'b'",)), ids=None)]}
+    applied = _rewrite("VX024", before, after, _context("test_x", generated=generated))
+
+    assert _codes(applied) == ["VX114"]
 
 
 def test_stacked_parametrize_marks_are_reversed() -> None:
