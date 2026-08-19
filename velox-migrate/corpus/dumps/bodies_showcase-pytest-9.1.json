@@ -111,6 +111,7 @@
    "setupplan",
    "skipping",
    "stepwise",
+   "sub/conftest.py",
    "subtests",
    "terminal",
    "terminalreporter",
@@ -299,11 +300,29 @@
     "module": "conftest",
     "qualname": "engine",
     "file": "conftest.py",
-    "lineno": 23,
+    "lineno": 24,
     "wrapped": false
    }
   },
   "f9": {
+   "argname": "finished",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "finished",
+    "file": "conftest.py",
+    "lineno": 47,
+    "wrapped": false
+   }
+  },
+  "f10": {
    "argname": "journal",
    "scope": "function",
    "params": null,
@@ -320,11 +339,11 @@
     "module": "conftest",
     "qualname": "journal",
     "file": "conftest.py",
-    "lineno": 39,
+    "lineno": 40,
     "wrapped": false
    }
   },
-  "f10": {
+  "f11": {
    "argname": "ledger",
    "scope": "function",
    "params": null,
@@ -341,11 +360,11 @@
     "module": "conftest",
     "qualname": "ledger",
     "file": "conftest.py",
-    "lineno": 28,
+    "lineno": 29,
     "wrapped": false
    }
   },
-  "f11": {
+  "f12": {
    "argname": "monkeypatch",
    "scope": "function",
    "params": null,
@@ -363,7 +382,7 @@
     "wrapped": false
    }
   },
-  "f12": {
+  "f13": {
    "argname": "pytestconfig",
    "scope": "session",
    "params": null,
@@ -383,7 +402,7 @@
     "wrapped": false
    }
   },
-  "f13": {
+  "f14": {
    "argname": "record_property",
    "scope": "function",
    "params": null,
@@ -403,7 +422,7 @@
     "wrapped": false
    }
   },
-  "f14": {
+  "f15": {
    "argname": "record_testsuite_property",
    "scope": "session",
    "params": null,
@@ -423,7 +442,7 @@
     "wrapped": false
    }
   },
-  "f15": {
+  "f16": {
    "argname": "record_xml_attribute",
    "scope": "function",
    "params": null,
@@ -443,7 +462,7 @@
     "wrapped": false
    }
   },
-  "f16": {
+  "f17": {
    "argname": "recwarn",
    "scope": "function",
    "params": null,
@@ -461,7 +480,29 @@
     "wrapped": false
    }
   },
-  "f17": {
+  "f18": {
+   "argname": "report",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "request",
+    "teardowns",
+    "finished"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "report",
+    "file": "conftest.py",
+    "lineno": 52,
+    "wrapped": false
+   }
+  },
+  "f19": {
    "argname": "settings",
    "scope": "session",
    "params": null,
@@ -475,11 +516,11 @@
     "module": "conftest",
     "qualname": "settings",
     "file": "conftest.py",
-    "lineno": 13,
+    "lineno": 14,
     "wrapped": false
    }
   },
-  "f18": {
+  "f20": {
    "argname": "subtests",
    "scope": "function",
    "params": null,
@@ -499,7 +540,7 @@
     "wrapped": false
    }
   },
-  "f19": {
+  "f21": {
    "argname": "teardowns",
    "scope": "session",
    "params": null,
@@ -513,11 +554,29 @@
     "module": "conftest",
     "qualname": "teardowns",
     "file": "conftest.py",
-    "lineno": 18,
+    "lineno": 19,
     "wrapped": false
    }
   },
-  "f20": {
+  "f22": {
+   "argname": "teardowns",
+   "scope": "session",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "sub",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "conftest",
+    "qualname": "teardowns",
+    "file": "sub/conftest.py",
+    "lineno": 11,
+    "wrapped": false
+   }
+  },
+  "f23": {
    "argname": "tmp_path",
    "scope": "function",
    "params": null,
@@ -538,7 +597,7 @@
     "wrapped": false
    }
   },
-  "f21": {
+  "f24": {
    "argname": "tmp_path_factory",
    "scope": "session",
    "params": null,
@@ -558,7 +617,7 @@
     "wrapped": false
    }
   },
-  "f22": {
+  "f25": {
    "argname": "tmpdir",
    "scope": "function",
    "params": null,
@@ -578,7 +637,7 @@
     "wrapped": false
    }
   },
-  "f23": {
+  "f26": {
    "argname": "tmpdir_factory",
    "scope": "session",
    "params": null,
@@ -598,7 +657,7 @@
     "wrapped": false
    }
   },
-  "f24": {
+  "f27": {
    "argname": "attempt",
    "scope": "function",
    "params": null,
@@ -647,53 +706,95 @@
   "engine": [
    "f8"
   ],
-  "journal": [
+  "finished": [
    "f9"
   ],
-  "ledger": [
+  "journal": [
    "f10"
   ],
-  "monkeypatch": [
+  "ledger": [
    "f11"
   ],
-  "pytestconfig": [
+  "monkeypatch": [
    "f12"
   ],
-  "record_property": [
+  "pytestconfig": [
    "f13"
   ],
-  "record_testsuite_property": [
+  "record_property": [
    "f14"
   ],
-  "record_xml_attribute": [
+  "record_testsuite_property": [
    "f15"
   ],
-  "recwarn": [
+  "record_xml_attribute": [
    "f16"
   ],
-  "settings": [
+  "recwarn": [
    "f17"
   ],
-  "subtests": [
+  "report": [
    "f18"
   ],
-  "teardowns": [
+  "settings": [
    "f19"
   ],
-  "tmp_path": [
+  "subtests": [
    "f20"
   ],
-  "tmp_path_factory": [
-   "f21"
-  ],
-  "tmpdir": [
+  "teardowns": [
+   "f21",
    "f22"
   ],
-  "tmpdir_factory": [
+  "tmp_path": [
    "f23"
+  ],
+  "tmp_path_factory": [
+   "f24"
+  ],
+  "tmpdir": [
+   "f25"
+  ],
+  "tmpdir_factory": [
+   "f26"
   ]
  },
  "items": [
+  {
+   "nodeid": "sub/test_sub.py::test_report_reads_the_subtrees_own_list",
+   "path": "sub/test_sub.py",
+   "lineno": 4,
+   "originalname": "test_report_reads_the_subtrees_own_list",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "report"
+   ],
+   "initialnames": [
+    "report"
+   ],
+   "names_closure": [
+    "teardowns",
+    "finished",
+    "report",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "report": [
+     "f18"
+    ],
+    "teardowns": [
+     "f21",
+     "f22"
+    ],
+    "finished": [
+     "f9"
+    ]
+   }
+  },
   {
    "nodeid": "test_bodies.py::test_patch_decorator",
    "path": "test_bodies.py",
@@ -763,10 +864,10 @@
    ],
    "name2fixturedefs": {
     "settings": [
-     "f17"
+     "f19"
     ],
     "attempt": [
-     "f24"
+     "f27"
     ]
    },
    "callspec": {
@@ -826,10 +927,10 @@
    ],
    "name2fixturedefs": {
     "settings": [
-     "f17"
+     "f19"
     ],
     "attempt": [
-     "f24"
+     "f27"
     ]
    },
    "callspec": {
@@ -928,13 +1029,13 @@
    ],
    "name2fixturedefs": {
     "ledger": [
-     "f10"
+     "f11"
     ],
     "teardowns": [
-     "f19"
+     "f21"
     ],
     "journal": [
-     "f9"
+     "f10"
     ]
    }
   },
@@ -980,7 +1081,41 @@
    ],
    "name2fixturedefs": {
     "teardowns": [
-     "f19"
+     "f21"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_bodies.py::test_report_reads_the_root_list",
+   "path": "test_bodies.py",
+   "lineno": 62,
+   "originalname": "test_report_reads_the_root_list",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "report"
+   ],
+   "initialnames": [
+    "report"
+   ],
+   "names_closure": [
+    "teardowns",
+    "finished",
+    "report",
+    "request"
+   ],
+   "name2fixturedefs": {
+    "report": [
+     "f18"
+    ],
+    "teardowns": [
+     "f21"
+    ],
+    "finished": [
+     "f9"
     ]
    }
   }

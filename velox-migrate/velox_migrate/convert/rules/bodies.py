@@ -478,25 +478,18 @@ def _registration(statement: cst.SimpleStatementLine) -> cst.Call | None:
 
 
 def _yielding(statements: list[cst.BaseStatement]) -> list[cst.BaseStatement]:
-    """`statements` with the value the factory handed back yielded instead of returned."""
+    """`statements` with the value the factory handed back yielded instead of returned.
+
+    A factory that hands nothing back — one ending in a bare `return`, or in no `return` at all —
+    yields nothing, since what the teardown needs is a generator rather than a value.
+    """
     trailing = statements[-1] if statements else None
-    returned = _returned(trailing) if trailing is not None else None
-    if returned is None:
+    if not isinstance(trailing, cst.SimpleStatementLine) or not isinstance(
+        trailing.body[-1], cst.Return
+    ):
         return [*statements, cst.SimpleStatementLine(body=[cst.Expr(value=cst.Yield())])]
-    assert isinstance(trailing, cst.SimpleStatementLine)
-    yielded = cst.SimpleStatementLine(
-        body=[cst.Expr(value=cst.Yield(value=returned))], leading_lines=trailing.leading_lines
-    )
-    return [*statements[:-1], yielded]
-
-
-def _returned(statement: cst.BaseStatement) -> cst.BaseExpression | None:
-    """What a lone `return` at the end of a body hands back, or `None` if it is not one."""
-    match statement:
-        case cst.SimpleStatementLine(body=[cst.Return(value=cst.BaseExpression() as value)]):
-            return value
-        case _:
-            return None
+    yielded = cst.Expr(value=cst.Yield(value=trailing.body[-1].value))
+    return [*statements[:-1], trailing.with_changes(body=[*trailing.body[:-1], yielded])]
 
 
 def _led(statement: cst.BaseStatement, carried: Sequence[cst.EmptyLine]) -> cst.BaseStatement:

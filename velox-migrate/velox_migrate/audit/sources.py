@@ -242,8 +242,10 @@ class _Frame:
 
     `blocks` are the conditional constructs entered since this frame opened — the ones whose body
     may not run — which is what tells a conditionally registered finalizer from an unconditional
-    one. A `with` or a `try` body is not among them: both run. `params` and `locals` are empty for
-    a class, whose body binds nothing a nested function sees.
+    one. A `with` body is not among them: entering can raise, but then nothing after it runs
+    either. A `try` body is, because its own handler can swallow the failure that stopped it
+    halfway and let the rest of the function run without it. `params` and `locals` are empty for a
+    class, whose body binds nothing a nested function sees.
     """
 
     name: str
@@ -343,6 +345,18 @@ class _Scanner(cst.CSTVisitor):
         self._enter_block("for")
 
     def leave_For(self, original_node: cst.For) -> None:
+        self._leave_block()
+
+    def visit_Try(self, node: cst.Try) -> None:
+        self._enter_block("try")
+
+    def leave_Try(self, original_node: cst.Try) -> None:
+        self._leave_block()
+
+    def visit_TryStar(self, node: cst.TryStar) -> None:
+        self._enter_block("try")
+
+    def leave_TryStar(self, original_node: cst.TryStar) -> None:
         self._leave_block()
 
     def visit_While(self, node: cst.While) -> None:

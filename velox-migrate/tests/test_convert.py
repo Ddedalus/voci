@@ -11,6 +11,7 @@ by 8.4's answers and one driven by 9.1's must place the same objects in the same
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -232,6 +233,41 @@ def test_a_patch_applied_as_a_decorator_keeps_it_and_is_marked_by_nothing(
 
     assert decorated in body
     assert "@velox.solo\n@mock.patch" not in body
+
+
+def test_a_specialized_copy_is_rewritten_the_way_the_fixture_it_copies_is(
+    version: str, tmp_path: Path
+) -> None:
+    # A copy is the original's source under another name, so the plan's answers about that body
+    # are the copy's answers too: the name it asked for is injected into it, with the import that
+    # reference needs, and its finalizer is the teardown after its `yield`.
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "sub" / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "from fixtures import finished, settings" in body
+    assert "def report_sub(" in body
+    assert "settings=Depends(settings)" in body
+    assert "request" not in body
+
+
+def test_a_name_resolving_to_a_fixture_nothing_writes_an_object_for_is_refused() -> None:
+    # `engine` asks for `settings` by name. Told that `settings` comes from an installed plugin
+    # rather than from this suite, there is no object a `Depends()` could name — so the fixture
+    # keeps the `request` it asked through, and the tests that reach it keep their pytest source.
+    dump = json.loads((DUMPS / f"{BODIES}-pytest-9.1.json").read_text(encoding="utf-8"))
+    key = next(k for k, entry in dump["fixture_defs"].items() if entry["argname"] == "settings")
+    dump["fixture_defs"][key]["func"]["file"] = "${prefix}/site-packages/plugin.py"
+    ground_truth = model.build(dump)
+    root = CORPUS / BODIES
+
+    result = convert.run(audit.run(ground_truth, root=root), ground_truth, root=root)
+
+    blocked = {ground_truth.fixture_defs[found].argname for found in result.plan.blocked_fixtures}
+
+    assert "engine" in blocked
+    assert "test_bodies.py::test_getfixturevalue_by_name" in result.plan.blocked_tests
 
 
 def test_the_overrides_suite_converts_with_nothing_refused(version: str) -> None:

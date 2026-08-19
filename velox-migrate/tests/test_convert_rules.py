@@ -1091,6 +1091,32 @@ def test_a_factory_that_hands_nothing_back_yields_nothing() -> None:
     _rewrite("VX013", before, after, _context(finalizers=["audited"]))
 
 
+def test_a_factory_ending_in_a_bare_return_yields_nothing_in_its_place() -> None:
+    before = """def audited(request, log):
+    log.append("setup")
+    request.addfinalizer(close)
+    return
+"""
+    after = """def audited(request, log):
+    log.append("setup")
+    yield
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["audited"]))
+
+
+def test_a_return_sharing_its_line_with_another_statement_still_becomes_the_yield() -> None:
+    before = """def ledger(request):
+    request.addfinalizer(close)
+    entries = []; return entries
+"""
+    after = """def ledger(request):
+    entries = []; yield entries
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["ledger"]))
+
+
 def test_a_finalizer_registered_inside_a_with_block_leaves_the_block_behind() -> None:
     before = """def handle(request):
     with open("f") as file:

@@ -394,8 +394,8 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     that one: what the subtree loses is a conversion, and what the rest of the suite keeps is the
     definition it overrode, declared for the tests that converge on it.
 
-  Chunk 3 is built against a sixth corpus suite, whose nine tests convert with nothing refused,
-  pass under `velox --serial`, keep every node id and run twice byte-identical. Five things that
+  Chunk 3 is built against a sixth corpus suite, whose eleven tests convert with nothing refused,
+  pass under `velox --serial`, keep every node id and run twice byte-identical. Six things that
   build settled:
   - **A `request` parameter goes away whole or not at all.** The rewrite's product is a signature
     without it, so it can only be written where every use of `request` in that body has an answer:
@@ -418,6 +418,11 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     with no `yield` of its own and no `return` except as its last statement; everything else is
     `VX014`, whose row grew to say so. The calls are written after the `yield` in the reverse of
     the order they were registered in, which is the order pytest ran them in.
+  - **A specialized copy carries the body's answers too.** A copy is the original's source under
+    another name, so the name that body asked for is injected into the copy, with the import that
+    reference needs, and the copy's finalizer becomes its own teardown. Keying what the plan
+    decided by the name the file binds — rather than by the definition it was decided about — is
+    what makes the two the same code path.
   - **The decorator form of `mock.patch` needed no mark at all.** velox reads a test's patching off
     the function object while collecting and schedules that test alone, so what the conversion owes
     it is a signature: the mock arrives first and positionally, and the injected parameters follow

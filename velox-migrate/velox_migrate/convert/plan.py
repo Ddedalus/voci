@@ -529,7 +529,7 @@ def _bodies(
             if finding.code == "VX013"
             else function in declared.get(file, {}).values() or site in items
         )
-        wanted = _requested(ground_truth, finding, node)
+        wanted = _requested(ground_truth, finding, node, translatable)
         if site not in writing:
             continue
         if not owned or site in surviving or wanted is None:
@@ -571,7 +571,10 @@ def _declined(finding: Finding, *, owned: bool) -> Finding:
 
 
 def _requested(
-    ground_truth: GroundTruth, finding: Finding, node: str | None
+    ground_truth: GroundTruth,
+    finding: Finding,
+    node: str | None,
+    translatable: Mapping[str, FixtureDef],
 ) -> tuple[tuple[str, str], ...] | None:
     """The name and key one `getfixturevalue` finding resolves to, or `None` if it resolves to none.
 
@@ -579,6 +582,9 @@ def _requested(
     directories define is the override question, which pytest answers per test and an injected
     parameter cannot answer at all — the object a body reaches is decided where that body is
     written, so a rewrite of it would hand one subtree's definition to another.
+
+    The definition it names also has to be one a `Depends()` can name: a fixture this conversion
+    writes an object for, or one of pytest's own that velox provides under another name.
     """
     if finding.code != "VX011":
         return ()
@@ -586,7 +592,11 @@ def _requested(
     chain = ground_truth.fixture_registry.get(name, ())
     if not name or node is None or len(chain) != 1:
         return None
-    return ((name, chain[0].key),) if audit_wiring.under(chain[0].visibility, node) else None
+    found = chain[0]
+    if not audit_wiring.under(found.visibility, node):
+        return None
+    nameable = found.key in translatable or found.argname in BUILTINS
+    return ((name, found.key),) if nameable else None
 
 
 def _asking_node(
@@ -877,6 +887,12 @@ def _consumers(
         for edge in _resolved_at(ground_truth, origin, copy.node).values():
             if edge is not None and edge.key in converting:
                 wanted.add(special.redirect(copy.module, edge.key))
+        # A copy is the original's source, so it names everything the original's body named too.
+        body = _body_of(bodies, origin)
+        if body is not None:
+            wanted |= {
+                special.redirect(copy.module, key) for _, key in body.requested if key in converting
+            }
     return consumers
 
 
@@ -981,7 +997,7 @@ def _work(
             duplicates=_ordered(duplicates.get(path, ())),
             needs=tuple(sorted(needs.get(path, set()))),
             solo=tuple(sorted(solo.get(path, ()))),
-            context=_context(ground_truth, path, items, blocked_tests, bodies),
+            context=_context(ground_truth, path, items, blocked_tests, bodies, special),
         )
     return work
 
@@ -1240,6 +1256,7 @@ def _context(
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     blocked_tests: frozenset[str],
     bodies: Mapping[tuple[str, str], Body] = {},
+    special: Specialization = specialize.NONE,
 ) -> Context:
     tests = {qualname for (file, qualname) in items if file == path}
     blocked = {
@@ -1247,6 +1264,7 @@ def _context(
         for item in ground_truth.items
         if item.path == path and item.nodeid in blocked_tests
     }
+    named = _bodies_in(bodies, path, ground_truth, special)
     return Context(
         path=path,
         axis_ids=_axis_ids(items, path),
@@ -1255,15 +1273,34 @@ def _context(
         xfail_strict=_xfail_strict(ground_truth),
         requested={
             qualname: {name: _param_of(ground_truth, key, name) for name, key in body.requested}
-            for (file, qualname), body in bodies.items()
-            if file == path and body.requested
+            for qualname, body in named.items()
+            if body.requested
         },
-        finalizers=frozenset(
-            qualname
-            for (file, qualname), body in bodies.items()
-            if file == path and body.finalizers
-        ),
+        finalizers=frozenset(qualname for qualname, body in named.items() if body.finalizers),
     )
+
+
+def _bodies_in(
+    bodies: Mapping[tuple[str, str], Body],
+    path: str,
+    ground_truth: GroundTruth,
+    special: Specialization,
+) -> Mapping[str, Body]:
+    """The bodies this file's rewrite reads, by the name each is written under in it.
+
+    A specialized copy is the duplicated source of a fixture written elsewhere, so what its body
+    asked for is what the original's asked for — under the copy's own name, which is the name this
+    file binds it to.
+    """
+    named = {qualname: body for (file, qualname), body in bodies.items() if file == path}
+    for copy in special.copies.values():
+        if copy.host != path:
+            continue
+        origin = ground_truth.fixture_defs.get(copy.origin)
+        body = _body_of(bodies, origin) if origin is not None else None
+        if body is not None:
+            named[copy.symbol] = body
+    return named
 
 
 def _param_of(ground_truth: GroundTruth, key: str, name: str) -> str:

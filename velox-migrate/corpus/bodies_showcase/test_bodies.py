@@ -57,3 +57,7 @@ def test_getfixturevalue_by_name(request):
 
 def test_teardown_ran_in_reverse(teardowns):
     assert teardowns == ["journal-inner", "journal-outer", "ledger"]
+
+
+def test_report_reads_the_root_list(report):
+    assert report["dsn"] == "sqlite:///bodies"
