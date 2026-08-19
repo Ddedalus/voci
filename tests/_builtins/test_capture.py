@@ -319,6 +319,51 @@ def test_log_records_captures_structured_records_and_set_level_expands_visibilit
     assert result.outcome is Outcome.PASSED, result.failure
 
 
+def test_log_records_text_formats_every_record() -> None:
+    logger_name = "velox_test_capture_text"
+
+    async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+        logger = logging.getLogger(logger_name)
+        logger.warning("first")
+        logger.error("second")
+
+        lines = records.text.splitlines()
+        assert len(lines) == 2
+        assert lines[0].startswith("WARNING ") and lines[0].endswith("first")
+        assert lines[1].startswith("ERROR   ") and lines[1].endswith("second")
+        assert logger_name in lines[0] and logger_name in lines[1]
+        assert records.text.endswith("\n")
+        assert records.record_tuples == (
+            (logger_name, logging.WARNING, "first"),
+            (logger_name, logging.ERROR, "second"),
+        )
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+    assert result.outcome is Outcome.PASSED, result.failure
+
+
+def test_log_records_clear_empties_the_live_container_not_a_snapshot() -> None:
+    logger_name = "velox_test_capture_clear"
+
+    async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+        logger = logging.getLogger(logger_name)
+        logger.warning("before")
+        assert len(records.records) == 1
+
+        records.clear()
+        assert records.records == ()
+        assert records.messages == ()
+        assert records.text == ""
+
+        # A record logged after clear() is captured as normal, because clear() emptied the same
+        # live deque the routing handler is still appending to, not a snapshot of it.
+        logger.warning("after")
+        assert records.messages == ("after",)
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+    assert result.outcome is Outcome.PASSED, result.failure
+
+
 def test_log_records_are_isolated_between_concurrent_tests() -> None:
     order: list[str] = []
     barrier = asyncio.Barrier(2)

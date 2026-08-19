@@ -357,14 +357,22 @@ def test_a(caplog):
 def test_the_log_attributes_with_no_counterpart_are_reported() -> None:
     source = """
 def test_a(caplog):
-    assert caplog.text
-    assert caplog.record_tuples
     assert caplog.get_records("call")
     caplog.handler.flush()
+"""
+
+    assert _codes(source) == ["VX222"] * 2
+
+
+def test_the_log_attributes_that_convert_are_not_reported() -> None:
+    source = """
+def test_a(caplog):
+    assert caplog.text
+    assert caplog.record_tuples
     caplog.clear()
 """
 
-    assert _codes(source) == ["VX206"] * 5
+    assert _codes(source) == []
 
 
 def test_a_stashed_raises_is_reported_and_the_callable_and_context_manager_forms_are_not() -> None:

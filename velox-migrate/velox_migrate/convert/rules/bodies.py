@@ -39,8 +39,15 @@ LOG_RECORDS = "log_records"
 _CAPTURE_NAMES = (CAPTURE, "capsys")
 _LOG_NAMES = (LOG_RECORDS, "caplog")
 
-# The attributes `velox.log_records` carries under the same names `caplog` did.
-_LOG_ATTRS = frozenset({"records", "messages"})
+# The attributes `velox.log_records` carries under the same names `caplog` did, mapped to the
+# code each rename files under: `records`/`messages` are this class's own default (VX204);
+# `text`/`record_tuples` are VX206's promoted rename onto the same object.
+_LOG_ATTRS: Mapping[str, str | None] = {
+    "records": None,
+    "messages": None,
+    "text": "VX206",
+    "record_tuples": "VX206",
+}
 
 # What `pytest.approx`'s positional arguments are, after the value itself.
 _APPROX_POSITIONAL = ("rel", "abs", "nan_ok")
@@ -145,22 +152,41 @@ class _Capture(_BodyPass):
 
 
 class _LogRecords(_BodyPass):
-    """VX204: `caplog.records` and `caplog.messages`, the same two names on `velox.log_records`."""
+    """VX204: `caplog.records` and `caplog.messages`, the same two names on `velox.log_records`.
+    VX206: `caplog.text`, `caplog.record_tuples` and `caplog.clear()`, renamed the same way but
+    filed under their own code since VX204's row is specifically about `records`/`messages`.
+    """
 
     CODE = "VX204"
 
     def leave_Attribute(
         self, original_node: cst.Attribute, updated_node: cst.Attribute
     ) -> cst.BaseExpression:
-        if self.is_blocked or original_node.attr.value not in _LOG_ATTRS:
+        attr = original_node.attr.value
+        if self.is_blocked or attr not in _LOG_ATTRS:
             return updated_node
         held = self.receiver(original_node.value, _LOG_NAMES)
         if held is None or held == LOG_RECORDS:
             return updated_node
         self.record(
-            f"`{render(original_node)}` becomes `{LOG_RECORDS}.{original_node.attr.value}`."
+            f"`{render(original_node)}` becomes `{LOG_RECORDS}.{attr}`.", code=_LOG_ATTRS[attr]
         )
         return updated_node.with_changes(value=cst.Name(LOG_RECORDS))
+
+    def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        func = original_node.func
+        if (
+            self.is_blocked
+            or not isinstance(func, cst.Attribute)
+            or func.attr.value != "clear"
+            or original_node.args
+        ):
+            return updated_node
+        held = self.receiver(func.value, _LOG_NAMES)
+        if held is None or held == LOG_RECORDS:
+            return updated_node
+        self.record(f"`{render(original_node)}` becomes `{LOG_RECORDS}.clear()`.", code="VX206")
+        return updated_node.with_changes(func=func.with_changes(value=cst.Name(LOG_RECORDS)))
 
 
 class _SetLevel(_BodyPass):

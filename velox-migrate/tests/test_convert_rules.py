@@ -1098,9 +1098,35 @@ def test_caplog_records_and_messages_move_to_log_records() -> None:
     assert _codes(applied) == ["VX204", "VX204"]
 
 
-def test_caplogs_other_attributes_are_left_to_their_own_row() -> None:
-    source = """def test_x(caplog):
+def test_caplog_text_and_record_tuples_move_to_log_records_under_vx206() -> None:
+    before = """def test_x(caplog):
     assert caplog.text == ""
+    assert caplog.record_tuples == []
+"""
+    after = """def test_x(caplog):
+    assert log_records.text == ""
+    assert log_records.record_tuples == []
+"""
+    applied = _rewrite("VX204", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX206", "VX206"]
+
+
+def test_caplog_clear_call_moves_to_log_records_under_vx206() -> None:
+    before = """def test_x(caplog):
+    caplog.clear()
+"""
+    after = """def test_x(caplog):
+    log_records.clear()
+"""
+    applied = _rewrite("VX204", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX206"]
+
+
+def test_caplogs_handler_is_left_to_its_own_row() -> None:
+    source = """def test_x(caplog):
+    caplog.handler.flush()
 """
     assert _untouched("VX204", source, _context("test_x")) == ()
 

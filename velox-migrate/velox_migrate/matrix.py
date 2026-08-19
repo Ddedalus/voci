@@ -526,11 +526,11 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX206",
-        "caplog.text, caplog.record_tuples, caplog.clear(), caplog.handler",
-        UNSUPPORTED,
-        "`velox.log_records` exposes the records and their messages, not the formatted text or "
-        "the handler behind them.",
-        action="Assert on `records` and `messages`, formatting in the test if the text matters.",
+        "caplog.text, caplog.record_tuples, caplog.clear()",
+        MECHANICAL,
+        "Become the same names on `velox.log_records`, which formats `.text` from its own "
+        "records on every read rather than keeping a second stream.",
+        target="velox.log_records",
     ),
     _row(
         "VX207",
@@ -657,6 +657,15 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "one read. A numpy array is left unconverted here too, since velox has no numpy "
         "dependency to compare it with.",
         action="Compare a sorted sequence instead of a set, or a list instead of a generator.",
+    ),
+    _row(
+        "VX222",
+        "caplog.handler, caplog.get_records(...)",
+        UNSUPPORTED,
+        "velox has no handler object behind `velox.log_records`, and no per-phase record split "
+        "for `get_records` to read.",
+        action="Assert on `records` or `messages` directly instead of `handler`; there is no "
+        "phase-scoped equivalent for `get_records`.",
     ),
     # --- configuration and plugins -------------------------------------------------------------
     _row(

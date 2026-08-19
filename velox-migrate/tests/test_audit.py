@@ -107,7 +107,6 @@ def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
         "VX202",  # readouterr twice
         "VX203",  # capfd
         "VX205",  # caplog.set_level
-        "VX206",  # caplog.text
         "VX208",  # tmpdir
         "VX210",  # a raises object stashed rather than entered or called
         "VX214",  # pytest.skip() as a statement
@@ -116,6 +115,7 @@ def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
         "VX217",  # a mock.patch decorator
         "VX218",  # a mock.patch context manager
         "VX221",  # approx over a generator
+        "VX222",  # caplog.handler
         "VX305",  # addopts
         "VX307",  # filterwarnings in the ini file
         "VX308",  # log_cli

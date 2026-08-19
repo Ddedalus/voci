@@ -50,13 +50,10 @@ _REQUEST_ATTRS: Mapping[str, str] = {
 }
 
 _CAPLOG_ATTRS: Mapping[str, str] = {
-    "text": "reads the formatted log text",
-    "record_tuples": "reads the records as tuples",
-    "clear": "clears the captured records",
     "handler": "reaches the handler behind the records",
     "get_records": "reads one test phase's records",
 }
-_CAPLOG_METHODS = frozenset({"clear", "get_records"})
+_CAPLOG_METHODS = frozenset({"get_records"})
 
 _MONKEYPATCH_EFFECTS: Mapping[str, str] = {
     "setenv": "writes an environment variable every test in flight can see",
@@ -669,7 +666,7 @@ class _Scanner(cst.CSTVisitor):
             reads = _CAPLOG_ATTRS.get(attr)
             if reads is not None:
                 called = "()" if attr in _CAPLOG_METHODS else ""
-                self._report("VX206", node, f"`caplog.{attr}{called}` {reads}.")
+                self._report("VX222", node, f"`caplog.{attr}{called}` {reads}.")
         elif self._is_fixture(value, "monkeypatch"):
             effect = _MONKEYPATCH_EFFECTS.get(attr, _MONKEYPATCH_OTHER)
             self._report("VX401", node, f"`monkeypatch.{attr}` {effect}.")

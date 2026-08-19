@@ -792,7 +792,7 @@ async def capture_provider(
 async def log_records_provider(
     kwargs: Mapping[str, Any], ctx: BuiltinContext
 ) -> tuple[Any, _Closer | None]:
-    """`velox.log_records`'s `BuiltinProvider`. Hands `LogRecords` the live list
+    """`velox.log_records`'s `BuiltinProvider`. Hands `LogRecords` the live deque
     `_RoutingHandler.emit` appends to, not a copy, so records logged after injection
     are still visible."""
     del ctx
