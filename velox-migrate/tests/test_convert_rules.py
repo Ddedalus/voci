@@ -1206,12 +1206,66 @@ def test_x():
     assert _codes(applied) == ["VX209"]
 
 
-def test_a_raises_called_rather_than_entered_is_refused() -> None:
-    source = """import pytest
+def test_a_raises_called_with_a_func_becomes_velox_raises() -> None:
+    """The callable form -- `pytest.raises(E, func, *args, **kwargs)` -- rewrites the same way
+    the `with`-entered form does: only the name changes."""
+    before = """import pytest
 
 
 def test_x():
     pytest.raises(ValueError, boom, 1)
+"""
+    after = """import pytest
+
+
+def test_x():
+    velox.raises(ValueError, boom, 1)
+"""
+    applied = _rewrite("VX209", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
+def test_a_raises_called_with_a_func_forwards_keyword_arguments_too() -> None:
+    before = """import pytest
+
+
+def test_x():
+    pytest.raises(ValueError, boom, 1, kind="bad")
+"""
+    after = """import pytest
+
+
+def test_x():
+    velox.raises(ValueError, boom, 1, kind="bad")
+"""
+    applied = _rewrite("VX209", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
+def test_a_raises_called_over_a_cancellation_is_refused() -> None:
+    source = """import asyncio
+
+import pytest
+
+
+def test_x():
+    pytest.raises(asyncio.CancelledError, boom)
+"""
+    applied = _untouched("VX209", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX211"]
+
+
+def test_a_raises_neither_entered_nor_called_is_refused() -> None:
+    """A bare `pytest.raises(E)`, stashed for later rather than entered or called immediately,
+    stays VX210: there is no `with` and no `func` for a rewrite to key off of."""
+    source = """import pytest
+
+
+def test_x():
+    box = pytest.raises(ValueError)
 """
     applied = _untouched("VX209", source, _context("test_x"))
 

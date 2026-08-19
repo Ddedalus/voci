@@ -91,3 +91,74 @@ def test_raises_still_catches_system_exit_and_keyboard_interrupt() -> None:
         raise SystemExit(1)
     with velox.raises(KeyboardInterrupt):
         raise KeyboardInterrupt
+
+
+def test_raises_callable_form_returns_a_populated_exception_info() -> None:
+    def boom() -> None:
+        raise ValueError("kaboom")
+
+    info = velox.raises(ValueError, boom)
+    assert info.value.args == ("kaboom",)
+    assert info.type is ValueError
+
+
+def test_raises_callable_form_forwards_args_and_kwargs() -> None:
+    def f(a: int, b: int, *, c: int = 0) -> None:
+        raise ValueError(f"{a} {b} {c}")
+
+    info = velox.raises(ValueError, f, 1, 2, c=3)
+    assert info.value.args == ("1 2 3",)
+
+
+def test_raises_callable_form_propagates_when_the_call_does_not_raise() -> None:
+    def f() -> None:
+        pass
+
+    with pytest.raises(AssertionError, match="DID NOT RAISE"):
+        velox.raises(ValueError, f)
+
+
+def test_raises_callable_form_propagates_an_unexpected_exception_type() -> None:
+    def f() -> None:
+        raise TypeError("wrong kind")
+
+    with pytest.raises(TypeError, match="wrong kind"):
+        velox.raises(ValueError, f)
+
+
+def test_raises_callable_form_rejects_a_non_callable_func() -> None:
+    with pytest.raises(TypeError, match="not callable"):
+        velox.raises(ValueError, "not a function")  # type: ignore[call-overload]
+
+
+def test_raises_callable_form_rejects_asyncio_cancelled_error() -> None:
+    def f() -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(TypeError, match="CancelledError"):
+        velox.raises(asyncio.CancelledError, f)
+
+
+def test_raises_callable_form_match_checks_the_exception_not_the_call() -> None:
+    """`match` always matches against the raised exception's message in the callable form too --
+    it is never forwarded to `func` as a `**kwargs` entry the way pytest's callable form does."""
+
+    def f(**kwargs: object) -> None:
+        assert kwargs == {}, "match should not have been forwarded to func"
+        raise ValueError("must be 0 or None")
+
+    info = velox.raises(ValueError, f, match="must be 0 or None")
+    assert info.value.args == ("must be 0 or None",)
+
+    def g() -> None:
+        raise ValueError("something else")
+
+    with pytest.raises(AssertionError, match="does not match"):
+        velox.raises(ValueError, g, match="must be 0 or None")
+
+
+def test_raises_bare_keyword_args_without_func_are_rejected() -> None:
+    """A stray keyword argument with no `func` to forward it to is almost certainly a mistake,
+    not a request for the context-manager form."""
+    with pytest.raises(TypeError, match="without a callable"):
+        velox.raises(ValueError, unexpected=1)  # type: ignore[call-overload]

@@ -367,12 +367,14 @@ def test_a(caplog):
     assert _codes(source) == ["VX206"] * 5
 
 
-def test_the_legacy_raises_call_form_is_reported_and_the_context_manager_is_not() -> None:
+def test_a_stashed_raises_is_reported_and_the_callable_and_context_manager_forms_are_not() -> None:
     source = """
 import pytest
 def test_a():
-    pytest.raises(ValueError, boom, 1)
+    box = pytest.raises(ValueError)
 def test_b():
+    pytest.raises(ValueError, boom, 1)
+def test_c():
     with pytest.raises(ValueError, match="boom"):
         boom()
 """
@@ -712,7 +714,7 @@ def test_an_aliased_import_resolves_to_the_construct_it_names() -> None:
 import pytest as pt
 from pytest import raises
 def test_a():
-    raises(ValueError, boom, 1)
+    box = raises(ValueError)
     pt.importorskip("lxml")
 """
 

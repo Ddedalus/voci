@@ -413,12 +413,14 @@ class _Scanner(cst.CSTVisitor):
     def _pytest_call(self, node: cst.Call, names: frozenset[str]) -> None:
         positional = _positional(node)
         if "pytest.raises" in names:
-            if len(positional) > 1:
+            entered = isinstance(self.get_metadata(ParentNodeProvider, node, None), cst.WithItem)
+            if not entered and len(positional) < 2:
                 self._report(
                     "VX210",
                     node,
-                    f"`pytest.raises` is called with {len(positional)} positional arguments, the "
-                    "`raises(E, func, *args)` form.",
+                    "`pytest.raises` is neither entered by a `with` nor called with a second "
+                    "positional argument for it to call, so its result is being stashed for "
+                    "later.",
                 )
             if positional and self._names(positional[0].value) & _CANCELLED:
                 self._report(

@@ -6,8 +6,9 @@ a body carries by the time a rule reads it — and only where an enclosing `def`
 parameter, since a local called `caplog` is not pytest's. Renaming the parameter itself is wiring's.
 
 `pytest.raises` and `pytest.approx` are read through `QualifiedNameProvider` instead, and each is
-rewritten only in the shape velox has: a `raises` entered by a `with`, and an `approx` over a
-scalar. Anything else is left as it was written, with the row that refuses it recorded.
+rewritten only in the shapes velox has: a `raises` entered by a `with` or called with the
+exception it expects and the callable it wraps, and an `approx` over a scalar. Anything else is
+left as it was written, with the row that refuses it recorded.
 """
 
 from __future__ import annotations
@@ -232,20 +233,24 @@ class _SetLevel(_BodyPass):
 
 
 class _Raises(_BodyPass):
-    """VX209: `pytest.raises` where a `with` enters it, which is the form velox has."""
+    """VX209: `pytest.raises` where a `with` enters it, and VX210: the callable form
+    `pytest.raises(E, func, *args, **kwargs)` — both are shapes velox's `raises` has too, so both
+    rewrite to `velox.raises` unchanged but for the name. A `pytest.raises(E)` that is neither —
+    entered by nothing, called with no second positional argument — is a raises object being
+    stashed for later, which still reports VX210: there is no `with` and no `func` for a rewrite
+    to key off of.
+    """
 
     CODE = "VX209"
 
     def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
         if self.is_blocked or "pytest.raises" not in self.names(original_node):
             return updated_node
-        if not isinstance(self.parent(original_node), cst.WithItem):
-            self.record(
-                f"`{render(original_node)}` is left as it is: `velox.raises` is a context manager, "
-                "and this call is not entered by a `with`.",
-                code="VX210",
-            )
-            return updated_node
+        if isinstance(self.parent(original_node), cst.WithItem):
+            return self._with_entered(original_node, updated_node)
+        return self._callable(original_node, updated_node)
+
+    def _with_entered(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
         given = positional(original_node)
         if starred(original_node) or len(given) != 1:
             self.record(
@@ -270,6 +275,27 @@ class _Raises(_BodyPass):
             )
             return updated_node
         self.record(f"`{render(original_node)}` becomes `velox.raises`.")
+        return updated_node.with_changes(func=velox("raises"))
+
+    def _callable(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        """`pytest.raises(E, func, *args, **kwargs)`, not entered by a `with`."""
+        given = positional(original_node)
+        if len(given) < 2:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `velox.raises` is a context "
+                "manager, and this call is not entered by a `with`.",
+                code="VX210",
+            )
+            return updated_node
+        uncatchable = self._uncatchable(given[0].value)
+        if uncatchable is not None:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `velox.raises` refuses "
+                f"`{uncatchable}`, since cancellation is how velox enforces a timeout.",
+                code="VX211",
+            )
+            return updated_node
+        self.record(f"`{render(original_node)}` becomes `velox.raises`.", code="VX210")
         return updated_node.with_changes(func=velox("raises"))
 
     def _uncatchable(self, expected: cst.BaseExpression) -> str | None:

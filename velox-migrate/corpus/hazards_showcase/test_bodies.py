@@ -2,9 +2,9 @@
 
 Contributes the capture-snapshot case (`readouterr` twice), the caplog cases (`set_level` and
 `.text`), the dangerous-rename case (`pytest.skip()` as a statement), and the no-counterpart cases
-(`importorskip`, `warns`, the legacy `raises` call form, `approx` over a sequence, `capfd`,
-`recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape hatch the root
-conftest wires up.
+(`importorskip`, `warns`, a `raises` object stashed rather than entered or called, `approx` over
+a sequence, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape
+hatch the root conftest wires up.
 """
 
 import logging
@@ -47,7 +47,7 @@ def test_warns():
 
 
 def test_legacy_raises():
-    pytest.raises(ValueError, int, "nope")
+    stashed = pytest.raises(ValueError)
 
 
 def test_approx_sequence():

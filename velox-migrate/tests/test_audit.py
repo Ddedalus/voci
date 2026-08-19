@@ -109,7 +109,7 @@ def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
         "VX205",  # caplog.set_level
         "VX206",  # caplog.text
         "VX208",  # tmpdir
-        "VX210",  # the legacy raises form
+        "VX210",  # a raises object stashed rather than entered or called
         "VX213",  # approx over a sequence
         "VX214",  # pytest.skip() as a statement
         "VX215",  # importorskip

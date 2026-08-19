@@ -558,9 +558,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX210",
         "pytest.raises(E, func, *args)",
-        REFUSED,
-        "velox's `raises` is a context manager only.",
-        action="Move the suite to the context-manager form under pytest first.",
+        MECHANICAL,
+        "Becomes `velox.raises`, which has the same callable form: it calls `func(*args, "
+        "**kwargs)` under the hood and returns the resulting `ExceptionInfo`.",
+        target="velox.raises",
     ),
     _row(
         "VX211",
