@@ -53,7 +53,7 @@ typecheck *args:
 build:
     uv build
 
-# Re-vendor pytest's assertion subsystem from the pytest/ submodule (spec/07)
+# Re-vendor pytest's assertion subsystem from the oss/pytest submodule (spec/07)
 vendor:
     uv run python scripts/vendor_assertion.py
 

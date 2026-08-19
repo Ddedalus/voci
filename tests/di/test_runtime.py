@@ -7,9 +7,9 @@ from __future__ import annotations
 import asyncio
 from typing import cast
 
+import pytest
 from _support import run_async as run
 
-import pytest
 import velox
 from velox import Depends
 from velox._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for

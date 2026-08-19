@@ -8,9 +8,9 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from _support import Project
 
-import pytest
 from velox._assertions import rewrite as _rewrite
 from velox._collection.collect import collect, module_name_for
 from velox._collection.selection import compile_tag_expression

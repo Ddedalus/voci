@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from velox._collection.selection import (
     SelectionError,
     compile_keyword_expression,

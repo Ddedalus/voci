@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 
 import pytest
+
 from velox._collection.parametrize import cases_for, known_params_of
 from velox._marks import ParamSet
 

@@ -12,11 +12,11 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
+import pytest
 from _support import run_async as run
 from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 
-import pytest
 from velox import fastapi as velox_fastapi
 
 # One module-level app, exactly as an application writes it, shared by every test in this file.

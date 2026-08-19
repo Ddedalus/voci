@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 import libcst as cst
-
 import pytest
+
 from velox_migrate.convert import rules
 from velox_migrate.convert.parametrize import Generated
 

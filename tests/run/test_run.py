@@ -12,10 +12,10 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from unittest import mock
 
+import pytest
 from _support import make_record as _record
 from _support import run_async
 
-import pytest
 import velox
 from velox._collection.collect import CollectionError
 from velox._di.fixtures import expand_cases, plan_for

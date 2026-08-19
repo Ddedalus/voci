@@ -14,8 +14,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import libcst as cst
-
 import pytest
+
 from velox_migrate import model
 from velox_migrate.convert import parametrize
 from velox_migrate.convert.parametrize import Decision

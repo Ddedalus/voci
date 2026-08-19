@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import schema
 
 CORPUS_DUMP = (

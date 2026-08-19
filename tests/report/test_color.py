@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import pytest
+
 from velox._report.color import GREEN, color_enabled, paint
 
 

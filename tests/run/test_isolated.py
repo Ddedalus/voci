@@ -12,10 +12,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import pytest
 from _support import make_record as _record
 from _support import run_async
 
-import pytest
 from velox._run.isolated import IsolatedConfig, result_to_json, run_isolated
 from velox._run.run import Outcome
 from velox._run.run import TestResult as Result

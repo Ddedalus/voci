@@ -23,8 +23,9 @@ Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recip
 `test`, `test-migrate`, `lint`, `fmt`, `typecheck`, `build`, `check`). For splitting objects out
 of a file into their own module and repointing imports, see the `refactor-tools` skill.
 
-Reference-only, not part of the package: `pytest/`, `fastapi/`, `research/`, `spec/`. `pytest/`
-and `fastapi/` are git submodules. Never cite `spec/` outside `spec/` — it's a scratch design
+Reference-only, not part of the package: `oss/`, `research/`, `spec/`. `oss/` holds other
+projects' checkouts as git submodules — `oss/pytest` and `oss/fastapi` among them — and is
+excluded from ruff and pyrefly. Never cite `spec/` outside `spec/` — it's a scratch design
 artifact, not published, and will be deleted.
 
 `plans/` holds internal working documents — research syntheses and implementation plans, written
@@ -33,7 +34,7 @@ and "internal working document" framing belong there, not in `docs/`. Files ther
 each other, so a link to another file in `plans/` stays a bare filename, not a `plans/`-prefixed
 path.
 
-`velox/_assertions/_vendor/` is **generated** from the `pytest/` submodule — never edit it by
+`velox/_assertions/_vendor/` is **generated** from the `oss/pytest/` submodule — never edit it by
 hand. Regenerate with `just vendor` (`scripts/vendor_assertion.py`, which logs every edit in
 `velox/_assertions/VENDOR.md`); `just vendor-check` verifies the tree is current. Kept
 byte-identical to upstream and excluded from ruff and pyrefly, except the hand-written `_shim.py`.

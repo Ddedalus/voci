@@ -16,9 +16,9 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from _support import make_record as _record
 
-import pytest
 import velox
 from velox._builtins import capture as _capture
 from velox._di.fixtures import plan_for

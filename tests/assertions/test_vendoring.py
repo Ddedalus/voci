@@ -74,7 +74,7 @@ def test_pytest_is_not_imported_by_using_the_rewriter() -> None:
 
 def test_vendored_tree_matches_the_script() -> None:
     """Regenerating the vendored tree from the pytest submodule must be a no-op."""
-    if not (REPO / "pytest" / "src" / "_pytest").is_dir():
+    if not (REPO / "oss" / "pytest" / "src" / "_pytest").is_dir():
         pytest.skip("pytest submodule not checked out")
     result = subprocess.run(
         [sys.executable, "scripts/vendor_assertion.py", "--check"],

@@ -7,6 +7,7 @@ a wrong rewrite rule at once — so its shape is asserted rather than trusted.
 from __future__ import annotations
 
 import pytest
+
 from velox_migrate import matrix
 from velox_migrate.matrix import Area, Disposition
 

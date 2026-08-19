@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import model
 from velox_migrate.convert import config
 from velox_migrate.model import GroundTruth

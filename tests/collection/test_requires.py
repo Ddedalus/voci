@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from _support import Project
 
-import pytest
 import velox
 from velox._collection.collect import TestRecord as Record
 from velox._collection.collect import collect

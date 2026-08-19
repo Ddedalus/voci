@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from velox_migrate.convert.edits import Edit, EditSet
 
 FIVE = "line 1\nline 2\nline 3\nline 4\nline 5\n"

@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
 from _support import Project
 
-import pytest
 from velox._builtins import capture as _capture
 
 

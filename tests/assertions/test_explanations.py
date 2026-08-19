@@ -7,6 +7,7 @@ diffed directly against `testing/test_assertion.py`.
 from __future__ import annotations
 
 import pytest
+
 from velox._assertions._vendor import util
 from velox._assertions._vendor._compare_any import _compare_eq_cls
 from velox._assertions._vendor._typing import NO_TRUNCATION_BUDGET, TruncationBudget

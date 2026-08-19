@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, cast
 
 import pytest
+
 import velox
 from velox import Depends
 from velox._di.fixtures import (
