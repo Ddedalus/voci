@@ -1,6 +1,6 @@
 [submodule "fastapi"]
-	path = fastapi
+	path = oss/fastapi
 	url = https://github.com/fastapi/fastapi.git
 [submodule "pytest"]
-	path = pytest
+	path = oss/pytest
 	url = https://github.com/pytest-dev/pytest.git
