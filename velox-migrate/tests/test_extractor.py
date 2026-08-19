@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import extractor, schema
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
@@ -382,6 +383,19 @@ def test_a_path_in_the_environment_is_rewritten_against_the_prefix() -> None:
     rewritten = normalize(f"{sys.prefix}/lib/site-packages/plugin.py")
 
     assert rewritten == "${prefix}/lib/site-packages/plugin.py"
+
+
+def test_a_path_in_a_package_directory_outside_the_prefix_is_still_rewritten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A runner that layers an ephemeral environment over a base one installs what it was asked
+    # for into a directory on `sys.path` that no prefix contains. A dump that left such a path
+    # alone would carry the cache directory of the machine it was taken on.
+    installed = "/cache/archive-v0/AbCdEf/lib/python3.13/site-packages"
+    monkeypatch.setattr(sys, "path", [*sys.path, installed])
+    normalize = extractor._PathNormalizer("/suite")
+
+    assert normalize(f"{installed}/_pytest/fixtures.py") == "${site_packages}/_pytest/fixtures.py"
 
 
 def test_a_suite_inside_the_environment_prefix_still_wins() -> None:
