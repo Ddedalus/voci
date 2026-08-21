@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import cli, extractor, schema
 
 SUITE = Path(__file__).resolve().parents[1] / "corpus" / "fixtures_showcase"

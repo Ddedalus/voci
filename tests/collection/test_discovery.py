@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from _support import Project
 
-import pytest
 from velox._collection.discovery import discover_files
 
 

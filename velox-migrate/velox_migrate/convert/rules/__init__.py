@@ -24,6 +24,8 @@ from typing import Protocol, final
 import libcst as cst
 from libcst.metadata import MetadataWrapper, ParentNodeProvider, QualifiedNameProvider
 
+from velox_migrate.convert.parametrize import Generated
+
 __all__ = [
     "RULES",
     "Applied",
@@ -47,6 +49,16 @@ class Context:
     nothing on anything else, so a mark rule touches a function only if it is named there.
     `blocked` are the qualnames whose source stays verbatim, refused functions and everything
     downstream of a refusal, and no rule writes inside one or on its decorators.
+
+    `requested` and `finalizers` carry what the plan decided about the bodies in this file, keyed
+    by qualname: which name a `request.getfixturevalue` becomes the parameter of, and whose
+    `request.addfinalizer` calls become the teardown after a `yield`. A rule writes only where
+    they say so — the shapes that decide it are the audit's to read, not a rewrite's.
+
+    `indirect` and `generated` carry the same answer about the cases a call site decided: which
+    `indirect` marks the fixture they name is about to carry as `params=`, as the argnames each
+    covers, and which axes a `pytest_generate_tests` hook produced become a parametrize of their
+    own, outermost first.
     """
 
     path: str
@@ -54,6 +66,10 @@ class Context:
     tests: frozenset[str] = frozenset()
     blocked: frozenset[str] = frozenset()
     xfail_strict: bool = False
+    requested: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    finalizers: frozenset[str] = frozenset()
+    indirect: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    generated: Mapping[str, Sequence[Generated]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +180,11 @@ class RuleTransformer(cst.CSTTransformer):
     def is_blocked(self) -> bool:
         """Whether this site sits in something `Context.blocked` names."""
         return any(frame.qualname in self.context.blocked for frame in self._stack[1:])
+
+    @property
+    def at_module_level(self) -> bool:
+        """Whether the `def` being left is written at module level rather than inside anything."""
+        return len(self._stack) == 2
 
     @property
     def is_test(self) -> bool:
@@ -384,12 +405,12 @@ def _param_names(params: cst.Parameters) -> frozenset[str]:
 def _collect() -> tuple[Rule, ...]:
     """Every rule, in code order.
 
-    Imported here rather than at the top of the module: `marks` and `bodies` are written in this
+    Imported here rather than at the top of the module: every rule module is written in this
     module's vocabulary, so they are loaded once it holds all of it.
     """
-    from velox_migrate.convert.rules import bodies, marks
+    from velox_migrate.convert.rules import bodies, cases, marks
 
-    return tuple(sorted((*marks.RULES, *bodies.RULES), key=lambda rule: rule.code))
+    return tuple(sorted((*marks.RULES, *bodies.RULES, *cases.RULES), key=lambda rule: rule.code))
 
 
 RULES: tuple[Rule, ...] = _collect()

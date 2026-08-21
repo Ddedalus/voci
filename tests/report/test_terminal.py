@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 import pytest
+
 from velox._collection.collect import Skipped
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan

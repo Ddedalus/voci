@@ -41,7 +41,7 @@ version-file = "velox/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["velox"]
 
-# velox-migrate is a second distribution in this repo (docs/migration-tool-plan.md §2), kept in
+# velox-migrate is a second distribution in this repo (plans/migration-tool-plan.md §2), kept in
 # the same workspace so its generated output can be exercised against velox itself in one CI run.
 [tool.uv.workspace]
 members = ["velox-migrate"]
@@ -52,10 +52,10 @@ target-version = "py313"
 # velox/_assertions/_vendor is kept byte-identical to upstream pytest so re-vendoring stays a
 # cheap, readable diff (spec/07 Q17). Formatting it would defeat that, so ruff never touches it.
 # velox-migrate/corpus holds deliberately-unidiomatic pytest suites used as codegen input
-# fixtures, so linting them is meaningless.
+# fixtures, so linting them is meaningless. oss/ holds checkouts of other projects' suites, which
+# answer to their own rules.
 extend-exclude = [
-    "pytest",
-    "fastapi",
+    "oss",
     "research",
     "spec",
     "velox/_assertions/_vendor",
@@ -85,9 +85,11 @@ extend-immutable-calls = ["velox.Depends", "Depends"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["velox", "velox_migrate"]
-# The `fastapi/` reference submodule at the repo root otherwise makes isort read the installed
-# `fastapi` package as first-party and file it next to velox's own imports.
-known-third-party = ["fastapi"]
+# Named rather than left to isort, which reads a package as first-party when a directory of that
+# name sits where it looks for sources. A checkout of either project anywhere isort searches would
+# otherwise file the installed package next to velox's own imports, and moving that checkout would
+# reshuffle the import block of every module that uses it.
+known-third-party = ["fastapi", "pytest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -103,7 +105,7 @@ project-includes = [
 # holds deliberately-unidiomatic pytest suites used as codegen input fixtures, so type-checking
 # them is meaningless.
 project-excludes = [
-    "pytest/**",
+    "oss/**",
     "research/**",
     "velox/_assertions/_vendor/**",
     "velox-migrate/corpus/**",

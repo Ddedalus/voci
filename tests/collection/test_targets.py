@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from velox._collection.targets import IdSelection, parse_target
 
 

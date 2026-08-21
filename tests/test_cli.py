@@ -9,9 +9,9 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
 from _support import Project
 
-import pytest
 from velox import __version__
 from velox.cli import _default_test_roots, _friendly_path, build_parser, main
 

@@ -173,7 +173,7 @@
    "func": {
     "module": "_pytest.cacheprovider",
     "qualname": "cache",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/cacheprovider.py",
+    "file": "${site_packages}/_pytest/cacheprovider.py",
     "lineno": 559,
     "wrapped": false
    }
@@ -193,7 +193,7 @@
    "func": {
     "module": "_pytest.capture",
     "qualname": "capfd",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "file": "${site_packages}/_pytest/capture.py",
     "lineno": 1097,
     "wrapped": false
    }
@@ -213,7 +213,7 @@
    "func": {
     "module": "_pytest.capture",
     "qualname": "capfdbinary",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "file": "${site_packages}/_pytest/capture.py",
     "lineno": 1125,
     "wrapped": false
    }
@@ -233,7 +233,7 @@
    "func": {
     "module": "_pytest.logging",
     "qualname": "caplog",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/logging.py",
+    "file": "${site_packages}/_pytest/logging.py",
     "lineno": 610,
     "wrapped": false
    }
@@ -253,7 +253,7 @@
    "func": {
     "module": "_pytest.capture",
     "qualname": "capsys",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "file": "${site_packages}/_pytest/capture.py",
     "lineno": 1006,
     "wrapped": false
    }
@@ -273,7 +273,7 @@
    "func": {
     "module": "_pytest.capture",
     "qualname": "capsysbinary",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "file": "${site_packages}/_pytest/capture.py",
     "lineno": 1069,
     "wrapped": false
    }
@@ -293,7 +293,7 @@
    "func": {
     "module": "_pytest.capture",
     "qualname": "capteesys",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/capture.py",
+    "file": "${site_packages}/_pytest/capture.py",
     "lineno": 1034,
     "wrapped": false
    }
@@ -311,7 +311,7 @@
    "func": {
     "module": "_pytest.doctest",
     "qualname": "doctest_namespace",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/doctest.py",
+    "file": "${site_packages}/_pytest/doctest.py",
     "lineno": 720,
     "wrapped": false
    }
@@ -405,7 +405,7 @@
    "func": {
     "module": "_pytest.monkeypatch",
     "qualname": "monkeypatch",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/monkeypatch.py",
+    "file": "${site_packages}/_pytest/monkeypatch.py",
     "lineno": 35,
     "wrapped": false
    }
@@ -443,7 +443,7 @@
    "func": {
     "module": "_pytest.fixtures",
     "qualname": "pytestconfig",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/fixtures.py",
+    "file": "${site_packages}/_pytest/fixtures.py",
     "lineno": 1563,
     "wrapped": false
    }
@@ -463,7 +463,7 @@
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_property",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "file": "${site_packages}/_pytest/junitxml.py",
     "lineno": 274,
     "wrapped": false
    }
@@ -483,7 +483,7 @@
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_testsuite_property",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "file": "${site_packages}/_pytest/junitxml.py",
     "lineno": 335,
     "wrapped": false
    }
@@ -503,7 +503,7 @@
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_xml_attribute",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/junitxml.py",
+    "file": "${site_packages}/_pytest/junitxml.py",
     "lineno": 297,
     "wrapped": false
    }
@@ -521,7 +521,7 @@
    "func": {
     "module": "_pytest.recwarn",
     "qualname": "recwarn",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/recwarn.py",
+    "file": "${site_packages}/_pytest/recwarn.py",
     "lineno": 36,
     "wrapped": false
    }
@@ -597,7 +597,7 @@
    "func": {
     "module": "_pytest.subtests",
     "qualname": "subtests",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/subtests.py",
+    "file": "${site_packages}/_pytest/subtests.py",
     "lineno": 135,
     "wrapped": false
    }
@@ -618,7 +618,7 @@
    "func": {
     "module": "_pytest.tmpdir",
     "qualname": "tmp_path",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "file": "${site_packages}/_pytest/tmpdir.py",
     "lineno": 290,
     "wrapped": false
    }
@@ -638,7 +638,7 @@
    "func": {
     "module": "_pytest.tmpdir",
     "qualname": "tmp_path_factory",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/tmpdir.py",
+    "file": "${site_packages}/_pytest/tmpdir.py",
     "lineno": 275,
     "wrapped": false
    }
@@ -658,7 +658,7 @@
    "func": {
     "module": "_pytest.legacypath",
     "qualname": "LegacyTmpdirPlugin.tmpdir",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "file": "${site_packages}/_pytest/legacypath.py",
     "lineno": 304,
     "wrapped": false
    }
@@ -678,7 +678,7 @@
    "func": {
     "module": "_pytest.legacypath",
     "qualname": "LegacyTmpdirPlugin.tmpdir_factory",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/legacypath.py",
+    "file": "${site_packages}/_pytest/legacypath.py",
     "lineno": 297,
     "wrapped": false
    }
@@ -716,7 +716,7 @@
    "func": {
     "module": "_pytest.python",
     "qualname": "get_direct_param_fixture_func",
-    "file": "${prefix}/lib/python3.13/site-packages/_pytest/python.py",
+    "file": "${site_packages}/_pytest/python.py",
     "lineno": 1154,
     "wrapped": false
    }

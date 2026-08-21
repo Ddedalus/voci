@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import audit, model
 from velox_migrate.audit import Audit
 from velox_migrate.audit.findings import SEVERITY

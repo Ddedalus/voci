@@ -12,10 +12,15 @@ it binds every argument by keyword, so the order it is reordered into is free.
 
 Signature whitespace is preserved wherever the original order already works, which is every
 signature whose parameters are all injected — the common case.
+
+A signature also grows and loses parameters here. A dependency a body asked for by name arrives
+as an injection with no parameter of its own and becomes one; a `request` whose every use the body
+rules rewrote arrives as an injection with no parameter left and stops being one.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -24,6 +29,7 @@ from libcst.codemod import CodemodContext, VisitorBasedCodemodCommand
 from libcst.codemod.visitors import AddImportsVisitor, RemoveImportsVisitor
 
 from velox_migrate import model
+from velox_migrate.convert import parametrize
 from velox_migrate.convert.plan import FileWork, FixtureWork, Injection, TestWork
 from velox_migrate.model import REQUEST
 
@@ -191,9 +197,17 @@ class _Wiring(VisitorBasedCodemodCommand):
             return node
         self._wrote = True
         self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
-        params, reordered = _rewrite(node.params.params, by_name)
-        kwonly, _ = _rewrite(node.params.kwonly_params, by_name)
-        if reordered:
+        added = [
+            _param(injection)
+            for injection in injections
+            if injection.asked and injection.was not in _declared(node.params)
+        ]
+        # A parameter after `*args` is keyword-only, so that is where a new one goes in a signature
+        # that has one; every other signature grows it at the end, where a default belongs.
+        keyword_only = node.params.star_arg is not cst.MaybeSentinel.DEFAULT
+        params, reordered = _rewrite(node.params.params, by_name, () if keyword_only else added)
+        kwonly, _ = _rewrite(node.params.kwonly_params, by_name, added if keyword_only else ())
+        if reordered or added:
             params = tuple(param.with_changes(comma=cst.MaybeSentinel.DEFAULT) for param in params)
         return node.with_changes(
             params=node.params.with_changes(params=params, kwonly_params=kwonly)
@@ -201,7 +215,9 @@ class _Wiring(VisitorBasedCodemodCommand):
 
 
 def _rewrite(
-    params: Sequence[cst.Param], by_name: Mapping[str, Injection]
+    params: Sequence[cst.Param],
+    by_name: Mapping[str, Injection],
+    added: Sequence[cst.Param] = (),
 ) -> tuple[tuple[cst.Param, ...], bool]:
     """`params` with each injected one given its `Depends()` default, and whether order moved.
 
@@ -211,15 +227,49 @@ def _rewrite(
 
     What decides the split is whether the rewritten parameter ends up with a default, not whether
     it was injected: a `params=` fixture's `request` becomes the bare `param` velox binds its case
-    to, so it belongs with the plain parameters however late it was written.
+    to, so it belongs with the plain parameters however late it was written. `added` are the
+    parameters a body asked for by name, which are injected and so go last either way.
     """
-    rewritten = [_inject(param, by_name.get(param.name.value)) for param in params]
+    kept = [param for param in params if not _is_dropped(param, by_name)]
+    rewritten = [_inject(param, by_name.get(param.name.value)) for param in kept]
+    rewritten += list(added)
     defaulted = [param.default is not None for param in rewritten]
     if all(defaulted) or not any(defaulted) or defaulted == sorted(defaulted):
         return tuple(rewritten), False
     plain = [param for param, has in zip(rewritten, defaulted, strict=True) if not has]
     filled = [param for param, has in zip(rewritten, defaulted, strict=True) if has]
     return tuple([*plain, *filled]), True
+
+
+def _is_dropped(param: cst.Param, by_name: Mapping[str, Injection]) -> bool:
+    """Whether this parameter is one the rewrite takes away rather than binds."""
+    injection = by_name.get(param.name.value)
+    return injection is not None and injection.dropped
+
+
+def _declared(params: cst.Parameters) -> frozenset[str]:
+    """Every name this signature already binds, wherever in it the name was written."""
+    named = {
+        param.name.value
+        for param in (*params.posonly_params, *params.params, *params.kwonly_params)
+    }
+    for star in (params.star_arg, params.star_kwarg):
+        if isinstance(star, cst.Param):
+            named.add(star.name.value)
+    return frozenset(named)
+
+
+def _param(injection: Injection) -> cst.Param:
+    """The parameter a dependency asked for by name becomes: injected, and written with a comma."""
+    return cst.Param(
+        name=cst.Name(injection.param),
+        default=cst.Call(
+            func=cst.Name("Depends"),
+            args=[cst.Arg(value=cst.parse_expression(injection.reference))],
+        ),
+        equal=cst.AssignEqual(whitespace_before=_NO_SPACE, whitespace_after=_NO_SPACE),
+        comma=cst.MaybeSentinel.DEFAULT,
+    )
 
 
 def _inject(param: cst.Param, injection: Injection | None) -> cst.Param:
@@ -247,6 +297,13 @@ def _stranded(node: cst.FunctionDef, injections: Sequence[Injection]) -> str | N
     is a use with no velox spelling, and the row that says so depends on which one it is.
     """
     for injection in injections:
+        if injection.dropped:
+            # Every use of `request` here was one a rule rewrote — unless one of them was written
+            # in a shape the rule declined, in which case the body still reads a parameter that is
+            # about to go away.
+            if _mentions(node.body, REQUEST):
+                return "VX015"
+            continue
         if not injection.renamed or injection.was == REQUEST:
             continue
         if not _mentions(node.body, injection.was):
@@ -301,6 +358,10 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     `scope` is written only where it is not velox's default, `params` and `ids` come across
     verbatim, and `autouse` has no counterpart — a declaration replaces it, which is why an
     autouse fixture never reaches here.
+
+    A fixture an `indirect` mark chose cases for has no `params=` of its own to carry over, so the
+    case list the plan took off those marks is written here — with the ids pytest composed from
+    it, which is what keeps each test's node id where it was.
     """
     existing = {
         arg.keyword.value: arg
@@ -310,13 +371,35 @@ def _fixture_call(expression: cst.BaseExpression, work: FixtureWork) -> cst.Base
     args: list[cst.Arg] = []
     if work.scope != "function":
         args.append(_kwarg("scope", cst.SimpleString(f'"{work.scope}"')))
-    for keyword in ("name", "params", "ids"):
+    written = ("name",) if work.carried is not None else ("name", "params", "ids")
+    if work.carried is not None:
+        # The cases are the mark's, so anything the decorator said about cases of its own is gone
+        # with it — pytest tolerates an `ids=` with no `params=` beside it, and velox does not.
+        args.append(_kwarg("params", _values(work.carried.values)))
+        args.append(_kwarg("ids", _strings(work.carried.ids)))
+    for keyword in written:
         carried = existing.get(keyword)
         if carried is not None:
             args.append(_kwarg(keyword, carried.value))
     return cst.Call(
         func=cst.Attribute(value=cst.Name("velox"), attr=cst.Name("fixture")),
         args=[arg.with_changes(comma=cst.MaybeSentinel.DEFAULT) for arg in args],
+    )
+
+
+def _values(spelled: Sequence[str]) -> cst.List:
+    """The case list as one literal, each value written from the `repr` the dump carries."""
+    elements = []
+    for text in spelled:
+        value = parametrize.literal(text)
+        assert value is not None, text
+        elements.append(cst.Element(value))
+    return cst.List(elements)
+
+
+def _strings(texts: Sequence[str]) -> cst.List:
+    return cst.List(
+        [cst.Element(cst.SimpleString(json.dumps(text, ensure_ascii=False))) for text in texts]
     )
 
 

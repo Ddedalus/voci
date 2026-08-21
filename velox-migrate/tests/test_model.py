@@ -10,6 +10,7 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+
 from velox_migrate import model, schema
 from velox_migrate.schema import DumpError
 
@@ -331,6 +332,19 @@ def test_the_two_environment_prefixes_expand_independently(
 
     assert resolved == Path("/usr/lib/mod.py")
     assert ground_truth.resolve_path("${base_prefix}/lib/mod.py", prefix="/venv") is None
+
+
+def test_the_directory_a_package_was_installed_into_expands_on_its_own(
+    ground_truth: model.GroundTruth,
+) -> None:
+    # Where a package was installed is not always under either prefix, so it is supplied — and
+    # expanded — separately from both.
+    resolved = ground_truth.resolve_path(
+        "${site_packages}/_pytest/fixtures.py", prefix="/venv", site_packages="/cache/lib"
+    )
+
+    assert resolved == Path("/cache/lib/_pytest/fixtures.py")
+    assert ground_truth.resolve_path("${site_packages}/_pytest/fixtures.py", prefix="/venv") is None
 
 
 def test_a_chain_naming_a_definition_the_dump_lacks_is_refused() -> None:

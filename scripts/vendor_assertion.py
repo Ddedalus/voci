@@ -7,7 +7,7 @@ this script *is* the coupling-point list, and it fails loudly when an edit no lo
 
     uv run python scripts/vendor_assertion.py
 
-Reads `pytest/` (the submodule), writes the vendored tree plus
+Reads `oss/pytest/` (the submodule), writes the vendored tree plus
 `velox/_assertions/_vendor/VENDOR.md`.
 Vendored files are kept byte-identical to upstream apart from the edits recorded here
 (spec/07 Q17), so `diff` against a fresh pytest checkout stays readable.
@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PYTEST_SRC = REPO / "pytest" / "src" / "_pytest"
+PYTEST_SRC = REPO / "oss" / "pytest" / "src" / "_pytest"
 DST = REPO / "velox" / "_assertions" / "_vendor"
 VENDOR_MD = REPO / "velox" / "_assertions" / "VENDOR.md"
 
@@ -453,7 +453,15 @@ def __getattr__(name: str) -> object:
 def pytest_commit() -> str:
     try:
         out = subprocess.run(
-            ["git", "-C", str(REPO / "pytest"), "describe", "--tags", "--always", "--dirty"],
+            [
+                "git",
+                "-C",
+                str(REPO / "oss" / "pytest"),
+                "describe",
+                "--tags",
+                "--always",
+                "--dirty",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -486,7 +494,7 @@ def main() -> int:
     if not PYTEST_SRC.is_dir():
         raise SystemExit(
             f"{PYTEST_SRC} not found — the pytest submodule is not checked out.\n"
-            "Run: git submodule update --init pytest"
+            "Run: git submodule update --init oss/pytest"
         )
 
     v = Vendorer()

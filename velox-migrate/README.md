@@ -139,5 +139,10 @@ $ just corpus-check        # verify those dumps match what the extractor produce
 `corpus/` holds pytest suites that exist to be extracted from, not run — feature-dense by design,
 since they are the input the tooling is tested against. `fixtures_showcase` is the wiring: overrides,
 autouse, parametrization, wrapped fixtures. `hazards_showcase` is everything that does not translate
-cleanly, one case per matrix row. `corpus/dumps/` holds their dumps, one per supported pytest
-version, which is what keeps a single model honest across both.
+cleanly, one case per matrix row. The rest are the conversion's own bars, each converted and then
+run under velox: `mechanical_showcase` for the constructs that translate one for one,
+`declarations_showcase` for the fixtures a test gets without naming them, `overrides_showcase` for
+the specialized chains, `bodies_showcase` for what only a body shows — patching, and a fixture
+asked for by name — and `parametrize_showcase` for the cases a call site decided rather than the
+fixture: an `indirect` mark, and a `pytest_generate_tests` hook. `corpus/dumps/` holds their
+dumps, one per supported pytest version, which is what keeps a single model honest across both.

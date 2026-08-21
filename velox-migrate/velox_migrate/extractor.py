@@ -120,15 +120,24 @@ class _PathNormalizer:
     """Rewrites an absolute path to one that means the same thing on another machine.
 
     Paths under the suite become relative to rootdir. Paths belonging to the environment —
-    pytest's own builtin fixtures, an installed plugin's fixtures — keep a `${prefix}` or
-    `${base_prefix}` token standing in for the interpreter prefix. Anything else is left alone.
+    pytest's own builtin fixtures, an installed plugin's fixtures — keep a `${site_packages}`,
+    `${prefix}` or `${base_prefix}` token standing in for the directory they were installed
+    into. Anything else is left alone.
     """
 
     def __init__(self, rootpath):
         self._roots = [(str(rootpath), "")]
-        # Longest prefix first, so a venv nested inside the suite wins over the suite itself.
+        # An installed package is not reliably under `sys.prefix`: a runner that layers an
+        # ephemeral environment over a base one puts what it installed on `sys.path` and leaves
+        # the prefix pointing elsewhere. Every directory packages are imported from is therefore
+        # a root in its own right, and one token covers them all, since which of an
+        # environment's several package directories a file sits in says nothing about the suite.
+        for entry in sys.path:
+            if os.path.basename(entry) in ("site-packages", "dist-packages"):
+                self._roots.append((entry, "${site_packages}"))
         for token, prefix in (("${prefix}", sys.prefix), ("${base_prefix}", sys.base_prefix)):
             self._roots.append((prefix, token))
+        # Longest prefix first, so a venv nested inside the suite wins over the suite itself.
         self._roots.sort(key=lambda pair: len(pair[0]), reverse=True)
 
     def __call__(self, path):

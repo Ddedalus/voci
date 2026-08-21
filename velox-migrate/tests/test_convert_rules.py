@@ -9,12 +9,13 @@ unrepeatable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 import libcst as cst
-
 import pytest
+
 from velox_migrate.convert import rules
+from velox_migrate.convert.parametrize import Generated
 
 PATH = "tests/test_suite.py"
 
@@ -26,6 +27,10 @@ def _context(
     blocked: Iterable[str] = (),
     axis_ids: Mapping[tuple[str, str], tuple[str, ...]] | None = None,
     xfail_strict: bool = False,
+    requested: Mapping[str, Mapping[str, str]] | None = None,
+    finalizers: Iterable[str] = (),
+    indirect: Mapping[str, frozenset[str]] | None = None,
+    generated: Mapping[str, Sequence[Generated]] | None = None,
 ) -> rules.Context:
     return rules.Context(
         path=PATH,
@@ -33,6 +38,10 @@ def _context(
         tests=frozenset(tests),
         blocked=frozenset(blocked),
         xfail_strict=xfail_strict,
+        requested=requested or {},
+        finalizers=frozenset(finalizers),
+        indirect=indirect or {},
+        generated=generated or {},
     )
 
 
@@ -301,7 +310,9 @@ def test_x(value):
     assert _codes(applied) == ["VX102"]
 
 
-def test_an_indirect_parametrize_is_the_fixture_per_value_row() -> None:
+def test_an_indirect_parametrize_the_plan_did_not_list_stays_where_it_was() -> None:
+    # Whether the fixture can carry these values is a question about every test in the suite that
+    # reaches it, so a rule told nothing about it writes nothing.
     source = """import pytest
 
 
@@ -311,7 +322,66 @@ def test_x(value):
 """
     applied = _untouched("VX101", source, _context("test_x"))
 
+    assert _codes(applied) == ["VX029"]
+
+
+def test_an_indirect_parametrize_the_plan_listed_goes_away() -> None:
+    # The values are written onto the fixture by the wiring swap, so what is left here is a mark
+    # with nothing to become.
+    before = """import pytest
+
+
+@pytest.mark.parametrize("value", [1, 2], indirect=True)
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite(
+        "VX007", before, after, _context("test_x", indirect={"test_x": frozenset({"value"})})
+    )
+
     assert _codes(applied) == ["VX007"]
+
+
+def test_the_cases_a_hook_produced_are_written_out_with_pytests_own_ids() -> None:
+    before = """def test_x(width, height):
+    assert width * height
+"""
+    after = """@velox.parametrize("width,height", [(2, 3), (5, 8)], ids=["small", "large"])
+def test_x(width, height):
+    assert width * height
+"""
+    generated = {
+        "test_x": [
+            Generated(
+                argnames=("width", "height"),
+                values=(("2", "3"), ("5", "8")),
+                ids=("small", "large"),
+            )
+        ]
+    }
+    applied = _rewrite("VX024", before, after, _context("test_x", generated=generated))
+
+    assert _codes(applied) == ["VX024"]
+
+
+def test_a_generated_axis_whose_ids_no_one_position_explains_says_so() -> None:
+    before = """def test_x(letter):
+    assert letter
+"""
+    after = """@velox.parametrize("letter", ["a", "b"])
+def test_x(letter):
+    assert letter
+"""
+    generated = {"test_x": [Generated(argnames=("letter",), values=(("'a'",), ("'b'",)), ids=None)]}
+    applied = _rewrite("VX024", before, after, _context("test_x", generated=generated))
+
+    assert _codes(applied) == ["VX114"]
 
 
 def test_stacked_parametrize_marks_are_reversed() -> None:
@@ -993,6 +1063,152 @@ def test_x():
 
     assert result.module.code == after
     assert _all(after, context).module.code == after
+
+
+# --- VX011 getfixturevalue --------------------------------------------------------------------
+
+
+def test_a_literal_getfixturevalue_becomes_the_name_of_the_parameter_it_injects() -> None:
+    before = """def engine(request):
+    return {"dsn": request.getfixturevalue("settings")["dsn"]}
+"""
+    after = """def engine(request):
+    return {"dsn": settings["dsn"]}
+"""
+    applied = _rewrite(
+        "VX011", before, after, _context(requested={"engine": {"settings": "settings"}})
+    )
+
+    assert _codes(applied) == ["VX011"]
+
+
+def test_a_getfixturevalue_of_a_renamed_builtin_becomes_the_name_velox_binds() -> None:
+    before = """def test_x(request):
+    assert request.getfixturevalue("tmp_path").is_dir()
+"""
+    after = """def test_x(request):
+    assert tmp_path.is_dir()
+"""
+    _rewrite(
+        "VX011",
+        before,
+        after,
+        _context("test_x", requested={"test_x": {"tmp_path": "tmp_path"}}),
+    )
+
+
+def test_a_getfixturevalue_the_plan_did_not_attribute_is_left_where_it_is() -> None:
+    # The name may mean two fixtures, or the definition may be one nothing can grow a parameter
+    # on. Either way the plan says so, and this rule writes only where it does.
+    source = """def engine(request):
+    return request.getfixturevalue("settings")
+"""
+
+    assert _untouched("VX011", source, _context()) == ()
+
+
+# --- VX013 addfinalizer -----------------------------------------------------------------------
+
+
+def test_an_unconditional_finalizer_becomes_the_teardown_after_a_yield() -> None:
+    before = """def ledger(request):
+    entries = []
+
+    request.addfinalizer(entries.clear)
+    return entries
+"""
+    after = """def ledger(request):
+    entries = []
+
+    yield entries
+    entries.clear()
+"""
+    applied = _rewrite("VX013", before, after, _context(finalizers=["ledger"]))
+
+    assert _codes(applied) == ["VX013"]
+
+
+def test_finalizers_run_in_the_reverse_of_the_order_they_were_registered_in() -> None:
+    # pytest runs them last-registered-first, and a `yield` fixture runs its teardown top to
+    # bottom, so the order the calls are written in is the reverse of the order they were made in.
+    before = """def journal(request, log):
+    request.addfinalizer(lambda: log.append("outer"))
+    request.addfinalizer(close)
+    return {"open": True}
+"""
+    after = """def journal(request, log):
+    yield {"open": True}
+    close()
+    (lambda: log.append("outer"))()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["journal"]))
+
+
+def test_a_factory_that_hands_nothing_back_yields_nothing() -> None:
+    before = """def audited(request, log):
+    log.append("setup")
+    request.addfinalizer(close)
+"""
+    after = """def audited(request, log):
+    log.append("setup")
+    yield
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["audited"]))
+
+
+def test_a_factory_ending_in_a_bare_return_yields_nothing_in_its_place() -> None:
+    before = """def audited(request, log):
+    log.append("setup")
+    request.addfinalizer(close)
+    return
+"""
+    after = """def audited(request, log):
+    log.append("setup")
+    yield
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["audited"]))
+
+
+def test_a_return_sharing_its_line_with_another_statement_still_becomes_the_yield() -> None:
+    before = """def ledger(request):
+    request.addfinalizer(close)
+    entries = []; return entries
+"""
+    after = """def ledger(request):
+    entries = []; yield entries
+    close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["ledger"]))
+
+
+def test_a_finalizer_registered_inside_a_with_block_leaves_the_block_behind() -> None:
+    before = """def handle(request):
+    with open("f") as file:
+        request.addfinalizer(file.close)
+    return file
+"""
+    after = """def handle(request):
+    with open("f") as file:
+        pass
+    yield file
+    file.close()
+"""
+    _rewrite("VX013", before, after, _context(finalizers=["handle"]))
+
+
+def test_a_registration_inside_a_nested_def_stays_where_it_was_written() -> None:
+    # What a nested function registers is registered only when something calls it, which is not
+    # the shape the plan attributes a site for — so the fixture around it is not one either.
+    source = """def ledger(request):
+    def register():
+        request.addfinalizer(close)
+
+    return register
+"""
+
+    assert _untouched("VX013", source, _context(finalizers=["ledger.register"])) == ()
 
 
 # --- VX201 capsys -----------------------------------------------------------------------------

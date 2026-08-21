@@ -175,9 +175,9 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "VX007",
         "@pytest.mark.parametrize(..., indirect=True)",
         MECHANICAL,
-        "Each value used becomes its own fixture object, since the case is chosen at the call "
-        "site rather than by the fixture.",
-        target="one generated fixture per value",
+        "The values move onto the fixture as `params=`: indirect parametrization is a call site "
+        "choosing a fixture's case, and a velox fixture carries its own cases.",
+        target="@velox.fixture(params=...)",
     ),
     _row(
         "VX008",
@@ -228,15 +228,17 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX014",
-        "request.addfinalizer under a condition",
+        "request.addfinalizer where no single yield can take its place",
         REFUSED,
-        "A `yield` fixture always runs its teardown, so a conditionally registered finalizer "
-        "would start running where it did not.",
-        action="Make the finalizer unconditional, moving the condition inside it.",
+        "A `yield` fixture hands its value over at one point in the body and tears down after "
+        "it, so a finalizer registered under a condition, from inside another function, or from "
+        "somewhere that is not a fixture has nowhere to move to.",
+        action="Register the finalizer unconditionally in the fixture's own body, moving any "
+        "condition inside it.",
     ),
     _row(
         "VX015",
-        "request.node, request.config, request.cls, request.instance, request.fixturenames",
+        "request.node, request.config, request.cls, and every other attribute of request",
         MARKER,
         "`velox.test_info` carries the test's id, tags, timeout and worker. Anything else these "
         "reach — a node's own marks, ini values, the owning class — has no counterpart.",
@@ -346,12 +348,42 @@ CONSTRUCTS: tuple[Construct, ...] = (
         action="Request the fixture by name where it is needed, or unwind the override.",
     ),
     _row(
+        "VX028",
+        "request.getfixturevalue of a name a parameter cannot carry",
+        REFUSED,
+        "A parameter names one object for the whole definition, so a name the suite defines in "
+        "more than one directory, or one asked for where there is no signature to grow, has no "
+        "parameter to become.",
+        action="Request the fixture in the signature, or unwind the override that gives the "
+        "name two meanings.",
+    ),
+    _row(
+        "VX029",
+        "indirect parametrization a params= fixture cannot carry",
+        REFUSED,
+        "A `params=` fixture has one case list for every test that reaches it, so a name given "
+        "different values in different tests, one parametrized alongside a direct axis, one "
+        "whose fixture already has cases of its own, and one whose values have no literal "
+        "spelling all have nowhere to go.",
+        action="Give the fixture the cases it always has with `params=`, or take the "
+        "parametrization off the fixture and pass the value to the test.",
+    ),
+    _row(
         "VX030",
         "a fixture an installed plugin provides",
         UNSUPPORTED,
         "The fixture lives in a distribution, not in the suite, so there is no source to move and "
         "nothing registers it under velox.",
         action="Write the fixture into the suite, or drop the tests that need it.",
+    ),
+    _row(
+        "VX031",
+        "a generated case an explicit parametrize cannot list",
+        REFUSED,
+        "A frozen case list is written from the value each case was given, so a value with no "
+        "literal spelling, and an axis the hook composed with one the test was written with, "
+        "have nothing this can write.",
+        action="Write the cases out as a `@pytest.mark.parametrize` before converting.",
     ),
     # --- marks and parametrization -------------------------------------------------------------
     _row(

@@ -9,6 +9,10 @@ parameter, since a local called `caplog` is not pytest's. Renaming the parameter
 rewritten only in the shapes velox has: a `raises` entered by a `with` or called with the
 exception it expects and the callable it wraps, and an `approx` over a scalar, a list, a tuple, or
 a dict. Anything else is left as it was written, with the row that refuses it recorded.
+
+The two `request` rules are the exception to a rule deciding anything: what a name means and
+whether a teardown can move are questions about the whole suite and about a factory's shape, so
+the plan answers them from the audit and these rules rewrite only the sites it names.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from velox_migrate.convert.rules import (
     keyword,
     keywords,
     leading,
+    literal_text,
     positional,
     render,
     rule,
@@ -36,6 +41,7 @@ from velox_migrate.convert.rules import (
 
 CAPTURE = "capture"
 LOG_RECORDS = "log_records"
+REQUEST = "request"
 
 # The two names one builtin fixture answers to while a file is being converted.
 _CAPTURE_NAMES = (CAPTURE, "capsys")
@@ -423,6 +429,170 @@ class _Approx(_BodyPass):
         return None
 
 
+class _GetFixtureValue(_BodyPass):
+    """VX011: `request.getfixturevalue("name")`, which is a parameter the signature grows.
+
+    The name is a literal, so the dependency is as static as a parameter would have been — and the
+    plan has already resolved it to one object and told the wiring swap to inject it. What is left
+    here is the call itself, which becomes the name that parameter binds.
+    """
+
+    CODE = "VX011"
+
+    def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        if self.is_blocked or self.method(original_node, (REQUEST,), "getfixturevalue") is None:
+            return updated_node
+        given = positional(original_node)
+        wanted = literal_text(given[0].value) if given else None
+        param = self.context.requested.get(self.qualname or "", {}).get(wanted or "")
+        if param is None:
+            return updated_node
+        self.record(f"`{render(original_node)}` becomes the injected parameter `{param}`.")
+        return cst.Name(param)
+
+
+class _Finalizers(_BodyPass):
+    """VX013: `request.addfinalizer(fn)`, which is what a `yield` fixture's teardown says.
+
+    Every registration in the factory goes, the value it hands over is yielded rather than
+    returned, and the callables are called after the `yield` in the reverse of the order they were
+    registered in — which is the order pytest runs them in. A factory with nothing to hand over
+    yields nothing, since a generator is what a teardown needs, not a value.
+
+    Only a `def` at module level is rewritten, which is the only kind a fixture object is ever
+    made of.
+    """
+
+    CODE = "VX013"
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> cst.FunctionDef:
+        if self.is_blocked or not self.at_module_level:
+            return updated_node
+        if (self.qualname or "") not in self.context.finalizers:
+            return updated_node
+        body = updated_node.body
+        if not isinstance(body, cst.IndentedBlock):
+            return updated_node
+        registration = _Registrations()
+        stripped = body.visit(registration)
+        if not registration.registered or not isinstance(stripped, cst.IndentedBlock):
+            return updated_node
+        statements = list(stripped.body)
+        teardown = [_calling(call) for call in reversed(registration.registered)]
+        self.record(
+            f"`request.addfinalizer` is called {len(registration.registered)} time(s) here, and "
+            "becomes the teardown after this fixture's `yield`."
+        )
+        return updated_node.with_changes(
+            body=stripped.with_changes(body=[*_yielding(statements), *teardown])
+        )
+
+
+class _Registrations(cst.CSTTransformer):
+    """Takes every `request.addfinalizer(...)` statement out of a body, keeping what it registered.
+
+    A function written inside the body is left alone: what it registers is registered only if
+    something calls it, which is not the unconditional shape the plan attributed this site for.
+
+    A removed statement hands the blank lines above it to whatever followed it, so taking a line
+    out of a body does not close a gap the author wrote.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registered: list[cst.BaseExpression] = []
+        # The statements themselves, not their ids: a block is rebuilt bottom-up, so a node this
+        # pass dropped can be collected and its id handed to a node built afterwards.
+        self._removing: list[cst.SimpleStatementLine] = []
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        return False
+
+    def leave_SimpleStatementLine(
+        self, original_node: cst.SimpleStatementLine, updated_node: cst.SimpleStatementLine
+    ) -> cst.SimpleStatementLine:
+        call = _registration(updated_node)
+        if call is None:
+            return updated_node
+        given = positional(call)
+        if len(given) != 1 or starred(call):
+            return updated_node
+        self.registered.append(given[0].value)
+        self._removing.append(updated_node)
+        return updated_node
+
+    def leave_IndentedBlock(
+        self, original_node: cst.IndentedBlock, updated_node: cst.IndentedBlock
+    ) -> cst.IndentedBlock:
+        if not any(self._is_removed(statement) for statement in updated_node.body):
+            return updated_node
+        kept: list[cst.BaseStatement] = []
+        carried: list[cst.EmptyLine] = []
+        for statement in updated_node.body:
+            if self._is_removed(statement):
+                carried = [*carried, *leading(statement)]
+                continue
+            kept.append(_led(statement, carried) if carried else statement)
+            carried = []
+        # An empty block renders as `pass`, which is what a `with` whose only statement was a
+        # registration becomes; a factory's own body is never left empty, since a `yield` follows.
+        return updated_node.with_changes(body=kept)
+
+    def _is_removed(self, statement: cst.BaseStatement) -> bool:
+        return any(statement is removed for removed in self._removing)
+
+
+def _registration(statement: cst.SimpleStatementLine) -> cst.Call | None:
+    """`statement` as a lone `request.addfinalizer(...)` call, or `None` for anything else."""
+    match statement.body:
+        case [
+            cst.Expr(
+                value=cst.Call(
+                    func=cst.Attribute(
+                        value=cst.Name(value="request"), attr=cst.Name(value="addfinalizer")
+                    )
+                ) as call
+            )
+        ]:
+            return call
+        case _:
+            return None
+
+
+def _yielding(statements: list[cst.BaseStatement]) -> list[cst.BaseStatement]:
+    """`statements` with the value the factory handed back yielded instead of returned.
+
+    A factory that hands nothing back — one ending in a bare `return`, or in no `return` at all —
+    yields nothing, since what the teardown needs is a generator rather than a value.
+    """
+    trailing = statements[-1] if statements else None
+    if not isinstance(trailing, cst.SimpleStatementLine) or not isinstance(
+        trailing.body[-1], cst.Return
+    ):
+        return [*statements, cst.SimpleStatementLine(body=[cst.Expr(value=cst.Yield())])]
+    yielded = cst.Expr(value=cst.Yield(value=trailing.body[-1].value))
+    return [*statements[:-1], trailing.with_changes(body=[*trailing.body[:-1], yielded])]
+
+
+def _led(statement: cst.BaseStatement, carried: Sequence[cst.EmptyLine]) -> cst.BaseStatement:
+    """`statement` with the blank lines a removed statement above it left behind."""
+    if not isinstance(statement, cst.SimpleStatementLine | cst.BaseCompoundStatement):
+        return statement
+    return statement.with_changes(leading_lines=[*carried, *statement.leading_lines])
+
+
+def _calling(registered: cst.BaseExpression) -> cst.SimpleStatementLine:
+    """The finalizer called, parenthesized where the expression that names it needs it."""
+    called = (
+        registered
+        if isinstance(registered, cst.Name | cst.Attribute | cst.Call | cst.Subscript)
+        else registered.with_changes(lpar=[cst.LeftParen()], rpar=[cst.RightParen()])
+    )
+    return cst.SimpleStatementLine(body=[cst.Expr(value=cst.Call(func=called))])
+
+
 def _out_and_err() -> cst.BaseExpression:
     """`capture.out, capture.err`, which is what unpacking a `readouterr()` bound."""
     return cst.Tuple(
@@ -436,6 +606,8 @@ def _out_and_err() -> cst.BaseExpression:
 
 
 RULES: tuple[TransformerRule, ...] = (
+    rule(_GetFixtureValue),
+    rule(_Finalizers),
     rule(_Capture),
     rule(_LogRecords),
     rule(_SetLevel),

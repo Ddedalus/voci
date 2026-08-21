@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 
 import pytest
+
 import velox
 from velox import Depends
 from velox._marks import marks_of

@@ -11,16 +11,17 @@ by 8.4's answers and one driven by 9.1's must place the same objects in the same
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import libcst as cst
-
 import pytest
+
 from velox_migrate import audit, convert, matrix, model
-from velox_migrate.convert import config, layout, markers, plan, wiring
+from velox_migrate.convert import config, layout, markers, parametrize, plan, wiring
 from velox_migrate.convert.layout import Import
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
@@ -29,11 +30,13 @@ PYTEST_VERSIONS = ["8.4", "9.1"]
 
 STANDALONE = "test_it.py"
 
+BODIES = "bodies_showcase"
 MECHANICAL = "mechanical_showcase"
 DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
 HAZARDS = "hazards_showcase"
 OVERRIDES = "overrides_showcase"
+PARAMETRIZE = "parametrize_showcase"
 
 
 @pytest.fixture(params=PYTEST_VERSIONS, ids=[f"pytest{v}" for v in PYTEST_VERSIONS])
@@ -131,6 +134,143 @@ def test_the_converted_declarations_suite_keeps_every_pytest_node_id(
     assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / DECLARATIONS)
 
 
+def test_the_bodies_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(BODIES, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_bodies_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for the body rewrites: a fixture asked for by name is constructed for the test that
+    # asked, a finalizer runs at teardown in the order pytest ran it, and a test that patches
+    # inside its body holds the whole run while it does.
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_bodies_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / BODIES)
+
+
+def test_a_fixture_asked_for_by_name_becomes_a_parameter_of_the_definition_that_asked(
+    version: str, tmp_path: Path
+) -> None:
+    # The name was a literal, so the dependency was static all along: `request` had nothing else
+    # to do here and goes with it.
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "def engine(settings=Depends(settings)):" in body
+    assert 'request.getfixturevalue("settings")' not in body
+
+
+def test_a_test_that_asked_for_a_fixture_by_name_loses_its_request_parameter(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "test_bodies.py").read_text(encoding="utf-8")
+
+    assert "def test_getfixturevalue_by_name(settings=Depends(settings)):" in body
+
+
+def test_an_unconditional_finalizer_becomes_the_teardown_after_a_yield(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+    journal = body[body.index("def journal") :]
+
+    assert "request.addfinalizer(" not in body
+    # pytest runs the last-registered finalizer first, and a `yield` fixture tears down top to
+    # bottom, so the calls are written in the reverse of the order they were registered in.
+    assert journal.index("yield {") < journal.index('append("journal-inner")')
+    assert journal.index('append("journal-inner")') < journal.index('append("journal-outer")')
+
+
+def test_a_patch_entered_inside_a_body_puts_the_test_on_its_own(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "test_bodies.py").read_text(encoding="utf-8")
+
+    assert "@velox.solo\ndef test_patch_context_manager(" in body
+    assert "@velox.solo\ndef test_started_patcher(" in body
+
+
+def test_a_patch_applied_as_a_decorator_keeps_it_and_is_marked_by_nothing(
+    version: str, tmp_path: Path
+) -> None:
+    # velox finds a decorator's patching on the function object at collection and schedules that
+    # test alone, so the conversion writes no mark of its own — and the injected parameters go
+    # after the mock the decorator fills positionally.
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "test_bodies.py").read_text(encoding="utf-8")
+
+    signature = "def test_patch_decorator(getcwd, engine=Depends(engine)):"
+    decorated = f'@mock.patch("os.getcwd")\n{signature}'
+
+    assert decorated in body
+    assert "@velox.solo\n@mock.patch" not in body
+
+
+def test_a_specialized_copy_is_rewritten_the_way_the_fixture_it_copies_is(
+    version: str, tmp_path: Path
+) -> None:
+    # A copy is the original's source under another name, so the plan's answers about that body
+    # are the copy's answers too: the name it asked for is injected into it, with the import that
+    # reference needs, and its finalizer is the teardown after its `yield`.
+    tree = tmp_path / BODIES
+    converted(BODIES, version, tree)
+
+    body = (tree / "sub" / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "from fixtures import finished, settings" in body
+    assert "def report_sub(" in body
+    assert "settings=Depends(settings)" in body
+    assert "request" not in body
+
+
+def test_a_name_resolving_to_a_fixture_nothing_writes_an_object_for_is_refused() -> None:
+    # `engine` asks for `settings` by name. Told that `settings` comes from an installed plugin
+    # rather than from this suite, there is no object a `Depends()` could name — so the fixture
+    # keeps the `request` it asked through, and the tests that reach it keep their pytest source.
+    dump = json.loads((DUMPS / f"{BODIES}-pytest-9.1.json").read_text(encoding="utf-8"))
+    key = next(k for k, entry in dump["fixture_defs"].items() if entry["argname"] == "settings")
+    dump["fixture_defs"][key]["func"]["file"] = "${prefix}/site-packages/plugin.py"
+    ground_truth = model.build(dump)
+    root = CORPUS / BODIES
+
+    result = convert.run(audit.run(ground_truth, root=root), ground_truth, root=root)
+
+    blocked = {ground_truth.fixture_defs[found].argname for found in result.plan.blocked_fixtures}
+
+    assert "engine" in blocked
+    assert "test_bodies.py::test_getfixturevalue_by_name" in result.plan.blocked_tests
+
+
 def test_the_overrides_suite_converts_with_nothing_refused(version: str) -> None:
     result = conversion_of(OVERRIDES, version)
 
@@ -159,6 +299,103 @@ def test_the_converted_overrides_suite_keeps_every_pytest_node_id(
     converted(OVERRIDES, version, tree)
 
     assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / OVERRIDES)
+
+
+def test_the_parametrize_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(PARAMETRIZE, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_parametrize_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for the two call-site parametrizations: a fixture an `indirect` mark chose cases for
+    # builds each of them, and a test a hook built cases for runs the list the hook produced.
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_parametrize_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / PARAMETRIZE)
+
+
+def test_an_indirect_marks_values_become_the_fixtures_own_cases(
+    version: str, tmp_path: Path
+) -> None:
+    # The mark is written in the test module and the `params=` is read in the fixture module, so
+    # what travels is the value pytest passed — with the ids it composed, which is what keeps the
+    # node ids. Both tests reaching `backend` lose the mark, including the one that never named it.
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    fixtures = (tree / "fixtures.py").read_text(encoding="utf-8")
+    tests = (tree / "test_indirect.py").read_text(encoding="utf-8")
+
+    assert '@velox.fixture(params=["mysql", "sqlite"], ids=["mysql", "sqlite"])' in fixtures
+    assert "def backend(param):" in fixtures
+    assert "indirect" not in tests
+    assert "def test_backend_through_engine(engine=Depends(engine)):" in tests
+
+
+def test_a_hook_that_built_cases_leaves_them_written_on_each_test(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / PARAMETRIZE
+    converted(PARAMETRIZE, version, tree)
+
+    body = (tree / "test_generated.py").read_text(encoding="utf-8")
+
+    assert '@velox.parametrize("width,height", [(2, 3), (5, 8)], ids=["small", "large"])' in body
+    assert '@velox.parametrize("letter", ["a", "b"], ids=["a", "b"])' in body
+    assert "VELOX-TODO[VX024]" in body
+
+
+def test_an_indirect_mark_on_a_fixture_with_cases_of_its_own_refuses_the_test(
+    version: str, tmp_path: Path
+) -> None:
+    # `backend` is a `params=` fixture that one test also parametrizes indirectly. One case list
+    # cannot be both, so the fixture keeps the cases every other test reaches it for and the test
+    # that asked for different ones keeps its pytest source.
+    tree = tmp_path / FIXTURES
+    result = converted(FIXTURES, version, tree)
+
+    body = (tree / "test_top.py").read_text(encoding="utf-8")
+
+    assert [f.code for f in result.plan.refusals if f.code == "VX029"] == ["VX029"]
+    assert "test_top.py::test_indirect[mysql]" in result.plan.blocked_tests
+    assert '@pytest.mark.parametrize("backend", ["mysql"], indirect=True)' in body
+    assert "VELOX-TODO[VX029]" in body
+    assert 'ids=["lite", "pg"]' in (tree / "fixtures.py").read_text(encoding="utf-8")
+
+
+def test_a_generated_value_with_no_literal_spelling_refuses_the_test() -> None:
+    # A frozen case list is written from the value each case was given, and a `repr` that reads
+    # back as nothing is not a value this can write down.
+    dump = json.loads((DUMPS / f"{PARAMETRIZE}-pytest-9.1.json").read_text(encoding="utf-8"))
+    for entry in dump["items"]:
+        params = (entry.get("callspec") or {}).get("params", {})
+        if "letter" in params:
+            params["letter"] = "<Backend object at 0x1>"
+    ground_truth = model.build(dump)
+    root = CORPUS / PARAMETRIZE
+
+    result = convert.run(audit.run(ground_truth, root=root), ground_truth, root=root)
+
+    assert [f.code for f in result.plan.refusals] == ["VX031"]
+    assert "test_generated.py::test_letters[a]" in result.plan.blocked_tests
+    assert "test_generated.py::test_area[small]" not in result.plan.blocked_tests
 
 
 def test_the_converted_suite_keeps_every_pytest_node_id(version: str, tmp_path: Path) -> None:
@@ -211,7 +448,7 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES])
+@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE])
 def test_converting_an_already_converted_tree_changes_nothing(
     suite: str, version: str, tmp_path: Path
 ) -> None:
@@ -344,6 +581,48 @@ def test_a_refusal_travels_to_the_tests_that_reach_it(version: str) -> None:
 
     assert blocked == {"dyn"}
     assert "test_top.py::test_uses" in result.plan.blocked_tests
+
+
+def test_a_name_the_suite_defines_twice_is_not_one_a_parameter_can_carry(
+    version: str, tmp_path: Path
+) -> None:
+    # `literal` asks for `settings` by name, and `settings` means one fixture at the root and
+    # another under `deep/`. A parameter names one object, so the fixture is left as it was.
+    tree = tmp_path / HAZARDS
+    result = converted(HAZARDS, version, tree)
+    ground_truth = model.load(DUMPS / f"{HAZARDS}-pytest-{version}.json")
+    blocked = {ground_truth.fixture_defs[key].argname for key in result.plan.blocked_fixtures}
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "literal" in blocked
+    assert "VELOX-TODO[VX028]" in body
+    assert 'return request.getfixturevalue("settings")' in body
+
+
+def test_a_request_the_rewrite_cannot_empty_leaves_the_finalizer_where_it_was(
+    version: str, tmp_path: Path
+) -> None:
+    # `sometimes_closed` registers its finalizer under an `if`, which a `yield` fixture's teardown
+    # cannot be, so both the registration and the `request` that made it stay.
+    tree = tmp_path / HAZARDS
+    converted(HAZARDS, version, tree)
+
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "def sometimes_closed(request, node_name):" in body
+    assert "VELOX-TODO[VX014]" in body
+
+
+def test_an_unconditional_finalizer_beside_no_other_request_use_converts(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / HAZARDS
+    converted(HAZARDS, version, tree)
+
+    body = (tree / "fixtures.py").read_text(encoding="utf-8")
+
+    assert "def closed():" in body
+    assert "yield handle" in body
 
 
 def test_a_refused_test_keeps_its_pytest_signature(version: str, tmp_path: Path) -> None:
@@ -489,6 +768,38 @@ def test_a_capsys_use_no_rule_rewrites_refuses_the_test_rather_than_stranding_it
 
     assert result.refused == (("test_x", "VX202"),)
     assert result.module.code == source
+
+
+def test_a_carried_case_list_replaces_what_the_decorator_said_about_cases() -> None:
+    # pytest tolerates an `ids=` with no `params=` beside it, and velox raises on one. The cases
+    # are the mark's now, so what the decorator said about cases of its own goes with it.
+    source = """import pytest
+
+
+@pytest.fixture(ids=["only"])
+def backend(request):
+    return request.param
+"""
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        fixtures=(
+            plan.FixtureWork(
+                key="f0",
+                argname="backend",
+                symbol="backend",
+                scope="function",
+                injections=(plan.Injection("request", "param", ""),),
+                parametrized=True,
+                carried=parametrize.Carried(values=("'mysql'",), ids=("mysql",)),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert '@velox.fixture(params=["mysql"], ids=["mysql"])' in result.module.code
+    assert '"only"' not in result.module.code
 
 
 def test_a_conftest_never_moves_onto_a_fixtures_module_the_suite_already_has() -> None:

@@ -301,7 +301,7 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   - **Signature whitespace survives unless the order has to change.** Injected parameters gain
     defaults, and a parameter without one cannot follow them, so only a signature mixing fixtures
     with `parametrize` argnames is reordered — velox binds by keyword, so that order is free.
-- **Phase 3 — the hard §4 machinery.** Specialization within budget, autouse placement, request
+- [x] **Phase 3 — the hard §4 machinery.** Specialization within budget, autouse placement, request
   elimination, `mock.patch` handling (decorator reorder + `@velox.solo` at context-manager
   sites). *Exit: corpus suites with overrides and autouse pass; over-budget cases refuse with
   correct fan-out numbers.* Declaration placement — autouse fixtures and `usefixtures`, `VX008`
@@ -363,9 +363,7 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     is the closer match to what indirect means — settling that row is the chunk's first job.
     `pytest_generate_tests` cases become an explicit `@velox.parametrize` from the dump's frozen
     callspecs with pytest's own ids, refusing cases whose `repr`ed values do not round-trip
-    through `literal_eval`, since a dump records `repr(obj)` and that is not always source. Both
-    codes sit in `plan.DEFERRED` without being named in Phase 3's headline; if they wait, Phase 3
-    closes at Chunk 3 and this becomes a Phase 4 item.
+    through `literal_eval`, since a dump records `repr(obj)` and that is not always source.
 
   Chunks 1 and 2 are built as one pass, since the general case subsumes the fan-out gate and a
   finding-level seam bought nothing once the copies existed. The subject is a fifth corpus suite
@@ -393,6 +391,74 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     declared over tests that had exactly one. `VX027` refuses the overriding definition and only
     that one: what the subtree loses is a conversion, and what the rest of the suite keeps is the
     definition it overrode, declared for the tests that converge on it.
+
+  Chunk 3 is built against a sixth corpus suite, whose eleven tests convert with nothing refused,
+  pass under `velox --serial`, keep every node id and run twice byte-identical. Six things that
+  build settled:
+  - **A `request` parameter goes away whole or not at all.** The rewrite's product is a signature
+    without it, so it can only be written where every use of `request` in that body has an answer:
+    a factory reading a literal `getfixturevalue` *and* `request.node` converts neither. That made
+    the scan's silence load-bearing, and it was not silent enough — an attribute with no row of
+    its own was reported by nothing, so `VX015` now covers every attribute of `request` rather
+    than the five that were named.
+  - **The rules decide none of this; the plan does, and reads source to do it.** Whether a name
+    means one fixture is a question about the whole suite, and whether a factory has one place a
+    `yield` can go is a question about a shape no dump carries — so the plan answers both, from
+    the audit and from the `ast` it already parses for binding names, and hands each rule the
+    sites it may write in. A rule that re-derived either would be a second opinion in the one
+    stage that has no oracle behind it.
+  - **A literal name is static only where the suite defines it once.** pytest resolves
+    `getfixturevalue` against the test that is running, so a name defined in two directories
+    reaches two objects and a parameter names one. `VX028` refuses those, and a body sitting
+    somewhere no signature can grow — a helper, a fixture written in a class — with it.
+  - **A finalizer is a teardown only where the body has one place to yield from.** A `return`
+    inside a branch would become a `yield` the body then runs past, so what converts is a factory
+    with no `yield` of its own and no `return` except as its last statement; everything else is
+    `VX014`, whose row grew to say so. The calls are written after the `yield` in the reverse of
+    the order they were registered in, which is the order pytest ran them in.
+  - **A specialized copy carries the body's answers too.** A copy is the original's source under
+    another name, so the name that body asked for is injected into the copy, with the import that
+    reference needs, and the copy's finalizer becomes its own teardown. Keying what the plan
+    decided by the name the file binds — rather than by the definition it was decided about — is
+    what makes the two the same code path.
+  - **The decorator form of `mock.patch` needed no mark at all.** velox reads a test's patching off
+    the function object while collecting and schedules that test alone, so what the conversion owes
+    it is a signature: the mock arrives first and positionally, and the injected parameters follow
+    it — which is what Phase 2's reordering already writes, since an injected parameter is the one
+    that has a default. Only a patch entered inside a body needs `@velox.solo`, and it goes on the
+    tests the audit charged the site to, which are not always in the file the patch is written in.
+
+  Chunk 4 is built against a seventh corpus suite, whose ten tests convert with nothing refused,
+  pass under `velox --serial`, keep every node id and run twice byte-identical, and it closes
+  Phase 3 — `plan.DEFERRED` is empty. Five things that build settled:
+  - **The row said "one generated fixture per value", and what indirect means is one fixture with
+    the values.** `params=` is the same multiplication the mark asked for, written where velox
+    reads it, while a fixture per value would be objects nothing names. That leaves the mark with
+    nothing to become, so `VX007` joins `VX009` as a wiring row spelled as a mark: the rule takes
+    the decorator away and the wiring swap writes the cases onto the fixture.
+  - **Both case lists are written from the dump rather than from the source that produced them.**
+    A hook's cases have no source to copy, and a mark's values are written in a test module while
+    the `params=` they become is read in whichever module holds the fixture — so what travels is
+    the value pytest passed, spelled as a literal, and a `repr` that does not read back as one is
+    a case this refuses. What the mark itself has to be is a decorator on the test's own `def`,
+    since that is the only place the rewrite takes one away — a mark on a class or in a
+    `pytestmark` would leave the fixture parametrized twice over.
+  - **A `params=` fixture has one case list, so the whole suite has to agree on it.** pytest
+    decides a fixture's cases per test, and what makes the move honest is that every test reaching
+    that fixture asked for the same ones — including the tests that reach it without naming it,
+    which would otherwise gain cases nobody wrote for them. `VX029` refuses the rest, sited on the
+    test rather than on the fixture, since the fixture is usually right for every other test that
+    reaches it.
+  - **Where an id sits is what decides whether an axis can move at all.** velox composes a case id
+    with its fixture-`params=` axes first and pytest composes it in the order the axes were
+    registered, so an indirect axis converts only where pytest already put it first — which is the
+    mark written innermost. The position falls out of the same id attribution `VX114` already
+    does, so one reading of a test's axes answers both questions.
+  - **A hook is not a construct that converts; its cases are.** `pytest_generate_tests` stays
+    where it was written and is marked, because velox has no collection hook — and the axes it
+    produced become decorators on the tests, outermost first so velox composes each id in the
+    order pytest did. An axis the hook composed with one the test was written with is refused
+    rather than slotted into a decorator stack whose order another rule owns.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*

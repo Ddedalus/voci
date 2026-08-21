@@ -11,10 +11,10 @@ import warnings
 from collections.abc import Iterator
 from types import CodeType
 
+import pytest
 from _support import make_record as _record
 from _support import run_async
 
-import pytest
 from velox._run import safety
 
 

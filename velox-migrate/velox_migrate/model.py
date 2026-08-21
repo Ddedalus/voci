@@ -31,7 +31,8 @@ class FuncLocation:
     by `FixtureDef.visibility`, which does not depend on this.
 
     `file` is relative to the suite's rootdir when the file is inside it, and otherwise carries a
-    `${prefix}` token for the interpreter prefix; `GroundTruth.resolve_path` expands it.
+    `${site_packages}` or `${prefix}` token for the directory the package was installed into;
+    `GroundTruth.resolve_path` expands it.
     """
 
     module: str | None
@@ -249,17 +250,28 @@ class GroundTruth:
         return tuple(alias for alias, canonical in self.ini_aliases.items() if canonical == name)
 
     def resolve_path(
-        self, path: str | None, *, prefix: str | None = None, base_prefix: str | None = None
+        self,
+        path: str | None,
+        *,
+        prefix: str | None = None,
+        base_prefix: str | None = None,
+        site_packages: str | None = None,
     ) -> Path | None:
         """`path` as written in the dump, expanded against this suite's rootdir.
 
-        A path carrying a `${prefix}` or `${base_prefix}` token belongs to the environment the
-        extraction ran in, not to the suite, and expands only if that prefix is supplied. In a
-        virtualenv the two differ, so they are supplied separately.
+        A path carrying a `${site_packages}`, `${prefix}` or `${base_prefix}` token belongs to
+        the environment the extraction ran in, not to the suite, and expands only if that
+        directory is supplied. They are supplied separately because they differ: in a virtualenv
+        the two prefixes are not the same, and the directory a package was installed into is not
+        always under either.
         """
         if path is None:
             return None
-        for token, replacement in (("${prefix}", prefix), ("${base_prefix}", base_prefix)):
+        for token, replacement in (
+            ("${site_packages}", site_packages),
+            ("${prefix}", prefix),
+            ("${base_prefix}", base_prefix),
+        ):
             if path == token:
                 return Path(replacement) if replacement else None
             if path.startswith(token + "/"):

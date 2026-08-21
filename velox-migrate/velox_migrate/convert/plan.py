@@ -21,27 +21,26 @@ from pathlib import Path
 from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
-from velox_migrate.convert import declarations, layout, specialize
+from velox_migrate.convert import declarations, layout, parametrize, specialize
 from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
+from velox_migrate.convert.parametrize import Carried, Decision
 from velox_migrate.convert.rules import Context
 from velox_migrate.convert.specialize import Specialization
 from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
 
-# Codes a later phase of the tool converts. Until then they behave exactly as a refusal: the
-# construct is real, the translation is not written, and the source says so. Each is a support
-# matrix row whose disposition already says conversion is possible, which is why the list lives
-# here rather than in the matrix.
-DEFERRED: frozenset[str] = frozenset(
-    {
-        "VX007",  # indirect parametrization
-        "VX011",  # getfixturevalue with a literal name
-        "VX013",  # addfinalizer
-        "VX024",  # cases a pytest_generate_tests hook produced
-        "VX217",  # mock.patch as a decorator
-        "VX218",  # mock.patch as a context manager
-    }
-)
+# Codes a later phase of the tool converts, which behave exactly as a refusal while they are
+# listed: the construct is real, the translation is not written, and the source says so. A code
+# here is a support matrix row whose disposition already says conversion is possible, which is why
+# the list lives in the code rather than in the matrix — a phase boundary is a list of codes.
+DEFERRED: frozenset[str] = frozenset()
+
+# What the body scan says about `request` in one definition: the two shapes a rewrite answers, the
+# rows that mean the parameter outlives the rewrite whatever else is written beside them, and the
+# row each of the two is refused under where the shape it is written in has no rewrite.
+_DYNAMIC = ("VX011", "VX013")
+_REQUEST_SURVIVES = ("VX012", "VX014", "VX015", "VX016", "VX017")
+_DECLINED = {"VX011": "VX028", "VX013": "VX014"}
 
 # pytest's own fixtures with a velox counterpart, and the parameter name the translation binds.
 # `capsys` and `caplog` are renamed because their velox counterparts are different objects with
@@ -73,21 +72,51 @@ class Injection:
     """One parameter of a test or fixture factory, and what it becomes.
 
     `reference` is the expression the emitted `Depends()` wraps. `param` is the parameter's name
-    afterwards, which differs from `was` only where the velox counterpart is a different object.
+    afterwards, which differs from `was` only where the velox counterpart is a different object,
+    and is empty for the one injection that is a removal: a `request` every use of which the
+    rewrite has taken away. `asked` marks the injection a body asked for by name rather than
+    through a parameter, which is the one the signature grows a parameter for.
     """
 
     was: str
     param: str
     reference: str
+    asked: bool = False
 
     @property
     def renamed(self) -> bool:
         return self.param != self.was
 
+    @property
+    def dropped(self) -> bool:
+        """Whether this injection takes its parameter away rather than binding it."""
+        return not self.param
+
+
+@dataclass(frozen=True, slots=True)
+class Body:
+    """What the scan found inside one definition, attributed to the definition it sits in.
+
+    `requested` are the fixtures a literal `request.getfixturevalue` asks for, each as the name it
+    was asked for and the key it resolves to: a name decided in source is a static dependency, so
+    it becomes an ordinary injected parameter. `finalizers` says this definition's
+    `request.addfinalizer` calls become the teardown after its `yield`. Either one is a use of
+    `request` the rewrite takes away, and a definition whose every use it takes away is one the
+    parameter itself leaves.
+    """
+
+    requested: tuple[tuple[str, str], ...] = ()
+    finalizers: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class FixtureWork:
-    """One fixture definition to translate, in the file its factory is written in."""
+    """One fixture definition to translate, in the file its factory is written in.
+
+    `carried` is the case list an indirect parametrization moves onto this fixture, and `None` for
+    every fixture whose cases are its own or which has none: `params=` and `ids=` a suite wrote
+    itself travel with the decorator rather than through here.
+    """
 
     key: str
     argname: str
@@ -95,6 +124,7 @@ class FixtureWork:
     scope: str
     injections: tuple[Injection, ...]
     parametrized: bool
+    carried: Carried | None = None
 
     @property
     def request_param(self) -> Injection | None:
@@ -134,7 +164,9 @@ class FileWork:
     file with declarations and nothing else is one the conversion writes from nothing.
     `duplicates` are specialized copies appended to the target before anything else runs, so the
     rewrite translates them exactly as it translates the definitions already written there, and
-    `needs` are the modules those copies read plainly.
+    `needs` are the modules those copies read plainly. `solo` are the tests in this file that take
+    the whole run to themselves, because a patch entered inside a body is one nothing outside the
+    test can see.
     """
 
     path: str
@@ -146,6 +178,7 @@ class FileWork:
     declares: tuple[str, ...] = ()
     duplicates: tuple[Duplicate, ...] = ()
     needs: tuple[str, ...] = ()
+    solo: tuple[str, ...] = ()
     context: Context = field(default_factory=lambda: Context(path=""))
 
     @property
@@ -189,8 +222,29 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     translatable = _translatable(ground_truth)
     refusals, markers = _sorted_findings(audit)
     overrides = audit_wiring.overrides(ground_truth)
-    blocked_fixtures = _blocked_fixtures(ground_truth, translatable, refusals, declared, overrides)
-    blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures)
+
+    # What a body asked for by name, attributed to the definition that asked: a site the rewrite
+    # cannot answer for is a refusal like any other, and travels like one.
+    every_item = _items_by_qualname(ground_truth, frozenset())
+    bodies, unattributed = _bodies(
+        audit,
+        ground_truth,
+        declared=declared,
+        yieldable=_yieldable_factories(sources),
+        items=every_item,
+        translatable=translatable,
+    )
+
+    # Where a case list a call site decided ends up, decided before anything is blocked: a fixture
+    # that is about to carry `params=` is one whose `request` has an answer, and one that is not is
+    # a refusal like any other.
+    cases = parametrize.decide(ground_truth, items=every_item, translatable=translatable)
+    refusals = (*refusals, *unattributed, *cases.findings)
+
+    blocked_fixtures = _blocked_fixtures(
+        ground_truth, translatable, refusals, declared, overrides, bodies, cases.carried
+    )
+    blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures, bodies)
 
     converting = {
         key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
@@ -204,7 +258,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     plan_layout = layout.plan(
         converting,
         symbols=symbols,
-        consumers=_consumers(ground_truth, converting, items, (), specialize.NONE),
+        consumers=_consumers(ground_truth, converting, items, (), specialize.NONE, bodies),
         source_of=sources.get,
     )
 
@@ -212,12 +266,18 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     # everything that reaches it exactly as any other refusal does.
     unplaced = {key for key in converting if plan_layout.home(key) is None}
     if unplaced:
-        blocked_fixtures = _propagate(ground_truth, translatable, blocked_fixtures | unplaced)
-        blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures)
+        blocked_fixtures = _propagate(
+            ground_truth, translatable, blocked_fixtures | unplaced, bodies, cases.carried
+        )
+        blocked_tests = _blocked_tests(ground_truth, refusals, blocked_fixtures, bodies)
         converting = {
             key: fixture for key, fixture in translatable.items() if key not in blocked_fixtures
         }
         items = _items_by_qualname(ground_truth, blocked_tests)
+
+    # A body belongs to a definition, so a definition this conversion is leaving as pytest wrote
+    # it has no body here either: what the rules read is what the rewrite is going to write.
+    bodies = _converting_bodies(bodies, ground_truth, converting, items)
 
     # Specialization comes after every refusal is settled, since a chain is only worth copying
     # where every fixture in it converts, and before the layout, which places the copies.
@@ -242,7 +302,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     plan_layout = layout.plan(
         converting,
         symbols=symbols,
-        consumers=_consumers(ground_truth, converting, items, placed, special),
+        consumers=_consumers(ground_truth, converting, items, placed, special, bodies),
         source_of=sources.get,
         placed=special.homes,
     )
@@ -260,6 +320,9 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             markers=markers,
             placed=placed,
             special=special,
+            bodies=bodies,
+            solo=_solo(audit, items),
+            decided=cases,
         ),
         blocked_tests=blocked_tests,
         blocked_fixtures=frozenset(blocked_fixtures),
@@ -389,6 +452,222 @@ def _fixture_argname(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None
     return None
 
 
+def _yieldable_factories(sources: Mapping[str, str]) -> Mapping[str, frozenset[str]]:
+    """Per file, the module-level fixture factories a finalizer could become the teardown of.
+
+    A `yield` fixture hands its value over at one point in the body and tears down after it, so a
+    factory has to have one place that point can go: no `yield` of its own, and no `return` except
+    as the last thing it does. A `return` from inside a branch would become a `yield` the body
+    then runs past.
+    """
+    found: dict[str, frozenset[str]] = {}
+    for path, text in sources.items():
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        names = {
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and _fixture_argname(node) is not None
+            and _yieldable(node)
+        }
+        if names:
+            found[path] = frozenset(names)
+    return found
+
+
+def _yieldable(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    own = list(_own_nodes(node))
+    if any(isinstance(found, ast.Yield | ast.YieldFrom) for found in own):
+        return False
+    trailing = node.body[-1] if node.body else None
+    return all(found is trailing for found in own if isinstance(found, ast.Return))
+
+
+def _own_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """Every node inside `node` that belongs to it rather than to a function written within it."""
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        yield child
+        stack.extend(ast.iter_child_nodes(child))
+
+
+def _bodies(
+    audit: Audit,
+    ground_truth: GroundTruth,
+    *,
+    declared: Mapping[str, Mapping[str, str]],
+    yieldable: Mapping[str, frozenset[str]],
+    items: Mapping[tuple[str, str], tuple[Item, ...]],
+    translatable: Mapping[str, FixtureDef],
+) -> tuple[Mapping[tuple[str, str], Body], tuple[Finding, ...]]:
+    """What each body asked for by name, keyed by site, and the findings no definition can answer.
+
+    A dynamic request is only translatable where the rewrite has a signature to write it into and
+    a `request` it can take away whole: a use of `request` the rewrite has no answer for leaves
+    the parameter behind, and a parameter left behind is a fixture velox cannot construct. So a
+    site is attributed only when it is a definition this conversion owns and nothing else in it
+    reads `request`, and refused where it is a definition this conversion writes and none of that
+    holds. A site that is neither — a helper, or a fixture no test reaches — is left alone: there
+    is nothing there for a refusal to protect.
+    """
+    by_site = _fixtures_by_site(ground_truth)
+    surviving = {
+        (finding.site.file or "", finding.site.function or "")
+        for finding in audit.findings
+        if finding.code in _REQUEST_SURVIVES
+    }
+    writing = {
+        (fixture.func.file or "", fixture.func.qualname or "") for fixture in translatable.values()
+    } | set(items)
+    bodies: dict[tuple[str, str], Body] = {}
+    unattributed: list[Finding] = []
+    for finding in sorted(audit.findings, key=lambda finding: finding.site.sort_key):
+        if finding.code not in _DYNAMIC:
+            continue
+        file, function = finding.site.file or "", finding.site.function or ""
+        site = (file, function)
+        node = _asking_node(ground_truth, by_site, items, site)
+        owned = (
+            function in yieldable.get(file, frozenset())
+            if finding.code == "VX013"
+            else function in declared.get(file, {}).values() or site in items
+        )
+        wanted = _requested(ground_truth, finding, node, translatable)
+        if site not in writing:
+            continue
+        if not owned or site in surviving or wanted is None:
+            unattributed.append(_declined(finding, owned=owned and site not in surviving))
+            continue
+        body = bodies.get(site, Body())
+        bodies[site] = Body(
+            requested=body.requested + wanted,
+            finalizers=body.finalizers or finding.code == "VX013",
+        )
+    return bodies, tuple(unattributed)
+
+
+def _declined(finding: Finding, *, owned: bool) -> Finding:
+    """`finding` under the row that refuses it, saying which of the two reasons it is.
+
+    Either the definition it sits in is not one this conversion writes a signature for, or the
+    name it asks for is not one a single parameter can stand for.
+    """
+    name = str(finding.detail.get("requested", ""))
+    asked = f'`request.getfixturevalue("{name}")`' if name else "`request.getfixturevalue(...)`"
+    message = (
+        f"{asked} asks for a name this suite defines in more than one directory, and a parameter "
+        "names one object."
+        if owned
+        else f"{asked} is asked for where there is no signature for the parameter to go in."
+    )
+    if finding.code == "VX013":
+        message = (
+            "`request.addfinalizer(...)` is registered where no single `yield` can take its place."
+        )
+    return Finding(
+        code=_DECLINED[finding.code],
+        message=message,
+        site=finding.site,
+        tests=finding.tests,
+        detail=finding.detail,
+    )
+
+
+def _requested(
+    ground_truth: GroundTruth,
+    finding: Finding,
+    node: str | None,
+    translatable: Mapping[str, FixtureDef],
+) -> tuple[tuple[str, str], ...] | None:
+    """The name and key one `getfixturevalue` finding resolves to, or `None` if it resolves to none.
+
+    A name the whole suite defines once is a static dependency wherever it is asked for. A name two
+    directories define is the override question, which pytest answers per test and an injected
+    parameter cannot answer at all — the object a body reaches is decided where that body is
+    written, so a rewrite of it would hand one subtree's definition to another.
+
+    The definition it names also has to be one a `Depends()` can name: a fixture this conversion
+    writes an object for, or one of pytest's own that velox provides under another name.
+    """
+    if finding.code != "VX011":
+        return ()
+    name = str(finding.detail.get("requested", ""))
+    chain = ground_truth.fixture_registry.get(name, ())
+    if not name or node is None or len(chain) != 1:
+        return None
+    found = chain[0]
+    if not audit_wiring.under(found.visibility, node):
+        return None
+    nameable = found.key in translatable or found.argname in BUILTINS
+    return ((name, found.key),) if nameable else None
+
+
+def _asking_node(
+    ground_truth: GroundTruth,
+    by_site: Mapping[tuple[str, str], frozenset[str]],
+    items: Mapping[tuple[str, str], tuple[Item, ...]],
+    site: tuple[str, str],
+) -> str | None:
+    """The node a name asked for at `site` is resolved from: a fixture's own, or a test's."""
+    keys = by_site.get(site)
+    if keys:
+        return ground_truth.fixture_defs[sorted(keys)[0]].visibility
+    cases = items.get(site)
+    return cases[0].nodeid if cases else None
+
+
+def _converting_bodies(
+    bodies: Mapping[tuple[str, str], Body],
+    ground_truth: GroundTruth,
+    converting: Mapping[str, FixtureDef],
+    items: Mapping[tuple[str, str], tuple[Item, ...]],
+) -> Mapping[tuple[str, str], Body]:
+    """`bodies`, less every site whose definition this conversion turned out to be leaving alone."""
+    written = {
+        (fixture.func.file or "", fixture.func.qualname or "") for fixture in converting.values()
+    }
+    written |= set(items)
+    return {site: body for site, body in bodies.items() if site in written}
+
+
+def _body_of(bodies: Mapping[tuple[str, str], Body], fixture: FixtureDef) -> Body | None:
+    return bodies.get((fixture.func.file or "", fixture.func.qualname or ""))
+
+
+def _body_of_item(bodies: Mapping[tuple[str, str], Body], item: Item) -> Body | None:
+    return bodies.get((item.path or "", _qualname_of(item)))
+
+
+def _qualname_of(item: Item) -> str:
+    return f"{item.cls}.{item.originalname}" if item.cls else item.originalname
+
+
+def _solo(
+    audit: Audit, items: Mapping[tuple[str, str], tuple[Item, ...]]
+) -> Mapping[str, frozenset[str]]:
+    """The tests that take the whole run to themselves, by the file they are written in.
+
+    Read from the finding's blast radius rather than from its site: a patch entered inside a body
+    is invisible until it runs, and the body that enters it may be a fixture's, so what has to run
+    alone is every test that reaches it. A test this conversion is refusing is left out — it keeps
+    the source pytest ran, and a mark on it would say nothing about how velox schedules it.
+    """
+    alone = {
+        nodeid for finding in audit.findings if finding.code == "VX218" for nodeid in finding.tests
+    }
+    found: dict[str, set[str]] = {}
+    for (path, qualname), cases in items.items():
+        if any(item.nodeid in alone for item in cases):
+            found.setdefault(path, set()).add(qualname)
+    return {path: frozenset(names) for path, names in found.items()}
+
+
 def _fixtures_by_site(ground_truth: GroundTruth) -> Mapping[tuple[str, str], frozenset[str]]:
     """Fixture keys by the file and qualname their factory is written at."""
     found: dict[tuple[str, str], set[str]] = {}
@@ -405,6 +684,8 @@ def _blocked_fixtures(
     refusals: tuple[Finding, ...],
     declared: Mapping[str, Mapping[str, str]],
     overrides: Sequence[audit_wiring.Override],
+    bodies: Mapping[tuple[str, str], Body],
+    carried: Mapping[str, Carried] = {},
 ) -> set[str]:
     """Every fixture this conversion leaves as pytest wrote it.
 
@@ -435,7 +716,7 @@ def _blocked_fixtures(
             # No source declares it under a name a `Depends()` could import.
             blocked.add(key)
 
-    return _propagate(ground_truth, translatable, blocked)
+    return _propagate(ground_truth, translatable, blocked, bodies, carried)
 
 
 def _undeclarable(overrides: Sequence[audit_wiring.Override]) -> set[str]:
@@ -461,7 +742,11 @@ def _at_site(by_site: Mapping[tuple[str, str], frozenset[str]], site: Site) -> f
 
 
 def _propagate(
-    ground_truth: GroundTruth, translatable: Mapping[str, FixtureDef], blocked: set[str]
+    ground_truth: GroundTruth,
+    translatable: Mapping[str, FixtureDef],
+    blocked: set[str],
+    bodies: Mapping[tuple[str, str], Body],
+    carried: Mapping[str, Carried] = {},
 ) -> set[str]:
     """Grow `blocked` until every fixture depending on a blocked one is blocked too."""
     edges: dict[str, set[str]] = {}
@@ -473,14 +758,26 @@ def _propagate(
                 # depending on one costs is decided where the dependency is read.
                 continue
             requested = edges.setdefault(fixture.key, set())
+            body = _body_of(bodies, fixture)
+            if body is not None:
+                # A name a body asked for is a dependency like any other, so a refusal reaches
+                # this fixture through it exactly as it does through a parameter.
+                requested |= {key for _, key in body.requested}
             for edge in item.dependencies(fixture):
                 if edge.fixture is not None:
                     requested.add(edge.fixture.key)
                 elif edge.name != REQUEST:
                     # A name the dump cannot resolve is a dependency nothing can name.
                     blocked.add(fixture.key)
-            if REQUEST in fixture.argnames and not fixture.is_parametrized:
-                # `request` has no counterpart except as a `params=` fixture's own case.
+            if (
+                REQUEST in fixture.argnames
+                and not fixture.is_parametrized
+                and fixture.key not in carried
+                and body is None
+            ):
+                # `request` has no counterpart except as a parametrized fixture's own case —
+                # whether the cases are the fixture's own or an indirect mark's — or where the
+                # scan accounted for every use of it and the rewrite takes them all away.
                 blocked.add(fixture.key)
 
     changed = True
@@ -520,7 +817,10 @@ def _unnameable(
 
 
 def _blocked_tests(
-    ground_truth: GroundTruth, refusals: tuple[Finding, ...], blocked_fixtures: set[str]
+    ground_truth: GroundTruth,
+    refusals: tuple[Finding, ...],
+    blocked_fixtures: set[str],
+    bodies: Mapping[tuple[str, str], Body],
 ) -> frozenset[str]:
     blocked = {
         nodeid
@@ -529,7 +829,13 @@ def _blocked_tests(
         for nodeid in finding.tests
     }
     for item in ground_truth.items:
-        if any(fixture.key in blocked_fixtures for fixture in item.walk()):
+        body = _body_of_item(bodies, item)
+        reached = {fixture.key for fixture in item.walk()}
+        if body is not None:
+            # A fixture this test asked for by name is not in its closure, so nothing else here
+            # would notice that the object it names is one the conversion is not writing.
+            reached |= {key for _, key in body.requested}
+        if reached & blocked_fixtures:
             blocked.add(item.nodeid)
     return frozenset(blocked)
 
@@ -546,8 +852,7 @@ def _items_by_qualname(
     for item in ground_truth.items:
         if item.path is None or item.nodeid in blocked_tests:
             continue
-        qualname = f"{item.cls}.{item.originalname}" if item.cls else item.originalname
-        grouped.setdefault((item.path, qualname), []).append(item)
+        grouped.setdefault((item.path, _qualname_of(item)), []).append(item)
     return {key: tuple(items) for key, items in grouped.items()}
 
 
@@ -557,6 +862,7 @@ def _consumers(
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     placed: Sequence[Declaration],
     special: Specialization,
+    bodies: Mapping[tuple[str, str], Body] = {},
 ) -> dict[str, set[str]]:
     """Per file, every fixture key the code in it will name — in a `Depends()` or a declaration."""
     consumers: dict[str, set[str]] = {}
@@ -571,6 +877,11 @@ def _consumers(
             resolved = item.resolve(name)
             if resolved is not None and resolved.key in converting:
                 wanted.add(special.redirect(path, resolved.key))
+        body = _body_of_item(bodies, item)
+        if body is not None:
+            wanted |= {
+                special.redirect(path, key) for _, key in body.requested if key in converting
+            }
 
     for fixture in converting.values():
         source = layout.owning_file(fixture)
@@ -581,6 +892,11 @@ def _consumers(
         for edge in _resolved_at(ground_truth, fixture, fixture.visibility).values():
             if edge is not None and edge.key in converting:
                 wanted.add(special.redirect(module, edge.key))
+        body = _body_of(bodies, fixture)
+        if body is not None:
+            wanted |= {
+                special.redirect(module, key) for _, key in body.requested if key in converting
+            }
 
     for copy in special.copies.values():
         wanted = consumers.setdefault(copy.module, set())
@@ -588,6 +904,12 @@ def _consumers(
         for edge in _resolved_at(ground_truth, origin, copy.node).values():
             if edge is not None and edge.key in converting:
                 wanted.add(special.redirect(copy.module, edge.key))
+        # A copy is the original's source, so it names everything the original's body named too.
+        body = _body_of(bodies, origin)
+        if body is not None:
+            wanted |= {
+                special.redirect(copy.module, key) for _, key in body.requested if key in converting
+            }
     return consumers
 
 
@@ -603,6 +925,9 @@ def _work(
     markers: tuple[Finding, ...],
     placed: Sequence[Declaration],
     special: Specialization,
+    bodies: Mapping[tuple[str, str], Body],
+    solo: Mapping[str, frozenset[str]],
+    decided: Decision,
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
@@ -617,9 +942,17 @@ def _work(
                 symbol=home.symbol,
                 scope=SCOPES.get(fixture.scope, "function"),
                 injections=_injections(
-                    ground_truth, plan_layout, key, home.module, converting, special
+                    ground_truth,
+                    plan_layout,
+                    key,
+                    home.module,
+                    converting,
+                    special,
+                    bodies=bodies,
+                    carried=decided.carried,
                 ),
-                parametrized=fixture.is_parametrized,
+                parametrized=fixture.is_parametrized or key in decided.carried,
+                carried=decided.carried.get(key),
             )
         )
 
@@ -628,8 +961,19 @@ def _work(
     needs: dict[str, set[str]] = {}
     for copy in sorted(special.copies.values(), key=lambda copy: (copy.module, copy.symbol)):
         injections = _injections(
-            ground_truth, plan_layout, copy.origin, copy.module, converting, special, node=copy.node
+            ground_truth,
+            plan_layout,
+            copy.origin,
+            copy.module,
+            converting,
+            special,
+            node=copy.node,
+            bodies=bodies,
+            carried=decided.carried,
         )
+        # A copy is the original's source under another name, so a case list the original carries
+        # is the copy's too: every test the copy serves reached the original's cases before.
+        borrowed = decided.carried.get(copy.origin)
         fixtures_by_file.setdefault(copy.host, []).append(
             FixtureWork(
                 key=copy.key,
@@ -637,7 +981,8 @@ def _work(
                 symbol=copy.symbol,
                 scope=SCOPES.get(copy.scope, "function"),
                 injections=injections,
-                parametrized=copy.parametrized,
+                parametrized=copy.parametrized or borrowed is not None,
+                carried=borrowed,
             )
         )
         duplicates.setdefault(copy.host, []).append(
@@ -655,7 +1000,9 @@ def _work(
         tests_by_file.setdefault(path, []).append(
             TestWork(
                 qualname=qualname,
-                injections=_test_injections(cases[0], plan_layout, path, converting, special),
+                injections=_test_injections(
+                    ground_truth, cases[0], plan_layout, path, converting, special, bodies
+                ),
             )
         )
 
@@ -680,7 +1027,8 @@ def _work(
             declares=declares.get(path, ()),
             duplicates=_ordered(duplicates.get(path, ())),
             needs=tuple(sorted(needs.get(path, set()))),
-            context=_context(ground_truth, path, items, blocked_tests),
+            solo=tuple(sorted(solo.get(path, ()))),
+            context=_context(ground_truth, path, items, blocked_tests, bodies, special, decided),
         )
     return work
 
@@ -795,30 +1143,95 @@ def _injections(
     special: Specialization,
     *,
     node: str | None = None,
+    bodies: Mapping[tuple[str, str], Body] = {},
+    carried: Mapping[str, Carried] = {},
 ) -> tuple[Injection, ...]:
     """What each parameter of the fixture `key`'s factory becomes, seen from `node`."""
     fixture = ground_truth.fixture_defs[key]
-    resolved = _resolved_at(ground_truth, fixture, node if node is not None else fixture.visibility)
-    return _from_names(
-        fixture.argnames,
+    parametrized = fixture.is_parametrized or key in carried
+    body = _body_of(bodies, fixture)
+    resolved = dict(
+        _resolved_at(ground_truth, fixture, node if node is not None else fixture.visibility)
+    )
+    names = _asked(ground_truth, fixture.argnames, resolved, body)
+    found = _from_names(
+        names,
         resolved,
         plan_layout,
         consumer,
         converting,
-        fixture.is_parametrized,
+        parametrized,
         special,
+        asked=_by_name(fixture.argnames, names),
     )
+    return _without_request(found, fixture.argnames, body, parametrized=parametrized)
 
 
 def _test_injections(
+    ground_truth: GroundTruth,
     item: Item,
     plan_layout: Layout,
     consumer: str,
     converting: Mapping[str, FixtureDef],
     special: Specialization,
+    bodies: Mapping[tuple[str, str], Body] = {},
 ) -> tuple[Injection, ...]:
-    resolved = {name: item.resolve(name) for name in item.argnames}
-    return _from_names(item.argnames, resolved, plan_layout, consumer, converting, False, special)
+    body = _body_of_item(bodies, item)
+    resolved: dict[str, FixtureDef | None] = {name: item.resolve(name) for name in item.argnames}
+    names = _asked(ground_truth, item.argnames, resolved, body)
+    found = _from_names(
+        names,
+        resolved,
+        plan_layout,
+        consumer,
+        converting,
+        False,
+        special,
+        asked=_by_name(item.argnames, names),
+    )
+    return _without_request(found, item.argnames, body, parametrized=False)
+
+
+def _asked(
+    ground_truth: GroundTruth,
+    argnames: tuple[str, ...],
+    resolved: dict[str, FixtureDef | None],
+    body: Body | None,
+) -> tuple[str, ...]:
+    """`argnames` plus the names this body asked for that are not among them, resolved alongside.
+
+    A name asked for in source is a dependency the signature does not have yet, so the rewrite
+    reads it exactly as it reads a parameter — and the parameter it grows takes its place.
+    """
+    names = list(argnames)
+    for name, key in body.requested if body is not None else ():
+        if name not in resolved:
+            resolved[name] = ground_truth.fixture_defs.get(key)
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _by_name(argnames: tuple[str, ...], names: tuple[str, ...]) -> frozenset[str]:
+    """The names of `names` that no parameter declares, which are the ones a body asked for."""
+    return frozenset(names) - frozenset(argnames)
+
+
+def _without_request(
+    injections: tuple[Injection, ...],
+    argnames: tuple[str, ...],
+    body: Body | None,
+    *,
+    parametrized: bool,
+) -> tuple[Injection, ...]:
+    """`injections`, plus the one that takes a spent `request` parameter away.
+
+    A `request` a body reads only through the shapes this conversion rewrites is a parameter with
+    nothing left to bind once they are rewritten, and velox has nothing to bind it to.
+    """
+    if body is None or parametrized or REQUEST not in argnames:
+        return injections
+    return (*injections, Injection(was=REQUEST, param="", reference=""))
 
 
 def _from_names(
@@ -829,6 +1242,7 @@ def _from_names(
     converting: Mapping[str, FixtureDef],
     parametrized: bool,
     special: Specialization,
+    asked: frozenset[str] = frozenset(),
 ) -> tuple[Injection, ...]:
     found: list[Injection] = []
     for name in names:
@@ -847,12 +1261,12 @@ def _from_names(
                 continue
             imported = plan_layout.importing(consumer, key)
             reference = imported.bound if imported is not None else home.symbol
-            found.append(Injection(was=name, param=name, reference=reference))
+            found.append(Injection(was=name, param=name, reference=reference, asked=name in asked))
             continue
         builtin = BUILTINS.get(fixture.argname)
         if builtin is not None:
             param, reference = builtin
-            found.append(Injection(was=name, param=param, reference=reference))
+            found.append(Injection(was=name, param=param, reference=reference, asked=name in asked))
     return tuple(found)
 
 
@@ -874,94 +1288,68 @@ def _context(
     path: str,
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     blocked_tests: frozenset[str],
+    bodies: Mapping[tuple[str, str], Body] = {},
+    special: Specialization = specialize.NONE,
+    cases: Decision | None = None,
 ) -> Context:
     tests = {qualname for (file, qualname) in items if file == path}
     blocked = {
-        f"{item.cls}.{item.originalname}" if item.cls else item.originalname
+        _qualname_of(item)
         for item in ground_truth.items
         if item.path == path and item.nodeid in blocked_tests
     }
+    named = _bodies_in(bodies, path, ground_truth, special)
+    decided = cases if cases is not None else parametrize.Decision({}, {}, {}, ())
     return Context(
         path=path,
-        axis_ids=_axis_ids(items, path),
+        axis_ids=parametrize.ids_by_axis(items, path),
+        indirect=_at_path(decided.dropped, path),
+        generated=_at_path(decided.generated, path),
         tests=frozenset(tests),
         blocked=frozenset(blocked),
         xfail_strict=_xfail_strict(ground_truth),
+        requested={
+            qualname: {name: _param_of(ground_truth, key, name) for name, key in body.requested}
+            for qualname, body in named.items()
+            if body.requested
+        },
+        finalizers=frozenset(qualname for qualname, body in named.items() if body.finalizers),
     )
 
 
-def _axis_ids(
-    items: Mapping[tuple[str, str], tuple[Item, ...]], path: str
-) -> Mapping[tuple[str, str], tuple[str, ...]]:
-    """pytest's own ids for each parametrize axis in `path`, where one axis explains them.
+def _bodies_in(
+    bodies: Mapping[tuple[str, str], Body],
+    path: str,
+    ground_truth: GroundTruth,
+    special: Specialization,
+) -> Mapping[str, Body]:
+    """The bodies this file's rewrite reads, by the name each is written under in it.
 
-    A case id is composed from every axis that varies the test, so an id can only be written onto
-    one `parametrize` mark when exactly one position in pytest's own id list moves with that
-    axis's index and stands still within it. Where no position does, the axis is `VX114` and the
-    ids are velox's to generate.
+    A specialized copy is the duplicated source of a fixture written elsewhere, so what its body
+    asked for is what the original's asked for — under the copy's own name, which is the name this
+    file binds it to.
     """
-    found: dict[tuple[str, str], tuple[str, ...]] = {}
-    for (file, qualname), cases in items.items():
-        if file != path:
+    named = {qualname: body for (file, qualname), body in bodies.items() if file == path}
+    for copy in special.copies.values():
+        if copy.host != path:
             continue
-        specs = [item.callspec for item in cases if item.callspec is not None]
-        if len(specs) != len(cases) or not specs:
-            continue
-        for argnames in _axes(specs):
-            ids = _ids_for_axis(specs, argnames)
-            if ids is not None:
-                found[(qualname, ",".join(argnames))] = ids
-    return found
+        origin = ground_truth.fixture_defs.get(copy.origin)
+        body = _body_of(bodies, origin) if origin is not None else None
+        if body is not None:
+            named[copy.symbol] = body
+    return named
 
 
-def _axes(specs: list) -> Iterator[tuple[str, ...]]:
-    """Every set of argnames that moves together across the cases.
-
-    One `parametrize` mark over `"a,b"` gives `a` and `b` the same index in every case, so the
-    names that share an index everywhere are the names one mark covers. They are kept in the order
-    the dump lists them, which is the order pytest registered them and so the order the mark was
-    written in — the order a rule looking an axis up by its argnames spells them in.
-    """
-    names = list(specs[0].indices)
-    grouped: dict[tuple[int, ...], list[str]] = {}
-    for name in names:
-        signature = tuple(spec.indices.get(name, -1) for spec in specs)
-        grouped.setdefault(signature, []).append(name)
-    for group in grouped.values():
-        yield tuple(group)
+def _param_of(ground_truth: GroundTruth, key: str, name: str) -> str:
+    """The parameter a requested name becomes, which is its own unless velox renames the fixture."""
+    fixture = ground_truth.fixture_defs.get(key)
+    builtin = BUILTINS.get(fixture.argname) if fixture is not None else None
+    return builtin[0] if builtin is not None else name
 
 
-def _ids_for_axis(specs: list, argnames: tuple[str, ...]) -> tuple[str, ...] | None:
-    by_index: dict[int, list] = {}
-    for spec in specs:
-        index = spec.indices.get(argnames[0])
-        if index is None:
-            return None
-        by_index.setdefault(index, []).append(spec)
-    if len(by_index) < 2 and len(specs) > 1:
-        # An axis with one value explains nothing about which id part is its own.
-        return None
-    width = len(specs[0].idlist)
-    if any(len(spec.idlist) != width for spec in specs):
-        return None
-    candidates = [
-        position
-        for position in range(width)
-        if _constant_within(by_index, position) and _distinct_across(by_index, position)
-    ]
-    if len(candidates) != 1:
-        return None
-    position = candidates[0]
-    return tuple(by_index[index][0].idlist[position] for index in sorted(by_index))
-
-
-def _constant_within(by_index: Mapping[int, list], position: int) -> bool:
-    return all(len({spec.idlist[position] for spec in group}) == 1 for group in by_index.values())
-
-
-def _distinct_across(by_index: Mapping[int, list], position: int) -> bool:
-    seen = [group[0].idlist[position] for group in by_index.values()]
-    return len(set(seen)) == len(seen)
+def _at_path[T](found: Mapping[tuple[str, str], T], path: str) -> Mapping[str, T]:
+    """`found`, keyed by site, narrowed to one file and re-keyed by the qualname alone."""
+    return {qualname: value for (file, qualname), value in found.items() if file == path}
 
 
 def _xfail_strict(ground_truth: GroundTruth) -> bool:

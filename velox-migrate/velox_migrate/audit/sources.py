@@ -49,6 +49,11 @@ _REQUEST_ATTRS: Mapping[str, str] = {
     "function": "the test function object",
 }
 
+# The `request` attributes a conversion has a translation for: the case a `params=` fixture reads,
+# the static dependency behind a literal `getfixturevalue`, and the teardown a `yield` says. Every
+# other attribute survives the rewrite, which is what makes it a finding of its own.
+_REQUEST_ELIMINABLE = frozenset({"param", "getfixturevalue", "addfinalizer"})
+
 _CAPLOG_ATTRS: Mapping[str, str] = {
     "handler": "reaches the handler behind the records",
     "get_records": "reads one test phase's records",
@@ -236,8 +241,10 @@ class _Frame:
 
     `blocks` are the conditional constructs entered since this frame opened — the ones whose body
     may not run — which is what tells a conditionally registered finalizer from an unconditional
-    one. A `with` or a `try` body is not among them: both run. `params` and `locals` are empty for
-    a class, whose body binds nothing a nested function sees.
+    one. A `with` body is not among them: entering can raise, but then nothing after it runs
+    either. A `try` body is, because its own handler can swallow the failure that stopped it
+    halfway and let the rest of the function run without it. `params` and `locals` are empty for a
+    class, whose body binds nothing a nested function sees.
     """
 
     name: str
@@ -337,6 +344,18 @@ class _Scanner(cst.CSTVisitor):
         self._enter_block("for")
 
     def leave_For(self, original_node: cst.For) -> None:
+        self._leave_block()
+
+    def visit_Try(self, node: cst.Try) -> None:
+        self._enter_block("try")
+
+    def leave_Try(self, original_node: cst.Try) -> None:
+        self._leave_block()
+
+    def visit_TryStar(self, node: cst.TryStar) -> None:
+        self._enter_block("try")
+
+    def leave_TryStar(self, original_node: cst.TryStar) -> None:
         self._leave_block()
 
     def visit_While(self, node: cst.While) -> None:
@@ -531,11 +550,13 @@ class _Scanner(cst.CSTVisitor):
         if attr == "getfixturevalue":
             positional = _positional(node)
             requested = positional[0].value if positional else None
-            if isinstance(requested, cst.SimpleString):
+            named = requested.evaluated_value if isinstance(requested, cst.SimpleString) else None
+            if isinstance(named, str):
                 self._report(
                     "VX011",
                     node,
                     f"`request.getfixturevalue({arguments})` requests one named fixture.",
+                    {"requested": named},
                 )
             else:
                 self._report(
@@ -660,11 +681,12 @@ class _Scanner(cst.CSTVisitor):
         value = node.value
         attr = node.attr.value
         if self._is_fixture(value, REQUEST):
+            if attr in _REQUEST_ELIMINABLE:
+                return
             if attr == "config" and self._parent_attribute(node) == "getoption":
                 return
-            reaches = _REQUEST_ATTRS.get(attr)
-            if reaches is not None:
-                self._report("VX015", node, f"`request.{attr}` reads {reaches}.")
+            reaches = _REQUEST_ATTRS.get(attr, "the request object pytest builds per fixture")
+            self._report("VX015", node, f"`request.{attr}` reads {reaches}.")
         elif self._is_fixture(value, "caplog"):
             reads = _CAPLOG_ATTRS.get(attr)
             if reads is not None:
@@ -745,13 +767,24 @@ class _Scanner(cst.CSTVisitor):
                 f"`{_render(target)}` writes `{root}`, which lives at module level.",
             )
 
-    def _report(self, code: str, node: cst.CSTNode, message: str) -> None:
+    def _report(
+        self,
+        code: str,
+        node: cst.CSTNode,
+        message: str,
+        detail: Mapping[str, str | int] | None = None,
+    ) -> None:
         line = self.get_metadata(PositionProvider, node, _NO_POSITION).start.line
         function = self._function
         key = (code, line, function or "")
         self._findings.setdefault(
             key,
-            Finding(code=code, message=message, site=Site(self._path, line, function)),
+            Finding(
+                code=code,
+                message=message,
+                site=Site(self._path, line, function),
+                detail=detail or {},
+            ),
         )
 
     def _names(self, node: cst.CSTNode) -> frozenset[str]:
