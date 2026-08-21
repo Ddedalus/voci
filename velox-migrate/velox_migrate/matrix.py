@@ -593,8 +593,8 @@ CONSTRUCTS: tuple[Construct, ...] = (
         MECHANICAL,
         "Becomes `velox.raises`, which has the same callable form: it calls `func(*args, "
         "**kwargs)` under the hood and returns the resulting `ExceptionInfo`. Left unconverted "
-        "when `match=` is among the kwargs: pytest forwards it to `func` there, but "
-        "`velox.raises` always intercepts it.",
+        "when `match=` is among the kwargs, or a `**mapping` is unpacked into them: pytest "
+        "forwards `match` to `func` there, but `velox.raises` always intercepts it.",
         target="velox.raises",
     ),
     _row(
