@@ -13,7 +13,7 @@ protocol, a live `list[LogRecord]`, a `Path`).
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import MutableSequence, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,18 +133,23 @@ class _LevelOverride(AbstractContextManager[None]):
         self._logger.setLevel(self._previous)
 
 
+#: pytest's `DEFAULT_LOG_FORMAT`, kept identical so a formatted line reads the same either way.
+_LOG_FORMAT = "%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s"
+
+
 @final
 class LogRecords:
     """The `caplog` equivalent: structured records captured for this test.
 
-    Wraps the live `list[logging.LogRecord]` that `_capture._RoutingHandler.emit` appends to,
-    not a copy, so `.records`/`.messages` reflect records logged after this fixture was
-    injected.
+    Wraps the live `deque[logging.LogRecord]` that `_capture._RoutingHandler.emit` appends to,
+    not a copy, so `.records`/`.messages`/`.text`/`.record_tuples` reflect records logged after
+    this fixture was injected, and `.clear()` empties the same container the handler is still
+    appending to rather than detaching a snapshot.
     """
 
     __slots__ = ("_records",)
 
-    def __init__(self, records: Sequence[logging.LogRecord]) -> None:
+    def __init__(self, records: MutableSequence[logging.LogRecord]) -> None:
         self._records = records
 
     @property
@@ -154,6 +159,21 @@ class LogRecords:
     @property
     def messages(self) -> Sequence[str]:
         return tuple(record.getMessage() for record in self._records)
+
+    @property
+    def text(self) -> str:
+        """Every captured record formatted, one per line."""
+        formatter = logging.Formatter(_LOG_FORMAT)
+        return "".join(formatter.format(record) + "\n" for record in self._records)
+
+    @property
+    def record_tuples(self) -> Sequence[tuple[str, int, str]]:
+        """`(logger name, level, message)` for each captured record, for assertion comparison."""
+        return tuple((record.name, record.levelno, record.getMessage()) for record in self._records)
+
+    def clear(self) -> None:
+        """Empty the captured records. A record logged after this call is captured as normal."""
+        self._records.clear()
 
     def set_level(
         self, level: int | str, *, logger: str | None = None

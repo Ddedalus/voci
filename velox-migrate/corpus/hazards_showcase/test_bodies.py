@@ -1,10 +1,10 @@
 """Test bodies holding the pytest API whose velox counterpart is partial or absent.
 
 Contributes the capture-snapshot case (`readouterr` twice), the caplog cases (`set_level` and
-`.text`), the dangerous-rename case (`pytest.skip()` as a statement), and the no-counterpart cases
-(`importorskip`, `warns`, the legacy `raises` call form, `approx` over a sequence, `capfd`,
-`recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape hatch the root
-conftest wires up.
+`.handler`), the dangerous-rename case (`pytest.skip()` as a statement), and the no-counterpart
+cases (`importorskip`, `warns`, a `raises` object stashed rather than entered or called, `approx`
+over a generator, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request`
+escape hatch the root conftest wires up.
 """
 
 import logging
@@ -27,7 +27,7 @@ def test_double_readouterr(capsys):
 def test_caplog_level(caplog):
     caplog.set_level(logging.INFO)
     logging.getLogger("app").info("hello")
-    assert "hello" in caplog.text
+    caplog.handler.flush()
 
 
 def test_conditional_skip():
@@ -47,11 +47,11 @@ def test_warns():
 
 
 def test_legacy_raises():
-    pytest.raises(ValueError, int, "nope")
+    stashed = pytest.raises(ValueError)
 
 
-def test_approx_sequence():
-    assert [0.1 + 0.2] == pytest.approx([0.3])
+def test_approx_generator():
+    stashed = pytest.approx(x for x in [0.3])
 
 
 def test_legacy_tmpdir(legacy_dir, tmpdir):

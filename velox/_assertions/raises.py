@@ -1,13 +1,18 @@
 """`raises`: a context manager that catches an expected exception and exposes it as
 `ExceptionInfo`, optionally matching the exception type and a regex against its message.
+
+Given a second positional argument, `raises` calls it instead of being entered by a `with`:
+`raises(expected, func, *args, **kwargs)` calls `func(*args, **kwargs)` and returns the same
+`ExceptionInfo`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from types import TracebackType
-from typing import final
+from typing import Any, final, overload
 
 __all__ = ["ExceptionInfo", "RaisesContext", "raises"]
 
@@ -93,14 +98,40 @@ class RaisesContext[E: BaseException]:
         return True
 
 
+@overload
 def raises[E: BaseException](
     expected: type[E] | tuple[type[E], ...],
     *,
     match: str | re.Pattern[str] | None = None,
-) -> RaisesContext[E]:
-    """Assert that the block raises `expected`, optionally with a message matching `match`.
+) -> RaisesContext[E]: ...
+@overload
+def raises[E: BaseException](
+    expected: type[E] | tuple[type[E], ...],
+    func: Callable[..., object],
+    *args: Any,
+    match: str | re.Pattern[str] | None = None,
+    **kwargs: Any,
+) -> ExceptionInfo[E]: ...
+def raises(expected, func=None, *args, match=None, **kwargs):
+    """Assert that `expected` is raised, optionally with a message matching `match`.
+
+    Used as a context manager, `raises` returns a `RaisesContext` whose `__enter__` hands back
+    an `ExceptionInfo`, populated once the block exits. Given a second positional argument, it
+    instead calls `func(*args, **kwargs)` under the same machinery and returns the
+    `ExceptionInfo` directly; a non-callable `func` raises `TypeError`.
+
+    `match` always matches against the raised exception, in both forms — it is never one of
+    `func`'s `**kwargs`, so a call means the same thing regardless of which form invoked it.
 
     `match` is an `re.search`, not a full match — pytest-compatible, including the gotcha that
     regex metacharacters in a literal message need escaping.
     """
-    return RaisesContext(expected, match)
+    if func is None:
+        if args or kwargs:
+            raise TypeError("raises() got positional/keyword arguments without a callable `func`")
+        return RaisesContext(expected, match)
+    if not callable(func):
+        raise TypeError(f"{func!r} is not callable")
+    with RaisesContext(expected, match) as info:
+        func(*args, **kwargs)
+    return info

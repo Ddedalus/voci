@@ -307,6 +307,13 @@ def starred(call: cst.Call) -> bool:
     return any(arg.star in ("*", "**") for arg in call.args)
 
 
+def double_starred(call: cst.Call) -> bool:
+    """Whether `call` unpacks a mapping with `**`, which can carry a keyword `keywords` can't see
+    since the mapping's contents aren't known until the call runs.
+    """
+    return any(arg.star == "**" for arg in call.args)
+
+
 def argument(value: cst.BaseExpression, name: str | None = None) -> cst.Arg:
     """One argument, positional or `name=`, spelled without spaces around the `=`."""
     if name is None:

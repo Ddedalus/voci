@@ -383,24 +383,47 @@ def test_a(caplog):
 def test_the_log_attributes_with_no_counterpart_are_reported() -> None:
     source = """
 def test_a(caplog):
-    assert caplog.text
-    assert caplog.record_tuples
     assert caplog.get_records("call")
     caplog.handler.flush()
+"""
+
+    assert _codes(source) == ["VX222"] * 2
+
+
+def test_the_log_attributes_that_convert_are_not_reported() -> None:
+    source = """
+def test_a(caplog):
+    assert caplog.text
+    assert caplog.record_tuples
     caplog.clear()
 """
 
-    assert _codes(source) == ["VX206"] * 5
+    assert _codes(source) == []
 
 
-def test_the_legacy_raises_call_form_is_reported_and_the_context_manager_is_not() -> None:
+def test_a_stashed_raises_is_reported_and_the_callable_and_context_manager_forms_are_not() -> None:
     source = """
 import pytest
 def test_a():
-    pytest.raises(ValueError, boom, 1)
+    box = pytest.raises(ValueError)
 def test_b():
+    pytest.raises(ValueError, boom, 1)
+def test_c():
     with pytest.raises(ValueError, match="boom"):
         boom()
+"""
+
+    assert _codes(source) == ["VX210"]
+
+
+def test_a_callable_raises_with_match_is_reported() -> None:
+    """pytest's callable form forwards `match=` to the callable rather than matching against the
+    exception, unlike `velox.raises`'s callable form, which always intercepts it -- so this shape
+    is flagged even though the plain callable form above is not."""
+    source = """
+import pytest
+def test_a():
+    pytest.raises(ValueError, boom, 1, match="boom")
 """
 
     assert _codes(source) == ["VX210"]
@@ -418,14 +441,40 @@ async def test_a():
     assert _codes(source) == ["VX211"]
 
 
-def test_approx_over_a_collection_or_an_array_is_reported_and_over_a_scalar_is_not() -> None:
+def test_approx_over_a_set_a_generator_or_an_array_is_reported() -> None:
     source = """
 import numpy as np, pytest
 def test_a():
-    assert a == pytest.approx([1.0, 2.0])
-    assert b == pytest.approx({"x": 1.0})
+    assert a == pytest.approx({1.0, 2.0})
+    assert b == pytest.approx(x for x in [1.0])
     assert c == pytest.approx(np.array([1.0]))
-    assert d == pytest.approx(1.0, rel=1e-6)
+"""
+
+    assert _codes(source) == ["VX221"] * 3
+
+
+def test_approx_over_a_list_tuple_or_dict_is_not_reported() -> None:
+    source = """
+import pytest
+def test_a():
+    assert a == pytest.approx([1.0, 2.0])
+    assert b == pytest.approx((1.0, 2.0))
+    assert c == pytest.approx({"x": 1.0})
+    assert d == pytest.approx([x for x in [1.0]])
+    assert e == pytest.approx({x: x for x in [1.0]})
+    assert f == pytest.approx(1.0, rel=1e-6)
+"""
+
+    assert _codes(source) == []
+
+
+def test_approx_over_a_nested_container_is_reported() -> None:
+    source = """
+import pytest
+def test_a():
+    assert a == pytest.approx([0.1, [0.2, 0.3]])
+    assert b == pytest.approx({"x": (0.1, 0.2)})
+    assert c == pytest.approx((0.1, {"x": 0.2}))
 """
 
     assert _codes(source) == ["VX213"] * 3
@@ -738,7 +787,7 @@ def test_an_aliased_import_resolves_to_the_construct_it_names() -> None:
 import pytest as pt
 from pytest import raises
 def test_a():
-    raises(ValueError, boom, 1)
+    box = raises(ValueError)
     pt.importorskip("lxml")
 """
 

@@ -6,8 +6,9 @@ a body carries by the time a rule reads it — and only where an enclosing `def`
 parameter, since a local called `caplog` is not pytest's. Renaming the parameter itself is wiring's.
 
 `pytest.raises` and `pytest.approx` are read through `QualifiedNameProvider` instead, and each is
-rewritten only in the shape velox has: a `raises` entered by a `with`, and an `approx` over a
-scalar. Anything else is left as it was written, with the row that refuses it recorded.
+rewritten only in the shapes velox has: a `raises` entered by a `with` or called with the
+exception it expects and the callable it wraps, and an `approx` over a scalar, a list, a tuple, or
+a dict. Anything else is left as it was written, with the row that refuses it recorded.
 
 The two `request` rules are the exception to a rule deciding anything: what a name means and
 whether a teardown can move are questions about the whole suite and about a factory's shape, so
@@ -20,11 +21,13 @@ from collections.abc import Mapping, Sequence
 
 import libcst as cst
 
+from velox_migrate.audit.sources import APPROX_KINDS, approx_nested
 from velox_migrate.convert.rules import (
     Context,
     RuleTransformer,
     TransformerRule,
     argument,
+    double_starred,
     keyword,
     keywords,
     leading,
@@ -44,22 +47,23 @@ REQUEST = "request"
 _CAPTURE_NAMES = (CAPTURE, "capsys")
 _LOG_NAMES = (LOG_RECORDS, "caplog")
 
-# The attributes `velox.log_records` carries under the same names `caplog` did.
-_LOG_ATTRS = frozenset({"records", "messages"})
+# The attributes `velox.log_records` carries under the same names `caplog` did, mapped to the
+# code each rename files under: `records`/`messages` are this class's own default (VX204);
+# `text`/`record_tuples` are VX206's promoted rename onto the same object.
+_LOG_ATTRS: Mapping[str, str | None] = {
+    "records": None,
+    "messages": None,
+    "text": "VX206",
+    "record_tuples": "VX206",
+}
 
 # What `pytest.approx`'s positional arguments are, after the value itself.
 _APPROX_POSITIONAL = ("rel", "abs", "nan_ok")
 
-_APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
-    cst.List: "a list",
-    cst.Tuple: "a tuple",
-    cst.Set: "a set",
-    cst.Dict: "a dict",
-    cst.ListComp: "a list comprehension",
-    cst.SetComp: "a set comprehension",
-    cst.DictComp: "a dict comprehension",
-    cst.GeneratorExp: "a generator expression",
-}
+# The shapes of `pytest.approx`'s first argument that convert under VX213 rather than the default
+# VX212 (a scalar). A literal's own elements are what `approx_nested` walks; a comprehension's
+# runtime shape cannot be inspected that way, so it converts unchecked.
+_APPROX_CONTAINER_SHAPES = (cst.List, cst.ListComp, cst.Tuple, cst.Dict, cst.DictComp)
 
 # `velox.raises` refuses to catch a cancellation, which is how a timeout stops a runaway test, so
 # it refuses every type a cancellation is an instance of.
@@ -147,22 +151,41 @@ class _Capture(_BodyPass):
 
 
 class _LogRecords(_BodyPass):
-    """VX204: `caplog.records` and `caplog.messages`, the same two names on `velox.log_records`."""
+    """VX204: `caplog.records` and `caplog.messages`, the same two names on `velox.log_records`.
+    VX206: `caplog.text`, `caplog.record_tuples` and `caplog.clear()`, renamed the same way but
+    filed under their own code since VX204's row is specifically about `records`/`messages`.
+    """
 
     CODE = "VX204"
 
     def leave_Attribute(
         self, original_node: cst.Attribute, updated_node: cst.Attribute
     ) -> cst.BaseExpression:
-        if self.is_blocked or original_node.attr.value not in _LOG_ATTRS:
+        attr = original_node.attr.value
+        if self.is_blocked or attr not in _LOG_ATTRS:
             return updated_node
         held = self.receiver(original_node.value, _LOG_NAMES)
         if held is None or held == LOG_RECORDS:
             return updated_node
         self.record(
-            f"`{render(original_node)}` becomes `{LOG_RECORDS}.{original_node.attr.value}`."
+            f"`{render(original_node)}` becomes `{LOG_RECORDS}.{attr}`.", code=_LOG_ATTRS[attr]
         )
         return updated_node.with_changes(value=cst.Name(LOG_RECORDS))
+
+    def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        func = original_node.func
+        if (
+            self.is_blocked
+            or not isinstance(func, cst.Attribute)
+            or func.attr.value != "clear"
+            or original_node.args
+        ):
+            return updated_node
+        held = self.receiver(func.value, _LOG_NAMES)
+        if held is None or held == LOG_RECORDS:
+            return updated_node
+        self.record(f"`{render(original_node)}` becomes `{LOG_RECORDS}.clear()`.", code="VX206")
+        return updated_node.with_changes(func=func.with_changes(value=cst.Name(LOG_RECORDS)))
 
 
 class _SetLevel(_BodyPass):
@@ -238,20 +261,27 @@ class _SetLevel(_BodyPass):
 
 
 class _Raises(_BodyPass):
-    """VX209: `pytest.raises` where a `with` enters it, which is the form velox has."""
+    """VX209: `pytest.raises` where a `with` enters it, and VX210: the callable form
+    `pytest.raises(E, func, *args, **kwargs)` — both are shapes velox's `raises` has too, so both
+    rewrite to `velox.raises` unchanged but for the name. A `pytest.raises(E)` that is neither —
+    entered by nothing, called with no second positional argument — is a raises object being
+    stashed for later, which still reports VX210: there is no `with` and no `func` for a rewrite
+    to key off of. A callable form passing `match=` is left alone too: pytest forwards it to
+    `func` there, but `velox.raises` always intercepts it, so the two forms disagree on what the
+    call means — and so is one unpacking a `**mapping`, since it might carry a `match` key the
+    rewrite has no way to see.
+    """
 
     CODE = "VX209"
 
     def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
         if self.is_blocked or "pytest.raises" not in self.names(original_node):
             return updated_node
-        if not isinstance(self.parent(original_node), cst.WithItem):
-            self.record(
-                f"`{render(original_node)}` is left as it is: `velox.raises` is a context manager, "
-                "and this call is not entered by a `with`.",
-                code="VX210",
-            )
-            return updated_node
+        if isinstance(self.parent(original_node), cst.WithItem):
+            return self._with_entered(original_node, updated_node)
+        return self._callable(original_node, updated_node)
+
+    def _with_entered(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
         given = positional(original_node)
         if starred(original_node) or len(given) != 1:
             self.record(
@@ -278,6 +308,35 @@ class _Raises(_BodyPass):
         self.record(f"`{render(original_node)}` becomes `velox.raises`.")
         return updated_node.with_changes(func=velox("raises"))
 
+    def _callable(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        """`pytest.raises(E, func, *args, **kwargs)`, not entered by a `with`."""
+        given = positional(original_node)
+        if len(given) < 2:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `velox.raises` is a context "
+                "manager, and this call is not entered by a `with`.",
+                code="VX210",
+            )
+            return updated_node
+        if "match" in keywords(original_node) or double_starred(original_node):
+            self.record(
+                f"`{render(original_node)}` is left as it is: pytest forwards `match` to `func` "
+                "in this form, but `velox.raises` always intercepts it to match the exception, "
+                "and a `**` unpack might carry one where the rewrite can't see it.",
+                code="VX210",
+            )
+            return updated_node
+        uncatchable = self._uncatchable(given[0].value)
+        if uncatchable is not None:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `velox.raises` refuses "
+                f"`{uncatchable}`, since cancellation is how velox enforces a timeout.",
+                code="VX211",
+            )
+            return updated_node
+        self.record(f"`{render(original_node)}` becomes `velox.raises`.", code="VX210")
+        return updated_node.with_changes(func=velox("raises"))
+
     def _uncatchable(self, expected: cst.BaseExpression) -> str | None:
         """Which of the types `velox.raises` refuses `expected` names, if it names one."""
         candidates = [expected]
@@ -293,7 +352,14 @@ class _Raises(_BodyPass):
 
 
 class _Approx(_BodyPass):
-    """VX212: `pytest.approx` over a scalar, which is what `velox.approx` compares."""
+    """VX212: `pytest.approx` over a scalar, which is the default this class's own `CODE` files
+    under. VX213: `pytest.approx` over a list, a tuple, or a dict — an explicit `code=` override
+    on every `record` below, used whenever the first argument has one of those shapes (its own
+    comprehension forms included), success and refusal alike; a list, tuple, dict, or set nested
+    one level inside a list/tuple/dict literal is one such refusal, since `velox.approx` only
+    walks one level. VX221: a set, a set comprehension, a generator expression, or a numpy array,
+    which stay refused — there is no position to compare any of those by.
+    """
 
     CODE = "VX212"
 
@@ -301,41 +367,59 @@ class _Approx(_BodyPass):
         if self.is_blocked or "pytest.approx" not in self.names(original_node):
             return updated_node
         given = positional(original_node)
+        code = self._code(given[0].value) if given else None
         if starred(original_node) or not given:
             self.record(
                 f"`{render(original_node)}` is left as it is: `velox.approx` takes the expected "
-                "value itself."
+                "value itself.",
+                code=code,
             )
             return updated_node
-        kind = self._kind(given[0].value)
+        expected = given[0].value
+        kind = self._kind(expected)
         if kind is not None:
             self.record(
                 f"`{render(original_node)}` is left as it is: it is given {kind}, and "
-                "`velox.approx` compares scalars.",
-                code="VX213",
+                "`velox.approx` has no position to compare it by.",
+                code="VX221",
+            )
+            return updated_node
+        nested = approx_nested(expected)
+        if nested is not None:
+            self.record(
+                f"`{render(original_node)}` is left as it is: `{render(nested)}` is nested "
+                "inside it, and `velox.approx` has no position to compare a nested container by.",
+                code=code,
             )
             return updated_node
         unknown = keywords(original_node) - set(_APPROX_POSITIONAL)
         if unknown or len(given) > 1 + len(_APPROX_POSITIONAL):
             self.record(
                 f"`{render(original_node)}` is left as it is: `velox.approx` takes `rel`, `abs` "
-                "and `nan_ok`."
+                "and `nan_ok`.",
+                code=code,
             )
             return updated_node
         args = list(original_node.args)
         for position, name in zip(given[1:], _APPROX_POSITIONAL, strict=False):
             if keyword(original_node, name) is not None:
                 self.record(
-                    f"`{render(original_node)}` is left as it is: it passes `{name}` twice."
+                    f"`{render(original_node)}` is left as it is: it passes `{name}` twice.",
+                    code=code,
                 )
                 return updated_node
             args = [argument(arg.value, name) if arg is position else arg for arg in args]
-        self.record(f"`{render(original_node)}` becomes `velox.approx`.")
+        self.record(f"`{render(original_node)}` becomes `velox.approx`.", code=code)
         return updated_node.with_changes(func=velox("approx"), args=args)
+
+    def _code(self, expected: cst.BaseExpression) -> str | None:
+        """`"VX213"` where `expected` is list/tuple/dict shaped, else `None` (the default
+        `VX212`, a scalar)."""
+        return "VX213" if isinstance(expected, _APPROX_CONTAINER_SHAPES) else None
 
     def _kind(self, expected: cst.BaseExpression) -> str | None:
         """What `expected` is, where it is something `velox.approx` does not compare."""
-        kind = _APPROX_KINDS.get(type(expected))
+        kind = APPROX_KINDS.get(type(expected))
         if kind is not None:
             return kind
         if isinstance(expected, cst.Call) and any(

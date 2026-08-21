@@ -1314,9 +1314,35 @@ def test_caplog_records_and_messages_move_to_log_records() -> None:
     assert _codes(applied) == ["VX204", "VX204"]
 
 
-def test_caplogs_other_attributes_are_left_to_their_own_row() -> None:
-    source = """def test_x(caplog):
+def test_caplog_text_and_record_tuples_move_to_log_records_under_vx206() -> None:
+    before = """def test_x(caplog):
     assert caplog.text == ""
+    assert caplog.record_tuples == []
+"""
+    after = """def test_x(caplog):
+    assert log_records.text == ""
+    assert log_records.record_tuples == []
+"""
+    applied = _rewrite("VX204", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX206", "VX206"]
+
+
+def test_caplog_clear_call_moves_to_log_records_under_vx206() -> None:
+    before = """def test_x(caplog):
+    caplog.clear()
+"""
+    after = """def test_x(caplog):
+    log_records.clear()
+"""
+    applied = _rewrite("VX204", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX206"]
+
+
+def test_caplogs_handler_is_left_to_its_own_row() -> None:
+    source = """def test_x(caplog):
+    caplog.handler.flush()
 """
     assert _untouched("VX204", source, _context("test_x")) == ()
 
@@ -1422,12 +1448,81 @@ def test_x():
     assert _codes(applied) == ["VX209"]
 
 
-def test_a_raises_called_rather_than_entered_is_refused() -> None:
-    source = """import pytest
+def test_a_raises_called_with_a_func_becomes_velox_raises() -> None:
+    """The callable form -- `pytest.raises(E, func, *args, **kwargs)` -- rewrites the same way
+    the `with`-entered form does: only the name changes."""
+    before = """import pytest
 
 
 def test_x():
     pytest.raises(ValueError, boom, 1)
+"""
+    after = """import pytest
+
+
+def test_x():
+    velox.raises(ValueError, boom, 1)
+"""
+    applied = _rewrite("VX209", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
+def test_a_raises_called_with_a_func_forwards_keyword_arguments_too() -> None:
+    before = """import pytest
+
+
+def test_x():
+    pytest.raises(ValueError, boom, 1, kind="bad")
+"""
+    after = """import pytest
+
+
+def test_x():
+    velox.raises(ValueError, boom, 1, kind="bad")
+"""
+    applied = _rewrite("VX209", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
+def test_a_raises_called_with_match_is_refused() -> None:
+    """pytest's callable form forwards `match=` to `func` as one of its `**kwargs`; velox's
+    callable form always intercepts `match` to match the exception instead. The two forms
+    disagree on what the call means, so this is not a safe mechanical rewrite."""
+    source = """import pytest
+
+
+def test_x():
+    pytest.raises(ValueError, boom, 1, match="bad")
+"""
+    applied = _untouched("VX209", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX210"]
+
+
+def test_a_raises_called_over_a_cancellation_is_refused() -> None:
+    source = """import asyncio
+
+import pytest
+
+
+def test_x():
+    pytest.raises(asyncio.CancelledError, boom)
+"""
+    applied = _untouched("VX209", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX211"]
+
+
+def test_a_raises_neither_entered_nor_called_is_refused() -> None:
+    """A bare `pytest.raises(E)`, stashed for later rather than entered or called immediately,
+    stays VX210: there is no `with` and no `func` for a rewrite to key off of."""
+    source = """import pytest
+
+
+def test_x():
+    box = pytest.raises(ValueError)
 """
     applied = _untouched("VX209", source, _context("test_x"))
 
@@ -1504,12 +1599,144 @@ def test_x():
     _rewrite("VX212", before, after, _context("test_x"))
 
 
-def test_approx_over_a_sequence_is_refused() -> None:
-    source = """import pytest
+def test_approx_over_a_list_becomes_velox_approx() -> None:
+    before = """import pytest
 
 
 def test_x():
     assert values == pytest.approx([0.1, 0.2])
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx([0.1, 0.2])
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_tuple_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx((0.1, 0.2), rel=1e-6)
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx((0.1, 0.2), rel=1e-6)
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_dict_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({"a": 0.1, "b": 0.2})
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx({"a": 0.1, "b": 0.2})
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_list_comprehension_becomes_velox_approx() -> None:
+    before = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx([x for x in [0.1, 0.2]])
+"""
+    after = """import pytest
+
+
+def test_x():
+    assert values == velox.approx([x for x in [0.1, 0.2]])
+"""
+    applied = _rewrite("VX212", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_set_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({0.1, 0.2})
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX221"]
+
+
+def test_approx_over_a_generator_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx(x for x in [0.1, 0.2])
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX221"]
+
+
+def test_approx_over_a_numpy_array_is_refused() -> None:
+    source = """import numpy as np, pytest
+
+
+def test_x():
+    assert values == pytest.approx(np.array([0.1, 0.2]))
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX221"]
+
+
+def test_approx_over_a_list_nested_in_a_list_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx([0.1, [0.2, 0.3]])
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_tuple_nested_in_a_dict_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx({"a": (0.1, 0.2)})
+"""
+    applied = _untouched("VX212", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX213"]
+
+
+def test_approx_over_a_dict_nested_in_a_tuple_is_refused() -> None:
+    source = """import pytest
+
+
+def test_x():
+    assert values == pytest.approx((0.1, {"a": 0.2}))
 """
     applied = _untouched("VX212", source, _context("test_x"))
 

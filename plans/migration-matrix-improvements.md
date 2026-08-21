@@ -12,11 +12,10 @@ This document focuses on category 1: features velox could add to unlock matrix r
 
 ## Candidates for velox changes
 
+VX210, VX213 and VX206 are done — promoted to `MECHANICAL` in [the matrix](../velox-migrate/velox_migrate/matrix.py) and converted by `velox_migrate.convert.rules.bodies`.
+
 | Code | Current | Feature | Promoted to |
 |---|---|---|---|
-| VX210 | REFUSED | Add a callable form to `velox.raises`: `raises(E, func, *args, **kwargs)` — call `func(*args, **kwargs)` inside the existing context manager. pytest has this form; velox doesn't. | MECHANICAL |
-| VX213 | UNSUPPORTED | Extend `velox.approx` to walk sequences and mappings elementwise, matching pytest's own behavior. Today it accepts scalars only. | MECHANICAL |
-| VX206 | UNSUPPORTED | Add `.text`, `.record_tuples`, and `.clear()` to `velox.log_records`. These format or manipulate captured logs the same way `caplog` does. | MECHANICAL |
 | VX105 | REFUSED | Add a `condition=` parameter to `@velox.xfail`, mirroring `@velox.skipif`'s own conditional form. | MECHANICAL |
 | VX102 | REFUSED | Let parametrize cases carry per-case marks — e.g., a `velox.case(value, marks=...)` wrapper `@velox.parametrize` recognizes. Pytest allows `pytest.param(..., marks=...)` per case. | MECHANICAL |
 | VX208 | REFUSED | Ship a `py.path.local`-compatible wrapper for `tmp_path`, so `tmpdir`/`tmpdir_factory` bodies (which use `.join`, `.strpath`, division) can migrate. pytest itself carries this legacy shim. | MECHANICAL |
@@ -33,6 +32,6 @@ This document focuses on category 1: features velox could add to unlock matrix r
 
 ## Next steps
 
-The shortlist above is ordered by implementation cost and audit impact: VX210, VX213, VX206 are the cheapest wins and would unlock cases commonly seen in real suites. Each row carries an `action` in the matrix itself; promoting it moves that action from a "manual rewrite" task to "the migration tool can do it."
+The remaining candidates are ordered by implementation cost and audit impact. Each row carries an `action` in the matrix itself; promoting it moves that action from a "manual rewrite" task to "the migration tool can do it."
 
-Consider prototyping the cheapest ones as velox features and re-running the migration tool on a real OSS suite to measure the impact on the final report.
+Consider prototyping the cheapest of what's left as velox features and re-running the migration tool on a real OSS suite to measure the impact on the final report.

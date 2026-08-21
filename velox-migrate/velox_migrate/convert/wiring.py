@@ -309,7 +309,7 @@ def _stranded(node: cst.FunctionDef, injections: Sequence[Injection]) -> str | N
         if not _mentions(node.body, injection.was):
             continue
         if injection.was == CAPLOG:
-            return "VX205" if _mentions(node.body, SET_LEVEL) else "VX206"
+            return "VX205" if _mentions(node.body, SET_LEVEL) else "VX222"
         return _STRANDED.get(injection.was, "VX220")
     return None
 
