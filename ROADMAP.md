@@ -24,12 +24,38 @@ test earns for returning a value or dropping a coroutine un-awaited · the repor
 `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Next
+**Codegen**: velox-migrate, plans:
+High-level in `plans/migration-tool-plan.md`
+Currently chewing through: `plans/migration-matrix-improvements.md`
 
-**Starvation-aware scheduling.** `exclusive=`/`@velox.solo` admission has no fairness guarantee: a
+Next: smoke-test on real open-source suites:
+1. Marshmallow
+2. httpx2 (successor to https, active development)
+
+
+### Urgent performance fixes
+To make test suite viable to run repeatedly.
+
+**Resolve QualifiedNameProvider/ParentNodeProvider once per file, not once per rule.** Build one MetadataWrapper over the original module, and pass its resolved caches into each subsequent wrapper.visit() via libcst's cache= param on MetadataWrapper.__init__ — since unsafe_skip_copy=True already preserves node identity, untouched nodes hit the cache and only newly-synthesized nodes need fresh resolution. This should collapse the dominant cost from ~19 full-tree scope passes down to ~1 per file. Given metadata resolution is ~70% of profiled convert.run() time, this is plausibly a 3-5x wall-clock win on its own.
+
+**Skip rules that can't match.** Several rules only care about specific decorator/call shapes; a cheap pre-check (e.g. "does this file even import pytest/contain a @pytest.mark...") could skip the MetadataWrapper construction entirely for files with nothing to do. Secondary to #1, not needed if #1 lands.
+Memoize conversion_of() in the test file (it's pure — no disk writes) per (suite, version) with functools.cache, so the ~10x-per-suite redundant recomputation in test_convert.py collapses to one real call per suite/version pair. converted() still needs its own tmp_path copy per test (since tests mutate the tree and run subprocesses against it), but it can reuse a cached Conversion object rather than recomputing one.
+
+## docs
+High-level plan in `plans/docsite-plan.md`
+
+## Code quality consolidation
+
+Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
+
+
+## Later
+
+## Starvation-aware scheduling
+`exclusive=`/`@velox.solo` admission has no fairness guarantee: a
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
 seeing an opening.
 
-## Later
 **Performance.** A persistent collection cache, `--lf`/`--ff`,
 
 **Reporting.** JUnit XML, `--report-json`, and GitHub annotations.
