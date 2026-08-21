@@ -161,15 +161,33 @@ a concrete reason to. Search is built in (Zensical's own client-side engine), no
   (`gen_cli_reference.py --check`, then `docs-build`) — same shape as the existing
   `vendor`/`vendor-check` pair. Both read `zensical.toml` from the repo root by default, so no
   `-f`/`--config-file` flag is needed as long as `just` runs recipes from the root.
-- A broken internal link or an unresolved nav entry should fail the build the way `mkdocs build
-  --strict` did — confirm Zensical's equivalent (`strict` is configurable per the v0.0.53 release
-  notes) once phase 1 is underway.
+- A broken internal link fails the build, the way `mkdocs build --strict` did: `strict = true` in
+  `zensical.toml` (equivalently `zensical build -s`), confirmed against a link to a page that
+  doesn't exist.
 
 ## Phasing
 
-1. **Skeleton** — `zensical.toml`, theme config, `index.md` adapted from `README.md`, placeholder
-   `index.md` per section, `docs-serve`/`docs-build` recipes, `docs` dependency group. Confirms
-   the site builds and looks right before content is written.
+1. ~~**Skeleton**~~ — **done.** `zensical.toml`, theme config, `index.md` adapted from
+   `README.md`, an `index.md` per section, `docs-serve`/`docs-build` recipes, `docs` dependency
+   group. What it settled:
+   - `strict = true` in `zensical.toml` is the `mkdocs build --strict` equivalent, and it does
+     fail the build on a link to a page that doesn't exist. `zensical build -s` is the same
+     switch from the CLI.
+   - Link validation is scoped to `docs_dir`, so `docs/rationale.md`'s `../README.md` and
+     `../ROADMAP.md` links failed the build. They became a link to `guide/index.md` and an
+     unlinked mention of `ROADMAP.md`. Every later page has to reach `examples/`, `README.md` or
+     `ROADMAP.md` the same way — named, not linked out of the tree — until phase 6 settles
+     `repo_url`.
+   - The modern variant renders light-only unless `[[project.theme.palette]]` entries are
+     declared; the three from Zensical's own starter config (system/light/dark) put the toggle in
+     the header.
+   - `navigation.indexes` is the one theme feature enabled, so `guide/index.md` *is* the Guide nav
+     entry rather than a lone child of it.
+   - `docs` joins `dev` in `[tool.uv] default-groups`. Left out, `just docs-build` installs the
+     docs toolchain and the next `just sync` uninstalls it again.
+   - Zensical is pinned exactly (`zensical==0.0.56`), per the alpha trade-off above.
+   - `guide/index.md` is written for real rather than stubbed — install, first test, shape of a
+     suite — since a placeholder would have to describe a page that doesn't exist.
 2. **Reference** — mkdocstrings wired up, the five symbol-group pages, `reference/cli.md` plus its
    generator script and check recipe.
 3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching

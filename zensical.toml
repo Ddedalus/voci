@@ -1,0 +1,47 @@
+# Zensical builds the documentation site from `docs/`. This file sits at the repo root rather than
+# inside `docs/` so that `docs_dir` — which Zensical resolves relative to the config file — gets
+# its default, and no config file ends up inside the published tree.
+
+[project]
+site_name = "velox"
+site_description = "A concurrent test runner for async Python."
+
+# A link to a page that doesn't exist, or to an anchor that doesn't, fails the build rather than
+# shipping a dead link.
+strict = true
+
+nav = [
+  { "Home" = "index.md" },
+  { "Guide" = ["guide/index.md"] },
+  { "How-to" = ["how-to/index.md"] },
+  { "Reference" = ["reference/index.md"] },
+  { "About" = ["about/index.md", "rationale.md"] },
+]
+
+[project.theme]
+# Zensical's default variant, stated explicitly so a change of default doesn't restyle the site
+# underneath us.
+variant = "modern"
+language = "en"
+# A section's `index.md` is the section itself, so "Guide" in the nav opens `guide/index.md`
+# rather than expanding to a lone child of the same name.
+features = ["navigation.indexes"]
+
+# Three palette entries are what puts a color-scheme toggle in the header: the first follows the
+# reader's system preference, the other two pin light and dark.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"

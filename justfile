@@ -53,6 +53,14 @@ typecheck *args:
 build:
     uv build
 
+# Serve the docs site with live reload (e.g. `just docs-serve --open`)
+docs-serve *args:
+    uv run zensical serve "$@"
+
+# Build the docs site into site/
+docs-build *args:
+    uv run zensical build "$@"
+
 # Re-vendor pytest's assertion subsystem from the oss/pytest submodule (spec/07)
 vendor:
     uv run python scripts/vendor_assertion.py
