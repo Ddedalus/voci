@@ -297,17 +297,134 @@ def test_x(value):
     assert "ids=" not in result.module.code
 
 
-def test_a_mark_on_one_case_refuses_the_whole_parametrize() -> None:
-    source = """import pytest
+def test_a_mark_on_one_case_becomes_velox_case() -> None:
+    before = """import pytest
 
 
 @pytest.mark.parametrize("value", [1, pytest.param(2, marks=pytest.mark.skip)])
 def test_x(value):
     assert value
 """
+    after = """import pytest
+
+
+@velox.parametrize("value", [1, velox.case(2, marks=velox.skip("no reason given"))])
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite("VX101", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX102"]
+
+
+def test_several_marks_on_one_case_become_a_marks_list() -> None:
+    before = """import pytest
+
+
+@pytest.mark.parametrize(
+    "value", [pytest.param(2, marks=[pytest.mark.xfail(reason="known"), pytest.mark.slow])]
+)
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+@velox.parametrize(
+    "value", [velox.case(2, marks=[velox.xfail("known"), velox.tag("slow")])]
+)
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite("VX101", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX102"]
+
+
+def test_a_case_marked_with_several_values_spells_them_out() -> None:
+    before = """import pytest
+
+
+@pytest.mark.parametrize("a,b", [pytest.param(1, 2, marks=pytest.mark.skip)])
+def test_x(a, b):
+    assert a < b
+"""
+    after = """import pytest
+
+
+@velox.parametrize("a,b", [velox.case(1, 2, marks=velox.skip("no reason given"))])
+def test_x(a, b):
+    assert a < b
+"""
+    _rewrite("VX101", before, after, _context("test_x"))
+
+
+def test_a_case_mark_and_its_id_both_carry() -> None:
+    before = """import pytest
+
+
+@pytest.mark.parametrize("value", [pytest.param(2, marks=pytest.mark.skip, id="two")])
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+@velox.parametrize("value", [velox.case(2, marks=velox.skip("no reason given"))], ids=("two",))
+def test_x(value):
+    assert value
+"""
+    _rewrite("VX101", before, after, _context("test_x"))
+
+
+def test_an_asyncio_case_mark_carries_nothing() -> None:
+    """`@pytest.mark.asyncio` goes away wherever it is written -- on a case, the case is left as
+    the bare value it would have been with no `marks=` at all."""
+    before = """import pytest
+
+
+@pytest.mark.parametrize("value", [pytest.param(2, marks=pytest.mark.asyncio)])
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+@velox.parametrize("value", [2])
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite("VX101", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX114"]
+
+
+def test_a_plugin_mark_on_one_case_refuses_the_whole_parametrize() -> None:
+    source = """import pytest
+
+
+@pytest.mark.parametrize("value", [1, pytest.param(2, marks=pytest.mark.filterwarnings("error"))])
+def test_x(value):
+    assert value
+"""
     applied = _untouched("VX101", source, _context("test_x"))
 
     assert _codes(applied) == ["VX102"]
+
+
+def test_two_scalar_marks_on_one_case_refuse_the_whole_parametrize() -> None:
+    source = """import pytest
+
+
+@pytest.mark.parametrize(
+    "value", [pytest.param(2, marks=[pytest.mark.skip, pytest.mark.skip(reason="again")])]
+)
+def test_x(value):
+    assert value
+"""
+    applied = _untouched("VX101", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX113"]
 
 
 def test_an_indirect_parametrize_the_plan_did_not_list_stays_where_it_was() -> None:
@@ -543,17 +660,94 @@ def test_x():
     _rewrite("VX104", before, after, _context("test_x"))
 
 
-def test_a_conditional_xfail_is_refused() -> None:
-    source = """import pytest
+def test_a_conditional_xfail_becomes_condition() -> None:
+    before = """import pytest
 
 
 @pytest.mark.xfail(sys.platform == "win32", reason="broken")
 def test_x():
     pass
 """
-    applied = _untouched("VX104", source, _context("test_x"))
+    after = """import pytest
+
+
+@velox.xfail("broken", condition=sys.platform == "win32")
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX104", before, after, _context("test_x"))
 
     assert _codes(applied) == ["VX105"]
+
+
+def test_a_conditional_xfail_positional_becomes_condition() -> None:
+    before = """import pytest
+
+
+@pytest.mark.xfail(sys.platform == "win32", reason="broken", strict=True)
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+@velox.xfail("broken", condition=sys.platform == "win32", strict=True)
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX104", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX105"]
+
+
+def test_a_string_xfail_condition_becomes_a_lambda() -> None:
+    before = """import pytest
+
+
+@pytest.mark.xfail("sys.platform == 'win32'", reason="broken")
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+@velox.xfail("broken", condition=lambda: sys.platform == 'win32')
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX116", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX116"]
+    assert "`sys`" in applied[0].message
+
+
+def test_a_string_xfail_condition_reading_pytests_config_is_refused() -> None:
+    source = """import pytest
+
+
+@pytest.mark.xfail("config.getoption('slow')", reason="slow")
+def test_x():
+    pass
+"""
+    applied = _untouched("VX116", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX116"]
+    assert "config" in applied[0].message
+
+
+def test_an_unrun_conditional_xfail_is_refused() -> None:
+    """`run=False` becomes a skip, which has no condition of its own -- applying it always would
+    not be the conditional expectation the source wrote."""
+    source = """import pytest
+
+
+@pytest.mark.xfail(run=False, reason="segfaults", condition=slow)
+def test_x():
+    pass
+"""
+    applied = _untouched("VX106", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX106"]
 
 
 def test_two_skips_on_one_test_are_refused_rather_than_stacked() -> None:

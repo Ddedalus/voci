@@ -197,7 +197,7 @@ class _MarkPass(RuleTransformer):
         text = literal_text(condition)
         needs: tuple[str, ...] = ()
         if text is not None:
-            condition, needs, refusal = self._lazy_condition(mark, text)
+            condition, needs, refusal = self._lazy_condition(mark, text, code="VX103")
             if refusal is not None:
                 return refusal
         expression = called(
@@ -228,9 +228,13 @@ class _MarkPass(RuleTransformer):
         )
 
     def _lazy_condition(
-        self, mark: _Mark, text: str
+        self, mark: _Mark, text: str, *, code: str
     ) -> tuple[cst.BaseExpression, tuple[str, ...], _Translated | None]:
-        """A string condition as a zero-argument lambda, with the modules it reads."""
+        """A string condition as a zero-argument lambda, with the modules it reads.
+
+        `code` is the row that answers for the mark being read -- one row per mark, since a
+        string condition is a different construct on a `skipif` than on an `xfail`.
+        """
         try:
             condition = cst.parse_expression(text)
         except cst.ParserSyntaxError:
@@ -238,8 +242,8 @@ class _MarkPass(RuleTransformer):
                 mark.node,
                 (),
                 _refuses(
-                    "VX103",
-                    "VX103",
+                    code,
+                    code,
                     f"`{render(mark.node)}`'s condition is not one Python expression.",
                 ),
             )
@@ -249,8 +253,8 @@ class _MarkPass(RuleTransformer):
                 mark.node,
                 (),
                 _refuses(
-                    "VX103",
-                    "VX103",
+                    code,
+                    code,
                     f"`{render(mark.node)}`'s condition reads pytest's `config`, which velox has "
                     "no counterpart for.",
                 ),
@@ -278,14 +282,8 @@ class _MarkPass(RuleTransformer):
             )
         given = positional(call)
         named = keyword(call, "condition")
-        if given or named is not None:
-            return _refuses(
-                "VX104",
-                "VX105",
-                f"`{render(mark.node)}` expects a failure only under a condition, and "
-                "`@velox.xfail` applies unconditionally.",
-            )
-        if keywords(call) - {"reason", "strict", "raises", "run"}:
+        condition = given[0].value if given else (named.value if named is not None else None)
+        if len(given) > 1 or keywords(call) - {"condition", "reason", "strict", "raises", "run"}:
             return _refuses(
                 "VX104", "VX104", f"`{render(mark.node)}` is not an `xfail` this rule reads."
             )
@@ -300,6 +298,13 @@ class _MarkPass(RuleTransformer):
                 "runs at all is what has no counterpart.",
             )
         if run is not None and _is_false(run.value):
+            if condition is not None:
+                return _refuses(
+                    "VX106",
+                    "VX106",
+                    f"`{render(mark.node)}` expects a failure without running the test, and only "
+                    f"when `{render(condition)}` -- the skip it becomes would apply always.",
+                )
             expression = called(velox("skip"), [argument(reason)], call)
             dropped = keywords(call) & {"strict", "raises"}
             note = f" Its `{'`, `'.join(sorted(dropped))}` is dropped." if dropped else ""
@@ -313,7 +318,18 @@ class _MarkPass(RuleTransformer):
                     f"expects a failure without running the test.{note}"
                 ),
             )
+        # A string condition is pytest's own evaluate-this-later spelling, and becomes the lambda
+        # `@velox.xfail(condition=...)` reads the same way `skipif`'s does -- its own row, since
+        # what a reader has to confirm is the condition rather than the expectation.
+        text = literal_text(condition) if condition is not None else None
+        needs: tuple[str, ...] = ()
+        if text is not None:
+            condition, needs, refusal = self._lazy_condition(mark, text, code="VX116")
+            if refusal is not None:
+                return refusal
         args = [argument(reason)]
+        if condition is not None:
+            args.append(argument(condition, "condition"))
         strict = keyword(call, "strict")
         if strict is not None:
             args.append(argument(strict.value, "strict"))
@@ -323,9 +339,22 @@ class _MarkPass(RuleTransformer):
         if raises is not None:
             args.append(argument(raises.value, "raises"))
         expression = called(velox("xfail"), args, call)
+        if text is not None:
+            wanted = "".join(f" It reads `{module}`." for module in needs)
+            return _Translated(
+                owner="VX116",
+                code="VX116",
+                scalar="xfail",
+                expression=expression,
+                needs=needs,
+                message=(
+                    f"`{render(mark.node)}` becomes `{render(expression)}`, its condition "
+                    f"evaluated where the module it reads is already imported.{wanted}"
+                ),
+            )
         return _Translated(
             owner="VX104",
-            code="VX104",
+            code="VX104" if condition is None else "VX105",
             scalar="xfail",
             expression=expression,
             message=f"`{render(mark.node)}` becomes `{render(expression)}`.",
@@ -396,10 +425,10 @@ class _MarkPass(RuleTransformer):
 
         ids_arg = keyword(call, "ids")
         names = _argnames(given[0].value)
-        cases = self._unwrap(given[1].value, arity=len(names) if names else None)
+        cases = self._unwrap(given[1].value, arity=len(names) if names else None, qualname=qualname)
         if isinstance(cases, _Translated):
             return cases
-        values, case_ids = cases
+        values, case_ids, marked, needs = cases
 
         axis = None
         if names is not None and qualname is not None:
@@ -430,10 +459,13 @@ class _MarkPass(RuleTransformer):
         expression = expression.with_changes(func=velox("parametrize"))
         if ids is not None:
             expression = with_keyword(expression, "ids", ids)
+        if marked:
+            note += " A case's own marks become `velox.case(..., marks=...)`."
         return _Translated(
             owner="VX101",
-            code="VX101" if not note else "VX114",
+            code="VX102" if marked else ("VX101" if not note else "VX114"),
             expression=expression,
+            needs=needs,
             message=f"`{render(mark.node)}` becomes `@velox.parametrize`.{note}",
         )
 
@@ -465,18 +497,25 @@ class _MarkPass(RuleTransformer):
         )
 
     def _unwrap(
-        self, values: cst.BaseExpression, *, arity: int | None
-    ) -> tuple[cst.BaseExpression, tuple[cst.BaseExpression, ...] | None] | _Translated:
-        """`values` with every `pytest.param` replaced by the case it wrapped, and their ids.
+        self, values: cst.BaseExpression, *, arity: int | None, qualname: str | None
+    ) -> (
+        tuple[cst.BaseExpression, tuple[cst.BaseExpression, ...] | None, bool, tuple[str, ...]]
+        | _Translated
+    ):
+        """`values` with every `pytest.param` replaced by the case it wrapped, its ids, whether
+        any case's own `marks=` was carried onto a `velox.case(...)`, and the modules any of
+        those marks reads.
 
         The ids come back only when every case carried one, since a partial list would label the
         wrong cases.
         """
         if not isinstance(values, cst.List | cst.Tuple):
-            return values, None
+            return values, None, False, ()
         elements: list[cst.BaseElement] = []
         ids: list[cst.BaseExpression] = []
         rewritten = False
+        marked = False
+        needs: list[str] = []
         for element in values.elements:
             wrapped = element.value
             if not (isinstance(wrapped, cst.Call) and "pytest.param" in self.names(wrapped)):
@@ -486,18 +525,21 @@ class _MarkPass(RuleTransformer):
                 return _refuses(
                     "VX101", "VX101", f"`{render(wrapped)}` unpacks its values at run time."
                 )
-            if keyword(wrapped, "marks") is not None:
+            if keywords(wrapped) - {"id", "marks"}:
                 return _refuses(
                     "VX101",
-                    "VX102",
-                    f"`{render(wrapped)}` marks one case, and a velox mark applies to a whole "
-                    "test.",
+                    "VX101",
+                    f"`{render(wrapped)}` is not `pytest.param(*values, id=..., marks=...)`.",
                 )
-            if keywords(wrapped) - {"id"}:
+            case_values = positional(wrapped)
+            if arity is not None and len(case_values) != arity:
                 return _refuses(
-                    "VX101", "VX101", f"`{render(wrapped)}` is not `pytest.param(*values, id=...)`."
+                    "VX101",
+                    "VX101",
+                    f"`{render(wrapped)}` holds a different number of values than the argnames "
+                    "name.",
                 )
-            case = _case(positional(wrapped), arity=arity)
+            case = _case(case_values, arity=arity)
             if case is None:
                 return _refuses(
                     "VX101",
@@ -505,15 +547,68 @@ class _MarkPass(RuleTransformer):
                     f"`{render(wrapped)}` holds a different number of values than the argnames "
                     "name.",
                 )
+            marks_kw = keyword(wrapped, "marks")
+            if marks_kw is not None:
+                read = self._case_marks(marks_kw.value, qualname=qualname)
+                if isinstance(read, _Translated):
+                    return read
+                case_marks, case_needs = read
+                needs.extend(case_needs)
+                if case_marks:
+                    marked = True
+                    spelled = case_marks[0] if len(case_marks) == 1 else _list(case_marks)
+                    case = called(
+                        velox("case"), [*case_values, argument(spelled, "marks")], wrapped
+                    )
             given_id = keyword(wrapped, "id")
             if given_id is not None:
                 ids.append(given_id.value)
             elements.append(element.with_changes(value=case))
             rewritten = True
         if not rewritten:
-            return values, None
+            return values, None, False, ()
         complete = tuple(ids) if len(ids) == len(elements) else None
-        return values.with_changes(elements=elements), complete
+        return values.with_changes(elements=elements), complete, marked, tuple(needs)
+
+    def _case_marks(
+        self, node: cst.BaseExpression, *, qualname: str | None
+    ) -> tuple[tuple[cst.BaseExpression, ...], tuple[str, ...]] | _Translated:
+        """One `pytest.param(..., marks=...)` value -- one mark, or a list/tuple of them -- as
+        the velox marks a `velox.case(...)` carries for that one case.
+
+        A mark this rule has no rewrite for (a plugin's, or one no other rule writes) refuses the
+        whole `@velox.parametrize` under `VX102`, the same as an untranslatable case value does.
+        A mark that goes away outright with no velox spelling (`asyncio`, `usefixtures`) is
+        simply not carried -- exactly what it does written above a `def`.
+        """
+        elements = node.elements if isinstance(node, cst.List | cst.Tuple) else None
+        marks = [element.value for element in elements] if elements is not None else [node]
+        expressions: list[cst.BaseExpression] = []
+        needs: list[str] = []
+        seen_scalars: set[str] = set()
+        for one in marks:
+            mark = self.mark_of(one)
+            if mark is None:
+                return _refuses(
+                    "VX101", "VX102", f"one case's `{render(one)}` is not a mark this rule reads."
+                )
+            translated = self.translate(mark, qualname=qualname)
+            if translated.refused:
+                return _refuses("VX101", "VX102", f"one case's {translated.message}")
+            if translated.expression is None:
+                continue
+            if translated.scalar is not None:
+                if translated.scalar in seen_scalars:
+                    return _refuses(
+                        "VX101",
+                        "VX113",
+                        f"`{render(node)}` puts two `{translated.scalar}` marks on one case, and "
+                        "velox raises rather than letting the last one win.",
+                    )
+                seen_scalars.add(translated.scalar)
+            expressions.append(translated.expression)
+            needs.extend(translated.needs)
+        return tuple(expressions), tuple(needs)
 
     # --- writing a decorator -------------------------------------------------------------------
 
@@ -650,10 +745,21 @@ class _StringSkipIf(_MarkPass):
 
 
 class _Skips(_MarkPass):
-    """VX104: `@pytest.mark.skip`, `@pytest.mark.skipif` on a value, and a plain
-    `@pytest.mark.xfail`."""
+    """VX104: `@pytest.mark.skip`, `@pytest.mark.skipif` on a value, and `@pytest.mark.xfail` on
+    one (VX105) or on nothing."""
 
     CODE = "VX104"
+
+    def leave_Decorator(
+        self, original_node: cst.Decorator, updated_node: cst.Decorator
+    ) -> cst.Decorator:
+        return self.rewrite(original_node, updated_node)
+
+
+class _StringXFail(_MarkPass):
+    """VX116: `@pytest.mark.xfail` with a string condition, as a zero-argument lambda."""
+
+    CODE = "VX116"
 
     def leave_Decorator(
         self, original_node: cst.Decorator, updated_node: cst.Decorator
@@ -1083,6 +1189,10 @@ def _tuple(values: Sequence[cst.BaseExpression]) -> cst.Tuple:
     return cst.Tuple(elements=[cst.Element(value=value) for value in values])
 
 
+def _list(values: Sequence[cst.BaseExpression]) -> cst.List:
+    return cst.List(elements=[cst.Element(value=value) for value in values])
+
+
 def _strict(strict: bool) -> list[cst.Arg]:
     return [argument(cst.Name("True"), "strict")] if strict else []
 
@@ -1129,6 +1239,7 @@ RULES: tuple[TransformerRule, ...] = (
     rule(_UseFixtures),
     rule(_Parametrize),
     rule(_StringSkipIf),
+    rule(_StringXFail),
     rule(_Skips),
     rule(_UnrunXFail),
     rule(_StrictXFail),

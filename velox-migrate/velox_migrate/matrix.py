@@ -397,9 +397,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX102",
         "pytest.param(..., marks=...)",
-        REFUSED,
-        "Marks apply to a whole test in velox, so a mark on one case has nowhere to go.",
-        action="Split the case into its own test, or branch on it inside the body.",
+        MECHANICAL,
+        "Becomes `velox.case(*values, marks=...)`, carrying the same marks translated into their "
+        "velox spelling, which reach that one case.",
+        target="velox.case(..., marks=...)",
     ),
     _row(
         "VX103",
@@ -421,10 +422,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX105",
         "@pytest.mark.xfail with a condition",
-        REFUSED,
-        "`@velox.xfail` applies unconditionally, so a conditional expectation has to become a "
-        "branch someone chooses.",
-        action="Split the conditional cases, or assert the two outcomes explicitly.",
+        MECHANICAL,
+        "The condition becomes `@velox.xfail`'s own `condition=`, which decides whether the "
+        "failure is expected at all.",
+        target="@velox.xfail(condition=...)",
     ),
     _row(
         "VX106",
@@ -510,6 +511,17 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "velox reads marks from the test function, and a mark on a class is a collection error, so "
         "each mark the assignment applied becomes a decorator on every test it reached.",
         target="the same mark on each test",
+    ),
+    _row(
+        "VX116",
+        "@pytest.mark.xfail with a string condition",
+        MARKER,
+        "velox takes a bool or a zero-arg callable, so the string becomes a lambda over the same "
+        "expression, evaluated where the module it reads is already imported.",
+        target="@velox.xfail(condition=...)",
+        marker="xfail-string",
+        action="Confirm the condition reads the same from the converted module as it did in "
+        "pytest's own namespace.",
     ),
     # --- bodies and builtin fixtures -----------------------------------------------------------
     _row(
