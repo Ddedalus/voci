@@ -4,8 +4,8 @@ Why velox is shaped the way it is. This is the document to read before changing 
 load-bearing — each decision here has a failure mode behind it, and the code alone won't tell you
 what it is.
 
-It covers the important choices only. For what exists, read [../README.md](../README.md); for what
-doesn't, [../ROADMAP.md](../ROADMAP.md).
+It covers the important choices only. For what exists, read the [Guide](guide/index.md); for what
+doesn't, `ROADMAP.md` at the repository root.
 
 ## The shape of the system
 
@@ -146,7 +146,7 @@ names the cause. It never quietly does the unsafe thing.
 
 The companion rule: a silent pass is a bug. A selector that matched nothing, a test collected as
 zero tests, an un-awaited coroutine — each of those should be a distinct failure or exit code, not
-a green run. Several of these are still unenforced (see [../ROADMAP.md](../ROADMAP.md)); each one
+a green run. Several of these are still unenforced (see `ROADMAP.md`); each one
 that stays unenforced is a real defect, not an accepted limitation.
 
 # Per-module notes

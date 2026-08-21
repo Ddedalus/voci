@@ -21,6 +21,12 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.1",
 ]
+# The docs site (zensical.toml, docs/). Zensical is pinned exactly rather than floored: it is
+# 0.0.x, ships several releases a week, and the theme and config schema both move between them.
+docs = [
+    "mkdocstrings[python]>=1.0.6",
+    "zensical==0.0.56",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -40,6 +46,11 @@ version-file = "velox/_version.py"
 # ("velox"), so hatchling's name-based auto-detection can't find it — point it there explicitly.
 [tool.hatch.build.targets.wheel]
 packages = ["velox"]
+
+# `docs` joins `dev` in the environment `just sync` builds. Left out, every `just docs-build`
+# would install the docs toolchain and the next `just sync` would uninstall it again.
+[tool.uv]
+default-groups = ["dev", "docs"]
 
 # velox-migrate is a second distribution in this repo (plans/migration-tool-plan.md §2), kept in
 # the same workspace so its generated output can be exercised against velox itself in one CI run.
