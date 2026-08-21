@@ -1374,3 +1374,137 @@ def test_an_ordinary_wrapping_decorator_no_longer_hides_an_injection(tmp_path: P
     assert len(result.records) == 1
     assert result.records[0].plan.root_args == (("value", 0, False),)
     assert result.records[0].patches == ()
+
+
+# `velox.case(..., marks=...)`: marks that reach one case of a parametrized test.
+# ------------------------------------------------------------------------------------------
+
+
+def test_a_case_marked_skip_is_skipped_and_its_siblings_still_run(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.skip('flaky case'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert [record.id for record in result.records] == ["test_sample.py::test_it[1]"]
+    assert [skipped.id for skipped in result.skipped] == ["test_sample.py::test_it[2]"]
+    assert result.skipped[0].reason == "flaky case"
+    assert result.errors == []
+
+
+def test_a_cases_marks_reach_that_cases_record_only(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.xfail('known'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    expectations = {record.id: record.marks.xfail for record in result.records}
+    assert expectations["test_sample.py::test_it[1]"] is None
+    expected = expectations["test_sample.py::test_it[2]"]
+    assert expected is not None and expected.reason == "known"
+
+
+def test_a_tag_on_one_case_selects_that_case_alone(tmp_path: Path) -> None:
+    """`-m` is answered per case where the cases differ: the function's own tags cannot decide
+    for a test one of whose cases is tagged and the rest are not."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("slow"))
+
+    assert [record.id for record in result.records] == ["test_sample.py::test_it[2]"]
+    assert result.deselected == ["test_sample.py::test_it[1]"]
+
+
+def test_a_tagged_case_is_deselected_by_a_negated_tag_expression(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path, tag_expr=compile_tag_expression("not slow"))
+
+    assert [record.id for record in result.records] == ["test_sample.py::test_it[1]"]
+    assert result.deselected == ["test_sample.py::test_it[2]"]
+
+
+def test_a_case_condition_that_raises_is_one_collection_error_for_the_test(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "def _boom():\n"
+        "    raise RuntimeError('condition boom')\n\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.skipif(_boom, reason='x'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert result.records == []
+    assert len(result.errors) == 1
+    assert "condition boom" in result.errors[0].message
+
+
+def test_a_records_marks_are_the_functions_own_where_no_case_carries_any(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n@velox.timeout(5)\nasync def test_it():\n    pass\n",
+    )
+
+    (record,) = collect([path], rootdir=tmp_path).records
+
+    assert record.marks.timeout == 5
+
+
+def test_an_xfail_whose_condition_does_not_hold_is_not_on_the_record(tmp_path: Path) -> None:
+    """Decided once, at collection: the runner asks whether there is an expectation, never
+    whether one applies."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.xfail('only elsewhere', condition=False)\n"
+        "async def test_it():\n"
+        "    pass\n",
+    )
+
+    (record,) = collect([path], rootdir=tmp_path).records
+
+    assert record.marks.xfail is None
+
+
+def test_an_xfail_condition_is_evaluated_at_collection_not_at_import(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "@velox.xfail('computed', condition=lambda: True)\n"
+        "async def test_it():\n"
+        "    pass\n",
+    )
+
+    (record,) = collect([path], rootdir=tmp_path).records
+
+    assert record.marks.xfail is not None
+    assert record.marks.xfail.reason == "computed"

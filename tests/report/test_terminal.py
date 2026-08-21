@@ -14,6 +14,7 @@ import pytest
 from velox._collection.collect import Skipped
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan
+from velox._marks import marks_of
 from velox._report.terminal import Reporter, _elide_middle, _failure_reason
 from velox._run.run import Outcome
 from velox._run.run import TestResult as Result
@@ -37,6 +38,7 @@ def _test_record(id: str, path: Path, index: int = 0, patches: tuple[str, ...] =
         func=_noop,
         params=None,
         plan=_EMPTY_PLAN,
+        marks=marks_of(_noop),
         patches=patches,
     )
 

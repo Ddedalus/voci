@@ -204,6 +204,18 @@ the same pass rejects a name two stacked `@parametrize`s both claim, or one that
 actual `Depends(...)` injection, since either would otherwise fail confusingly later, at call time,
 once two sources tried to supply the same keyword.
 
+**A collected record carries its own marks, and every condition on them is already decided.**
+`velox.case(value, marks=...)` puts a mark on one case of a `@velox.parametrize`, so the marks
+reaching one record of a test function need not be the marks reaching the next. Collection folds
+the case's marks into the function's and stores the result on `TestRecord`, which is what the
+runner reads — a mark answered by looking at `func` would be answered once for cases that differ.
+The same pass decides `@velox.skipif`'s and `@velox.xfail(condition=...)`'s conditions, both of
+which may be callables: evaluating a condition is running suite code, and running it inside the
+runner would mean a user's expression raising in the middle of concurrent dispatch rather than
+becoming this test's collection error alongside every other malformed mark. A `-m` tag expression
+therefore waits for the expansion whenever some case carries a tag of its own, since the
+function's tags are then not the answer for any of its cases.
+
 ## `_di/fixtures.py` / `_di/runtime.py` — dependency injection
 
 **The refcount is reserved before the await, not after.** A waiter parked on a pending fixture

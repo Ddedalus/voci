@@ -13,17 +13,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from velox._di.fixtures import case_value_id, dedupe_case_ids
-from velox._marks import ParamSet
+from velox._marks import NO_MARKS, Marks, ParamSet, merged
 
 __all__ = ["Case", "cases_for", "known_params_of"]
 
 
 @dataclass(frozen=True, slots=True)
 class Case:
-    """One expanded `@velox.parametrize` callspec: its call kwargs and display id."""
+    """One expanded `@velox.parametrize` callspec: its call kwargs, display id and own marks."""
 
     params: dict[str, object]
     id: str
+    marks: Marks = NO_MARKS
+    """What `velox.case(..., marks=...)` put on this case alone, folded across stacked
+    parametrizations. Empty for a case written as a bare value, which is most of them."""
 
 
 def known_params_of(parametrizations: tuple[ParamSet, ...]) -> frozenset[str]:
@@ -52,7 +55,8 @@ def cases_for(parametrizations: tuple[ParamSet, ...]) -> tuple[Case, ...]:
     are generated per-value (str/int/bool/None/enum become their literal; anything else becomes
     `argname<index>`), joined with `-` across a case's names and again across stacked
     parametrizations, then disambiguated by appending an occurrence count to any id that collides
-    with another after generation.
+    with another after generation. Marks a `velox.case(...)` wrapper put on any case of the
+    combination reach the combination, `_marks.merged` folding them outermost first.
     """
     if not parametrizations:
         return ()
@@ -61,20 +65,23 @@ def cases_for(parametrizations: tuple[ParamSet, ...]) -> tuple[Case, ...]:
     return _dedupe(_merge(combo) for combo in itertools.product(*per_set))
 
 
-def _merge(combo: tuple[tuple[dict[str, object], str], ...]) -> Case:
-    """One product tuple -- one `(values, case_id)` pair per stacked parametrization -- flattened
-    into a single `Case`."""
+def _merge(combo: tuple[tuple[dict[str, object], str, Marks], ...]) -> Case:
+    """One product tuple -- one `(values, case_id, marks)` triple per stacked parametrization --
+    flattened into a single `Case`."""
     params: dict[str, object] = {}
-    for values, _ in combo:
+    marks = NO_MARKS
+    for values, _, case_marks in combo:
         params.update(values)
-    return Case(params=params, id="-".join(case_id for _, case_id in combo))
+        marks = merged(marks, case_marks)
+    return Case(params=params, id="-".join(case_id for _, case_id, _ in combo), marks=marks)
 
 
-def _case_options(param_set: ParamSet) -> tuple[tuple[dict[str, object], str], ...]:
+def _case_options(param_set: ParamSet) -> tuple[tuple[dict[str, object], str, Marks], ...]:
     ids = _case_ids(param_set)
+    case_marks = param_set.case_marks or (NO_MARKS,) * len(param_set.argvalues)
     return tuple(
-        (dict(zip(param_set.argnames, values, strict=True)), case_id)
-        for values, case_id in zip(param_set.argvalues, ids, strict=True)
+        (dict(zip(param_set.argnames, values, strict=True)), case_id, marks)
+        for values, case_id, marks in zip(param_set.argvalues, ids, case_marks, strict=True)
     )
 
 
@@ -100,6 +107,6 @@ def _dedupe(cases: Iterable[Case]) -> tuple[Case, ...]:
     cases = tuple(cases)
     deduped_ids = dedupe_case_ids([case.id for case in cases])
     return tuple(
-        Case(params=case.params, id=deduped_id)
+        Case(params=case.params, id=deduped_id, marks=case.marks)
         for case, deduped_id in zip(cases, deduped_ids, strict=True)
     )

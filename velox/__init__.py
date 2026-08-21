@@ -22,11 +22,14 @@ from velox._builtins.fixtures import (
 from velox._collection.requires import use
 from velox._di.fixtures import Depends, Fixture, Injection, Scope, fixture
 from velox._marks import (
+    MarkDecorator,
     Marks,
+    ParamCase,
     ParamSet,
     Skip,
     SkipIf,
     XFail,
+    case,
     isolated,
     parametrize,
     skip,
@@ -48,7 +51,9 @@ __all__ = [
     "Fixture",
     "Injection",
     "LogRecords",
+    "MarkDecorator",
     "Marks",
+    "ParamCase",
     "ParamSet",
     "RaisesContext",
     "Scope",
@@ -60,6 +65,7 @@ __all__ = [
     "__version__",
     "approx",
     "capture",
+    "case",
     "fixture",
     "isolated",
     "log_records",

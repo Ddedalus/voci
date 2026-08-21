@@ -52,7 +52,7 @@ from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
 from velox._di.fixtures import exclusive_tokens_of
-from velox._marks import Marks, XFail, marks_of
+from velox._marks import Marks, XFail
 from velox._run import isolated as _isolated
 from velox._run import safety as _safety
 
@@ -155,7 +155,7 @@ def _resolve_call_outcome(
     call_summary: str | None,
 ) -> tuple[Outcome, str | None, str | None]:
     """The call phase's own FAILED/PASSED disposition, reread through `xfail` when
-    `record.func` carries one. A `raises=` mismatch still reports FAILED -- the wrong
+    the record carries one. A `raises=` mismatch still reports FAILED -- the wrong
     exception is not the failure the mark said to expect."""
     if call_failure is not None:
         if xfail is None or (
@@ -429,7 +429,7 @@ async def _run_one(
         summary = call_summary if call_failure is not None else teardown_summary
     else:
         outcome, failure, summary = _resolve_call_outcome(
-            None if call_misused else marks_of(record.func).xfail,
+            None if call_misused else record.marks.xfail,
             call_exc=call_exc,
             call_failure=call_failure,
             call_summary=call_summary,
@@ -452,7 +452,7 @@ def solo_for_patching(record: TestRecord) -> bool:
     A `@velox.isolated` test is excluded: it patches its own subprocess, where there is nothing
     else to disturb, so it costs the suite no concurrency.
     """
-    return bool(record.patches) and not marks_of(record.func).isolated
+    return bool(record.patches) and not record.marks.isolated
 
 
 @final
@@ -731,7 +731,7 @@ def run_suite(
             f"teardown_grace must be a positive, finite number of seconds, got {teardown_grace}"
         )
     if isolated is None and not already_isolated:
-        needs_isolation = next((r for r in records if marks_of(r.func).isolated), None)
+        needs_isolation = next((r for r in records if r.marks.isolated), None)
         if needs_isolation is not None:
             raise ValueError(
                 f"{needs_isolation.id!r} is marked @velox.isolated but run_suite was not given "
@@ -792,7 +792,9 @@ def run_suite(
             # the module-scope flush below, so concurrency=1 is a genuine exact-serial mode:
             # the next test cannot start until this one's admission -- module teardown
             # included -- is released.
-            marks = marks_of(record.func)
+            # The record's, not the function's: one `@velox.parametrize` case can carry marks
+            # the next case does not (`velox.case(..., marks=...)`).
+            marks = record.marks
             tokens = exclusive_tokens_of(record.plan)
             # One value, computed once and passed to both acquire and release: the two must
             # agree, or the gate's solo bookkeeping never unwinds.

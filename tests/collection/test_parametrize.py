@@ -6,8 +6,9 @@ import enum
 
 import pytest
 
+import velox
 from velox._collection.parametrize import cases_for, known_params_of
-from velox._marks import ParamSet
+from velox._marks import NO_MARKS, ParamSet, marks_of
 
 
 def test_known_params_of_is_the_union_of_every_paramsets_argnames() -> None:
@@ -116,3 +117,34 @@ def test_dedupe_never_renames_into_an_id_another_case_already_uses() -> None:
     ids = [case.id for case in cases]
     assert ids == ["11", "12", "10"]
     assert len(set(ids)) == len(ids), f"duplicate id among {ids!r}"
+
+
+def test_cases_for_carries_each_cases_own_marks() -> None:
+    marked = ParamSet(("n",), ((1,), (2,)), case_marks=(NO_MARKS, marks_of(_skipped)))
+    cases = cases_for((marked,))
+    assert [case.marks.skip is not None for case in cases] == [False, True]
+
+
+def test_cases_for_folds_the_marks_of_every_axis_of_one_combination() -> None:
+    """A combination is one case of each stacked parametrization, so it carries the marks of
+    each of them -- neither axis's marks are dropped because the other varies."""
+    outer = ParamSet(("outer",), ((1,), (2,)), case_marks=(marks_of(_tagged), NO_MARKS))
+    inner = ParamSet(("inner",), (("a",),), case_marks=(marks_of(_skipped),))
+    cases = cases_for((outer, inner))
+    assert [(case.marks.tags, case.marks.skip is not None) for case in cases] == [
+        (("slow",), True),
+        ((), True),
+    ]
+
+
+def test_cases_for_leaves_an_unmarked_paramsets_cases_unmarked() -> None:
+    (case,) = cases_for((ParamSet(("n",), ((1,),)),))
+    assert case.marks == NO_MARKS
+
+
+@velox.skip("marked case")
+def _skipped() -> None: ...
+
+
+@velox.tag("slow")
+def _tagged() -> None: ...

@@ -11,10 +11,10 @@ would otherwise collect as nothing · explicit dependency injection with
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s
-per-test subprocess tier · `skip`/`skipif`/`xfail` ·
-`@velox.parametrize`, including stacked decorators · parametrized fixtures (`params=` on
-`@velox.fixture`) · `velox.use(...)` fixture declarations on a test module or a package
-`__init__.py` ·
+per-test subprocess tier · `skip`/`skipif`/`xfail`, conditional or not ·
+`@velox.parametrize`, including stacked decorators and `velox.case(...)` marks on one case ·
+parametrized fixtures (`params=` on `@velox.fixture`) · `velox.use(...)` fixture declarations
+on a test module or a package `__init__.py` ·
 `unittest.mock` patch detection, solo scheduling and its reported cost ·
 selection by `path.py::test_name` id, `-k` and `@velox.tag` with `-m` · `-x`/`--maxfail`
 and Ctrl-C, both cancelling what is in flight · `--serial`, `--collect-only`, `-v`/`-q` and

@@ -115,6 +115,16 @@ def test_parametrize_wraps_single_name_values() -> None:
     assert param_set.argvalues == (("a@b.c",), ("d@e.f",))
 
 
+def test_case_carries_marks_for_one_parametrize_case() -> None:
+    @velox.parametrize("n", [1, velox.case(2, marks=velox.xfail("known"))])
+    def target(n: int) -> None: ...
+
+    (param_set,) = marks_of(target).parametrizations
+    assert param_set.argvalues == ((1,), (2,))
+    assert isinstance(velox.case(2), velox.ParamCase)
+    assert [marks.xfail is not None for marks in param_set.case_marks] == [False, True]
+
+
 def test_stacked_parametrize_puts_the_outermost_first() -> None:
     @velox.parametrize("outer", [1, 2])
     @velox.parametrize("inner", ["a", "b"])

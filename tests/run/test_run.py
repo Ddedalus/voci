@@ -19,6 +19,7 @@ from _support import run_async
 import velox
 from velox._collection.collect import CollectionError
 from velox._di.fixtures import expand_cases, plan_for
+from velox._marks import marks_of
 from velox._run.run import (
     AdmissionGate,
     Outcome,
@@ -1628,6 +1629,48 @@ def test_xfail_raises_not_matching_the_exception_type_reports_failed() -> None:
     (result,) = run_suite([_record(0, _fails, "test_fails")])
 
     assert result.outcome is Outcome.FAILED
+
+
+def test_xfail_whose_condition_does_not_hold_reports_failed() -> None:
+    """The condition is decided at collection, so what reaches the runner is a record with no
+    expectation on it at all -- and a failure it reports as the failure it is."""
+
+    @velox.xfail("only on some platform", condition=False)
+    async def _fails() -> None:
+        raise AssertionError("nope")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.FAILED
+
+
+def test_xfail_whose_condition_holds_reports_xfailed() -> None:
+    @velox.xfail("known broken here", condition=lambda: True)
+    async def _fails() -> None:
+        raise AssertionError("nope")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.XFAILED
+
+
+def test_marks_are_read_from_the_record_not_the_function() -> None:
+    """Two records over one function, as a `velox.case(..., marks=...)` builds: the one carrying
+    the expectation reports XFAILED and the other, the same failure, FAILED."""
+
+    async def _fails() -> None:
+        raise AssertionError("nope")
+
+    expected = _record(0, _fails, "test_fails[0]", marks=marks_of(_expects_failure))
+    plain = _record(1, _fails, "test_fails[1]")
+
+    results = run_suite([expected, plain])
+
+    assert [result.outcome for result in results] == [Outcome.XFAILED, Outcome.FAILED]
+
+
+@velox.xfail("this case only")
+def _expects_failure() -> None: ...
 
 
 def test_xfail_does_not_apply_to_a_setup_error() -> None:

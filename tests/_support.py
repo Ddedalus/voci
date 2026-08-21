@@ -12,6 +12,7 @@ from typing import Any
 
 from velox._collection.collect import TestRecord as Record
 from velox._di.fixtures import ResolutionPlan
+from velox._marks import Marks, decided, marks_of
 
 #: A test with no `Depends(...)` at all still needs a plan (`_collect.py` gives every
 #: `TestRecord` one, uniformly) — the trivial one, shared by every factory below.
@@ -26,7 +27,10 @@ def make_record(
     path: Path = Path("mod.py"),
     params: Mapping[str, object] | None = None,
     patches: tuple[str, ...] = (),
+    marks: Marks | None = None,
 ) -> Record:
+    """`marks` default to `func`'s own with their conditions decided, exactly as a collected
+    record's are for a test with no per-case marks."""
     return Record(
         id=f"{path}::{qualname}",
         index=index,
@@ -36,6 +40,7 @@ def make_record(
         func=func,
         params=params,
         plan=plan,
+        marks=decided(marks_of(func)) if marks is None else marks,
         patches=patches,
     )
 

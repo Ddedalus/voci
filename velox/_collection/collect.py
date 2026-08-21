@@ -1,25 +1,28 @@
 """Collection: import test modules and build the flat list of test records.
 
 `TestRecord` carries what the runner needs to execute a test: `id`, `path`, `lineno`, `qualname`,
-`func`, its `params` (if `@velox.parametrize`d), and its resolved `plan`. A test marked
-`@velox.skip`/`@velox.skipif` is read off the function object and excluded from `records` into
-`skipped` instead of running for real; a `tag_expr` (see `selection.py`) whose expression a test's
-`@velox.tag(...)` names don't satisfy excludes it into `deselected` instead -- checked after the
-skip check, so a skip-marked test is always `skipped`, never reclassified as deselected depending
-on `-m`. `keyword_expr` (`-k`) and `id_selection` (`path.py::test_name` arguments, `targets.py`)
-deselect the same way, but against a whole test id, so both see each `@velox.parametrize` case's
-own `[case]` suffix. A `Depends(...)`-defaulted parameter is resolved via `_fixtures.plan_for`,
-alongside the fixtures the module declared for all of its tests with `velox.use(...)`
-(`requires.py`), and a malformed DI graph (bad scope nesting, a missing injection) becomes a
-`CollectionError`, the same way a bad import does. The declarations reaching one test are those
-of its own module together with those of every package above it, outermost first
-(`requires.package_inits`).
+`func`, its `params` (if `@velox.parametrize`d), its resolved `plan`, and its `marks`, whose
+conditions are decided here so nothing downstream evaluates a suite's own expression again. A test
+marked `@velox.skip`/`@velox.skipif` is read off the function object and excluded from `records`
+into `skipped` instead of running for real; a `tag_expr` (see `selection.py`) whose expression a
+test's `@velox.tag(...)` names don't satisfy excludes it into `deselected` instead -- checked
+after the skip check, so a skip-marked test is always `skipped`, never reclassified as deselected
+depending on `-m`. `keyword_expr` (`-k`) and `id_selection` (`path.py::test_name` arguments,
+`targets.py`) deselect the same way, but against a whole test id, so both see each
+`@velox.parametrize` case's own `[case]` suffix. A `Depends(...)`-defaulted parameter is resolved
+via `_fixtures.plan_for`, alongside the fixtures the module declared for all of its tests with
+`velox.use(...)` (`requires.py`), and a malformed DI graph (bad scope nesting, a missing
+injection) becomes a `CollectionError`, the same way a bad import does. The declarations reaching
+one test are those of its own module together with those of every package above it, outermost
+first (`requires.package_inits`).
 
 A `@velox.parametrize`d test expands into one record per case
 (`parametrize.cases_for`), sharing the one `ResolutionPlan` built for the function — parametrize
-values are call kwargs, not part of the DI graph. A test transitively depending on a fixture built
-with `params=` expands the same way, on the DI graph instead (`_fixtures.expand_cases`); the two
-axes cross freely, so both together multiply.
+values are call kwargs, not part of the DI graph. A case written as `velox.case(value, marks=...)`
+carries marks of its own, folded into the function's on that one record (`_case_disposition`), so
+one case can be skipped, tagged or expected to fail while its siblings run. A test transitively
+depending on a fixture built with `params=` expands the same way, on the DI graph instead
+(`_fixtures.expand_cases`); the two axes cross freely, so both together multiply.
 
 A decorated test is read through its decorators: its injection plan and its definition line come
 from the function underneath (`_mocking.real_function`), while the decorated object is what runs.
@@ -62,12 +65,12 @@ from pathlib import Path
 from typing import Any
 
 from velox._assertions import rewrite as _rewrite
-from velox._collection.parametrize import cases_for, known_params_of
+from velox._collection.parametrize import Case, cases_for, known_params_of
 from velox._collection.requires import REQUIRES_ATTR, combined, package_inits, requires_of
 from velox._collection.selection import KeywordExpression, TagExpression
 from velox._collection.targets import IdSelection
 from velox._di.fixtures import Fixture, ResolutionPlan, expand_cases, plan_for
-from velox._marks import MARKS_ATTR, Marks, marks_of
+from velox._marks import MARKS_ATTR, NO_MARKS, Marks, decided, holds, marks_of, merged
 from velox._mocking import patching_of, real_function
 
 __all__ = [
@@ -110,6 +113,11 @@ class TestRecord:
     same function, since parametrize values are call kwargs, not part of the DI graph — but
     distinct per fixture-case combination for a function depending on a `params=` fixture, since
     that's what specializes each fixture's construction and cache key to its chosen case."""
+    marks: Marks
+    """This record's marks: the function's own, with the marks of its `velox.case(...)` cases
+    folded in, and every condition already decided -- a `@velox.xfail(condition=...)` that does
+    not hold is not here at all. The runner reads its marks from this rather than from `func`,
+    since two cases of one function need not carry the same ones."""
     patches: tuple[str, ...] = ()
     """What this test patches with `unittest.mock`, one display name per patcher
     (`_mocking.patching_of`). Non-empty means the test installs a process-global override and
@@ -225,10 +233,36 @@ def _skip_reason(marks: Marks) -> str | None:
     if marks.skip is not None:
         return marks.skip.reason
     for skipif in marks.skipifs:
-        condition = skipif.condition
-        if condition() if callable(condition) else condition:
+        if holds(skipif.condition):
             return skipif.reason
     return None
+
+
+def _case_disposition(base: Marks, case: Case | None) -> tuple[Marks, str | None]:
+    """One case's effective marks -- `base`, with `case`'s own folded in and their conditions
+    decided -- and the reason that case does not run, or `None`.
+
+    A case carrying no marks of its own is `base` and nothing else, and `collect` has already
+    read the reason for that: asking again would evaluate every `skipif` condition a second
+    time.
+    """
+    if case is None or case.marks == NO_MARKS:
+        return base, None
+    case_marks = decided(merged(base, case.marks))
+    return case_marks, _skip_reason(case_marks)
+
+
+def _cases_carry_tags(marks: Marks) -> bool:
+    """Whether any `velox.case(...)` in this test's parametrizations carries a tag.
+
+    Where one does, `-m` cannot be answered for the whole function -- one case may be tagged
+    `slow` and another not -- so the tag check waits for the expansion (`collect`).
+    """
+    return any(
+        case_marks.tags
+        for param_set in marks.parametrizations
+        for case_marks in param_set.case_marks
+    )
 
 
 def collect(
@@ -259,7 +293,8 @@ def collect(
        as nothing at all is a `CollectionError` instead, one per offending class or name.
     4. Sort by definition line (`_definition_line`, read through any decorators) — source order,
        whether a test is a module-level function or a method, not `vars()` iteration order.
-    5. Per test: a `skip`/truthy-`skipif` mark excludes it from `records` into `skipped`
+    5. Per test: a `skip`/truthy-`skipif` mark on the function excludes it from `records` into
+       `skipped`
        instead, unless `keyword_expr` or `id_selection` leaves it out of the run altogether, in
        which case it goes to `deselected` — both are matched against its bare id, its cases
        never having been worked out. Otherwise `tag_expr`, if given, excludes a test whose
@@ -275,7 +310,10 @@ def collect(
        class path and function name, and each record carrying the `ResolutionPlan` specialized
        for its own fixture-case combination. `keyword_expr` and `id_selection` are applied last,
        to each of those ids, so a `-k` term or a `path.py::test_name[case]` argument matching one
-       case of a parametrized test selects that case alone; the rest go to `deselected`.
+       case of a parametrized test selects that case alone; the rest go to `deselected`. A
+       `velox.case(..., marks=...)` case is skipped or deselected there too, on its own merged
+       marks -- and where any case carries a tag of its own, `tag_expr` is answered there rather
+       than above, the function's tags being no answer for cases that differ.
 
     The `velox.use(...)` declarations reaching a file are validated once, before its tests: a
     malformed declared graph is one `CollectionError` for the file, which then contributes no
@@ -375,7 +413,10 @@ def collect(
                 skipped.append(Skipped(id=test_id, reason=reason, path=display_path))
                 continue
 
-            if tag_expr is not None and not tag_expr.matches(marks.tags):
+            # Deferred to the expansion below when a case carries tags of its own: the
+            # function's tags are then not the whole answer for any of its cases.
+            per_case_tags = _cases_carry_tags(marks)
+            if tag_expr is not None and not per_case_tags and not tag_expr.matches(marks.tags):
                 deselected.append(test_id)
                 unexpanded.append(test_id)
                 continue
@@ -402,13 +443,24 @@ def collect(
                     positional_supplied=candidate.supplied_positionals + patching.positional_args,
                 )
                 cases = cases_for(marks.parametrizations) if marks.parametrizations else None
+                # Folded here, inside this try, rather than in the loop below: a case's
+                # `skipif`/`xfail` condition is a callable this calls, and one that raises is
+                # this test's `CollectionError` exactly as a malformed graph is. One answer per
+                # case rather than per record -- the fixture-case axis crossing it changes
+                # neither the marks nor the reason.
+                base_marks = decided(marks)
+                per_case = [
+                    (case, *_case_disposition(base_marks, case))
+                    for case in (cases if cases is not None else (None,))
+                ]
                 expansions = expand_cases(plan)
             except Exception:
                 # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
                 # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata;
                 # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
-                # both claim. All are attributed to this test and collection continues, same as
-                # the `_skip_reason` catch above.
+                # both claim, and a case's own condition raises whatever it raises. All are
+                # attributed to this test and collection continues, same as the `_skip_reason`
+                # catch above.
                 errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
                 continue
 
@@ -423,11 +475,13 @@ def collect(
                     ),
                     case.params if case else None,
                     expansion.plan,
+                    case_marks,
+                    case_reason,
                 )
                 for expansion in expansions
-                for case in (cases if cases is not None else (None,))
+                for case, case_marks, case_reason in per_case
             ]
-            for case_id, params, record_plan in entries:
+            for case_id, params, record_plan, record_marks, case_reason in entries:
                 name = f"{candidate.name}[{case_id}]" if case_id else candidate.name
                 record_id = f"{display_path}::{name}"
                 # Both filters run here rather than per function, above: a `-k` term and a
@@ -439,6 +493,18 @@ def collect(
                 if id_selection is not None and not id_selection.selects(resolved_path, name):
                     deselected.append(record_id)
                     continue
+                # A case's own `skip`/`skipif`: the function's was answered before the expansion
+                # and excluded the whole test there, so anything left here is one case's alone.
+                if case_reason is not None:
+                    skipped.append(Skipped(id=record_id, reason=case_reason, path=display_path))
+                    continue
+                if (
+                    tag_expr is not None
+                    and per_case_tags
+                    and not tag_expr.matches(record_marks.tags)
+                ):
+                    deselected.append(record_id)
+                    continue
                 records.append(
                     TestRecord(
                         id=record_id,
@@ -448,6 +514,7 @@ def collect(
                         qualname=func.__qualname__,
                         func=func,
                         params=params,
+                        marks=record_marks,
                         plan=record_plan,
                         patches=patching.targets,
                     )

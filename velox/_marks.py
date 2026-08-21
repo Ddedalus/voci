@@ -15,13 +15,20 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
+    "NO_MARKS",
+    "MarkDecorator",
     "Marks",
+    "ParamCase",
     "ParamSet",
     "Skip",
     "SkipIf",
     "XFail",
+    "case",
+    "decided",
+    "holds",
     "isolated",
     "marks_of",
+    "merged",
     "parametrize",
     "skip",
     "skipif",
@@ -34,6 +41,10 @@ __all__ = [
 MARKS_ATTR = "__velox_marks__"
 
 type ExcTypes = type[BaseException] | tuple[type[BaseException], ...]
+
+type MarkDecorator = Callable[[Any], Any]
+"""What `case(marks=...)` takes: `velox.skip("...")`, `velox.solo`, or any other decorator that
+folds a mark into the function it is handed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,9 +66,17 @@ class SkipIf:
 
 @dataclass(frozen=True, slots=True)
 class XFail:
+    """An expected failure, `condition` deciding whether it is expected at all.
+
+    `condition` is read the way `SkipIf`'s is -- a `bool`, or a zero-argument callable for one
+    that must not be computed during import -- and decided once, at collection. A false one
+    leaves the test's own pass or fail standing.
+    """
+
     reason: str
     strict: bool = False
     raises: ExcTypes | None = None
+    condition: bool | Callable[[], bool] = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +89,9 @@ class ParamSet:
     argnames: tuple[str, ...]
     argvalues: tuple[tuple[object, ...], ...]
     ids: tuple[str, ...] | Callable[[object], str | None] | None = None
+    case_marks: tuple[Marks, ...] = ()
+    """One entry per case in `argvalues`, read off the `case(...)` wrappers among them -- or
+    empty, the common case, when no case carries marks of its own."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +109,19 @@ class Marks:
     """Outermost decorator first, which is also slowest-varying: feed straight to `product()`."""
 
 
+NO_MARKS = Marks()
+"""The empty record, shared: what a function with no marks and a case with no marks of its own
+both have, and the default for anything that carries a `Marks` field."""
+
+
+@dataclass(frozen=True, slots=True)
+class ParamCase:
+    """One `@parametrize` case with marks of its own, as `case(...)` builds it."""
+
+    values: tuple[object, ...]
+    marks: Marks
+
+
 def marks_of(fn: object) -> Marks:
     """The marks attached to `fn`, or an empty record. Never raises."""
     # `fn.__dict__.get(...)`, not `getattr`: getattr walks the MRO, so a subclass would inherit
@@ -95,8 +130,47 @@ def marks_of(fn: object) -> Marks:
     # `getattr` guard around it — this must never raise.
     marks_dict = getattr(fn, "__dict__", None)
     if marks_dict is None:
-        return Marks()
-    return marks_dict.get(MARKS_ATTR) or Marks()
+        return NO_MARKS
+    return marks_dict.get(MARKS_ATTR) or NO_MARKS
+
+
+def merged(base: Marks, extra: Marks) -> Marks:
+    """`base` with `extra` folded into it -- how one case's own marks reach that case's test.
+
+    The specific one wins where only one can: `extra`'s `skip`, `xfail` and `timeout` stand in
+    for `base`'s. The accumulating marks accumulate, as they do across stacked decorators, and
+    `parametrizations` are `base`'s alone -- a case parametrizes nothing.
+    """
+    if extra == NO_MARKS:
+        return base
+    return Marks(
+        skip=extra.skip or base.skip,
+        skipifs=(*base.skipifs, *extra.skipifs),
+        xfail=extra.xfail or base.xfail,
+        tags=(*base.tags, *extra.tags),
+        timeout=base.timeout if extra.timeout is None else extra.timeout,
+        solo=base.solo or extra.solo,
+        isolated=base.isolated or extra.isolated,
+        parametrizations=base.parametrizations,
+    )
+
+
+def holds(condition: bool | Callable[[], bool]) -> bool:
+    """Whether a `SkipIf`/`XFail` condition is true, calling it if that is what it is."""
+    return bool(condition() if callable(condition) else condition)
+
+
+def decided(marks: Marks) -> Marks:
+    """`marks` with its `xfail` condition decided, so nothing downstream evaluates it again.
+
+    An expectation that does not hold is dropped outright rather than carried as a false one:
+    whoever reads the record then has the one question they ask -- is there an `xfail` --
+    already answered. `skipif` needs no such pass: its answer is a reason, which
+    `_collection.collect` reads for itself.
+    """
+    if marks.xfail is None or holds(marks.xfail.condition):
+        return marks
+    return dataclasses.replace(marks, xfail=None)
 
 
 # Marks live on the function object (`__velox_marks__` is part of the tested surface — see
@@ -143,15 +217,21 @@ def skipif[F: Callable[..., Any]](
 
 
 def xfail[F: Callable[..., Any]](
-    reason: str, *, strict: bool = False, raises: ExcTypes | None = None
+    reason: str,
+    *,
+    condition: bool | Callable[[], bool] = True,
+    strict: bool = False,
+    raises: ExcTypes | None = None,
 ) -> Callable[[F], F]:
     """Record an expected-failure mark, with `reason`. A call phase that raises reports
     `XFAILED` instead of `FAILED`; one that passes reports `XPASSED`, or fails the test outright
     if `strict` is set. `raises`, if given, narrows which exception type counts as the expected
-    failure -- any other exception still reports `FAILED`."""
+    failure -- any other exception still reports `FAILED`. `condition` expects the failure only
+    where it holds, read the way `skipif`'s is: a `bool`, or a zero-argument callable for one
+    that must not be computed during import."""
 
     def decorate(fn: F) -> F:
-        return _amend(fn, xfail=XFail(reason, strict=strict, raises=raises))
+        return _amend(fn, xfail=XFail(reason, strict=strict, raises=raises, condition=condition))
 
     return decorate
 
@@ -206,7 +286,9 @@ def parametrize[F: Callable[..., Any]](
     """Record a `parametrize` mark. `argnames` is `"a,b"` or `["a", "b"]`; with one name, each
     entry of `argvalues` is that value, with several, each entry is a tuple aligned to the
     names. Stacked decorators combine in a stable, defined order: outermost varies slowest.
-    Expanded into one test per case at collection (`_collection.parametrize.cases_for`).
+    An entry written as `case(value, marks=...)` carries marks for that one case, folded into
+    the test's own for the record that case expands into. Expanded into one test per case at
+    collection (`_collection.parametrize.cases_for`).
     """
     # Validated here, at decoration time: failing in the collector instead points the traceback
     # elsewhere, and a stale `ids` list would silently mislabel every later case instead of
@@ -216,24 +298,28 @@ def parametrize[F: Callable[..., Any]](
         raise ValueError(f"parametrize({argnames!r}): no argument names given")
     if len(set(names)) != len(names):
         raise ValueError(f"parametrize({argnames!r}): duplicate argument name")
-    cases = tuple(_case(v, len(names)) for v in argvalues)
+    cases = tuple(_case_values(v, len(names)) for v in argvalues)
+    per_case = tuple(v.marks if isinstance(v, ParamCase) else NO_MARKS for v in argvalues)
     if not cases:
         # Caught here rather than left to expand into zero records: a `@parametrize` that
         # contributes no cases would otherwise make the test vanish from the suite with no
         # `CollectionError`, no `Skipped` entry, and no count discrepancy visible at a glance.
         raise ValueError(f"parametrize({argnames!r}): no argvalues given")
-    for case in cases:
-        if len(case) != len(names):
+    for case_values in cases:
+        if len(case_values) != len(names):
             raise ValueError(
                 f"parametrize({argnames!r}): expected {len(names)} value(s) per case, "
-                f"got {len(case)}: {case!r}"
+                f"got {len(case_values)}: {case_values!r}"
             )
     fixed_ids = ids if ids is None or callable(ids) else tuple(ids)
     if isinstance(fixed_ids, tuple) and len(fixed_ids) != len(cases):
         raise ValueError(
             f"parametrize({argnames!r}): {len(fixed_ids)} id(s) for {len(cases)} case(s)"
         )
-    param_set = ParamSet(names, cases, fixed_ids)
+    # Left empty unless some case actually carries marks: `case_marks` is then an alignment
+    # every reader of a `ParamSet` would have to keep in step for nothing.
+    marked = per_case if any(case_marks != NO_MARKS for case_marks in per_case) else ()
+    param_set = ParamSet(names, cases, fixed_ids, marked)
 
     def decorate(fn: F) -> F:
         # Prepend: decorators apply bottom-up, so the last one applied is the outermost, and
@@ -243,13 +329,53 @@ def parametrize[F: Callable[..., Any]](
     return decorate
 
 
+def case(*values: object, marks: MarkDecorator | Sequence[MarkDecorator] = ()) -> ParamCase:
+    """One `@parametrize` case, carrying marks that reach that case alone.
+
+    `marks` are the very decorators a test carries -- `case(2, marks=velox.skip("flaky"))`,
+    `case(3, marks=[velox.xfail("known"), velox.tag("slow")])` -- and mean for this case what
+    they would mean written above the `def`. Every mark but `parametrize` works this way; the
+    test's own marks and the case's are folded together, the case's winning where only one of
+    `skip`, `xfail` or `timeout` can stand.
+
+    `values` are that case's values, one per argname, exactly as they would be written without
+    the wrapper: `case(1, 2)` for two argnames, `case((1, 2))` for one that takes a tuple.
+    """
+    decorators = [marks] if callable(marks) else list(marks)
+
+    def marked() -> None:
+        """Stand-in for the test this case's marks are being read for."""
+
+    # Marks are read by applying the decorators to a stand-in function, rather than by naming
+    # the record types here: one spelling for a case's marks and a test's, and the decorators'
+    # own validation -- a duplicate scalar, a non-positive timeout -- is what rejects a
+    # malformed case, at decoration time, where the traceback still points at the case list.
+    marked.__name__ = "velox.case(...)"
+    for decorator in decorators:
+        if decorator(marked) is not marked:
+            raise TypeError(f"case(marks=...): {decorator!r} is not a velox mark decorator")
+    collected = marks_of(marked)
+    if decorators and collected == NO_MARKS:
+        # A `pytest.mark.*` decorator, say: it takes a function and hands the same one back,
+        # marking it for a runner that is not this one, and would otherwise be silently dropped.
+        raise TypeError(f"case(marks=...): {marks!r} attached no velox marks")
+    if collected.parametrizations:
+        raise TypeError("case(marks=...): @velox.parametrize applies to a whole test, not a case")
+    return ParamCase(values, collected)
+
+
 def _split(argnames: str | Sequence[str]) -> tuple[str, ...]:
     if isinstance(argnames, str):
         return tuple(n.strip() for n in argnames.split(",") if n.strip())
     return tuple(argnames)
 
 
-def _case(value: object, arity: int) -> tuple[object, ...]:
+def _case_values(value: object, arity: int) -> tuple[object, ...]:
+    if isinstance(value, ParamCase):
+        # Already one value per argname, however many that is: `case(1, 2)` wrote them out, and
+        # `case((1, 2))` for a single argname wrote one value that happens to be a tuple. The
+        # arity check in `parametrize` is what rejects a case that named the wrong number.
+        return value.values
     if arity == 1:
         return (value,)
     return tuple(value) if isinstance(value, tuple | list) else (value,)
