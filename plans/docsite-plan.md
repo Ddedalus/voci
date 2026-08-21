@@ -5,9 +5,8 @@ themed like [FastAPI's docs](../oss/fastapi/docs/en) (cloned at `oss/fastapi/` f
 
 ## What "same look and feel" means
 
-FastAPI's docs are [mkdocs](https://www.mkdocs.org/) +
-[mkdocs-material](https://squidfunk.github.io/mkdocs-material/), with content split into four
-kinds of page:
+FastAPI's docs run on [mkdocs](https://www.mkdocs.org/) + mkdocs-material, with content split
+into four kinds of page:
 
 - **Tutorial** (`tutorial/`) — ordered, narrative, one concept per page, each built around a
   runnable code sample.
@@ -16,17 +15,30 @@ kinds of page:
   pages, one per public symbol group, rendered straight from docstrings.
 - **About** (`about/`, plus `index.md`) — what it is, why, and orientation.
 
-Adopting this for velox means: mkdocs-material as the site generator and theme, the same four-way
-split, and mkdocstrings for the reference section so it stays truthful to the source instead of
-hand-duplicated.
+The generator is [Zensical](https://zensical.org/), not mkdocs. mkdocs has had no maintainer
+since August 2024, which is why the Material for MkDocs team built Zensical as its successor
+rather than fork it; FastAPI's own build (`oss/fastapi/scripts/docs.py`) already runs a real
+production Zensical build alongside its mkdocs one, reading the same `mkdocs.yml`. Adopting this
+for velox means: Zensical as the site generator, its **modern** theme (Zensical's default —
+a fresh design, not a clone of Material's chrome), the same four-way split, and mkdocstrings for
+the reference section so it stays truthful to the source instead of hand-duplicated.
+
+Zensical is alpha software (`Development Status :: 3 - Alpha` on PyPI, versions still `0.0.x`),
+under active development — multiple releases a week as of this writing. mkdocstrings support is
+explicitly "preliminary" (its author joined the Zensical team to build it, but some features,
+named as backlinks, aren't there yet); the wider plugin ecosystem (macros, tags, redirects,
+social cards) is still filling in. None of the gaps found so far touch what this plan needs —
+mkdocstrings' Python handler, and the pymdown-extensions family (admonitions, superfences,
+snippets) are both supported today, and are already default-enabled. Accepted trade-off: pin the
+version and expect breaking changes on upgrade, the way any alpha dependency is handled.
 
 ## Where the site lives
 
 Internal working documents (this file included) live in `plans/`, not `docs/`.
 
 ```
+zensical.toml                     repo root — see below for why
 docs/
-  mkdocs.yml
   rationale.md                    existing, unchanged — canonical WHY doc, cited by README/CLAUDE.md
   index.md                        home page, adapted from README.md
   guide/                          = FastAPI's tutorial/
@@ -36,9 +48,16 @@ docs/
   img/  css/  js/
 ```
 
-`docs_dir: .` in `mkdocs.yml` (relative to the config file, which sits in `docs/`) points mkdocs
-straight at `docs/`and no `docs/en/`
-locale layer either.
+`zensical.toml` lives at the repo root, not inside `docs/`: `docs_dir` defaults to `docs`
+relative to the config file, and Zensical's docs_dir currently cannot be set to `.` — so putting
+the config next to `docs/` (the same place `pyproject.toml` and `justfile` already sit) gets the
+default for free, with no config file inside the published tree and no `docs/en/` locale layer
+(velox ships one language).
+
+Native format is `zensical.toml` (TOML), not `mkdocs.yml` — nothing here is migrating from an
+existing mkdocs project, and TOML already matches this repo's other config (`pyproject.toml`).
+Zensical's `mkdocs.yml` compatibility layer is a permanent feature, not a deprecation trap, so
+this isn't a one-way door if it turns out to matter.
 
 `rationale.md` needs no symlink or move: it already sits inside `docs_dir`, at the path README
 and `CLAUDE.md` already cite, and the site's nav just groups it under **About** without touching
@@ -106,15 +125,18 @@ in FastAPI. Mitigation — keep every inline snippet short enough to eyeball aga
 lifting a snippet verbatim from an `examples/` file (with a line-range comment noting the source)
 over writing a new one from scratch.
 
-Embedding mechanism: `pymdownx.snippets` (ships with `pymdown-extensions`, a mkdocs-material
-dependency already) to pull a marked block out of an `examples/` file into a fenced code block.
+Embedding mechanism: `pymdownx.snippets` — pymdown-extensions is default-enabled under Zensical,
+same as under mkdocs-material — to pull a marked block out of an `examples/` file into a fenced
+code block.
 
 ## Reference pages: mkdocstrings
 
 Same mechanism as FastAPI: `mkdocstrings[python]`, `::: velox.fixture`-style directives, reading
 docstrings that already follow the velox-docs register. `filters: ['!^_']` to keep private names
 out, `show_root_heading`, `merge_init_into_class`, `signature_crossrefs` — the same options
-FastAPI sets, since they're generic mkdocstrings behavior, not FastAPI-specific.
+FastAPI sets, since they're generic mkdocstrings behavior, not Zensical- or FastAPI-specific.
+Configured under `[project.plugins.mkdocstrings.handlers.python]` in `zensical.toml`, per
+[Zensical's mkdocstrings docs](https://zensical.org/docs/setup/extensions/mkdocstrings/).
 
 `reference/cli.md` is the one page mkdocstrings can't produce — argparse has no docstring-driven
 autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a script
@@ -124,27 +146,28 @@ guards the vendored tree, so the reference can't drift from the real flags.
 
 ## Theme
 
-`mkdocs-material`, `custom_dir` skipped for v1 (no logo/favicon assets exist yet — placeholder
-Material icons are fine until there's real brand art). Carry over the parts of FastAPI's `theme:`
-block that are generic Material features, not FastAPI branding or i18n plumbing:
-`content.code.copy`, `content.code.annotate`, `navigation.tabs`, `navigation.footer`,
-`navigation.top`, `toc.follow`, `search.highlight`/`search.suggest`, light/dark palette toggle.
-Drop: `alternate:` (translation switcher), the social-icon row (no public accounts yet), `logo`/
-`favicon` (no assets yet — flag as a follow-up once there's brand art).
+`variant = "modern"` — Zensical's default, so this needs no config beyond stating it explicitly
+against a future default change. It's a different, newer design than Material's classic chrome,
+so FastAPI's `theme:` feature list (`navigation.tabs`, `toc.follow`, and so on — all classic-variant
+options) doesn't carry over; modern's own defaults are the baseline, customized only once there's
+a concrete reason to. Search is built in (Zensical's own client-side engine), no plugin needed.
+`logo`/`favicon` skipped for v1 — no brand art exists yet; flag as a follow-up.
 
 ## Tooling
 
-- `pyproject.toml`: new `[dependency-groups] docs` — `mkdocs`, `mkdocs-material`,
-  `mkdocstrings[python]`.
-- `justfile`: `docs-serve` (`mkdocs serve -f docs/mkdocs.yml`), `docs-build` (`mkdocs build
-  -f docs/mkdocs.yml --strict`), `docs-check` (`gen_cli_reference.py --check`, then
-  `docs-build`) — same shape as the existing `vendor`/`vendor-check` pair.
-- `--strict` makes a broken internal link or an unresolved `nav` entry fail the build, standing in
-  for the doc tests FastAPI's own CI runs.
+- `pyproject.toml`: new `[dependency-groups] docs` — `zensical`, `mkdocstrings[python]` (same
+  pairing FastAPI's own `pyproject.toml` uses).
+- `justfile`: `docs-serve` (`zensical serve`), `docs-build` (`zensical build`), `docs-check`
+  (`gen_cli_reference.py --check`, then `docs-build`) — same shape as the existing
+  `vendor`/`vendor-check` pair. Both read `zensical.toml` from the repo root by default, so no
+  `-f`/`--config-file` flag is needed as long as `just` runs recipes from the root.
+- A broken internal link or an unresolved nav entry should fail the build the way `mkdocs build
+  --strict` did — confirm Zensical's equivalent (`strict` is configurable per the v0.0.53 release
+  notes) once phase 1 is underway.
 
 ## Phasing
 
-1. **Skeleton** — `mkdocs.yml`, theme config, `index.md` adapted from `README.md`, placeholder
+1. **Skeleton** — `zensical.toml`, theme config, `index.md` adapted from `README.md`, placeholder
    `index.md` per section, `docs-serve`/`docs-build` recipes, `docs` dependency group. Confirms
    the site builds and looks right before content is written.
 2. **Reference** — mkdocstrings wired up, the five symbol-group pages, `reference/cli.md` plus its
@@ -162,4 +185,4 @@ Each phase is a reviewable unit on its own branch, per the worktree workflow.
 
 - **Hosting.** Not decided here — the repo isn't public yet, so there's nowhere to point a
   `site_url`/`repo_url` at. Revisit at phase 6.
-- **Brand art.** No logo/favicon exist. Placeholder Material icons until that changes.
+- **Brand art.** No logo/favicon exist. Zensical's modern-theme defaults until that changes.
