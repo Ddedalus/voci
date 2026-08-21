@@ -27,7 +27,7 @@ language = "en"
 # rather than expanding to a lone child of the same name.
 features = ["navigation.indexes"]
 
-# Three palette entries are what puts a colour-scheme toggle in the header: the first follows the
+# Three palette entries are what puts a color-scheme toggle in the header: the first follows the
 # reader's system preference, the other two pin light and dark.
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"

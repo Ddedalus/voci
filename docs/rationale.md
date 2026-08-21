@@ -146,8 +146,8 @@ names the cause. It never quietly does the unsafe thing.
 
 The companion rule: a silent pass is a bug. A selector that matched nothing, a test collected as
 zero tests, an un-awaited coroutine — each of those should be a distinct failure or exit code, not
-a green run. Several of these are still unenforced (see `ROADMAP.md`); each one
-that stays unenforced is a real defect, not an accepted limitation.
+a green run. Several of these are still unenforced (see `ROADMAP.md`); each one that stays
+unenforced is a real defect, not an accepted limitation.
 
 # Per-module notes
 
