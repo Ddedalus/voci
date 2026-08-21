@@ -144,14 +144,17 @@ _BLOCKING = frozenset(
 
 _ENVIRON_WRITES = frozenset({"update", "setdefault", "pop", "clear"})
 
-_APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
+# What `pytest.approx`'s first argument is, where `velox.approx` has no position to compare it
+# by — shared with `velox_migrate.convert.rules.bodies._Approx`, which refuses the same shapes.
+APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
     cst.Set: "a set",
     cst.SetComp: "a set comprehension",
     cst.GeneratorExp: "a generator expression",
 }
 
 # The literal container types one level of nesting refuses, inside a list, tuple, or dict literal
-# passed to `pytest.approx` — the same shape `velox_migrate.convert.rules.bodies._Approx` refuses.
+# passed to `pytest.approx` — shared with `velox_migrate.convert.rules.bodies._Approx`, which
+# refuses the same shape.
 _APPROX_NESTED_LITERALS = (cst.List, cst.Tuple, cst.Dict, cst.Set)
 
 _FAKERS = frozenset({"Faker", "faker"})
@@ -476,7 +479,7 @@ class _Scanner(cst.CSTVisitor):
         list, tuple, dict, or set literal nested one level inside it, the same shape
         `velox_migrate.convert.rules.bodies._Approx` refuses to convert.
         """
-        kind = _APPROX_KINDS.get(type(argument))
+        kind = APPROX_KINDS.get(type(argument))
         if kind is not None:
             return "VX221", f"`pytest.approx` is given {kind}."
         if isinstance(argument, cst.Call):
@@ -485,7 +488,7 @@ class _Scanner(cst.CSTVisitor):
                 name.startswith("numpy.") for name in self._names(argument)
             ):
                 return "VX221", "`pytest.approx` is given a `numpy` array."
-        nested = _approx_nested(argument)
+        nested = approx_nested(argument)
         if nested is not None:
             return (
                 "VX213",
@@ -913,11 +916,12 @@ def _dotted(node: cst.CSTNode) -> str | None:
     return ".".join(reversed(parts))
 
 
-def _approx_nested(argument: cst.BaseExpression) -> cst.BaseExpression | None:
+def approx_nested(argument: cst.BaseExpression) -> cst.BaseExpression | None:
     """The first literal nested one level inside `argument`, if `argument` is a list, tuple, or
     dict literal and one of its own elements is itself a list, tuple, dict, or set literal.
 
-    A comprehension's runtime shape cannot be inspected this way, so it is left unchecked.
+    A comprehension's runtime shape cannot be inspected this way, so it is left unchecked. Shared
+    with `velox_migrate.convert.rules.bodies._Approx`, which refuses converting the same shape.
     """
     if isinstance(argument, cst.List | cst.Tuple):
         values: Iterable[cst.BaseExpression] = (

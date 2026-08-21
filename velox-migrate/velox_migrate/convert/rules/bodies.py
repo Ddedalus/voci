@@ -17,11 +17,13 @@ from collections.abc import Mapping, Sequence
 
 import libcst as cst
 
+from velox_migrate.audit.sources import APPROX_KINDS, approx_nested
 from velox_migrate.convert.rules import (
     Context,
     RuleTransformer,
     TransformerRule,
     argument,
+    double_starred,
     keyword,
     keywords,
     leading,
@@ -52,19 +54,10 @@ _LOG_ATTRS: Mapping[str, str | None] = {
 # What `pytest.approx`'s positional arguments are, after the value itself.
 _APPROX_POSITIONAL = ("rel", "abs", "nan_ok")
 
-_APPROX_KINDS: Mapping[type[cst.CSTNode], str] = {
-    cst.Set: "a set",
-    cst.SetComp: "a set comprehension",
-    cst.GeneratorExp: "a generator expression",
-}
-
 # The shapes of `pytest.approx`'s first argument that convert under VX213 rather than the default
-# VX212 (a scalar). A literal's own elements are what bug 2's nesting check walks; a comprehension's
+# VX212 (a scalar). A literal's own elements are what `approx_nested` walks; a comprehension's
 # runtime shape cannot be inspected that way, so it converts unchecked.
 _APPROX_CONTAINER_SHAPES = (cst.List, cst.ListComp, cst.Tuple, cst.Dict, cst.DictComp)
-
-# The literal container types one level of nesting refuses, inside a list, tuple, or dict literal.
-_NESTED_LITERALS = (cst.List, cst.Tuple, cst.Dict, cst.Set)
 
 # `velox.raises` refuses to catch a cancellation, which is how a timeout stops a runaway test, so
 # it refuses every type a cancellation is an instance of.
@@ -269,7 +262,8 @@ class _Raises(_BodyPass):
     stashed for later, which still reports VX210: there is no `with` and no `func` for a rewrite
     to key off of. A callable form passing `match=` is left alone too: pytest forwards it to
     `func` there, but `velox.raises` always intercepts it, so the two forms disagree on what the
-    call means.
+    call means — and so is one unpacking a `**mapping`, since it might carry a `match` key the
+    rewrite has no way to see.
     """
 
     CODE = "VX209"
@@ -318,10 +312,11 @@ class _Raises(_BodyPass):
                 code="VX210",
             )
             return updated_node
-        if "match" in keywords(original_node):
+        if "match" in keywords(original_node) or double_starred(original_node):
             self.record(
                 f"`{render(original_node)}` is left as it is: pytest forwards `match` to `func` "
-                "in this form, but `velox.raises` always intercepts it to match the exception.",
+                "in this form, but `velox.raises` always intercepts it to match the exception, "
+                "and a `**` unpack might carry one where the rewrite can't see it.",
                 code="VX210",
             )
             return updated_node
@@ -383,7 +378,7 @@ class _Approx(_BodyPass):
                 code="VX221",
             )
             return updated_node
-        nested = self._nested(expected)
+        nested = approx_nested(expected)
         if nested is not None:
             self.record(
                 f"`{render(original_node)}` is left as it is: `{render(nested)}` is nested "
@@ -418,7 +413,7 @@ class _Approx(_BodyPass):
 
     def _kind(self, expected: cst.BaseExpression) -> str | None:
         """What `expected` is, where it is something `velox.approx` does not compare."""
-        kind = _APPROX_KINDS.get(type(expected))
+        kind = APPROX_KINDS.get(type(expected))
         if kind is not None:
             return kind
         if isinstance(expected, cst.Call) and any(
@@ -426,27 +421,6 @@ class _Approx(_BodyPass):
         ):
             return "a `numpy` array"
         return None
-
-    def _nested(self, expected: cst.BaseExpression) -> cst.BaseExpression | None:
-        """The first literal nested one level inside `expected`, if `expected` is a list, tuple,
-        or dict literal and one of its own elements is itself a list, tuple, dict, or set
-        literal.
-
-        A comprehension's runtime shape cannot be inspected this way, so it is left unchecked.
-        """
-        if isinstance(expected, cst.List | cst.Tuple):
-            values: Sequence[cst.BaseExpression] = [
-                element.value for element in expected.elements if isinstance(element, cst.Element)
-            ]
-        elif isinstance(expected, cst.Dict):
-            values = [
-                element.value
-                for element in expected.elements
-                if isinstance(element, cst.DictElement)
-            ]
-        else:
-            return None
-        return next((value for value in values if isinstance(value, _NESTED_LITERALS)), None)
 
 
 def _out_and_err() -> cst.BaseExpression:
