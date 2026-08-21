@@ -12,12 +12,20 @@ This document focuses on category 1: features velox could add to unlock matrix r
 
 ## Candidates for velox changes
 
-VX210, VX213 and VX206 are done — promoted to `MECHANICAL` in [the matrix](../velox-migrate/velox_migrate/matrix.py) and converted by `velox_migrate.convert.rules.bodies`.
+VX210, VX213, VX206, VX105 and VX102 are done — promoted to `MECHANICAL` in
+[the matrix](../velox-migrate/velox_migrate/matrix.py) and converted by
+`velox_migrate.convert.rules.marks` (VX105, VX102) and `.bodies` (VX210, VX213, VX206).
+
+VX105's `condition=` lands as `velox.xfail(reason, condition=...)` on `velox._marks.XFail`,
+decided once at collection (`_collection.collect._case_disposition`) rather than re-evaluated by
+the runner. A string condition (pytest's own evaluate-later spelling) is its own row, VX116,
+mirroring VX103's string `skipif`. VX102's `velox.case(*values, marks=...)` reads the same
+decorators a test would carry by applying them to a stand-in function, so one case's marks and a
+test's own share one spelling and one validation path; `ParamSet.case_marks` and `parametrize.Case`
+carry them through expansion.
 
 | Code | Current | Feature | Promoted to |
 |---|---|---|---|
-| VX105 | REFUSED | Add a `condition=` parameter to `@velox.xfail`, mirroring `@velox.skipif`'s own conditional form. | MECHANICAL |
-| VX102 | REFUSED | Let parametrize cases carry per-case marks — e.g., a `velox.case(value, marks=...)` wrapper `@velox.parametrize` recognizes. Pytest allows `pytest.param(..., marks=...)` per case. | MECHANICAL |
 | VX208 | REFUSED | Ship a `py.path.local`-compatible wrapper for `tmp_path`, so `tmpdir`/`tmpdir_factory` bodies (which use `.join`, `.strpath`, division) can migrate. pytest itself carries this legacy shim. | MECHANICAL |
 | VX014 | REFUSED | Give a fixture body an imperative teardown-registration call that runs conditionally and can register multiple times. Today only unconditional `yield` teardowns work. | MECHANICAL or MARKER |
 | VX214 | REFUSED | Add imperative skip/fail functions (`velox.fail(msg)`, a runtime exception) alongside the existing decorators, so `pytest.skip()` / `pytest.fail()` statements in bodies have a real target. | MECHANICAL |
