@@ -20,11 +20,12 @@ a `VXnnn` code that report sections, `VELOX-TODO` markers and rewrite rules all 
 classification decisions belong in that table, not in the code that reads it.
 
 Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for root recipes (`sync`,
-`run`, `test`, `lint`, `fmt`, `typecheck`, `build`, `check`). Recipes not central to the daily dev
-loop live in `recipes/<module>.just` and are invoked `just <module> <recipe>` — `migrate` (velox-migrate
-tests and corpus dumps), `docs`, `vendor`, `bench`, `refactor`; `just --list <module>` lists a
-module's recipes. For splitting objects out of a file into their own module and repointing
-imports, see the `refactor-tools` skill.
+`run`, `fmt`, `build`, `check`). Recipes not central to the daily dev loop live in
+`recipes/<module>.just` and are invoked `just <module> <recipe>` — `checks` (lint, fmt-check,
+typecheck, test: `check`'s dependents, also runnable standalone), `migrate` (velox-migrate tests
+and corpus dumps), `docs`, `vendor`, `bench`, `refactor`; `just --list <module>` lists a module's
+recipes. For splitting objects out of a file into their own module and repointing imports, see
+the `refactor-tools` skill.
 
 Reference-only, not part of the package: `oss/`, `research/`, `spec/`. `oss/` holds other
 projects' checkouts as git submodules — `oss/pytest` and `oss/fastapi` among them — and is
@@ -68,8 +69,8 @@ When asked to do work on feature or larger refactor:
    `.claude/worktrees/` placement: `git worktree add ../velox-wt-<name> -b <branch>`, then
    `EnterWorktree(path: "/home/hubert/velox-wt-<name>")` to attach the session to it. Reason:
    `.git/info/exclude` hides `**/.claude/worktrees/` from git status, and pyrefly honors that same
-   file when resolving `project-includes` globs, so `just typecheck`'s first command finds zero
-   files and fails for any worktree placed there. A sibling directory doesn't match that pattern.
+   file when resolving `project-includes` globs, so `just checks typecheck`'s first command finds
+   zero files and fails for any worktree placed there. A sibling directory doesn't match that pattern.
    Run `just sync` once inside the new worktree before `just check` — it has its own `.venv`.
 2. Do the work. Commit.
 3. Spawn /code-review <level> <branch> (default: medium, hard for very complex changes)
