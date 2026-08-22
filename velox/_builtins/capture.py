@@ -839,16 +839,16 @@ async def tmp_path_factory_provider(
 async def tmpdir_provider(
     kwargs: Mapping[str, Any], ctx: BuiltinContext
 ) -> tuple[Any, _Closer | None]:
-    """`velox.tmpdir`'s `BuiltinProvider`: the same directory `velox.tmp_path` allocates,
-    wrapped in `LegacyPath`."""
-    path, closer = await tmp_path_provider(kwargs, ctx)
-    return _builtins.LegacyPath(path), closer
+    """`velox.tmpdir`'s `BuiltinProvider`: its own `Depends(tmp_path)` directory, wrapped in
+    `LegacyPath`."""
+    del ctx
+    return _builtins.LegacyPath(kwargs["tmp_path"]), None
 
 
 async def tmpdir_factory_provider(
     kwargs: Mapping[str, Any], ctx: BuiltinContext
 ) -> tuple[Any, _Closer | None]:
-    """`velox.tmpdir_factory`'s `BuiltinProvider`: `velox.tmp_path_factory`'s factory, wrapped
-    in `LegacyTmpPathFactory`."""
-    factory, closer = await tmp_path_factory_provider(kwargs, ctx)
-    return _builtins.LegacyTmpPathFactory(factory), closer
+    """`velox.tmpdir_factory`'s `BuiltinProvider`: its own `Depends(tmp_path_factory)` factory,
+    wrapped in `LegacyTmpPathFactory`."""
+    del ctx
+    return _builtins.LegacyTmpPathFactory(kwargs["tmp_path_factory"]), None

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, final
 
-from velox._di.fixtures import builtin_fixture, fixture
+from velox._di.fixtures import Depends, builtin_fixture, fixture
 
 __all__ = [
     "Capture",
@@ -259,21 +259,21 @@ class LegacyPath:
         return LegacyPath(self._path.joinpath(*args))
 
     def write(self, data: str | bytes, mode: str = "w", *, ensure: bool = False) -> None:
-        """Write `data` to the path, creating parent directories first if `ensure`.
+        """Write `data` to the path in `mode`, creating parent directories first if `ensure`.
 
-        `mode` picks text or binary, as `open()`'s own `mode` does; `data`'s type has to agree
-        with it, exactly as `py.path.local.write` requires.
+        `mode` is `open()`'s own mode string -- `"w"` truncates, `"a"` appends, a `"b"` in it
+        picks binary -- and `data`'s type has to agree with it, exactly as `py.path.local.write`
+        requires.
         """
         if ensure:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-        if "b" in mode:
-            if not isinstance(data, bytes):
-                raise TypeError(f"write(mode={mode!r}): expected bytes, got {type(data).__name__}")
-            self._path.write_bytes(data)
-        else:
-            if not isinstance(data, str):
-                raise TypeError(f"write(mode={mode!r}): expected str, got {type(data).__name__}")
-            self._path.write_text(data)
+        binary = "b" in mode
+        if binary and not isinstance(data, bytes):
+            raise TypeError(f"write(mode={mode!r}): expected bytes, got {type(data).__name__}")
+        if not binary and not isinstance(data, str):
+            raise TypeError(f"write(mode={mode!r}): expected str, got {type(data).__name__}")
+        with self._path.open(mode) as f:
+            f.write(data)
 
     def __truediv__(self, other: str) -> LegacyPath:
         return LegacyPath(self._path / other)
@@ -319,18 +319,6 @@ def tmp_path_factory() -> TmpPathFactory:
 
 
 @fixture()
-def tmpdir() -> LegacyPath:
-    """`tmp_path`, wrapped as a `LegacyPath`."""
-    raise NotImplementedError(_RUNTIME)
-
-
-@fixture(scope="session")
-def tmpdir_factory() -> LegacyTmpPathFactory:
-    """`tmp_path_factory`, wrapped as a `LegacyTmpPathFactory`."""
-    raise NotImplementedError(_RUNTIME)
-
-
-@fixture()
 def capture() -> Capture:
     raise NotImplementedError(_RUNTIME)
 
@@ -359,12 +347,33 @@ tmp_path = builtin_fixture(tmp_path.func, provider=_capture.tmp_path_provider, s
 tmp_path_factory = builtin_fixture(
     tmp_path_factory.func, provider=_capture.tmp_path_factory_provider, scope="session"
 )
-tmpdir = builtin_fixture(tmpdir.func, provider=_capture.tmpdir_provider, scope="function")
-tmpdir_factory = builtin_fixture(
-    tmpdir_factory.func, provider=_capture.tmpdir_factory_provider, scope="session"
-)
 capture = builtin_fixture(capture.func, provider=_capture.capture_provider, scope="function")
 log_records = builtin_fixture(
     log_records.func, provider=_capture.log_records_provider, scope="function"
 )
 test_info = builtin_fixture(test_info.func, provider=_capture.test_info_provider, scope="function")
+
+
+# `tmpdir`/`tmpdir_factory` are declared only now, `Depends()`-ing on the just-rebound `tmp_path`/
+# `tmp_path_factory` rather than allocating a directory of their own: a test asking for both gets
+# the same directory either way, and `tmpdir_factory.mktemp(...)` shares `tmp_path_factory`'s own
+# numbering instead of starting a second counter over the same `basetemp`.
+def _tmpdir(tmp_path: Path = Depends(tmp_path)) -> LegacyPath:
+    raise NotImplementedError(_RUNTIME)
+
+
+def _tmpdir_factory(
+    tmp_path_factory: TmpPathFactory = Depends(tmp_path_factory),
+) -> LegacyTmpPathFactory:
+    raise NotImplementedError(_RUNTIME)
+
+
+tmpdir = builtin_fixture(
+    _tmpdir, provider=_capture.tmpdir_provider, scope="function", name="tmpdir"
+)
+tmpdir_factory = builtin_fixture(
+    _tmpdir_factory,
+    provider=_capture.tmpdir_factory_provider,
+    scope="session",
+    name="tmpdir_factory",
+)

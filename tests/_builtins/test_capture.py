@@ -676,6 +676,13 @@ def test_legacy_path_write_text_and_bytes(tmp_path: Path) -> None:
         velox.LegacyPath(tmp_path / "c.txt").write(b"not text")
 
 
+def test_legacy_path_write_mode_a_appends_rather_than_overwrites(tmp_path: Path) -> None:
+    wrapped = velox.LegacyPath(tmp_path / "a.txt")
+    wrapped.write("hello", mode="a")
+    wrapped.write("world", mode="a")
+    assert (tmp_path / "a.txt").read_text() == "helloworld"
+
+
 def test_legacy_path_falls_through_to_the_wrapped_path_for_a_shared_method(tmp_path: Path) -> None:
     wrapped = velox.LegacyPath(tmp_path)
     assert wrapped.exists()
@@ -699,6 +706,46 @@ def test_tmpdir_factory_mktemp_and_getbasetemp_return_legacy_path(tmp_path: Path
     )
 
     assert result.outcome is Outcome.PASSED, result.failure
+
+
+def test_tmpdir_and_tmp_path_name_the_same_directory_for_one_test(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    async def test_func(
+        p: Path = velox.Depends(velox.tmp_path),
+        d: velox.LegacyPath = velox.Depends(velox.tmpdir),
+    ) -> None:
+        seen["p"] = p
+        seen["d"] = d
+
+    (result,) = run_suite(
+        [_record(0, test_func, "test_func", plan=plan_for(test_func))],
+        basetemp=tmp_path / "base",
+    )
+
+    assert result.outcome is Outcome.PASSED, result.failure
+    assert seen["d"].strpath == str(seen["p"])  # type: ignore[attr-defined]
+
+
+def test_tmpdir_factory_and_tmp_path_factory_share_one_counter(tmp_path: Path) -> None:
+    """A test asking for both factories mustn't collide on the same numbered `mktemp` name --
+    they wrap one `TmpPathFactory`, not two independent ones over the same `basetemp`."""
+    made: list[Path] = []
+
+    async def test_func(
+        factory: velox.TmpPathFactory = velox.Depends(velox.tmp_path_factory),
+        legacy: velox.LegacyTmpPathFactory = velox.Depends(velox.tmpdir_factory),
+    ) -> None:
+        made.append(factory.mktemp("data"))
+        made.append(Path(legacy.mktemp("data").strpath))
+
+    (result,) = run_suite(
+        [_record(0, test_func, "test_func", plan=plan_for(test_func))],
+        basetemp=tmp_path / "base",
+    )
+
+    assert result.outcome is Outcome.PASSED, result.failure
+    assert made[0] != made[1]
 
 
 def test_basetemp_override_is_cleared_before_use_when_it_looks_like_a_previous_basetemp(
