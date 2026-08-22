@@ -172,6 +172,16 @@ class RuleTransformer(cst.CSTTransformer):
             self._stack.pop()
         return result
 
+    def abandon(self, original_node: cst.CSTNode) -> None:
+        """Pop the frame `on_visit` pushed for `original_node`, without running `leave_*`.
+
+        Used by `_Pipeline` when an earlier pass in the same traversal has already removed or
+        flattened this node: there is nothing left here for this pass to rewrite, but it still
+        owes the stack the pop its own `on_leave` would have made.
+        """
+        if isinstance(original_node, cst.FunctionDef | cst.ClassDef):
+            self._stack.pop()
+
     @property
     def qualname(self) -> str | None:
         """The `def` or `class` being visited, dotted, or `None` at module level."""
@@ -289,8 +299,8 @@ class _Pipeline(cst.CSTTransformer):
     Each node visits through every pass in turn — the `updated_node` one pass leaves behind is
     what the next pass sees — which is what makes this equivalent to running each pass's own
     `wrapper.visit()` in sequence. No current rule removes or flattens a node; if one ever does,
-    the passes after it simply see nothing further to rewrite there, same as they would if that
-    node were already gone from a prior, separate pass.
+    the passes after it are told to `abandon` that node rather than fed the sentinel in its
+    place, since only `RuleTransformer`'s own frame-stack bookkeeping still needs to run there.
     """
 
     def __init__(self, passes: Sequence[RuleTransformer]) -> None:
@@ -307,9 +317,14 @@ class _Pipeline(cst.CSTTransformer):
     def on_leave(
         self, original_node: cst.CSTNodeT, updated_node: cst.CSTNodeT
     ) -> cst.CSTNodeT | cst.RemovalSentinel | cst.FlattenSentinel[cst.CSTNodeT]:
-        for pass_ in self._passes:
+        for index, pass_ in enumerate(self._passes):
             result = pass_.on_leave(original_node, updated_node)
             if not isinstance(result, cst.CSTNode):
+                # Nothing is left here for a later pass to rewrite, but each one still pushed a
+                # frame for this node in `on_visit` and owes the stack the pop its own `on_leave`
+                # would have made.
+                for remaining in self._passes[index + 1 :]:
+                    remaining.abandon(original_node)
                 return result
             updated_node = result
         return updated_node

@@ -50,12 +50,7 @@ def _apply(code: str, source: str, context: rules.Context) -> rules.Result:
 
 
 def _all(source: str, context: rules.Context) -> rules.Result:
-    module = cst.parse_module(source)
-    applied: list[rules.Applied] = []
-    for rule in rules.RULES:
-        result = rule.apply(module, context)
-        module = result.module
-        applied.extend(result.applied)
+    module, applied = rules.apply_all(cst.parse_module(source), rules.RULES, context)
     return rules.Result(module=module, applied=tuple(applied))
 
 
