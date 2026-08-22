@@ -69,7 +69,9 @@ def conversion_of(
 def converted(suite: str, version: str, destination: Path) -> convert.Conversion:
     """`suite` copied into `destination` and converted in place, as a user would run it."""
     shutil.copytree(CORPUS / suite, destination, dirs_exist_ok=True)
-    result = conversion_of(suite, version, root=destination)
+    # `destination` is an untouched copy of the corpus, so the cached corpus Conversion's edits
+    # (rootdir-relative, per EditSet's own contract) apply to it exactly as a fresh one would.
+    result = conversion_of(suite, version)
     result.edits.apply(destination)
     return result
 
