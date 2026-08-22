@@ -1,5 +1,7 @@
 # AST-based recipes for splitting/moving top-level objects and rewiring their imports
-# across the repo. Imported into the root justfile — see CLAUDE.md's Refactor tools section.
+# across the repo. Invoked as `just refactor <recipe>` — see CLAUDE.md's refactor-tools skill.
+
+set working-directory := '..'
 
 # Install dependencies the refactor recipes need (ruff only — see docs/rationale.md)
 init:

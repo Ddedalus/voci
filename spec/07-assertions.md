@@ -154,6 +154,6 @@ rewrites — consistent with the research's 30-line estimate for `rewrite.py` al
 explanation engine and the three fixes are included. `velox/_vendor/VENDOR.md` is generated and
 lists every edit with its rationale.
 
-Measured on the implementation (`just bench-cold-start`): cold rewrite **6.4x** a plain compile
+Measured on the implementation (`just bench cold-start`): cold rewrite **6.4x** a plain compile
 at ~376 µs/assert, warm pyc load **343x** faster than cold — the same order as R§2's 4.6x/154x,
 on a synthetic module rather than pytest's own test file.

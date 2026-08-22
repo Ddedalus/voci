@@ -1,5 +1,11 @@
 set positional-arguments
 
+mod bench 'recipes/bench.just'
+mod docs 'recipes/docs.just'
+mod migrate 'recipes/migrate.just'
+mod refactor 'recipes/refactor.just'
+mod vendor 'recipes/vendor.just'
+
 # List available recipes
 default: list
 
@@ -18,18 +24,6 @@ run *args:
 # Run the test suite (e.g. `just test -k cli`)
 test *args:
     uv run pytest "$@"
-
-# Run the velox-migrate test suite (e.g. `just test-migrate -k extractor`)
-test-migrate *args:
-    uv run pytest velox-migrate/tests "$@"
-
-# Regenerate the checked-in corpus ground-truth dumps, one per supported pytest
-corpus-dumps *args:
-    uv run python velox-migrate/scripts/refresh_corpus_dumps.py "$@"
-
-# Verify the checked-in corpus dumps still match what the extractor produces
-corpus-check:
-    uv run python velox-migrate/scripts/refresh_corpus_dumps.py --check
 
 # Lint with ruff (e.g. `just lint --fix`)
 lint *args:
@@ -53,26 +47,6 @@ typecheck *args:
 build:
     uv build
 
-# Serve the docs site with live reload (e.g. `just docs-serve --open`)
-docs-serve *args:
-    uv run zensical serve "$@"
-
-# Build the docs site into site/
-docs-build *args:
-    uv run zensical build "$@"
-
-# Re-vendor pytest's assertion subsystem from the oss/pytest submodule (spec/07)
-vendor:
-    uv run python scripts/vendor_assertion.py
-
-# Verify the vendored tree matches what the vendoring script generates
-vendor-check:
-    uv run python scripts/vendor_assertion.py --check
-
-# Assert the assertion-rewrite cold/warm ratio is still within budget (spec/07 §5)
-bench-cold-start *args:
-    uv run python scripts/bench_cold_start.py "$@"
-
 # Run lint, format-check, typecheck and tests together (quiet on success)
 check:
     #!/usr/bin/env bash
@@ -93,7 +67,4 @@ check:
     run format     just fmt-check
     run typecheck  just typecheck
     run tests      just test
-    run migrate    just test-migrate
-
-# Refactor tools (summarize, move, rewire, init) — see refactor.justfile
-import 'refactor.justfile'
+    run migrate    just migrate test

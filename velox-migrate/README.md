@@ -131,9 +131,9 @@ are lower bounds while it is.
 ## Development
 
 ```console
-$ just test-migrate        # the test suite
-$ just corpus-dumps        # regenerate the checked-in dumps under corpus/dumps/
-$ just corpus-check        # verify those dumps match what the extractor produces
+$ just migrate test         # the test suite
+$ just migrate corpus-dumps # regenerate the checked-in dumps under corpus/dumps/
+$ just migrate corpus-check # verify those dumps match what the extractor produces
 ```
 
 `corpus/` holds pytest suites that exist to be extracted from, not run — feature-dense by design,

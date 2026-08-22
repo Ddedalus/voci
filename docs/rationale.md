@@ -134,7 +134,7 @@ under concurrency they would leak one test's assertion config into a sibling's f
 
 The seam is a lookup substitution, not a patch: the vendored code still refers to those names
 exactly as upstream wrote them, and a module-level `__getattr__` resolves them to the ContextVars.
-That is what lets the tree stay byte-identical. It is regenerated with `just vendor`, never edited
+That is what lets the tree stay byte-identical. It is regenerated with `just vendor update`, never edited
 by hand, and excluded from lint and type checking — edit it directly and the next regeneration
 silently reverts you.
 

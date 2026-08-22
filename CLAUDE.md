@@ -12,16 +12,19 @@ workspace member holding the pytest→velox migration tooling. velox never depen
 tests are `velox-migrate/tests/`; `velox-migrate/corpus/` holds pytest suites that exist to be
 extracted from and converted rather than run directly, so it is excluded from ruff and pyrefly, and
 `velox-migrate/corpus/dumps/` holds their checked-in ground-truth dumps, one per supported pytest
-— regenerate with `just corpus-dumps`, verify with `just corpus-check`. `velox_migrate/extractor.py`
+— regenerate with `just migrate corpus-dumps`, verify with `just migrate corpus-check`. `velox_migrate/extractor.py`
 is a single file importing only stdlib and pytest so it can be copied into an environment where
 nothing else can be installed; keep it that way. Everything else there may use LibCST, its one
 dependency. `velox_migrate/matrix.py` is the support matrix: one row per pytest construct, keyed by
 a `VXnnn` code that report sections, `VELOX-TODO` markers and rewrite rules all reconcile against —
 classification decisions belong in that table, not in the code that reads it.
 
-Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for recipes (`sync`, `run`,
-`test`, `test-migrate`, `lint`, `fmt`, `typecheck`, `build`, `check`). For splitting objects out
-of a file into their own module and repointing imports, see the `refactor-tools` skill.
+Tooling: uv, ruff, pyrefly, pytest. Run via `justfile` — `just list` for root recipes (`sync`,
+`run`, `test`, `lint`, `fmt`, `typecheck`, `build`, `check`). Recipes not central to the daily dev
+loop live in `recipes/<module>.just` and are invoked `just <module> <recipe>` — `migrate` (velox-migrate
+tests and corpus dumps), `docs`, `vendor`, `bench`, `refactor`; `just --list <module>` lists a
+module's recipes. For splitting objects out of a file into their own module and repointing
+imports, see the `refactor-tools` skill.
 
 Reference-only, not part of the package: `oss/`, `research/`, `spec/`. `oss/` holds other
 projects' checkouts as git submodules — `oss/pytest` and `oss/fastapi` among them — and is
@@ -35,8 +38,8 @@ each other, so a link to another file in `plans/` stays a bare filename, not a `
 path.
 
 `velox/_assertions/_vendor/` is **generated** from the `oss/pytest/` submodule — never edit it by
-hand. Regenerate with `just vendor` (`scripts/vendor_assertion.py`, which logs every edit in
-`velox/_assertions/VENDOR.md`); `just vendor-check` verifies the tree is current. Kept
+hand. Regenerate with `just vendor update` (`scripts/vendor_assertion.py`, which logs every edit in
+`velox/_assertions/VENDOR.md`); `just vendor check` verifies the tree is current. Kept
 byte-identical to upstream and excluded from ruff and pyrefly, except the hand-written `_shim.py`.
 
 ## Documentation

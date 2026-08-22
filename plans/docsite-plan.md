@@ -141,7 +141,7 @@ Configured under `[project.plugins.mkdocstrings.handlers.python]` in `zensical.t
 `reference/cli.md` is the one page mkdocstrings can't produce — argparse has no docstring-driven
 autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a script
 (`scripts/gen_cli_reference.py`) that imports `velox.cli.build_parser()` and renders its help text
-into the page, plus a `--check` mode wired into `just docs-check` the same way `just vendor-check`
+into the page, plus a `--check` mode wired into `just docs check` the same way `just vendor check`
 guards the vendored tree, so the reference can't drift from the real flags.
 
 ## Theme
@@ -183,7 +183,7 @@ a concrete reason to. Search is built in (Zensical's own client-side engine), no
      the header.
    - `navigation.indexes` is the one theme feature enabled, so `guide/index.md` *is* the Guide nav
      entry rather than a lone child of it.
-   - `docs` joins `dev` in `[tool.uv] default-groups`. Left out, `just docs-build` installs the
+   - `docs` joins `dev` in `[tool.uv] default-groups`. Left out, `just docs build` installs the
      docs toolchain and the next `just sync` uninstalls it again.
    - Zensical is pinned exactly (`zensical==0.0.56`), per the alpha trade-off above.
    - `guide/index.md` is written for real rather than stubbed — install, first test, shape of a
