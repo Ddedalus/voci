@@ -1414,6 +1414,33 @@ def test_a_cases_marks_reach_that_cases_record_only(tmp_path: Path) -> None:
     assert expected is not None and expected.reason == "known"
 
 
+def test_a_case_with_marks_of_its_own_does_not_re_evaluate_the_functions_own_condition(
+    tmp_path: Path,
+) -> None:
+    """A case carrying an unrelated mark of its own (here, a tag) still folds the function's
+    `xfail` into its record -- but must not call its condition a second time to do it, since
+    `decided` promises callers that evaluating it once is the whole contract."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "import velox\n\n"
+        "calls = []\n\n"
+        "def _counted():\n"
+        "    calls.append(1)\n"
+        "    return True\n\n"
+        "@velox.xfail('known', condition=_counted)\n"
+        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "async def test_it(n):\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert len(result.records) == 2
+    assert all(record.marks.xfail is not None for record in result.records)
+    calls = result.records[0].func.__globals__["calls"]
+    assert calls == [1]
+
+
 def test_a_tag_on_one_case_selects_that_case_alone(tmp_path: Path) -> None:
     """`-m` is answered per case where the cases differ: the function's own tags cannot decide
     for a test one of whose cases is tagged and the rest are not."""

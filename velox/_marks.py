@@ -349,7 +349,7 @@ def case(*values: object, marks: MarkDecorator | Sequence[MarkDecorator] = ()) -
     # Marks are read by applying the decorators to a stand-in function, rather than by naming
     # the record types here: one spelling for a case's marks and a test's, and the decorators'
     # own validation -- a duplicate scalar, a non-positive timeout -- is what rejects a
-    # malformed case, at decoration time, where the traceback still points at the case list.
+    # malformed case, at decoration time, where the traceback points at the case list.
     marked.__name__ = "velox.case(...)"
     for decorator in decorators:
         if decorator(marked) is not marked:

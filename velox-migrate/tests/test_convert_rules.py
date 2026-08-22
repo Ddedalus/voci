@@ -341,6 +341,29 @@ def test_x(value):
     assert _codes(applied) == ["VX102"]
 
 
+def test_a_cases_xfail_mark_carries_the_suites_strict() -> None:
+    """A case's own `xfail` reads `strict=` from the suite's `xfail_strict` ini setting exactly
+    as a top-level `@velox.xfail` does -- `_StrictXFail` (VX107) only patches decorators, so a
+    mark nested inside `velox.case(..., marks=...)` must already carry it."""
+    before = """import pytest
+
+
+@pytest.mark.parametrize("value", [pytest.param(2, marks=pytest.mark.xfail(reason="known"))])
+def test_x(value):
+    assert value
+"""
+    after = """import pytest
+
+
+@velox.parametrize("value", [velox.case(2, marks=velox.xfail("known", strict=True))])
+def test_x(value):
+    assert value
+"""
+    applied = _rewrite("VX101", before, after, _context("test_x", xfail_strict=True))
+
+    assert _codes(applied) == ["VX102"]
+
+
 def test_a_case_marked_with_several_values_spells_them_out() -> None:
     before = """import pytest
 

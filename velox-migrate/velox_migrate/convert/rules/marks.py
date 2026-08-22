@@ -592,7 +592,9 @@ class _MarkPass(RuleTransformer):
                 return _refuses(
                     "VX101", "VX102", f"one case's `{render(one)}` is not a mark this rule reads."
                 )
-            translated = self.translate(mark, qualname=qualname)
+            translated = self.translate(
+                mark, qualname=qualname, strict_default=self.context.xfail_strict
+            )
             if translated.refused:
                 return _refuses("VX101", "VX102", f"one case's {translated.message}")
             if translated.expression is None:

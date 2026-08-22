@@ -239,17 +239,20 @@ def _skip_reason(marks: Marks) -> str | None:
 
 
 def _case_disposition(base: Marks, case: Case | None) -> tuple[Marks, str | None]:
-    """One case's effective marks -- `base`, with `case`'s own folded in and their conditions
-    decided -- and the reason that case does not run, or `None`.
+    """One case's effective marks -- `base`, with `case`'s own folded in -- and the reason that
+    case does not run, or `None`.
 
-    A case carrying no marks of its own is `base` and nothing else, and `collect` has already
-    read the reason for that: asking again would evaluate every `skipif` condition a second
-    time.
+    `base` arrives already decided: a test whose `skip`/`skipifs` resolve to "runs" only reaches
+    here after `collect` confirmed that, and its `xfail` condition was decided at the same time.
+    Only `case`'s own marks are new; re-deciding `base`'s again would evaluate a `skipif` or
+    `xfail` condition a second time, which callers of `decided` are promised never happens.
     """
     if case is None or case.marks == NO_MARKS:
         return base, None
-    case_marks = decided(merged(base, case.marks))
-    return case_marks, _skip_reason(case_marks)
+    case_marks = merged(base, case.marks)
+    if case.marks.xfail is not None:
+        case_marks = decided(case_marks)
+    return case_marks, _skip_reason(case.marks)
 
 
 def _cases_carry_tags(marks: Marks) -> bool:
