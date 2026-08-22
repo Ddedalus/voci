@@ -683,6 +683,17 @@ def test_legacy_path_write_mode_a_appends_rather_than_overwrites(tmp_path: Path)
     assert (tmp_path / "a.txt").read_text() == "helloworld"
 
 
+def test_legacy_path_mkdir_creates_and_returns_the_named_subdirectory(tmp_path: Path) -> None:
+    """`.mkdir` takes the name to create, `py.path.local`'s own shape -- not `Path.mkdir`'s
+    `mode`/`parents`/`exist_ok`, which `LegacyPath` doesn't carry over."""
+    wrapped = velox.LegacyPath(tmp_path)
+    sub = wrapped.mkdir("sub")
+
+    assert isinstance(sub, velox.LegacyPath)
+    assert sub.strpath == str(tmp_path / "sub")
+    assert (tmp_path / "sub").is_dir()
+
+
 def test_legacy_path_falls_through_to_the_wrapped_path_for_a_shared_method(tmp_path: Path) -> None:
     wrapped = velox.LegacyPath(tmp_path)
     assert wrapped.exists()

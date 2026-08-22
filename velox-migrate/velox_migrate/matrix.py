@@ -588,7 +588,7 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "tmpdir, tmpdir_factory",
         MECHANICAL,
         "Same names, `velox.tmpdir`/`velox.tmpdir_factory`'s own `LegacyPath` wrapping `.join`, "
-        "`.strpath`, `.write` and division the way pytest's own legacy shim does.",
+        "`.strpath`, `.write`, `.mkdir` and division the way pytest's own legacy shim does.",
         target="velox.tmpdir, velox.tmpdir_factory",
     ),
     _row(

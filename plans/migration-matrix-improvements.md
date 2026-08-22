@@ -27,9 +27,11 @@ test's own share one spelling and one validation path; `ParamSet.case_marks` and
 carry them through expansion.
 
 VX208's `LegacyPath` (`velox/_builtins/fixtures.py`) wraps a `pathlib.Path` with `.join`,
-`.strpath`, `.write` and `/` division — the shape pytest's own `tmpdir` shim carries — and falls
-through to the wrapped `Path` for a method the two share. `velox.tmpdir`/`velox.tmpdir_factory`
-hand one back instead of a bare `Path`/`TmpPathFactory`, mirroring pytest's own
+`.strpath`, `.write`, `.mkdir` and `/` division — the shape pytest's own `tmpdir` shim carries —
+and falls through to the wrapped `Path` for a method the two share by coincidence. `.mkdir` is
+overridden rather than left to that fallthrough: it takes the name to create, not `Path.mkdir`'s
+`mode`/`parents`/`exist_ok`. `velox.tmpdir`/`velox.tmpdir_factory` hand one back instead of a bare
+`Path`/`TmpPathFactory`, mirroring pytest's own
 `tmp_path`-then-`tmpdir` layering.
 
 | Code | Current | Feature | Promoted to |

@@ -238,12 +238,14 @@ class TmpPathFactory:
 
 @final
 class LegacyPath:
-    """A `pathlib.Path`, wrapped for suites still calling `.join`, `.strpath`, `/` or `.write`
-    on it the way pytest's own `tmpdir` does.
+    """A `pathlib.Path`, wrapped for suites still calling `.join`, `.strpath`, `/`, `.write` or
+    `.mkdir` on it the way pytest's own `tmpdir` does.
 
-    Only that shape is implemented; an attribute this class doesn't define falls through to the
-    wrapped `Path`, which covers a method the two share (`.exists()`, `.mkdir()`, ...) and raises
-    `AttributeError` for one that is `py.path.local`-only.
+    Only that shape is implemented, and `.mkdir` is overridden rather than left to fall through:
+    it takes the name to create, not `Path.mkdir`'s `mode`/`parents`/`exist_ok`. Any other
+    attribute this class doesn't define falls through to the wrapped `Path`, which is exact for a
+    method the two share by coincidence (`.exists()`, ...) and raises `AttributeError` for one
+    that is `py.path.local`-only.
     """
 
     __slots__ = ("_path",)
@@ -257,6 +259,17 @@ class LegacyPath:
 
     def join(self, *args: str) -> LegacyPath:
         return LegacyPath(self._path.joinpath(*args))
+
+    def mkdir(self, *args: str) -> LegacyPath:
+        """Create and return the directory `.join(*args)` names.
+
+        Shadows `Path.mkdir`, whose `mode`/`parents`/`exist_ok` keyword arguments this class
+        does not carry over, the way `py.path.local.mkdir` -- a different call, same name --
+        never did either.
+        """
+        made = self.join(*args)
+        made._path.mkdir()
+        return made
 
     def write(self, data: str | bytes, mode: str = "w", *, ensure: bool = False) -> None:
         """Write `data` to the path in `mode`, creating parent directories first if `ensure`.
