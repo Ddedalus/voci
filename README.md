@@ -37,6 +37,8 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
 
 
 # tests/test_users.py
+from velox import Depends
+
 from tests.fixtures import session
 
 
