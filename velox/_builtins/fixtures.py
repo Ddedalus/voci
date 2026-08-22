@@ -1,13 +1,13 @@
 """Built-in fixtures and the types they hand back.
 
-`tmp_path`, `tmp_path_factory`, `capture`, `log_records` and `test_info` are declared here as
-ordinary `Fixture` objects carrying a `provider`: the runtime calls that provider instead of the
-decorated function, and the providers themselves live in `velox._builtins.capture`, wired in at
-the bottom of this module.
+`tmp_path`, `tmp_path_factory`, `tmpdir`, `tmpdir_factory`, `capture`, `log_records` and
+`test_info` are declared here as ordinary `Fixture` objects carrying a `provider`: the runtime
+calls that provider instead of the decorated function, and the providers themselves live in
+`velox._builtins.capture`, wired in at the bottom of this module.
 
 The types those providers construct are defined here too — `Capture`, `LogRecords`,
-`TmpPathFactory` and `TestInfo` — each taking plain constructor arguments (a `Sink`-shaped
-protocol, a live `list[LogRecord]`, a `Path`).
+`TmpPathFactory`, `LegacyPath`, `LegacyTmpPathFactory` and `TestInfo` — each taking plain
+constructor arguments (a `Sink`-shaped protocol, a live `list[LogRecord]`, a `Path`).
 """
 
 from __future__ import annotations
@@ -17,12 +17,14 @@ from collections.abc import MutableSequence, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, final
+from typing import Any, Protocol, final
 
-from velox._di.fixtures import builtin_fixture, fixture
+from velox._di.fixtures import Depends, builtin_fixture, fixture
 
 __all__ = [
     "Capture",
+    "LegacyPath",
+    "LegacyTmpPathFactory",
     "LogRecords",
     "TestInfo",
     "TmpPathFactory",
@@ -31,6 +33,8 @@ __all__ = [
     "test_info",
     "tmp_path",
     "tmp_path_factory",
+    "tmpdir",
+    "tmpdir_factory",
 ]
 
 _RUNTIME = "provided by the velox runtime; not callable directly"
@@ -232,6 +236,90 @@ class TmpPathFactory:
         return self._basetemp
 
 
+@final
+class LegacyPath:
+    """A `pathlib.Path`, wrapped for suites still calling `.join`, `.strpath`, `/`, `.write` or
+    `.mkdir` on it the way pytest's own `tmpdir` does.
+
+    Only that shape is implemented, and `.mkdir` is overridden rather than left to fall through:
+    it takes the name to create, not `Path.mkdir`'s `mode`/`parents`/`exist_ok`. Any other
+    attribute this class doesn't define falls through to the wrapped `Path`, which is exact for a
+    method the two share by coincidence (`.exists()`, ...) and raises `AttributeError` for one
+    that is `py.path.local`-only.
+    """
+
+    __slots__ = ("_path",)
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    @property
+    def strpath(self) -> str:
+        return str(self._path)
+
+    def join(self, *args: str) -> LegacyPath:
+        return LegacyPath(self._path.joinpath(*args))
+
+    def mkdir(self, *args: str) -> LegacyPath:
+        """Create and return the directory `.join(*args)` names.
+
+        Shadows `Path.mkdir`, whose `mode`/`parents`/`exist_ok` keyword arguments this class
+        does not carry over, the way `py.path.local.mkdir` -- a different call, same name --
+        never did either.
+        """
+        made = self.join(*args)
+        made._path.mkdir()
+        return made
+
+    def write(self, data: str | bytes, mode: str = "w", *, ensure: bool = False) -> None:
+        """Write `data` to the path in `mode`, creating parent directories first if `ensure`.
+
+        `mode` is `open()`'s own mode string -- `"w"` truncates, `"a"` appends, a `"b"` in it
+        picks binary -- and `data`'s type has to agree with it, exactly as `py.path.local.write`
+        requires.
+        """
+        if ensure:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        binary = "b" in mode
+        if binary and not isinstance(data, bytes):
+            raise TypeError(f"write(mode={mode!r}): expected bytes, got {type(data).__name__}")
+        if not binary and not isinstance(data, str):
+            raise TypeError(f"write(mode={mode!r}): expected str, got {type(data).__name__}")
+        with self._path.open(mode) as f:
+            f.write(data)
+
+    def __truediv__(self, other: str) -> LegacyPath:
+        return LegacyPath(self._path / other)
+
+    def __fspath__(self) -> str:
+        return str(self._path)
+
+    def __str__(self) -> str:
+        return str(self._path)
+
+    def __repr__(self) -> str:
+        return f"LegacyPath({self._path!r})"
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._path, name)
+
+
+@final
+class LegacyTmpPathFactory:
+    """`TmpPathFactory`, handing back `LegacyPath` instead of `Path`."""
+
+    __slots__ = ("_factory",)
+
+    def __init__(self, factory: TmpPathFactory) -> None:
+        self._factory = factory
+
+    def mktemp(self, basename: str, *, numbered: bool = True) -> LegacyPath:
+        return LegacyPath(self._factory.mktemp(basename, numbered=numbered))
+
+    def getbasetemp(self) -> LegacyPath:
+        return LegacyPath(self._factory.getbasetemp())
+
+
 @fixture()
 def tmp_path() -> Path:
     """A directory unique to this test, by construction: `basetemp/<sanitized-test-id>`."""
@@ -277,3 +365,28 @@ log_records = builtin_fixture(
     log_records.func, provider=_capture.log_records_provider, scope="function"
 )
 test_info = builtin_fixture(test_info.func, provider=_capture.test_info_provider, scope="function")
+
+
+# `tmpdir`/`tmpdir_factory` are declared only now, `Depends()`-ing on the just-rebound `tmp_path`/
+# `tmp_path_factory` rather than allocating a directory of their own: a test asking for both gets
+# the same directory either way, and `tmpdir_factory.mktemp(...)` shares `tmp_path_factory`'s own
+# numbering instead of starting a second counter over the same `basetemp`.
+def _tmpdir(tmp_path: Path = Depends(tmp_path)) -> LegacyPath:
+    raise NotImplementedError(_RUNTIME)
+
+
+def _tmpdir_factory(
+    tmp_path_factory: TmpPathFactory = Depends(tmp_path_factory),
+) -> LegacyTmpPathFactory:
+    raise NotImplementedError(_RUNTIME)
+
+
+tmpdir = builtin_fixture(
+    _tmpdir, provider=_capture.tmpdir_provider, scope="function", name="tmpdir"
+)
+tmpdir_factory = builtin_fixture(
+    _tmpdir_factory,
+    provider=_capture.tmpdir_factory_provider,
+    scope="session",
+    name="tmpdir_factory",
+)

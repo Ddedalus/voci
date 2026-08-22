@@ -12,9 +12,11 @@ This document focuses on category 1: features velox could add to unlock matrix r
 
 ## Candidates for velox changes
 
-VX210, VX213, VX206, VX105 and VX102 are done — promoted to `MECHANICAL` in
+VX210, VX213, VX206, VX105, VX102 and VX208 are done — promoted to `MECHANICAL` in
 [the matrix](../velox-migrate/velox_migrate/matrix.py) and converted by
-`velox_migrate.convert.rules.marks` (VX105, VX102) and `.bodies` (VX210, VX213, VX206).
+`velox_migrate.convert.rules.marks` (VX105, VX102) and `.bodies` (VX210, VX213, VX206). VX208
+needs no rule of its own: `tmpdir`/`tmpdir_factory` keep their names, so the wiring rewrite that
+already renames a builtin fixture's parameter carries them across unchanged.
 
 VX105's `condition=` lands as `velox.xfail(reason, condition=...)` on `velox._marks.XFail`,
 decided once at collection (`_collection.collect._case_disposition`) rather than re-evaluated by
@@ -24,9 +26,16 @@ decorators a test would carry by applying them to a stand-in function, so one ca
 test's own share one spelling and one validation path; `ParamSet.case_marks` and `parametrize.Case`
 carry them through expansion.
 
+VX208's `LegacyPath` (`velox/_builtins/fixtures.py`) wraps a `pathlib.Path` with `.join`,
+`.strpath`, `.write`, `.mkdir` and `/` division — the shape pytest's own `tmpdir` shim carries —
+and falls through to the wrapped `Path` for a method the two share by coincidence. `.mkdir` is
+overridden rather than left to that fallthrough: it takes the name to create, not `Path.mkdir`'s
+`mode`/`parents`/`exist_ok`. `velox.tmpdir`/`velox.tmpdir_factory` hand one back instead of a bare
+`Path`/`TmpPathFactory`, mirroring pytest's own
+`tmp_path`-then-`tmpdir` layering.
+
 | Code | Current | Feature | Promoted to |
 |---|---|---|---|
-| VX208 | REFUSED | Ship a `py.path.local`-compatible wrapper for `tmp_path`, so `tmpdir`/`tmpdir_factory` bodies (which use `.join`, `.strpath`, division) can migrate. pytest itself carries this legacy shim. | MECHANICAL |
 | VX014 | REFUSED | Give a fixture body an imperative teardown-registration call that runs conditionally and can register multiple times. Today only unconditional `yield` teardowns work. | MECHANICAL or MARKER |
 | VX214 | REFUSED | Add imperative skip/fail functions (`velox.fail(msg)`, a runtime exception) alongside the existing decorators, so `pytest.skip()` / `pytest.fail()` statements in bodies have a real target. | MECHANICAL |
 

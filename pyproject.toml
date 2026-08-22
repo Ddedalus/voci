@@ -91,9 +91,11 @@ select = [
 # `velox.Depends(...)` and `Depends(...)` (after `from velox import Depends`) both pass; spec/01
 # §10 names the one shape this can't cover -- a method call like `fixture.with_()`, which has no
 # fixed qualified name to whitelist, is why that API was deferred rather than shipped needing
-# every call site to disable the rule by hand.
+# every call site to disable the rule by hand. `velox._di.fixtures.Depends` covers the same spelling
+# inside `_builtins/fixtures.py` itself, which wires a builtin fixture onto another one (`tmpdir`
+# onto `tmp_path`) before the public `velox` package it would otherwise import from exists.
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends", "Depends"]
+extend-immutable-calls = ["velox.Depends", "Depends", "velox._di.fixtures.Depends"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["velox", "velox_migrate"]

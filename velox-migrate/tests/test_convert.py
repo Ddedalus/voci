@@ -611,8 +611,8 @@ def test_a_refused_test_keeps_its_pytest_signature(version: str, tmp_path: Path)
 
 
 def test_a_supported_builtin_fixture_refuses_nothing(version: str) -> None:
-    # `tmp_path` has a velox counterpart, so a test requesting it converts; the audit reports its
-    # sibling `tmpdir`, which does not, and only that one blocks anything.
+    # Every builtin the matrix marks mechanical converts, so a test requesting one is never
+    # blocked on its account.
     result = conversion_of(HAZARDS, version)
     ground_truth = model.load(DUMPS / f"{HAZARDS}-pytest-{version}.json")
     blocked = {
@@ -622,6 +622,7 @@ def test_a_supported_builtin_fixture_refuses_nothing(version: str) -> None:
     }
 
     assert "tmp_path" not in blocked
+    assert "tmpdir" not in blocked
     assert "capsys" not in blocked
 
 

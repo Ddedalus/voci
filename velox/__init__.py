@@ -10,6 +10,8 @@ from velox._assertions.approx import Approx, approx
 from velox._assertions.raises import ExceptionInfo, RaisesContext, raises
 from velox._builtins.fixtures import (
     Capture,
+    LegacyPath,
+    LegacyTmpPathFactory,
     LogRecords,
     TestInfo,
     TmpPathFactory,
@@ -18,6 +20,8 @@ from velox._builtins.fixtures import (
     test_info,
     tmp_path,
     tmp_path_factory,
+    tmpdir,
+    tmpdir_factory,
 )
 from velox._collection.requires import use
 from velox._di.fixtures import Depends, Fixture, Injection, Scope, fixture
@@ -50,6 +54,8 @@ __all__ = [
     "ExceptionInfo",
     "Fixture",
     "Injection",
+    "LegacyPath",
+    "LegacyTmpPathFactory",
     "LogRecords",
     "MarkDecorator",
     "Marks",
@@ -79,6 +85,8 @@ __all__ = [
     "timeout",
     "tmp_path",
     "tmp_path_factory",
+    "tmpdir",
+    "tmpdir_factory",
     "use",
     "xfail",
 ]
