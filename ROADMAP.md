@@ -35,10 +35,13 @@ Next: smoke-test on real open-source suites:
 ## docs
 High-level plan in `plans/docsite-plan.md`
 
+**Performance.** A persistent collection cache, `--lf`/`--ff`,
+
+**Coverage.** Ensuring we play nicely with coverage and can produce suitable reports.
+
 ## Code quality consolidation
 
 Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
-
 
 ## Later
 
@@ -47,18 +50,13 @@ Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplica
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
 seeing an opening.
 
-**Performance.** A persistent collection cache, `--lf`/`--ff`,
-
 **Reporting.** JUnit XML, `--report-json`, and GitHub annotations.
-
-**Coverage.** Ensuring we play nicely with coverage and can produce suitable reports.
 
 
 ### Needs human review
 
-**Migration.** Codegen that rewrites a pytest suite's fixture wiring to velox, with no hand edits.
-This is the difference between velox being adoptable and being greenfield-only.
-
+**Testmon functionality** Allow for coverage-driven replay of only affected tests in a suite after code modification.
+ 
 **Benchmark** A published, reproducible
 benchmark against pytest and `pytest-xdist` on a real suite.
 
