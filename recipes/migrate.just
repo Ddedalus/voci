@@ -3,7 +3,7 @@ set working-directory := '..'
 
 # Run the velox-migrate test suite (e.g. `just migrate test -k extractor`)
 test *args:
-    uv run pytest velox-migrate/tests "$@"
+    uv run pytest velox-migrate/tests -n auto "$@"
 
 # Regenerate the checked-in corpus ground-truth dumps, one per supported pytest
 corpus-dumps *args:

@@ -11,28 +11,13 @@ import shutil
 from pathlib import Path
 
 import libcst as cst
-import pytest
+from _support import CORPUS, DUMPS, conversion_of
 
 from velox_migrate import audit, convert, model
 from velox_migrate.convert import declarations
 
-CORPUS = Path(__file__).resolve().parents[1] / "corpus"
-DUMPS = CORPUS / "dumps"
-PYTEST_VERSIONS = ["8.4", "9.1"]
-
 DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
-
-
-@pytest.fixture(params=PYTEST_VERSIONS, ids=[f"pytest{v}" for v in PYTEST_VERSIONS])
-def version(request: pytest.FixtureRequest) -> str:
-    return str(request.param)
-
-
-def conversion_of(suite: str, version: str) -> convert.Conversion:
-    ground_truth = model.load(DUMPS / f"{suite}-pytest-{version}.json")
-    root = CORPUS / suite
-    return convert.run(audit.run(ground_truth, root=root), ground_truth, root=root)
 
 
 def declared_in(conversion: convert.Conversion, container: str) -> tuple[str, ...]:

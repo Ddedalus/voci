@@ -9,44 +9,25 @@ rather than of the plan, since the source is what runs.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
+from _support import DUMPS, conversion_of, converted
 
-from velox_migrate import audit, convert, model
+from velox_migrate import model
 from velox_migrate.audit import wiring
 from velox_migrate.convert import plan, specialize
 from velox_migrate.convert.layout import Import
-
-CORPUS = Path(__file__).resolve().parents[1] / "corpus"
-DUMPS = CORPUS / "dumps"
-PYTEST_VERSIONS = ["8.4", "9.1"]
 
 OVERRIDES = "overrides_showcase"
 HAZARDS = "hazards_showcase"
 
 
-@pytest.fixture(params=PYTEST_VERSIONS, ids=[f"pytest{v}" for v in PYTEST_VERSIONS])
-def version(request: pytest.FixtureRequest) -> str:
-    return str(request.param)
-
-
-def conversion_of(
-    suite: str, version: str, *, root: Path | None = None, budget: int = audit.DEFAULT_BUDGET
-) -> convert.Conversion:
-    ground_truth = model.load(DUMPS / f"{suite}-pytest-{version}.json")
-    where = root if root is not None else CORPUS / suite
-    return convert.run(audit.run(ground_truth, root=where, budget=budget), ground_truth, root=where)
-
-
 @pytest.fixture
 def tree(version: str, tmp_path: Path) -> Path:
     """The overrides corpus suite, copied out and converted in place."""
-    where = tmp_path / OVERRIDES
-    shutil.copytree(CORPUS / OVERRIDES, where, dirs_exist_ok=True)
-    conversion_of(OVERRIDES, version, root=where).edits.apply(where)
-    return where
+    converted(OVERRIDES, version, tmp_path / OVERRIDES)
+    return tmp_path / OVERRIDES
 
 
 def source(tree: Path, path: str) -> str:
