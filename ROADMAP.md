@@ -32,12 +32,6 @@ Next: smoke-test on real open-source suites:
 1. Marshmallow
 2. httpx2 (successor to https, active development)
 
-
-### Urgent performance fixes
-To make test suite viable to run repeatedly.
-
-**Memoize conversion_of() in the test file** (it's pure — no disk writes) per (suite, version) with functools.cache, so the ~10x-per-suite redundant recomputation in test_convert.py collapses to one real call per suite/version pair. converted() still needs its own tmp_path copy per test (since tests mutate the tree and run subprocesses against it), but it can reuse a cached Conversion object rather than recomputing one.
-
 ## docs
 High-level plan in `plans/docsite-plan.md`
 
