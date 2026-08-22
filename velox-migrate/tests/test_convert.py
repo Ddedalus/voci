@@ -11,6 +11,7 @@ by 8.4's answers and one driven by 9.1's must place the same objects in the same
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
@@ -44,12 +45,25 @@ def version(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
+@functools.cache
+def _conversion_of_corpus(suite: str, version: str, budget: int) -> convert.Conversion:
+    """conversion_of, pinned to the checked-in corpus tree, which never changes underfoot.
+
+    That makes it pure in (suite, version, budget), so it's cached: dozens of tests each want their
+    own `conversion_of(suite, version)` and would otherwise redo the same libcst parse and rewrite.
+    """
+    where = CORPUS / suite
+    ground_truth = model.load(DUMPS / f"{suite}-pytest-{version}.json")
+    return convert.run(audit.run(ground_truth, root=where, budget=budget), ground_truth, root=where)
+
+
 def conversion_of(
     suite: str, version: str, *, root: Path | None = None, budget: int = audit.DEFAULT_BUDGET
 ) -> convert.Conversion:
+    if root is None:
+        return _conversion_of_corpus(suite, version, budget)
     ground_truth = model.load(DUMPS / f"{suite}-pytest-{version}.json")
-    where = root if root is not None else CORPUS / suite
-    return convert.run(audit.run(ground_truth, root=where, budget=budget), ground_truth, root=where)
+    return convert.run(audit.run(ground_truth, root=root, budget=budget), ground_truth, root=root)
 
 
 def converted(suite: str, version: str, destination: Path) -> convert.Conversion:
