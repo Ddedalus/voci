@@ -1,10 +1,21 @@
 set positional-arguments
 
+# Assertion-rewrite cold/warm benchmark
 mod bench 'recipes/bench.just'
+
+# check's dependents (lint, fmt-check, typecheck, test), also runnable standalone
 mod checks 'recipes/checks.just'
+
+# Docs site (zensical)
 mod docs 'recipes/docs.just'
+
+# velox-migrate tests and corpus dumps
 mod migrate 'recipes/migrate.just'
+
+# AST-based tools for splitting/moving top-level objects and rewiring their imports
 mod refactor 'recipes/refactor.just'
+
+# Vendored pytest assertion subsystem (oss/pytest submodule)
 mod vendor 'recipes/vendor.just'
 
 # List available recipes
