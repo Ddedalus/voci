@@ -34,6 +34,7 @@ __all__ = [
     "Rule",
     "RuleTransformer",
     "TransformerRule",
+    "apply_all",
     "enabled",
     "rule",
 ]
@@ -253,6 +254,65 @@ class TransformerRule:
 def rule(transformer: type[RuleTransformer]) -> TransformerRule:
     """`transformer` as a rule, coded by its own `CODE`."""
     return TransformerRule(code=transformer.CODE, transformer=transformer)
+
+
+def apply_all(
+    module: cst.Module, active: Sequence[Rule], context: Context
+) -> tuple[cst.Module, list[Applied]]:
+    """`module` rewritten by every rule in `active`, in order, over one metadata resolution.
+
+    Equivalent to folding `Rule.apply` over `active`, but `ParentNodeProvider` and
+    `QualifiedNameProvider` are resolved once against `module` rather than once per rule: every
+    rule in `RULES` is a `TransformerRule`, so its pass can share one `MetadataWrapper`'s metadata
+    instead of each building its own and paying for a fresh scope resolution. Raises `TypeError`
+    for a `Rule` that isn't one, since there is nothing to share a pass with.
+    """
+    passes: list[RuleTransformer] = []
+    for transformer_rule in active:
+        if not isinstance(transformer_rule, TransformerRule):
+            raise TypeError(
+                f"apply_all only supports TransformerRule rules, got {transformer_rule.code!r}"
+            )
+        passes.append(transformer_rule.transformer(context))
+    wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
+    shared = wrapper.resolve_many((ParentNodeProvider, QualifiedNameProvider))
+    for pass_ in passes:
+        pass_.metadata = shared
+    new_module = wrapper.module.visit(_Pipeline(passes))
+    assert isinstance(new_module, cst.Module)
+    return new_module, [applied for pass_ in passes for applied in pass_.records]
+
+
+class _Pipeline(cst.CSTTransformer):
+    """Every pass in `passes`, run as one traversal in the order they're given.
+
+    Each node visits through every pass in turn — the `updated_node` one pass leaves behind is
+    what the next pass sees — which is what makes this equivalent to running each pass's own
+    `wrapper.visit()` in sequence. No current rule removes or flattens a node; if one ever does,
+    the passes after it simply see nothing further to rewrite there, same as they would if that
+    node were already gone from a prior, separate pass.
+    """
+
+    def __init__(self, passes: Sequence[RuleTransformer]) -> None:
+        super().__init__()
+        self._passes = passes
+
+    def on_visit(self, node: cst.CSTNode) -> bool:
+        visit_children = False
+        for pass_ in self._passes:
+            if pass_.on_visit(node):
+                visit_children = True
+        return visit_children
+
+    def on_leave(
+        self, original_node: cst.CSTNodeT, updated_node: cst.CSTNodeT
+    ) -> cst.CSTNodeT | cst.RemovalSentinel | cst.FlattenSentinel[cst.CSTNodeT]:
+        for pass_ in self._passes:
+            result = pass_.on_leave(original_node, updated_node)
+            if not isinstance(result, cst.CSTNode):
+                return result
+            updated_node = result
+        return updated_node
 
 
 # --- expression helpers, shared by the mark and body rules ----------------------------------

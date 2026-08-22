@@ -132,13 +132,9 @@ def run(
 
 
 def _rewrite(
-    module: cst.Module, work: FileWork, active: Collection[rules.Rule]
+    module: cst.Module, work: FileWork, active: Sequence[rules.Rule]
 ) -> tuple[cst.Module, list[rules.Applied], tuple[tuple[str, str], ...]]:
-    applied: list[rules.Applied] = []
-    for rule in active:
-        result = rule.apply(module, work.context)
-        module = result.module
-        applied.extend(result.applied)
+    module, applied = rules.apply_all(module, active, work.context)
 
     swapped = wiring.apply(
         module,
