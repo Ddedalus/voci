@@ -586,11 +586,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX208",
         "tmpdir, tmpdir_factory",
-        REFUSED,
-        "These are `py.path.local` objects with their own API — `.join`, `.strpath`, string "
-        "division — so the body has to change, not the name.",
-        action="Move the suite to `tmp_path` under pytest first; the bodies stay verified while "
-        "you do.",
+        MECHANICAL,
+        "Same names, `velox.tmpdir`/`velox.tmpdir_factory`'s own `LegacyPath` wrapping `.join`, "
+        "`.strpath`, `.write` and division the way pytest's own legacy shim does.",
+        target="velox.tmpdir, velox.tmpdir_factory",
     ),
     _row(
         "VX209",

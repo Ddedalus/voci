@@ -635,6 +635,72 @@ def test_tmp_path_factory_mktemp_numbers_by_construction(tmp_path: Path) -> None
     assert all(p.is_dir() for p in made)
 
 
+def test_tmpdir_wraps_the_same_directory_tmp_path_would(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    async def test_func(
+        d: velox.LegacyPath = velox.Depends(velox.tmpdir),
+    ) -> None:
+        seen["dir"] = d
+
+    (result,) = run_suite(
+        [_record(0, test_func, "test_func", plan=plan_for(test_func))],
+        basetemp=tmp_path / "base",
+    )
+
+    assert result.outcome is Outcome.PASSED, result.failure
+    d = seen["dir"]
+    assert isinstance(d, velox.LegacyPath)
+    assert Path(d.strpath).is_dir()
+
+
+def test_legacy_path_join_strpath_and_division_match_pathlib(tmp_path: Path) -> None:
+    wrapped = velox.LegacyPath(tmp_path)
+
+    assert wrapped.join("a", "b").strpath == str(tmp_path / "a" / "b")
+    assert (wrapped / "a").strpath == str(tmp_path / "a")
+    assert str(wrapped) == str(tmp_path)
+    assert os.fspath(wrapped) == str(tmp_path)
+
+
+def test_legacy_path_write_text_and_bytes(tmp_path: Path) -> None:
+    text_file = velox.LegacyPath(tmp_path / "a.txt")
+    text_file.write("hello")
+    assert (tmp_path / "a.txt").read_text() == "hello"
+
+    binary_file = velox.LegacyPath(tmp_path / "nested" / "b.bin")
+    binary_file.write(b"\x00\x01", mode="wb", ensure=True)
+    assert (tmp_path / "nested" / "b.bin").read_bytes() == b"\x00\x01"
+
+    with pytest.raises(TypeError):
+        velox.LegacyPath(tmp_path / "c.txt").write(b"not text")
+
+
+def test_legacy_path_falls_through_to_the_wrapped_path_for_a_shared_method(tmp_path: Path) -> None:
+    wrapped = velox.LegacyPath(tmp_path)
+    assert wrapped.exists()
+    with pytest.raises(AttributeError):
+        wrapped.listdir()  # a py.path.local-only method, not implemented here
+
+
+def test_tmpdir_factory_mktemp_and_getbasetemp_return_legacy_path(tmp_path: Path) -> None:
+    async def test_func(
+        factory: velox.LegacyTmpPathFactory = velox.Depends(velox.tmpdir_factory),
+    ) -> None:
+        made = factory.mktemp("data")
+        assert isinstance(made, velox.LegacyPath)
+        assert Path(made.strpath).is_dir()
+        base = factory.getbasetemp()
+        assert isinstance(base, velox.LegacyPath)
+
+    (result,) = run_suite(
+        [_record(0, test_func, "test_func", plan=plan_for(test_func))],
+        basetemp=tmp_path / "base",
+    )
+
+    assert result.outcome is Outcome.PASSED, result.failure
+
+
 def test_basetemp_override_is_cleared_before_use_when_it_looks_like_a_previous_basetemp(
     tmp_path: Path,
 ) -> None:

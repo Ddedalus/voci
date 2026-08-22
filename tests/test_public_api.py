@@ -143,9 +143,18 @@ def test_parametrize_rejects_a_mismatched_case() -> None:
 def test_builtin_fixtures_are_fixtures() -> None:
     assert velox.tmp_path.scope == "function"
     assert velox.tmp_path_factory.scope == "session"
+    assert velox.tmpdir.scope == "function"
+    assert velox.tmpdir_factory.scope == "session"
     assert all(
         isinstance(f, velox.Fixture)
-        for f in (velox.tmp_path, velox.capture, velox.log_records, velox.test_info)
+        for f in (
+            velox.tmp_path,
+            velox.tmpdir,
+            velox.tmpdir_factory,
+            velox.capture,
+            velox.log_records,
+            velox.test_info,
+        )
     )
 
 

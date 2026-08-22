@@ -53,6 +53,8 @@ __all__ = [
     "test_info_provider",
     "tmp_path_factory_provider",
     "tmp_path_provider",
+    "tmpdir_factory_provider",
+    "tmpdir_provider",
     "unattributed_sections",
     "uninstall",
 ]
@@ -832,3 +834,21 @@ async def tmp_path_factory_provider(
     del ctx
     setup = _require_installed()
     return _builtins.TmpPathFactory(setup.basetemp_root), None
+
+
+async def tmpdir_provider(
+    kwargs: Mapping[str, Any], ctx: BuiltinContext
+) -> tuple[Any, _Closer | None]:
+    """`velox.tmpdir`'s `BuiltinProvider`: the same directory `velox.tmp_path` allocates,
+    wrapped in `LegacyPath`."""
+    path, closer = await tmp_path_provider(kwargs, ctx)
+    return _builtins.LegacyPath(path), closer
+
+
+async def tmpdir_factory_provider(
+    kwargs: Mapping[str, Any], ctx: BuiltinContext
+) -> tuple[Any, _Closer | None]:
+    """`velox.tmpdir_factory`'s `BuiltinProvider`: `velox.tmp_path_factory`'s factory, wrapped
+    in `LegacyTmpPathFactory`."""
+    factory, closer = await tmp_path_factory_provider(kwargs, ctx)
+    return _builtins.LegacyTmpPathFactory(factory), closer

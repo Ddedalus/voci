@@ -108,7 +108,6 @@ def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
         "VX202",  # readouterr twice
         "VX203",  # capfd
         "VX205",  # caplog.set_level
-        "VX208",  # tmpdir
         "VX210",  # a raises object stashed rather than entered or called
         "VX214",  # pytest.skip() as a statement
         "VX215",  # importorskip

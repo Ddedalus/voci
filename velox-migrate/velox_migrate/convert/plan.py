@@ -48,6 +48,8 @@ _DECLINED = {"VX011": "VX028", "VX013": "VX014"}
 BUILTINS: Mapping[str, tuple[str, str]] = {
     "tmp_path": ("tmp_path", "velox.tmp_path"),
     "tmp_path_factory": ("tmp_path_factory", "velox.tmp_path_factory"),
+    "tmpdir": ("tmpdir", "velox.tmpdir"),
+    "tmpdir_factory": ("tmpdir_factory", "velox.tmpdir_factory"),
     "capsys": ("capture", "velox.capture"),
     "caplog": ("log_records", "velox.log_records"),
 }

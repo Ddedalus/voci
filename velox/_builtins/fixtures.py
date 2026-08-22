@@ -1,13 +1,13 @@
 """Built-in fixtures and the types they hand back.
 
-`tmp_path`, `tmp_path_factory`, `capture`, `log_records` and `test_info` are declared here as
-ordinary `Fixture` objects carrying a `provider`: the runtime calls that provider instead of the
-decorated function, and the providers themselves live in `velox._builtins.capture`, wired in at
-the bottom of this module.
+`tmp_path`, `tmp_path_factory`, `tmpdir`, `tmpdir_factory`, `capture`, `log_records` and
+`test_info` are declared here as ordinary `Fixture` objects carrying a `provider`: the runtime
+calls that provider instead of the decorated function, and the providers themselves live in
+`velox._builtins.capture`, wired in at the bottom of this module.
 
 The types those providers construct are defined here too — `Capture`, `LogRecords`,
-`TmpPathFactory` and `TestInfo` — each taking plain constructor arguments (a `Sink`-shaped
-protocol, a live `list[LogRecord]`, a `Path`).
+`TmpPathFactory`, `LegacyPath`, `LegacyTmpPathFactory` and `TestInfo` — each taking plain
+constructor arguments (a `Sink`-shaped protocol, a live `list[LogRecord]`, a `Path`).
 """
 
 from __future__ import annotations
@@ -17,12 +17,14 @@ from collections.abc import MutableSequence, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, final
+from typing import Any, Protocol, final
 
 from velox._di.fixtures import builtin_fixture, fixture
 
 __all__ = [
     "Capture",
+    "LegacyPath",
+    "LegacyTmpPathFactory",
     "LogRecords",
     "TestInfo",
     "TmpPathFactory",
@@ -31,6 +33,8 @@ __all__ = [
     "test_info",
     "tmp_path",
     "tmp_path_factory",
+    "tmpdir",
+    "tmpdir_factory",
 ]
 
 _RUNTIME = "provided by the velox runtime; not callable directly"
@@ -232,6 +236,77 @@ class TmpPathFactory:
         return self._basetemp
 
 
+@final
+class LegacyPath:
+    """A `pathlib.Path`, wrapped for suites still calling `.join`, `.strpath`, `/` or `.write`
+    on it the way pytest's own `tmpdir` does.
+
+    Only that shape is implemented; an attribute this class doesn't define falls through to the
+    wrapped `Path`, which covers a method the two share (`.exists()`, `.mkdir()`, ...) and raises
+    `AttributeError` for one that is `py.path.local`-only.
+    """
+
+    __slots__ = ("_path",)
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    @property
+    def strpath(self) -> str:
+        return str(self._path)
+
+    def join(self, *args: str) -> LegacyPath:
+        return LegacyPath(self._path.joinpath(*args))
+
+    def write(self, data: str | bytes, mode: str = "w", *, ensure: bool = False) -> None:
+        """Write `data` to the path, creating parent directories first if `ensure`.
+
+        `mode` picks text or binary, as `open()`'s own `mode` does; `data`'s type has to agree
+        with it, exactly as `py.path.local.write` requires.
+        """
+        if ensure:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        if "b" in mode:
+            if not isinstance(data, bytes):
+                raise TypeError(f"write(mode={mode!r}): expected bytes, got {type(data).__name__}")
+            self._path.write_bytes(data)
+        else:
+            if not isinstance(data, str):
+                raise TypeError(f"write(mode={mode!r}): expected str, got {type(data).__name__}")
+            self._path.write_text(data)
+
+    def __truediv__(self, other: str) -> LegacyPath:
+        return LegacyPath(self._path / other)
+
+    def __fspath__(self) -> str:
+        return str(self._path)
+
+    def __str__(self) -> str:
+        return str(self._path)
+
+    def __repr__(self) -> str:
+        return f"LegacyPath({self._path!r})"
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._path, name)
+
+
+@final
+class LegacyTmpPathFactory:
+    """`TmpPathFactory`, handing back `LegacyPath` instead of `Path`."""
+
+    __slots__ = ("_factory",)
+
+    def __init__(self, factory: TmpPathFactory) -> None:
+        self._factory = factory
+
+    def mktemp(self, basename: str, *, numbered: bool = True) -> LegacyPath:
+        return LegacyPath(self._factory.mktemp(basename, numbered=numbered))
+
+    def getbasetemp(self) -> LegacyPath:
+        return LegacyPath(self._factory.getbasetemp())
+
+
 @fixture()
 def tmp_path() -> Path:
     """A directory unique to this test, by construction: `basetemp/<sanitized-test-id>`."""
@@ -240,6 +315,18 @@ def tmp_path() -> Path:
 
 @fixture(scope="session")
 def tmp_path_factory() -> TmpPathFactory:
+    raise NotImplementedError(_RUNTIME)
+
+
+@fixture()
+def tmpdir() -> LegacyPath:
+    """`tmp_path`, wrapped as a `LegacyPath`."""
+    raise NotImplementedError(_RUNTIME)
+
+
+@fixture(scope="session")
+def tmpdir_factory() -> LegacyTmpPathFactory:
+    """`tmp_path_factory`, wrapped as a `LegacyTmpPathFactory`."""
     raise NotImplementedError(_RUNTIME)
 
 
@@ -271,6 +358,10 @@ from velox._builtins import capture as _capture  # noqa: E402
 tmp_path = builtin_fixture(tmp_path.func, provider=_capture.tmp_path_provider, scope="function")
 tmp_path_factory = builtin_fixture(
     tmp_path_factory.func, provider=_capture.tmp_path_factory_provider, scope="session"
+)
+tmpdir = builtin_fixture(tmpdir.func, provider=_capture.tmpdir_provider, scope="function")
+tmpdir_factory = builtin_fixture(
+    tmpdir_factory.func, provider=_capture.tmpdir_factory_provider, scope="session"
 )
 capture = builtin_fixture(capture.func, provider=_capture.capture_provider, scope="function")
 log_records = builtin_fixture(
