@@ -29,86 +29,32 @@ separate distribution — the velox runtime stays minimal.
 | §11 Q6: is `--concurrency 1` green a tool-enforced gate? | A subcommand (`verify`), strongly recommended in the workflow, not a hard gate — it requires both runners runnable in one env, which is not always true |
 | §11 Q7: coverage verification | Documented recipe, not a v1 tool feature |
 
-## 2. Package shape
-
-```
-velox-migrate/                    # workspace member; dist "velox-migrate", import velox_migrate
-  velox_migrate/
-    extractor.py                  # single-file pytest plugin, stdlib+pytest only, copyable
-    schema.py                     # dump schema: versioning, loader, refusal on mismatch
-    model.py                      # fixture graph + item model built from the dump
-    matrix.py                     # the support matrix: every pytest construct → classification
-    audit/                        # LibCST static scanners: §6 hazards, request.* uses, §5 traps
-    convert/                      # the codegen: plan, layout, wiring, declarations, markers, edits
-      rules/                      # VX001… LibCST codemod rules (the §5 mechanical layer)
-    prefactor/                    # pytest→pytest codemod rules (run while the suite is green)
-    specialize.py                 # §4.2 chain generation + fan-out budget
-    report/                       # terminal summary, migration-report.md, findings.json
-    cli.py                        # extract | audit | convert | verify
-  skills/                         # AI prefactor/postfactor skills (consume findings.json)
-  scripts/                        # artifact regeneration (corpus dumps)
-  corpus/                         # pytest suites converted end to end, then run under velox
-    dumps/                        # their ground-truth dumps, one per supported pytest
-  tests/
-```
-
-**Why a separate distribution:** the runtime must not carry LibCST, and the tool's lifecycle is
-different — migration tools finish and get archived (bump-pydantic's arc); velox doesn't.
 
 **Why the same repo:** the codegen targets velox's public API surface exactly, and drift between
 them is the tool's biggest correctness risk. In one repo, the corpus tests can run their
 *generated output under velox itself* in the same CI, so an API change that breaks generated code
 breaks a test the same day. A separate repo would rediscover that drift at release boundaries.
 
-**The extractor is deliberately a single file with no dependencies beyond pytest.** That is the
-whole answer to "the suite only collects inside a container": copy one file in, run
+**The extractor is deliberately a single file with no dependencies beyond pytest.** That is the whole answer to "the suite only collects inside a container": copy one file in, run
 `pytest -p extractor --collect-only`, copy one JSON file out. `velox-migrate extract` is a
-convenience wrapper for the common case where the dev environment can collect; the file is the
-portable unit. It pins `pytest>=8.4,<10` with three or four `hasattr` shims (the ground-truth
-research enumerates them), and the dump carries `extractor_version` + `pytest_version` so the
-codegen refuses mismatches loudly.
+convenience wrapper.
 
-## 3. The extraction decision, and why there is no static fallback
-
-The ground-truth research validated the extractor end to end: at collection time, without running
-a test, pytest hands over per-test resolution with overrides already decided
-(`name2fixturedefs`, chain ordered furthest→closest, winner last, the overridden super at `[-2]`
-— exactly §4.2's input), the autouse placement map keyed by visibility node (exactly §4.3's
-`velox.use` placement), per-case parametrize data with **pytest's generated id string captured
-verbatim** (closing §9 by copy instead of by reimplementation), mark provenance via public
-`iter_markers_with_node`, and resolved config plus the installed-plugin census for §7's
-pre-flight.
-
-The alternative — statically reimplementing conftest scoping, plugin fixture registration, and
-`pytest_generate_tests` — is §4.1's own warning: rebuilding the machinery velox exists to delete,
-with a permanent fidelity gap. A half-faithful static resolver is precisely the "test passes for
-a new reason" failure mode ranked worst in §1. So the position is strict: **no dump, no
-migration.** A suite that cannot collect under pytest cannot be migrated trustworthily by any
-method; the tool says so and stops. Static analysis is still used heavily — but only for what
-collection genuinely cannot see (test bodies: §5 traps, §6 hazards, `request.*` uses), never for
-name resolution.
-
-One consequence to document rather than fight: the dump is ground truth *for the environment it
-ran in*. Platform-conditional fixtures need one extraction per relevant environment; the dump
-records platform and plugin versions so `audit` can warn when it matters.
+The dump is ground truth *for the environment it ran in*. Platform-conditional fixtures need one extraction per relevant environment; the dump records platform and plugin versions so `audit` can warn when it matters.
 
 ## 4. The pipeline
 
 Four subcommands, coupled through files in `.velox-migrate/` so every stage is inspectable,
-resumable, and re-runnable — partial migration (§10) falls out of this rather than being a mode.
+resumable, and re-runnable.
 
-**`extract`** → `ground-truth.json`. Runs in the suite's environment; the only stage that needs
-pytest.
+**`extract`** → `ground-truth.json`. Runs in the suite's environment; the only stage that needs pytest.
 
-**`audit`** → `migration-report.md` + `findings.json` + terminal summary. Joins the dump with the
-static scan and classifies every construct against the support matrix:
+**`audit`** → `migration-report.md` + `findings.json` + terminal summary. Joins the dump with the static scan and classifies every construct against the support matrix:
 
 - *mechanical* — converted silently (the §5 table's clean rows);
 - *mechanical-with-marker* — converted, but semantics shifted enough to warrant a
   `VELOX-TODO[VXnnn]` marker (capsys double-`readouterr`, caplog `set_level`, id-sensitive CI
   configs);
-- *refused* — convertible only by a human decision: over-budget override chains,
-  `pytest.skip()` in a body (§5's most dangerous rename), computed `getfixturevalue`;
+- *refused* — convertible only by a human decision: computed `getfixturevalue`;
 - *unsupported* — the §3 "never" list and §7's no-recipe plugins, each with the manual path named;
 - *hazard* — §6 census entries with counts and file:line lists, plus the headline
   **percent-of-suite-serialized estimate** that makes the adoption decision rational.
@@ -119,9 +65,7 @@ and it must work well *before* anyone commits to converting.
 **`convert`** — the deterministic codegen. Dry-run is the default and prints the layout plan
 (where each fixture module goes, every collision rename, every specialization chain with its
 fan-out) plus a unified diff; `--write` is explicit. Byte-faithful edits to existing files;
-freshly synthesized fixture modules are formatted once with the user's formatter and never
-touched again. Every non-mechanical site gets `# VELOX-TODO[VXnnn]: reason` above the
-function it concerns, with an existence check making re-runs marker-idempotent.
+freshly synthesized fixture modules are formatted once with the user's formatter. Every non-mechanical site gets `# VELOX-TODO[VXnnn]: reason`.
 
 **`verify`** — runs pytest on the pre-migration tree and `velox --serial` on the converted tree,
 and compares outcomes test-for-test through the id map (trivial, since ids were emitted
@@ -147,79 +91,35 @@ That gives three tiers:
    module-level. Each shrinks `convert`'s surface, and each is verified by the suite staying
    green.
 
-2. **Prefactor skills** (AI-assisted, in `skills/`, driven by `findings.json`): the judgment
-   refactors — unwinding an over-budget conftest override into an explicit seam or a
-   parametrized base fixture; turning a `monkeypatch`/patched-global into an injected dependency;
-   untangling an autouse fixture doing several jobs. The skill proposes and applies a refactor
-   *in pytest terms*, the user runs pytest, green means proceed. This is where §11 Q5's DI-seam
-   question lands: the idiomatic result needs seams, the reviewable diff argues against doing it
-   in the conversion pass — so it happens in a different pass, with its own verification.
+2. **Prefactor skills** (AI-assisted, in `skills/`, driven by `findings.json`): the judgment refactors. The skill proposes and applies a refactor *in pytest terms*.
 
-3. **Postfactor skills**: triage after `verify` at concurrency — choosing `@velox.solo` vs
-   `@velox.isolated` vs a seam per §6 site, with the report supplying the context; and the
-   optional consolidate-fixtures cleanup for teams that want the idiomatic layout after the
-   reviewable diff has landed.
-
-AI never touches the wiring translation because the failure ranking demands it: a model that
-"helpfully" adjusts a fixture body during conversion is the silent-meaning-change failure, and
-determinism plus idempotency are what make `convert` re-runnable on a moving branch.
+3. **Postfactor skills**: triage after `verify` at concurrency — choosing `@velox.solo` vs `@velox.isolated` vs a seam per §6 site and the optional consolidate-fixtures cleanup for teams that want the idiomatic layout after the reviewable diff has landed.
 
 ## 6. Override chains without an override mechanism (§4.2)
 
-With no override feature in velox, a conftest override has exactly two honest translations, and
-the tool offers both:
+With no override feature in velox, a conftest override has two translations:
 
-- **Within budget**: `specialize.py` generates the specialized chain — the overriding fixture
-  plus a copy of every fixture strictly between it and each test that resolves through it, named
-  by scope (`settings_integration`, `engine_integration`, …), placed in the overriding
-  directory's fixture module. The dump's per-test chains make this mechanical, including the
-  "override requests its super" pattern (`[-2]`).
-- **Over budget**: refuse loudly. The audit reports each override's fan-out (how many downstream
-  fixtures × how many override scopes) so the expensive ones are visible before conversion; the
-  refusal points at the unwind-override skill, and the prefactored suite converts cleanly on the
-  next run.
+- **Within budget**: `specialize.py` generates the specialized chain — the overriding fixture plus a copy of every fixture strictly between it and each test that resolves through it, with new names.
+- **Over budget**: refuse loudly. The audit reports each override's fan-out , pointing at the unwind-override skill.
 
-The budget's unit is *generated fixtures per override scope*, default deliberately small (≈5,
-configurable). The rationale: a 2-fixture chain duplicated for one subtree reads fine in review;
-a 15-fixture chain duplicated for three subtrees is the 40,000-line diff §4.2 warns about, and
-that suite is better served by a seam it will want anyway. Erring toward refusal is consistent
-with the failure ranking, and the escape hatch is a skill run, not hand edits.
+The budget's unit is *generated fixtures per override scope*, default≈5,
+configurable.
 
 ## 7. Layout (§4.5)
 
 Preserve the conftest geography: each directory that had a `conftest.py` gets a `fixtures.py`
 (the non-fixture conftest content — helpers, constants — moves alongside; hooks are refused with
-their own marker category). Rationale: the diff stays reviewable because every fixture moves the
-shortest possible distance, the override/specialization structure stays legible in the tree, and
-name collisions stay rare because the directory keyed them apart in pytest too. Where two
-`fixtures.py` still collide at an import site, the import aliases by path
-(`from tests.integration.fixtures import client as integration_client`). All imports are emitted
-rootdir-relative absolute — never relative — because test modules load under synthetic
-`velox_tests.*` names. `velox.use` placement comes straight from the dump's autouse map: a
-visibility node of `integration` becomes a declaration in `integration/__init__.py`, created if
-absent, importing from the sibling `fixtures.py` — along with an `__init__.py` in every directory
-between it and each test it covers, since velox reads a package declaration by walking up from the
-test file and stops at the first directory that is not a package.
+their own marker category).
+
+Where two `fixtures.py` still collide at an import site, the import aliases by path (`from tests.integration.fixtures import client as integration_client`). 
 
 ## 8. Codegen platform and discipline
 
-LibCST ≥ 1.9, alone (evidence and alternatives in the research doc — ast-grep is detection-grade
-only, tokenize-hybrid is the wrong shape for decorator/signature/layout surgery, everything else
-is dead). The disciplines adopted from prior art:
+LibCST ≥ 1.9. The disciplines adopted from prior art:
 
-- **bump-pydantic's registry shape**: numbered rules (`VX001…`), individually disableable, each
-  mapping one row of the support matrix, so report categories, marker categories, and rule ids
-  reconcile by grep.
-- **pyupgrade's fixpoint idempotency**: every rule matches only pytest source forms, which the
-  rewrite eliminates — idempotent by construction — plus explicit marker-existence checks (the
-  one place bump-pydantic's history shows that construction fails).
-- **django-codemod's `CodemodTest` pattern**: verbatim before/after source assertions per rule,
-  which double as format-preservation pins.
-- **The corpus as the real test bed**: golden suites converted end-to-end, run twice
-  (byte-identical second run asserted), and their output executed under velox in CI — the
-  drift alarm that justifies the monorepo.
-- `QualifiedNameProvider` everywhere a `pytest` spelling is matched (aliased imports),
-  `AddImportsVisitor` for imports, `SkipFile` for per-file refusal.
+- **bump-pydantic's registry shape**: numbered rules (`VX001…`)
+- **pyupgrade's fixpoint idempotency**: every rule matches only pytest source forms, which the rewrite eliminates.
+- **django-codemod's `CodemodTest` pattern**: verbatim before/after source assertions per rule, which double as format-preservation pins.
 
 ## 9. Build order
 

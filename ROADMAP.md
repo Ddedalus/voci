@@ -26,7 +26,6 @@ test earns for returning a value or dropping a coroutine un-awaited · the repor
 ## Next
 **Codegen**: velox-migrate, plans:
 High-level in `plans/migration-tool-plan.md`
-Currently chewing through: `plans/migration-matrix-improvements.md`
 
 Next: smoke-test on real open-source suites:
 1. Marshmallow

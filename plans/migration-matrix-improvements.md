@@ -10,39 +10,17 @@ A construct is `REFUSED` or `UNSUPPORTED` for one of three reasons:
 
 This document focuses on category 1: features velox could add to unlock matrix rows that are currently stuck for lack of them, not for architectural reasons.
 
-## Candidates for velox changes
+## Done
 
 VX210, VX213, VX206, VX105, VX102, VX208 and VX214 are done — promoted to `MECHANICAL` in
-[the matrix](../velox-migrate/velox_migrate/matrix.py) and converted by
-`velox_migrate.convert.rules.marks` (VX105, VX102) and `.bodies` (VX210, VX213, VX206, VX214).
-VX208 needs no rule of its own: `tmpdir`/`tmpdir_factory` keep their names, so the wiring rewrite
-that already renames a builtin fixture's parameter carries them across unchanged.
-
-VX105's `condition=` lands as `velox.xfail(reason, condition=...)` on `velox._marks.XFail`,
-decided once at collection (`_collection.collect._case_disposition`) rather than re-evaluated by
-the runner. A string condition (pytest's own evaluate-later spelling) is its own row, VX116,
-mirroring VX103's string `skipif`. VX102's `velox.case(*values, marks=...)` reads the same
-decorators a test would carry by applying them to a stand-in function, so one case's marks and a
-test's own share one spelling and one validation path; `ParamSet.case_marks` and `parametrize.Case`
-carry them through expansion.
+[the matrix](../velox-migrate/velox_migrate/matrix.py) 
 
 VX208's `LegacyPath` (`velox/_builtins/fixtures.py`) wraps a `pathlib.Path` with `.join`,
 `.strpath`, `.write`, `.mkdir` and `/` division — the shape pytest's own `tmpdir` shim carries —
-and falls through to the wrapped `Path` for a method the two share by coincidence. `.mkdir` is
-overridden rather than left to that fallthrough: it takes the name to create, not `Path.mkdir`'s
-`mode`/`parents`/`exist_ok`. `velox.tmpdir`/`velox.tmpdir_factory` hand one back instead of a bare
-`Path`/`TmpPathFactory`, mirroring pytest's own
-`tmp_path`-then-`tmpdir` layering.
 
-VX214's feature turned out to be two `BaseException` subclasses, `velox.Skipped`/`velox.Failed`
-(`velox/_run/run.py`, alongside `Outcome`, which grew a `SKIPPED` member for them), not a
-function: `velox.skip`/`velox.xfail` are already taken as decorator-factory names, and pytest's
-own `Skipped`/`Failed` are `BaseException`s too, so a body's `except Exception:` can't
-accidentally swallow one. `_run_one` catches either in the setup or call phase and reports
-`SKIPPED`, ahead of `xfail`'s reclassification but behind a later teardown failure — the same
-priority pytest's own imperative skip gets. `pytest.xfail()` as a statement stays refused (its own
-row now, VX223): there is no runtime target for an expectation `@velox.xfail(...)` only ever
-decides once, at collection, before the test has run.
+## Abandoned for now
+
+Too much fuss for rare syntax:
 
 | Code | Current | Feature | Promoted to |
 |---|---|---|---|
@@ -55,9 +33,3 @@ decides once, at collection, before the test has run.
 - **VX113** — Double marks (e.g., two `@velox.skip` on one test) are deliberate validation errors, not gaps.
 - **VX019, VX215** — The matrix's own `action` text describes a tool rewrite the migration tool could perform today, not a velox gap.
 - **Hazard block (VX401–VX416)** — These exist because velox runs tests concurrently. "Fixing" them would mean abandoning concurrency.
-
-## Next steps
-
-The remaining candidates are ordered by implementation cost and audit impact. Each row carries an `action` in the matrix itself; promoting it moves that action from a "manual rewrite" task to "the migration tool can do it."
-
-Consider prototyping the cheapest of what's left as velox features and re-running the migration tool on a real OSS suite to measure the impact on the final report.
