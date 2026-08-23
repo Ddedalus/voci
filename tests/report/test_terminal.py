@@ -222,6 +222,35 @@ def test_file_block_counts_a_runtime_skip_alongside_a_marked_one() -> None:
     assert "no backend" not in out
 
 
+def test_a_file_whose_every_dispatched_test_skips_at_runtime_reads_as_skip_not_pass() -> None:
+    """Unlike a mixed file (previous test), a file with results but none of them anything but
+    `velox.Skipped` has nothing to call `PASS`: it reads as `SKIP`, the same status a wholly
+    collection-time-skipped file gets, and does not also repeat the count as `(N skipped)` --
+    the status word has already said it."""
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path), _test_record(f"{path}::test_b", path)]
+    reporter, stream = _reporter(records)
+
+    reporter.on_result(_result(f"{path}::test_a", 0, outcome=Outcome.SKIPPED, failure="a"))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.SKIPPED, failure="b"))
+
+    out = stream.getvalue()
+    assert "SKIP" in out
+    assert "PASS" not in out
+    assert "2 tests" in out
+    assert "skipped)" not in out
+
+
+def test_quiet_marks_a_wholly_runtime_skipped_file_with_an_s_not_a_dot() -> None:
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path)]
+    reporter, stream = _reporter(records, verbosity=-1)
+
+    reporter.on_result(_result(f"{path}::test_a", 0, outcome=Outcome.SKIPPED, failure="no backend"))
+
+    assert stream.getvalue() == "s"
+
+
 def test_a_wholly_skipped_file_gets_a_skip_block_from_flush_pending() -> None:
     """No test of the file ever reports in, so `on_result` never reaches its block -- without
     `flush_pending` printing it, the file would vanish from the run's output entirely."""

@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 
 import libcst as cst
 
-from velox_migrate.audit.sources import APPROX_KINDS, approx_nested
+from velox_migrate.audit.sources import APPROX_KINDS, approx_nested, imperative_reason_args
 from velox_migrate.convert.rules import (
     Context,
     RuleTransformer,
@@ -456,10 +456,6 @@ class _Imperative(_BodyPass):
     CODE = "VX214"
 
     _TARGETS: Mapping[str, str] = {"pytest.skip": "Skipped", "pytest.fail": "Failed"}
-    _REASON_KEYWORDS: Mapping[str, frozenset[str]] = {
-        "pytest.skip": frozenset({"reason"}),
-        "pytest.fail": frozenset({"reason", "msg"}),
-    }
 
     def leave_Expr(self, original_node: cst.Expr, updated_node: cst.Expr) -> cst.BaseSmallStatement:
         call = original_node.value
@@ -479,33 +475,20 @@ class _Imperative(_BodyPass):
                 code="VX223",
             )
             return updated_node
-        args = self._args(call, name)
-        if args is None:
-            return updated_node
-        target = self._TARGETS[name]
-        self.record(f"`{render(call)}` becomes `raise velox.{target}(...)`.")
-        return cst.Raise(exc=cst.Call(func=velox(target), args=args))
-
-    def _args(self, call: cst.Call, name: str) -> list[cst.Arg] | None:
-        """`call`'s reason as zero or one positional argument for `velox.Skipped`/`Failed`, or
-        `None` where the shape is left alone (having already recorded why)."""
-        given = positional(call)
-        allowed = self._REASON_KEYWORDS[name]
-        reason_kwargs = [kw for kw in sorted(allowed) if keyword(call, kw) is not None]
-        unknown = keywords(call) - allowed
-        if starred(call) or unknown or len(given) > 1 or bool(given) + len(reason_kwargs) > 1:
+        # The eligibility check -- and what counts as *the* reason -- lives in `audit.sources`,
+        # which the VX214 scan reads the very same call for ahead of any rewrite running; a
+        # second, hand-kept copy here would drift from what the audit predicts.
+        reason_args = imperative_reason_args(call, name)
+        if reason_args is None:
             self.record(
                 f"`{render(call)}` is left as it is: `velox.{self._TARGETS[name]}` takes only "
                 "the reason, positionally."
             )
-            return None
-        if given:
-            return [argument(given[0].value)]
-        if reason_kwargs:
-            arg = keyword(call, reason_kwargs[0])
-            assert arg is not None
-            return [argument(arg.value)]
-        return []
+            return updated_node
+        target = self._TARGETS[name]
+        self.record(f"`{render(call)}` becomes `raise velox.{target}(...)`.")
+        args = [argument(reason) for reason in reason_args]
+        return cst.Raise(exc=cst.Call(func=velox(target), args=args))
 
 
 class _GetFixtureValue(_BodyPass):

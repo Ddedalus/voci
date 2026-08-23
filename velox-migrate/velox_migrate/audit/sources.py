@@ -639,7 +639,7 @@ class _Scanner(cst.CSTVisitor):
             )
             return
         for name in ("pytest.skip", "pytest.fail"):
-            if name in names and _imperative_unconvertible(call, name):
+            if name in names and imperative_reason_args(call, name) is None:
                 self._report(
                     "VX214", call, f"`{name}({_arguments(call)})` is called as a statement."
                 )
@@ -987,31 +987,41 @@ def _keyword(node: cst.Call, name: str) -> cst.Arg | None:
 
 
 # The keyword `pytest.skip`/`pytest.fail` accept for their reason -- `fail`'s `msg=` is a
-# deprecated alias for `reason=`. Mirrors `convert.rules.bodies._Imperative._REASON_KEYWORDS`,
-# which is what actually decides whether the call converts; this is only the audit's own read of
-# the same shape, ahead of any rewrite running.
-_IMPERATIVE_REASON_KEYWORDS: Mapping[str, frozenset[str]] = {
+# deprecated alias for `reason=`. Exported for `convert.rules.bodies._Imperative` to share: this
+# module is what decides VX214's shape (this file is already the lower layer -- `bodies.py`
+# imports `APPROX_KINDS`/`approx_nested` from here too), so the rewrite rule reads the same
+# eligibility this scan reports against, rather than a second hand-kept copy of it.
+IMPERATIVE_REASON_KEYWORDS: Mapping[str, frozenset[str]] = {
     "pytest.skip": frozenset({"reason"}),
     "pytest.fail": frozenset({"reason", "msg"}),
 }
 
 
-def _imperative_unconvertible(node: cst.Call, name: str) -> bool:
-    """Whether `node`, a bare `pytest.skip`/`pytest.fail` statement, is a shape VX214's rewrite
-    rule leaves alone: more than one candidate reason (a positional alongside a keyword, or
-    both of `fail`'s two spellings), a keyword neither name accepts (`allow_module_level=`,
-    `pytrace=`), or a `*`/`**` unpack that might carry one of either."""
+def imperative_reason_args(node: cst.Call, name: str) -> tuple[cst.BaseExpression, ...] | None:
+    """`node` -- a bare `pytest.skip`/`pytest.fail` call -- as the zero or one reason expression
+    VX214's rewrite passes `velox.Skipped`/`velox.Failed` positionally, or `None` where the shape
+    is left alone: more than one candidate reason (a positional alongside a keyword, or both of
+    `fail`'s two spellings), a keyword neither name accepts (`allow_module_level=`, `pytrace=`),
+    or a `*`/`**` unpack that might carry one of either."""
     given = _positional(node)
-    allowed = _IMPERATIVE_REASON_KEYWORDS[name]
+    allowed = IMPERATIVE_REASON_KEYWORDS[name]
     all_keywords = frozenset(arg.keyword.value for arg in node.args if arg.keyword is not None)
     reason_keywords = [kw for kw in sorted(allowed) if _keyword(node, kw) is not None]
     unpacked = any(arg.star in ("*", "**") for arg in node.args)
-    return (
+    if (
         unpacked
         or bool(all_keywords - allowed)
         or len(given) > 1
         or bool(given) + len(reason_keywords) > 1
-    )
+    ):
+        return None
+    if given:
+        return (given[0].value,)
+    if reason_keywords:
+        arg = _keyword(node, reason_keywords[0])
+        assert arg is not None
+        return (arg.value,)
+    return ()
 
 
 def _condition(node: cst.Call, positional: list[cst.Arg]) -> cst.BaseExpression | None:

@@ -352,6 +352,34 @@ def test_teardown_raises_a_group_when_multiple_releases_fail() -> None:
     assert {str(exc) for exc in group.exceptions} == {"a boom", "b boom"}
 
 
+def test_teardown_folds_a_skipped_or_failed_closer_into_the_group_too() -> None:
+    """`velox.Skipped`/`velox.Failed` are `BaseException`s, not `Exception`s -- like the
+    `KeyboardInterrupt`/`SystemExit`/`CancelledError` this loop's `except Exception` is
+    deliberately narrowed to let through unfolded. Unlike those three, a closer raising one is an
+    ordinary teardown failure, not an interrupt: it must still fold into the group, and the
+    *other* key's closer must still run rather than being abandoned."""
+
+    async def _build_skips():
+        async def closer() -> None:
+            raise velox.Skipped("skip boom")
+
+        return "skips", closer
+
+    async def scenario() -> BaseExceptionGroup:
+        store = ScopeStore()
+        fx = velox.fixture()(lambda: None)
+        key_a, key_b = ("function", 1, "a"), ("function", 1, "skips")
+        await store.acquire(key_a, "function", fx, _build_a)
+        await store.acquire(key_b, "function", fx, _build_skips)
+
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            await teardown(store, [key_a, key_b])
+        return excinfo.value
+
+    group = run(scenario())
+    assert {str(exc) for exc in group.exceptions} == {"a boom", "skip boom"}
+
+
 def test_aclose_raises_a_group_when_multiple_session_closers_fail() -> None:
     """`aclose` force-tears-down every remaining entry regardless of scope; two closers failing
     at once must both surface, not just the first."""

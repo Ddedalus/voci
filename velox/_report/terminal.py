@@ -171,8 +171,11 @@ class Reporter:
 
         The count is what this run accounted for in that file -- its tests that ran, plus
         its tests a skip mark kept from running -- and `SKIP` is the status of a file with
-        nothing in the first group. `STOP` is the status of a file the run was stopped in
-        the middle of: nothing in it failed, but not everything in it got to answer."""
+        nothing in the first group: no dispatched result at all (every test there was
+        collection-time skip-marked), or a dispatched result that was itself a runtime
+        `velox.Skipped` for every one of them. `STOP` is the status of a file the run was
+        stopped in the middle of: nothing in it failed, but not everything in it got to
+        answer."""
         failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
         cancelled = sum(1 for result in results if result.outcome is Outcome.CANCELLED)
         # A `velox.Skipped` raised mid-run, folded into the same annotation as a skip mark's:
@@ -181,11 +184,16 @@ class Reporter:
         # did run through setup (and maybe the call) before it skipped.
         runtime_skipped = sum(1 for result in results if result.outcome is Outcome.SKIPPED)
         skipped = self._skipped_by_path.get(path, 0)
+        # Dispatched results that answered with something other than a runtime skip -- what
+        # makes this file's status `PASS` rather than `SKIP` below. A file with results that
+        # are *all* `velox.Skipped` has nothing here, exactly like a file with no results at
+        # all (every test collection-time skip-marked): neither has anything to call `PASS`.
+        answered = len(results) - runtime_skipped
         if failed:
             status, character, status_color = "FAIL", "F", _color.RED
         elif cancelled:
             status, character, status_color = "STOP", "!", _color.YELLOW
-        elif results:
+        elif answered:
             status, character, status_color = "PASS", ".", _color.GREEN
         else:
             status, character, status_color = "SKIP", "s", _color.YELLOW
@@ -223,9 +231,11 @@ class Reporter:
             line += "   " + _color.paint(
                 f"({cancelled} cancelled)", _color.YELLOW, enabled=self._color_enabled
             )
-        # Only where it qualifies the count: on a wholly skipped file `SKIP` has said it.
+        # Only where it qualifies the count: on a wholly skipped file `SKIP` has already said
+        # it, whether that file dispatched nothing at all or dispatched results that were all
+        # `velox.Skipped`.
         noted_skips = skipped + runtime_skipped
-        if noted_skips and results:
+        if noted_skips and status != "SKIP":
             line += "   " + _color.paint(
                 f"({noted_skips} skipped)", _color.YELLOW, enabled=self._color_enabled
             )

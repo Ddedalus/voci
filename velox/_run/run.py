@@ -53,16 +53,15 @@ from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
 from velox._di.fixtures import exclusive_tokens_of
 from velox._marks import Marks, XFail
+from velox._outcomes import Skipped
 from velox._run import isolated as _isolated
 from velox._run import safety as _safety
 
 __all__ = [
     "FAILING_OUTCOMES",
     "AdmissionGate",
-    "Failed",
     "IsolatedConfig",
     "Outcome",
-    "Skipped",
     "StopController",
     "TestResult",
     "exit_code_for",
@@ -84,30 +83,6 @@ DEFAULT_CONCURRENCY = 16
 #: for a clean release of whatever this test held" -- generous enough for a container to stop or
 #: a connection pool to drain, short enough that Ctrl-C still feels like Ctrl-C.
 DEFAULT_TEARDOWN_GRACE = 5.0
-
-
-class Skipped(BaseException):
-    """Raise to skip the running test immediately -- the runtime counterpart of
-    `@velox.skip`/`@velox.skipif`, which decide once at collection instead. `_run_one` catches
-    this in both the setup and call phase and reports `Outcome.SKIPPED`, with `str(self)` as the
-    reason; whatever ran before the raise already ran, and fixtures already acquired are still
-    torn down normally.
-
-    A `BaseException`, not an `Exception` -- like pytest's own `Skipped`, so a test or fixture
-    body's `except Exception:` doesn't accidentally swallow the skip signal it was never meant to
-    catch.
-    """
-
-
-class Failed(BaseException):
-    """Raise to fail the running test immediately, with a message rather than an assertion --
-    the runtime counterpart of writing `assert False, msg`. Caught nowhere specially: any
-    exception already fails a test's call phase, so this is just a named spelling of "fail with
-    this message", for the cases pytest's own `pytest.fail()` covers.
-
-    A `BaseException`, not an `Exception`, for the same reason `Skipped` is: a broad
-    `except Exception:` around a test's own code must not swallow a deliberate failure signal.
-    """
 
 
 class Outcome(enum.Enum):

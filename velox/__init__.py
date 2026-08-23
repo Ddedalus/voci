@@ -44,7 +44,7 @@ from velox._marks import (
     timeout,
     xfail,
 )
-from velox._run.run import Failed, Skipped
+from velox._outcomes import Failed, Skipped
 from velox._version import __version__
 
 # Grouped by purpose above (DI, marks, built-in fixtures, assertions) but sorted alphabetically
