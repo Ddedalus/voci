@@ -632,8 +632,14 @@ class _Scanner(cst.CSTVisitor):
         call = node.value
         if not isinstance(call, cst.Call):
             return
-        for name in sorted(self._names(call)):
-            if name in ("pytest.skip", "pytest.fail", "pytest.xfail"):
+        names = self._names(call)
+        if "pytest.xfail" in names:
+            self._report(
+                "VX223", call, f"`pytest.xfail({_arguments(call)})` is called as a statement."
+            )
+            return
+        for name in ("pytest.skip", "pytest.fail"):
+            if name in names and _imperative_unconvertible(call, name):
                 self._report(
                     "VX214", call, f"`{name}({_arguments(call)})` is called as a statement."
                 )
@@ -978,6 +984,34 @@ def _keyword(node: cst.Call, name: str) -> cst.Arg | None:
         if arg.keyword is not None and arg.keyword.value == name:
             return arg
     return None
+
+
+# The keyword `pytest.skip`/`pytest.fail` accept for their reason -- `fail`'s `msg=` is a
+# deprecated alias for `reason=`. Mirrors `convert.rules.bodies._Imperative._REASON_KEYWORDS`,
+# which is what actually decides whether the call converts; this is only the audit's own read of
+# the same shape, ahead of any rewrite running.
+_IMPERATIVE_REASON_KEYWORDS: Mapping[str, frozenset[str]] = {
+    "pytest.skip": frozenset({"reason"}),
+    "pytest.fail": frozenset({"reason", "msg"}),
+}
+
+
+def _imperative_unconvertible(node: cst.Call, name: str) -> bool:
+    """Whether `node`, a bare `pytest.skip`/`pytest.fail` statement, is a shape VX214's rewrite
+    rule leaves alone: more than one candidate reason (a positional alongside a keyword, or
+    both of `fail`'s two spellings), a keyword neither name accepts (`allow_module_level=`,
+    `pytrace=`), or a `*`/`**` unpack that might carry one of either."""
+    given = _positional(node)
+    allowed = _IMPERATIVE_REASON_KEYWORDS[name]
+    all_keywords = frozenset(arg.keyword.value for arg in node.args if arg.keyword is not None)
+    reason_keywords = [kw for kw in sorted(allowed) if _keyword(node, kw) is not None]
+    unpacked = any(arg.star in ("*", "**") for arg in node.args)
+    return (
+        unpacked
+        or bool(all_keywords - allowed)
+        or len(given) > 1
+        or bool(given) + len(reason_keywords) > 1
+    )
 
 
 def _condition(node: cst.Call, positional: list[cst.Arg]) -> cst.BaseExpression | None:

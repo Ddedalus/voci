@@ -41,7 +41,7 @@ SUITE = Suite(
 # One code per disposition, plus a second hazard and a config code, so every section of a report
 # has something in it.
 UNSUPPORTED = "VX020"
-REFUSED = "VX214"
+REFUSED = "VX014"
 MARKED = "VX003"
 HAZARD = "VX401"
 SERIAL_HAZARD = "VX402"
@@ -129,7 +129,7 @@ def test_the_payload_matrix_holds_exactly_the_codes_the_findings_use() -> None:
         {UNSUPPORTED, REFUSED, MARKED, HAZARD, SERIAL_HAZARD, MECHANICAL, CONFIG}
     )
     assert data["matrix"][REFUSED]["disposition"] == "refused"
-    assert data["matrix"][REFUSED]["area"] == "bodies"
+    assert data["matrix"][REFUSED]["area"] == "wiring"
     assert data["matrix"][MARKED]["marker"] == "scope"
     assert data["matrix"][SERIAL_HAZARD]["serialized"] is True
 

@@ -634,11 +634,12 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX214",
-        "pytest.skip(), pytest.fail(), pytest.xfail() as a statement",
-        REFUSED,
-        "`velox.skip` is a decorator factory: called in a body it builds a decorator, discards it "
-        "and lets the test run on. Renaming this would turn a conditional skip into a silent pass.",
-        action="Lift the condition into `@velox.skipif`, or make the test assert what it means.",
+        "pytest.skip(), pytest.fail() as a statement",
+        MECHANICAL,
+        "`velox.skip` is a decorator factory, not a runtime call -- calling it in a body builds "
+        "a decorator and discards it, which would turn a conditional skip into a silent pass, so "
+        "these become `velox.Skipped`/`velox.Failed`, raised directly, instead.",
+        target="velox.Skipped, velox.Failed",
     ),
     _row(
         "VX215",
@@ -709,6 +710,16 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "for `get_records` to read.",
         action="Assert on `records` or `messages` directly instead of `handler`; there is no "
         "phase-scoped equivalent for `get_records`.",
+    ),
+    _row(
+        "VX223",
+        "pytest.xfail() as a statement",
+        UNSUPPORTED,
+        "Unlike `pytest.skip()`/`pytest.fail()`, this has no runtime target to become: it marks "
+        "the test as an expected failure and stops it right there, which `@velox.xfail(...)`'s "
+        "condition -- decided once at collection, before the test has run at all -- can't reach.",
+        action="Lift the condition into `@velox.xfail(condition=...)`, if it's known before the "
+        "test runs; otherwise let the test fail and mark it `@velox.xfail` unconditionally.",
     ),
     # --- configuration and plugins -------------------------------------------------------------
     _row(

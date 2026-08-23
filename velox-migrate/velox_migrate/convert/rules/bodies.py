@@ -10,6 +10,12 @@ rewritten only in the shapes velox has: a `raises` entered by a `with` or called
 exception it expects and the callable it wraps, and an `approx` over a scalar, a list, a tuple, or
 a dict. Anything else is left as it was written, with the row that refuses it recorded.
 
+`pytest.skip`/`pytest.fail`, called as a statement rather than read off a mark, become a `raise`
+of `velox.Skipped`/`velox.Failed` -- the runtime counterparts of the `skip`/`xfail` marks, for a
+body that decides mid-run rather than at collection. `pytest.xfail` the same way stays refused:
+there is no runtime target for an expectation `@velox.xfail(...)` only ever decides once, ahead of
+the test running at all.
+
 The two `request` rules are the exception to a rule deciding anything: what a name means and
 whether a teardown can move are questions about the whole suite and about a factory's shape, so
 the plan answers them from the audit and these rules rewrite only the sites it names.
@@ -429,6 +435,79 @@ class _Approx(_BodyPass):
         return None
 
 
+class _Imperative(_BodyPass):
+    """VX214: `pytest.skip(reason)`/`pytest.fail(reason)`, called as a bare statement, becoming
+    `raise velox.Skipped(reason)`/`raise velox.Failed(reason)` -- the two are `BaseException`s a
+    body raises directly, not decorators like `velox.skip`/`velox.xfail`, whose own row this
+    would otherwise collide with (calling a decorator factory in a body builds a decorator and
+    discards it, turning a conditional skip into a silent pass). VX223: `pytest.xfail(...)` the
+    same way, which stays refused -- there is no runtime target for it, since `@velox.xfail`'s
+    condition is decided once, at collection, before the test has run at all.
+
+    Only the reason itself carries over. `reason=`/`fail`'s deprecated `msg=` become a plain
+    positional argument either way: `Skipped`/`Failed` are bare `BaseException`s, and raising one
+    with a keyword argument raises `TypeError` instead of the outcome it names. A call passing
+    `allow_module_level=` (skip's own import-time form) or `pytrace=` (fail), an unknown keyword,
+    a `**` unpack that might carry one, or more than one candidate reason (a positional alongside
+    a keyword, or both of fail's two spellings) is left as it is -- none of those has a velox
+    equivalent, or a reason this rule can pick out on its own.
+    """
+
+    CODE = "VX214"
+
+    _TARGETS: Mapping[str, str] = {"pytest.skip": "Skipped", "pytest.fail": "Failed"}
+    _REASON_KEYWORDS: Mapping[str, frozenset[str]] = {
+        "pytest.skip": frozenset({"reason"}),
+        "pytest.fail": frozenset({"reason", "msg"}),
+    }
+
+    def leave_Expr(self, original_node: cst.Expr, updated_node: cst.Expr) -> cst.BaseSmallStatement:
+        call = original_node.value
+        if self.is_blocked or not isinstance(call, cst.Call):
+            return updated_node
+        name = next(
+            (n for n in ("pytest.skip", "pytest.fail", "pytest.xfail") if n in self.names(call)),
+            None,
+        )
+        if name is None:
+            return updated_node
+        if name == "pytest.xfail":
+            self.record(
+                f"`{render(call)}` is left as it is: there is no runtime target for it -- "
+                "`@velox.xfail(...)`'s condition is decided once at collection, before the test "
+                "has run.",
+                code="VX223",
+            )
+            return updated_node
+        args = self._args(call, name)
+        if args is None:
+            return updated_node
+        target = self._TARGETS[name]
+        self.record(f"`{render(call)}` becomes `raise velox.{target}(...)`.")
+        return cst.Raise(exc=cst.Call(func=velox(target), args=args))
+
+    def _args(self, call: cst.Call, name: str) -> list[cst.Arg] | None:
+        """`call`'s reason as zero or one positional argument for `velox.Skipped`/`Failed`, or
+        `None` where the shape is left alone (having already recorded why)."""
+        given = positional(call)
+        allowed = self._REASON_KEYWORDS[name]
+        reason_kwargs = [kw for kw in sorted(allowed) if keyword(call, kw) is not None]
+        unknown = keywords(call) - allowed
+        if starred(call) or unknown or len(given) > 1 or bool(given) + len(reason_kwargs) > 1:
+            self.record(
+                f"`{render(call)}` is left as it is: `velox.{self._TARGETS[name]}` takes only "
+                "the reason, positionally."
+            )
+            return None
+        if given:
+            return [argument(given[0].value)]
+        if reason_kwargs:
+            arg = keyword(call, reason_kwargs[0])
+            assert arg is not None
+            return [argument(arg.value)]
+        return []
+
+
 class _GetFixtureValue(_BodyPass):
     """VX011: `request.getfixturevalue("name")`, which is a parameter the signature grows.
 
@@ -613,4 +692,5 @@ RULES: tuple[TransformerRule, ...] = (
     rule(_SetLevel),
     rule(_Raises),
     rule(_Approx),
+    rule(_Imperative),
 )

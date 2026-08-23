@@ -1179,7 +1179,7 @@
   {
    "nodeid": "check_bodies.py::test_raises",
    "path": "check_bodies.py",
-   "lineno": 15,
+   "lineno": 19,
    "originalname": "test_raises",
    "cls": null,
    "own_markers": [],
@@ -1194,7 +1194,7 @@
   {
    "nodeid": "check_bodies.py::test_approx",
    "path": "check_bodies.py",
-   "lineno": 23,
+   "lineno": 27,
    "originalname": "test_approx",
    "cls": null,
    "own_markers": [],
@@ -1209,7 +1209,7 @@
   {
    "nodeid": "check_bodies.py::test_capsys",
    "path": "check_bodies.py",
-   "lineno": 27,
+   "lineno": 31,
    "originalname": "test_capsys",
    "cls": null,
    "own_markers": [],
@@ -1235,7 +1235,7 @@
   {
    "nodeid": "check_bodies.py::test_caplog",
    "path": "check_bodies.py",
-   "lineno": 33,
+   "lineno": 37,
    "originalname": "test_caplog",
    "cls": null,
    "own_markers": [],
@@ -1261,7 +1261,7 @@
   {
    "nodeid": "check_bodies.py::test_skipif_string_condition",
    "path": "check_bodies.py",
-   "lineno": 40,
+   "lineno": 44,
    "originalname": "test_skipif_string_condition",
    "cls": null,
    "own_markers": [
@@ -1287,6 +1287,36 @@
      }
     }
    ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "check_bodies.py::test_imperative_skip",
+   "path": "check_bodies.py",
+   "lineno": 49,
+   "originalname": "test_imperative_skip",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [],
+   "initialnames": [],
+   "names_closure": [],
+   "name2fixturedefs": {}
+  },
+  {
+   "nodeid": "check_bodies.py::test_imperative_fail",
+   "path": "check_bodies.py",
+   "lineno": 55,
+   "originalname": "test_imperative_fail",
+   "cls": null,
+   "own_markers": [],
+   "markers_with_origin": [],
    "usefixtures": [],
    "autouse": [],
    "argnames": [],

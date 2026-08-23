@@ -1211,7 +1211,7 @@
   {
    "nodeid": "test_bodies.py::test_double_readouterr",
    "path": "test_bodies.py",
-   "lineno": 19,
+   "lineno": 21,
    "originalname": "test_double_readouterr",
    "cls": null,
    "own_markers": [],
@@ -1248,7 +1248,7 @@
   {
    "nodeid": "test_bodies.py::test_caplog_level",
    "path": "test_bodies.py",
-   "lineno": 27,
+   "lineno": 29,
    "originalname": "test_caplog_level",
    "cls": null,
    "own_markers": [],
@@ -1283,10 +1283,10 @@
    }
   },
   {
-   "nodeid": "test_bodies.py::test_conditional_skip",
+   "nodeid": "test_bodies.py::test_conditional_xfail",
    "path": "test_bodies.py",
-   "lineno": 33,
-   "originalname": "test_conditional_skip",
+   "lineno": 35,
+   "originalname": "test_conditional_xfail",
    "cls": null,
    "own_markers": [],
    "markers_with_origin": [],
@@ -1314,7 +1314,7 @@
   {
    "nodeid": "test_bodies.py::test_importorskip",
    "path": "test_bodies.py",
-   "lineno": 39,
+   "lineno": 41,
    "originalname": "test_importorskip",
    "cls": null,
    "own_markers": [],
@@ -1343,7 +1343,7 @@
   {
    "nodeid": "test_bodies.py::test_warns",
    "path": "test_bodies.py",
-   "lineno": 44,
+   "lineno": 46,
    "originalname": "test_warns",
    "cls": null,
    "own_markers": [],
@@ -1372,7 +1372,7 @@
   {
    "nodeid": "test_bodies.py::test_legacy_raises",
    "path": "test_bodies.py",
-   "lineno": 49,
+   "lineno": 51,
    "originalname": "test_legacy_raises",
    "cls": null,
    "own_markers": [],
@@ -1401,7 +1401,7 @@
   {
    "nodeid": "test_bodies.py::test_approx_generator",
    "path": "test_bodies.py",
-   "lineno": 53,
+   "lineno": 55,
    "originalname": "test_approx_generator",
    "cls": null,
    "own_markers": [],
@@ -1430,7 +1430,7 @@
   {
    "nodeid": "test_bodies.py::test_legacy_tmpdir",
    "path": "test_bodies.py",
-   "lineno": 57,
+   "lineno": 59,
    "originalname": "test_legacy_tmpdir",
    "cls": null,
    "own_markers": [],
@@ -1481,7 +1481,7 @@
   {
    "nodeid": "test_bodies.py::test_capfd",
    "path": "test_bodies.py",
-   "lineno": 62,
+   "lineno": 64,
    "originalname": "test_capfd",
    "cls": null,
    "own_markers": [],
@@ -1518,7 +1518,7 @@
   {
    "nodeid": "test_bodies.py::test_recwarn",
    "path": "test_bodies.py",
-   "lineno": 67,
+   "lineno": 69,
    "originalname": "test_recwarn",
    "cls": null,
    "own_markers": [],
@@ -1554,7 +1554,7 @@
   {
    "nodeid": "test_bodies.py::test_patch_decorator",
    "path": "test_bodies.py",
-   "lineno": 72,
+   "lineno": 74,
    "originalname": "test_patch_decorator",
    "cls": null,
    "own_markers": [],
@@ -1591,7 +1591,7 @@
   {
    "nodeid": "test_bodies.py::test_patch_context_manager",
    "path": "test_bodies.py",
-   "lineno": 78,
+   "lineno": 80,
    "originalname": "test_patch_context_manager",
    "cls": null,
    "own_markers": [],
@@ -1620,7 +1620,7 @@
   {
    "nodeid": "test_bodies.py::test_request_escape_hatches",
    "path": "test_bodies.py",
-   "lineno": 83,
+   "lineno": 85,
    "originalname": "test_request_escape_hatches",
    "cls": null,
    "own_markers": [],

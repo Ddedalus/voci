@@ -202,6 +202,26 @@ def test_file_block_counts_its_skipped_tests_rather_than_listing_them() -> None:
     assert "not ready" not in out
 
 
+def test_file_block_counts_a_runtime_skip_alongside_a_marked_one() -> None:
+    """A `velox.Skipped` raised mid-run reaches `on_result` like any other result -- it's
+    already in `results`, not a separate list -- so it folds into the same `(N skipped)`
+    annotation a `skip` mark's does."""
+    path = Path("tests/test_sample.py")
+    records = [_test_record(f"{path}::test_a", path), _test_record(f"{path}::test_b", path)]
+    reporter, stream = _reporter(
+        records, skipped=[_skipped(f"{path}::test_c", path, reason="not ready")]
+    )
+
+    reporter.on_result(_result(f"{path}::test_a", 0))
+    reporter.on_result(_result(f"{path}::test_b", 1, outcome=Outcome.SKIPPED, failure="no backend"))
+
+    out = stream.getvalue()
+    assert "PASS" in out
+    assert "3 tests" in out
+    assert "(2 skipped)" in out
+    assert "no backend" not in out
+
+
 def test_a_wholly_skipped_file_gets_a_skip_block_from_flush_pending() -> None:
     """No test of the file ever reports in, so `on_result` never reaches its block -- without
     `flush_pending` printing it, the file would vanish from the run's output entirely."""
@@ -558,6 +578,40 @@ def test_finish_folds_skipped_into_the_leading_count() -> None:
     assert "3 tests · 1 passed · 2 skipped" in out
 
 
+def test_finish_folds_a_runtime_skip_into_the_same_leading_count_as_a_marked_one() -> None:
+    """Unlike a `skip` mark's skip, a runtime one already ran through setup (and maybe the
+    call), so it's counted off `results` rather than off `self.skipped` -- but the totals line
+    reads the two as one number."""
+    path = Path("f.py")
+    results = [
+        _result(f"{path}::test_a", 0, duration=1.0),
+        _result(f"{path}::test_b", 1, outcome=Outcome.SKIPPED, failure="no backend"),
+    ]
+    records = [_test_record(results[0].id, path), _test_record(results[1].id, path)]
+    reporter, stream = _reporter(records, skipped=[_skipped(f"{path}::test_c", path)])
+
+    reporter.finish(results, wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "3 tests · 1 passed · 2 skipped" in out
+
+
+def test_a_runtime_skip_is_not_treated_as_a_failure() -> None:
+    """`Outcome.SKIPPED` never lands in `FAILING_OUTCOMES`: it gets neither failure detail nor
+    a short-summary line, and doesn't push the process exit code to 1 (see `test_run.py` for
+    the exit-code half)."""
+    path = Path("f.py")
+    result = _result(f"{path}::test_a", 0, outcome=Outcome.SKIPPED, failure="no backend")
+    records = [_test_record(result.id, path)]
+    reporter, stream = _reporter(records)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "no backend" not in out
+    assert "short test summary" not in out
+
+
 def test_finish_counts_deselected_and_not_run_tests() -> None:
     path = Path("f.py")
     results = [_result(f"{path}::test_a", 0, duration=1.0)]
@@ -767,6 +821,21 @@ def test_verbose_lists_every_skip_with_its_reason() -> None:
     out = stream.getvalue()
     assert "--- skipped 1 test ---" in out
     assert f"{path}::test_b - pagination is not implemented yet" in out
+
+
+def test_verbose_lists_a_runtime_skip_with_its_reason_after_the_marked_ones() -> None:
+    path = Path("tests/test_a.py")
+    records = [_test_record(f"{path}::test_a", path), _test_record(f"{path}::test_b", path)]
+    skipped = [_skipped(f"{path}::test_a", path, reason="pagination is not implemented yet")]
+    reporter, stream = _reporter(records, skipped=skipped, verbosity=1)
+    result = _result(f"{path}::test_b", 0, outcome=Outcome.SKIPPED, failure="no backend")
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "--- skipped 2 tests ---" in out
+    assert f"{path}::test_a - pagination is not implemented yet" in out
+    assert f"{path}::test_b - no backend" in out
 
 
 def test_the_default_verbosity_counts_skips_without_their_reasons() -> None:

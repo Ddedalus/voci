@@ -59,8 +59,10 @@ from velox._run import safety as _safety
 __all__ = [
     "FAILING_OUTCOMES",
     "AdmissionGate",
+    "Failed",
     "IsolatedConfig",
     "Outcome",
+    "Skipped",
     "StopController",
     "TestResult",
     "exit_code_for",
@@ -84,6 +86,30 @@ DEFAULT_CONCURRENCY = 16
 DEFAULT_TEARDOWN_GRACE = 5.0
 
 
+class Skipped(BaseException):
+    """Raise to skip the running test immediately -- the runtime counterpart of
+    `@velox.skip`/`@velox.skipif`, which decide once at collection instead. `_run_one` catches
+    this in both the setup and call phase and reports `Outcome.SKIPPED`, with `str(self)` as the
+    reason; whatever ran before the raise already ran, and fixtures already acquired are still
+    torn down normally.
+
+    A `BaseException`, not an `Exception` -- like pytest's own `Skipped`, so a test or fixture
+    body's `except Exception:` doesn't accidentally swallow the skip signal it was never meant to
+    catch.
+    """
+
+
+class Failed(BaseException):
+    """Raise to fail the running test immediately, with a message rather than an assertion --
+    the runtime counterpart of writing `assert False, msg`. Caught nowhere specially: any
+    exception already fails a test's call phase, so this is just a named spelling of "fail with
+    this message", for the cases pytest's own `pytest.fail()` covers.
+
+    A `BaseException`, not an `Exception`, for the same reason `Skipped` is: a broad
+    `except Exception:` around a test's own code must not swallow a deliberate failure signal.
+    """
+
+
 class Outcome(enum.Enum):
     """A test's final disposition."""
 
@@ -91,6 +117,11 @@ class Outcome(enum.Enum):
     FAILED = "failed"
     #: Setup or teardown raised, as opposed to the test's own call phase.
     ERROR = "error"
+    #: `velox.Skipped` was raised during setup or the call phase -- a runtime skip, as opposed
+    #: to a `skip`/`skipif` mark, which never reaches `_run_one` at all (collection keeps a
+    #: skip-marked test out of the run entirely). Not a failing outcome: exactly like a
+    #: collection-time skip, it says nothing about whether the code under test works.
+    SKIPPED = "skipped"
     #: The setup+call envelope exceeded its `--timeout` budget. Its own outcome rather
     #: than a flavor of FAILED/ERROR, since the fix (raise the budget, or find the
     #: blocking call) is different from either.
@@ -126,9 +157,10 @@ class TestResult:
     index: int
     outcome: Outcome
     duration: float
-    #: Formatted traceback text, or a synthesized message for TIMEOUT. `None` iff
-    #: `outcome` is PASSED. For ERROR this may be the setup traceback, the teardown
-    #: traceback, or both concatenated if the call phase also failed.
+    #: Formatted traceback text, or a synthesized message for TIMEOUT/SKIPPED (for the latter,
+    #: `str(the raised velox.Skipped)`, not a traceback). `None` iff `outcome` is PASSED. For
+    #: ERROR this may be the setup traceback, the teardown traceback, or both concatenated if
+    #: the call phase also failed.
     failure: str | None
     #: A short one-line "ExceptionType: message" summary of whichever exception
     #: decided `outcome`, read directly off the exception object rather than parsed
@@ -198,13 +230,14 @@ async def _run_one(
     A timed-out envelope is reported TIMEOUT ahead of any other phase's failure; a
     cancellation `stop` delivered is CANCELLED; setup raising is ERROR; teardown raising
     is ERROR even over a passing call (both tracebacks are kept if the call also failed);
-    otherwise FAILED or PASSED (call raised or not), reread as XFAILED/XPASSED when
-    `record.func` carries a `@velox.xfail(...)` mark. `xfail` only ever reclassifies
-    those last two -- a timeout, a setup error or a teardown error reports as such
-    regardless of the mark, the same way pytest's own xfail only wraps the test's call
-    phase, and so does a call phase that returned a value or dropped a coroutine
-    un-awaited (`safety.call_misuse`): a mark can't have predicted a failure that isn't
-    an exception in the first place.
+    a `velox.Skipped` raised during setup or the call phase -- ahead of that phase's own
+    ERROR/FAILED, but behind a later teardown's ERROR -- is SKIPPED; otherwise FAILED or
+    PASSED (call raised or not), reread as XFAILED/XPASSED when `record.func` carries a
+    `@velox.xfail(...)` mark. `xfail` only ever reclassifies those last two -- a timeout, a
+    setup error, a teardown error, or a skip reports as such regardless of the mark, the same
+    way pytest's own xfail only wraps the test's call phase, and so does a call phase that
+    returned a value or dropped a coroutine un-awaited (`safety.call_misuse`): a mark can't
+    have predicted a failure that isn't an exception in the first place.
 
     `stop`, when the run has one, is both how a cancellation is recognized as the run's
     own doing rather than a sibling's collateral damage and where the teardown of a
@@ -214,6 +247,7 @@ async def _run_one(
     start = time.monotonic()
     setup_failure: str | None = None
     setup_summary: str | None = None
+    skip_reason: str | None = None
     call_failure: str | None = None
     call_summary: str | None = None
     call_exc: BaseException | None = None
@@ -246,11 +280,16 @@ async def _run_one(
                 setup_done = True
             except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                 raise
+            except Skipped as exc:
+                # Caught ahead of the generic handler below: a skip raised while acquiring a
+                # fixture is not a setup failure, and nothing acquired after it exists to run a
+                # call phase against.
+                skip_reason = str(exc)
             except BaseException as exc:
                 setup_failure = traceback.format_exc()
                 setup_summary = _summarize_exception(exc)
 
-            if setup_failure is None:
+            if setup_failure is None and skip_reason is None:
                 # `record.params` first, `kwargs` (this case's DI plan) second: collection
                 # already rejects any name both `@velox.parametrize` and `Depends(...)` claim
                 # (`_di._check_missing_injections`), so the two never actually overlap -- this
@@ -290,6 +329,12 @@ async def _run_one(
                         call_misused = True
                 except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                     raise
+                except Skipped as exc:
+                    # Caught ahead of the generic handler below, and ahead of `xfail`: a skip
+                    # reached mid-call is reported as skipped regardless of what an `xfail` mark
+                    # on this test expected -- pytest's own imperative skip takes the same
+                    # priority over it.
+                    skip_reason = str(exc)
                 except BaseException as exc:
                     call_failure = traceback.format_exc()
                     call_summary = _summarize_exception(exc)
@@ -427,6 +472,14 @@ async def _run_one(
         )
         # Call-first, mirroring failure's own text ordering just above.
         summary = call_summary if call_failure is not None else teardown_summary
+    elif skip_reason is not None:
+        # After setup/teardown failure, ahead of `_resolve_call_outcome`: a skip that reached
+        # this far had a clean setup and (if it got that far) a clean teardown, and it is not
+        # reread through `xfail` the way a call failure or pass is -- there is no "expected
+        # failure" question left to ask about a test that never got to fail or pass.
+        outcome = Outcome.SKIPPED
+        failure = skip_reason
+        summary = f"SKIPPED: {skip_reason}"
     else:
         outcome, failure, summary = _resolve_call_outcome(
             None if call_misused else record.marks.xfail,

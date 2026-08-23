@@ -1,10 +1,12 @@
 """Test bodies holding the pytest API whose velox counterpart is partial or absent.
 
 Contributes the capture-snapshot case (`readouterr` twice), the caplog cases (`set_level` and
-`.handler`), the dangerous-rename case (`pytest.skip()` as a statement), and the no-counterpart
-cases (`importorskip`, `warns`, a `raises` object stashed rather than entered or called, `approx`
-over a generator, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request`
-escape hatch the root conftest wires up.
+`.handler`), and the no-counterpart cases (`importorskip`, `pytest.xfail()` as a statement --
+unlike `pytest.skip()`/`pytest.fail()`, which become `raise velox.Skipped(...)`/`Failed(...)`,
+there is no runtime target an expectation `@velox.xfail(...)` decides once, at collection, could
+become -- `warns`, a `raises` object stashed rather than entered or called, `approx` over a
+generator, `capfd`, `recwarn`, `tmpdir`), plus both `mock.patch` forms and every `request` escape
+hatch the root conftest wires up.
 """
 
 import logging
@@ -30,9 +32,9 @@ def test_caplog_level(caplog):
     caplog.handler.flush()
 
 
-def test_conditional_skip():
+def test_conditional_xfail():
     if sys.platform == "nonexistent":
-        pytest.skip("this platform has no such thing")
+        pytest.xfail("this platform has no such thing")
     assert True
 
 
