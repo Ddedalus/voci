@@ -80,7 +80,7 @@ def test_the_suite_is_described_by_what_its_tests_reach(hazards: Audit) -> None:
 def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
     # One code only collection can answer, one only a parse can, in a single audit.
     assert "VX006" in codes(hazards)
-    assert "VX214" in codes(hazards)
+    assert "VX223" in codes(hazards)
 
 
 @pytest.mark.parametrize(
@@ -109,7 +109,7 @@ def test_the_dump_and_the_sources_are_both_read(hazards: Audit) -> None:
         "VX203",  # capfd
         "VX205",  # caplog.set_level
         "VX210",  # a raises object stashed rather than entered or called
-        "VX214",  # pytest.skip() as a statement
+        "VX223",  # pytest.xfail() as a statement
         "VX215",  # importorskip
         "VX216",  # recwarn and pytest.warns
         "VX217",  # a mock.patch decorator

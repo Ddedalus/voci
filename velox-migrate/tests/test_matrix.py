@@ -48,7 +48,8 @@ def test_mechanical_and_marker_rows_are_the_ones_conversion_produces_code_for() 
     converts = {construct.code for construct in matrix.CONSTRUCTS if construct.converts}
 
     assert "VX001" in converts
-    assert "VX214" not in converts
+    assert "VX214" in converts
+    assert "VX223" not in converts
 
 
 def test_a_code_the_matrix_does_not_define_is_refused_by_name() -> None:

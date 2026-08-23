@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, final
 
 from velox._di.fixtures import BuiltinContext, Fixture, PlanStep, ResolutionPlan, Scope
+from velox._outcomes import Failed, Skipped
 
 __all__ = ["ScopeStore", "setup", "teardown"]
 
@@ -169,18 +170,21 @@ class ScopeStore:
         fixture's own entry is — making reverse insertion order a valid teardown order even when
         entries from unrelated tests or modules are interleaved in it.
         """
-        errors: list[Exception] = []
+        errors: list[BaseException] = []
         for key in reversed(list(self._entries)):
             entry = self._entries.pop(key, None)
             if entry is None or entry.closer is None:
                 continue
             try:
                 await entry.closer()
-            except Exception as exc:
+            except (Exception, Skipped, Failed) as exc:
                 # `Exception`, not `BaseException`: a KeyboardInterrupt/SystemExit/CancelledError
                 # raised by a closer must propagate immediately rather than being folded into the
                 # group below as an ordinary teardown failure. The remaining keys are left
-                # un-torn-down on that path.
+                # un-torn-down on that path. `Skipped`/`Failed` are `BaseException`s for the same
+                # reason those three are -- so a broad `except Exception:` in test/fixture code
+                # can't swallow them -- but a teardown raising one is an ordinary teardown
+                # failure, not an interrupt, and folds in here alongside it explicitly.
                 errors.append(exc)
         if errors:
             raise BaseExceptionGroup("session-scope teardown", errors)
@@ -287,12 +291,14 @@ async def _release_all(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
     # `Exception`, not `BaseException`: a KeyboardInterrupt/SystemExit/CancelledError raised by a
     # fixture's teardown must propagate immediately rather than being folded into the
     # BaseExceptionGroup below as an ordinary teardown failure. The remaining keys are left
-    # un-released on that path.
-    errors: list[Exception] = []
+    # un-released on that path. `Skipped`/`Failed` are `BaseException`s too (so a broad
+    # `except Exception:` in test/fixture code can't swallow them), but a teardown raising one is
+    # an ordinary teardown failure, not an interrupt, and folds in here alongside it explicitly.
+    errors: list[BaseException] = []
     for key in keys:
         try:
             await store.release(key)
-        except Exception as exc:
+        except (Exception, Skipped, Failed) as exc:
             errors.append(exc)
     if errors:
         raise BaseExceptionGroup("fixture teardown", errors)

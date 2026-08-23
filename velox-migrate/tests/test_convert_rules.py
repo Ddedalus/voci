@@ -2119,3 +2119,152 @@ def test_x():
     assert True
 '''
     assert _untouched(code, source, _context("test_x")) == ()
+
+
+# --- imperative skip/fail (bodies.VX214/VX223) -------------------------------------------------
+
+
+def test_skip_called_as_a_statement_becomes_a_raised_skipped() -> None:
+    before = """import pytest
+
+
+def test_x():
+    if not available:
+        pytest.skip("no backend")
+"""
+    after = """import pytest
+
+
+def test_x():
+    if not available:
+        raise velox.Skipped("no backend")
+"""
+    applied = _rewrite("VX214", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX214"]
+
+
+def test_fail_called_as_a_statement_becomes_a_raised_failed() -> None:
+    before = """import pytest
+
+
+def test_x():
+    try:
+        connect()
+    except OSError:
+        pytest.fail("unreachable")
+"""
+    after = """import pytest
+
+
+def test_x():
+    try:
+        connect()
+    except OSError:
+        raise velox.Failed("unreachable")
+"""
+    applied = _rewrite("VX214", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX214"]
+
+
+def test_skips_reason_keyword_becomes_positional() -> None:
+    """`velox.Skipped` is a bare `BaseException`: raising one with `reason=` would raise
+    `TypeError` instead of the skip it names, so the keyword becomes positional."""
+    before = """import pytest
+
+
+def test_x():
+    pytest.skip(reason="no backend")
+"""
+    after = """import pytest
+
+
+def test_x():
+    raise velox.Skipped("no backend")
+"""
+    _rewrite("VX214", before, after, _context("test_x"))
+
+
+def test_fails_deprecated_msg_keyword_becomes_positional_too() -> None:
+    before = """import pytest
+
+
+def test_x():
+    pytest.fail(msg="unreachable")
+"""
+    after = """import pytest
+
+
+def test_x():
+    raise velox.Failed("unreachable")
+"""
+    _rewrite("VX214", before, after, _context("test_x"))
+
+
+def test_skip_with_no_reason_at_all_converts_with_no_arguments() -> None:
+    before = """import pytest
+
+
+def test_x():
+    pytest.skip()
+"""
+    after = """import pytest
+
+
+def test_x():
+    raise velox.Skipped()
+"""
+    _rewrite("VX214", before, after, _context("test_x"))
+
+
+def test_skip_with_allow_module_level_is_left_as_it_is() -> None:
+    """No velox equivalent for pytest's import-time skip form."""
+    source = """import pytest
+
+
+def test_x():
+    pytest.skip("no backend", allow_module_level=True)
+"""
+    applied = _untouched("VX214", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX214"]
+
+
+def test_fail_with_pytrace_is_left_as_it_is() -> None:
+    source = """import pytest
+
+
+def test_x():
+    pytest.fail("unreachable", pytrace=False)
+"""
+    applied = _untouched("VX214", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX214"]
+
+
+def test_a_reason_given_both_positionally_and_as_a_keyword_is_left_as_it_is() -> None:
+    source = """import pytest
+
+
+def test_x():
+    pytest.fail("unreachable", msg="also this")
+"""
+    applied = _untouched("VX214", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX214"]
+
+
+def test_xfail_called_as_a_statement_is_left_as_it_is() -> None:
+    """There is no runtime target for it: `@velox.xfail(...)`'s condition is decided once, at
+    collection, before the test has run."""
+    source = """import pytest
+
+
+def test_x():
+    if not available:
+        pytest.xfail("no backend")
+"""
+    applied = _untouched("VX214", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX223"]

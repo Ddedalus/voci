@@ -1700,6 +1700,111 @@ def test_xfail_does_not_apply_to_a_timeout() -> None:
     assert result.outcome is Outcome.TIMEOUT
 
 
+# `velox.Skipped`/`velox.Failed`: the runtime counterparts of `@velox.skip` and an assertion --
+# pytest's `pytest.skip()`/`pytest.fail()`, raised as a statement rather than read off a mark.
+# ------------------------------------------------------------------------------------------
+
+
+def test_skip_raised_in_the_call_phase_reports_skipped_with_its_reason() -> None:
+    async def _skips() -> None:
+        raise velox.Skipped("no backend configured")
+
+    (result,) = run_suite([_record(0, _skips, "test_skips")])
+
+    assert result.outcome is Outcome.SKIPPED
+    assert result.failure == "no backend configured"
+
+
+def test_skip_raised_during_fixture_setup_reports_skipped_not_error() -> None:
+    @velox.fixture()
+    def unavailable() -> int:
+        raise velox.Skipped("backend not installed")
+
+    async def test_func(x: int = velox.Depends(unavailable)) -> None:
+        raise AssertionError("must never run: setup already skipped")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.SKIPPED
+    assert result.failure == "backend not installed"
+
+
+def test_skip_in_the_call_phase_still_tears_fixtures_down() -> None:
+    torn_down = False
+
+    @velox.fixture()
+    def resource():
+        yield 1
+        nonlocal torn_down
+        torn_down = True
+
+    async def test_func(x: int = velox.Depends(resource)) -> None:
+        raise velox.Skipped("no backend")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.SKIPPED
+    assert torn_down
+
+
+def test_skip_in_the_call_phase_takes_priority_over_an_xfail_mark() -> None:
+    """A skip reached mid-call is reported as skipped regardless of what an `xfail` mark on the
+    same test expected -- pytest's own imperative skip takes the same priority."""
+
+    @velox.xfail("expected to fail, not skip")
+    async def _skips() -> None:
+        raise velox.Skipped("no backend")
+
+    (result,) = run_suite([_record(0, _skips, "test_skips")])
+
+    assert result.outcome is Outcome.SKIPPED
+
+
+def test_a_teardown_failure_after_a_call_phase_skip_still_reports_error() -> None:
+    """Mirrors teardown's priority over a passing or failing call: a skip that reached a clean
+    call phase is not the last word if teardown then fails."""
+
+    @velox.fixture()
+    def flaky_teardown():
+        yield 1
+        raise RuntimeError("teardown boom")
+
+    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+        raise velox.Skipped("no backend")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.ERROR
+    assert result.failure is not None
+    assert "teardown boom" in result.failure
+
+
+def test_failed_raised_in_the_call_phase_reports_failed_with_its_message() -> None:
+    """`velox.Failed` needs no special-casing in `_run_one`: it's caught by the same generic
+    handler any other exception is, and reads as an ordinary failure."""
+
+    async def _fails() -> None:
+        raise velox.Failed("unreachable")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.FAILED
+    assert result.failure is not None
+    assert "unreachable" in result.failure
+
+
+def test_failed_raised_in_the_call_phase_reports_xfailed_under_an_xfail_mark() -> None:
+    """Unlike `Skipped`, `Failed` is read through `xfail` exactly like any other failure."""
+
+    @velox.xfail("known broken")
+    async def _fails() -> None:
+        raise velox.Failed("unreachable")
+
+    (result,) = run_suite([_record(0, _fails, "test_fails")])
+
+    assert result.outcome is Outcome.XFAILED
+
+
 # Deliberately not shared with report/test_terminal.py's `_result`: that one carries the full
 # Reporter surface (failure text, captured output, log records); this one only needs `outcome`
 # for `exit_code_for`.
@@ -1749,6 +1854,13 @@ def test_exit_code_xfailed_and_xpassed_are_not_failures() -> None:
     turn a run red. A strict xpass reports FAILED instead of XPASSED (covered in test_run.py's
     `@velox.xfail` section), so it never reaches `exit_code_for` as XPASSED."""
     results = [_result(Outcome.PASSED), _result(Outcome.XFAILED), _result(Outcome.XPASSED)]
+    assert exit_code_for(results, []) == 0
+
+
+def test_exit_code_runtime_skipped_is_not_a_failure() -> None:
+    """A `velox.Skipped` result reaches `exit_code_for` inside `results` itself (unlike a
+    `skip`-marked test, which never runs), and contributes `0` the same as PASSED."""
+    results = [_result(Outcome.PASSED), _result(Outcome.SKIPPED)]
     assert exit_code_for(results, []) == 0
 
 

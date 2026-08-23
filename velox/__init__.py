@@ -2,8 +2,9 @@
 
 This is the whole public surface — everything else is private and may move. It exports
 dependency injection (`fixture`, `Depends`, `Scope`, `use`), marks for selecting and shaping tests
-(`skip`, `xfail`, `parametrize`, `tag`, ...), built-in fixtures (`tmp_path`, `capture`,
-`log_records`, `test_info`), and assertion helpers (`raises`, `approx`).
+(`skip`, `xfail`, `parametrize`, `tag`, ...), runtime skip/fail signals (`Skipped`, `Failed`),
+built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`), and assertion helpers
+(`raises`, `approx`).
 """
 
 from velox._assertions.approx import Approx, approx
@@ -43,6 +44,7 @@ from velox._marks import (
     timeout,
     xfail,
 )
+from velox._outcomes import Failed, Skipped
 from velox._version import __version__
 
 # Grouped by purpose above (DI, marks, built-in fixtures, assertions) but sorted alphabetically
@@ -52,6 +54,7 @@ __all__ = [
     "Capture",
     "Depends",
     "ExceptionInfo",
+    "Failed",
     "Fixture",
     "Injection",
     "LegacyPath",
@@ -65,6 +68,7 @@ __all__ = [
     "Scope",
     "Skip",
     "SkipIf",
+    "Skipped",
     "TestInfo",
     "TmpPathFactory",
     "XFail",

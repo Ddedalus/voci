@@ -480,7 +480,10 @@ def test_a():
     assert _codes(source) == ["VX213"] * 3
 
 
-def test_an_imperative_skip_is_reported_wherever_it_is_reached_and_a_mark_is_not() -> None:
+def test_a_convertible_imperative_skip_or_fail_is_not_reported() -> None:
+    """`pytest.skip("...")`/`pytest.fail("...")`, called with just a reason, become
+    `raise velox.Skipped(...)`/`Failed(...)` -- there is nothing here for the audit to flag,
+    unlike the decorator mark, which is a different construct with its own row entirely."""
     source = """
 import pytest
 @pytest.mark.skip(reason="flaky")
@@ -493,7 +496,37 @@ def test_a():
         pytest.fail("unreachable")
 """
 
+    assert _codes(source) == []
+
+
+def test_an_unconvertible_imperative_skip_or_fail_is_reported() -> None:
+    """`allow_module_level=`/`pytrace=` have no velox equivalent -- the rewrite rule leaves
+    these as they are, so the audit still flags them."""
+    source = """
+import pytest
+def test_a():
+    if not available:
+        pytest.skip("no backend", allow_module_level=True)
+    try:
+        connect()
+    except OSError:
+        pytest.fail("unreachable", pytrace=False)
+"""
+
     assert _codes(source) == ["VX214", "VX214"]
+
+
+def test_an_imperative_xfail_is_reported_as_having_no_runtime_target() -> None:
+    """Unlike `pytest.skip()`/`pytest.fail()`, `pytest.xfail()` stays refused: an expectation
+    `@velox.xfail(...)` decides once, at collection, has no runtime counterpart to raise."""
+    source = """
+import pytest
+def test_a():
+    if not available:
+        pytest.xfail("no backend")
+"""
+
+    assert _codes(source) == ["VX223"]
 
 
 def test_an_import_time_skip_is_reported() -> None:

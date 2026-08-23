@@ -151,9 +151,9 @@ class Reporter:
         """
         if result.outcome in FAILING_OUTCOMES:
             outcome_color = _color.RED
-        elif result.outcome is Outcome.CANCELLED:
-            # Neither green nor red: the run stopped this test, so it reported neither a
-            # pass nor a failure.
+        elif result.outcome in (Outcome.CANCELLED, Outcome.SKIPPED):
+            # Neither green nor red: the run stopped this test (CANCELLED) or the test itself
+            # said to stop (SKIPPED), so neither reported a pass nor a failure.
             outcome_color = _color.YELLOW
         else:
             outcome_color = _color.GREEN
@@ -171,16 +171,29 @@ class Reporter:
 
         The count is what this run accounted for in that file -- its tests that ran, plus
         its tests a skip mark kept from running -- and `SKIP` is the status of a file with
-        nothing in the first group. `STOP` is the status of a file the run was stopped in
-        the middle of: nothing in it failed, but not everything in it got to answer."""
+        nothing in the first group: no dispatched result at all (every test there was
+        collection-time skip-marked), or a dispatched result that was itself a runtime
+        `velox.Skipped` for every one of them. `STOP` is the status of a file the run was
+        stopped in the middle of: nothing in it failed, but not everything in it got to
+        answer."""
         failed = sum(1 for result in results if result.outcome in FAILING_OUTCOMES)
         cancelled = sum(1 for result in results if result.outcome is Outcome.CANCELLED)
+        # A `velox.Skipped` raised mid-run, folded into the same annotation as a skip mark's:
+        # both mean this file has that many fewer tests to show a pass/fail for. Unlike a
+        # skip mark's, it's already counted in `results`/`collected` below, since the test
+        # did run through setup (and maybe the call) before it skipped.
+        runtime_skipped = sum(1 for result in results if result.outcome is Outcome.SKIPPED)
         skipped = self._skipped_by_path.get(path, 0)
+        # Dispatched results that answered with something other than a runtime skip -- what
+        # makes this file's status `PASS` rather than `SKIP` below. A file with results that
+        # are *all* `velox.Skipped` has nothing here, exactly like a file with no results at
+        # all (every test collection-time skip-marked): neither has anything to call `PASS`.
+        answered = len(results) - runtime_skipped
         if failed:
             status, character, status_color = "FAIL", "F", _color.RED
         elif cancelled:
             status, character, status_color = "STOP", "!", _color.YELLOW
-        elif results:
+        elif answered:
             status, character, status_color = "PASS", ".", _color.GREEN
         else:
             status, character, status_color = "SKIP", "s", _color.YELLOW
@@ -218,10 +231,13 @@ class Reporter:
             line += "   " + _color.paint(
                 f"({cancelled} cancelled)", _color.YELLOW, enabled=self._color_enabled
             )
-        # Only where it qualifies the count: on a wholly skipped file `SKIP` has said it.
-        if skipped and results:
+        # Only where it qualifies the count: on a wholly skipped file `SKIP` has already said
+        # it, whether that file dispatched nothing at all or dispatched results that were all
+        # `velox.Skipped`.
+        noted_skips = skipped + runtime_skipped
+        if noted_skips and status != "SKIP":
             line += "   " + _color.paint(
-                f"({skipped} skipped)", _color.YELLOW, enabled=self._color_enabled
+                f"({noted_skips} skipped)", _color.YELLOW, enabled=self._color_enabled
             )
         # flush=True: a tty's stdout is line-buffered, but piped to a file or a CI log
         # collector it's block-buffered, so nothing would surface a block until the
@@ -321,7 +337,7 @@ class Reporter:
             for section in unattributed_output:
                 print(section, file=self.stream)
 
-        self._print_skip_reasons()
+        self._print_skip_reasons(results)
         self._print_durations(results)
         self._print_patching_cost(results, wall_clock=wall_clock)
         print(file=self.stream)
@@ -364,6 +380,7 @@ class Reporter:
             Outcome.PASSED,
             Outcome.XFAILED,
             Outcome.XPASSED,
+            Outcome.SKIPPED,
         )
         # A guard, not a category: an Outcome member reaching results without a field of its
         # own below lands in `other` rather than vanishing from a total that then silently
@@ -393,7 +410,10 @@ class Reporter:
             f"{_plural(total, 'test')}",
             self._counts(
                 (counted[Outcome.PASSED], "passed", _color.GREEN),
-                (len(self.skipped), "skipped", _color.YELLOW),
+                # Collection-time skips (a `skip`/`skipif` mark) and runtime ones
+                # (`velox.Skipped`, mid-setup or mid-call) read as one count: both mean the
+                # same thing to whoever is reading the totals line.
+                (len(self.skipped) + counted[Outcome.SKIPPED], "skipped", _color.YELLOW),
                 (counted[Outcome.XFAILED], "xfailed", _color.GRAY),
                 (counted[Outcome.XPASSED], "xpassed", _color.YELLOW),
                 # The user's own filter rather than an outcome, so it never earns an alarm
@@ -413,22 +433,28 @@ class Reporter:
         """`color.counts` against this reporter's own color setting."""
         return _color.counts(*fields, enabled=self._color_enabled)
 
-    def _print_skip_reasons(self) -> None:
-        """`-v`'s section for the tests a skip mark kept from running, each with its reason:
+    def _print_skip_reasons(self, results: list[TestResult]) -> None:
+        """`-v`'s section for every skipped test, each with its reason -- a `skip` mark's
+        (kept `results` out entirely, listed from `self.skipped`) and a `velox.Skipped` raised
+        at runtime (reached setup or the call phase, listed from `results` itself) read as one
+        list, in that order:
 
         --- skipped 2 tests ---
         tests/api/test_users.py::test_list - pagination is not implemented yet
+        tests/api/test_users.py::test_create - no backend configured
         """
-        if self.verbosity < 1 or not self.skipped:
+        runtime = [result for result in results if result.outcome is Outcome.SKIPPED]
+        total = len(self.skipped) + len(runtime)
+        if self.verbosity < 1 or not total:
             return
         print(file=self.stream)
-        print(
-            f"--- skipped {len(self.skipped)} {_plural(len(self.skipped), 'test')} ---",
-            file=self.stream,
-        )
+        print(f"--- skipped {total} {_plural(total, 'test')} ---", file=self.stream)
         for skip in self.skipped:
             reason = _color.paint(skip.reason, _color.GRAY, enabled=self._color_enabled)
             print(f"{skip.id} - {reason}", file=self.stream)
+        for result in runtime:
+            reason = _color.paint(result.failure or "", _color.GRAY, enabled=self._color_enabled)
+            print(f"{result.id} - {reason}", file=self.stream)
 
     def _print_durations(self, results: list[TestResult]) -> None:
         """`--durations N`: the N slowest tests of the run, printed only when asked for.
