@@ -137,7 +137,44 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   empty.
 - **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
   pytest→pytest rules, then the skills in the order their findings appear in real audits.
-  *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.*
+  *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.* Target
+  suites: marshmallow (smoke — expected zero refusals) and httpx2, pydantic's fork of httpx
+  (exit suite). Selection methodology and upstream-httpx numbers are in
+  [oss-refactors-plan.md](oss-refactors-plan.md); httpx2 itself is unaudited as of writing, so its
+  numbers there are inherited from httpx, not measured. Sequenced as:
+
+  - **0. Scope httpx2** (spike, no code). Run the existing `audit` against it and check what the
+    inherited httpx numbers don't answer: does it still parametrize over `pytest-trio` (VX323,
+    refused — velox only runs asyncio) alongside anyio/asyncio (VX320, converts mechanically), and
+    has the fork changed the conftest/fixture graph. Decides whether httpx2 is viable as an exit
+    suite as-is.
+  - **1. `verify` subcommand.** The one pipeline stage in §4 with no code yet — `cli.py` has only
+    `extract`/`audit`/`convert`. Runs pytest on the pre-migration tree and `velox --serial` on the
+    converted tree, diffs outcomes through the id map, writes the divergence list. Both target
+    suites need this before either closes out; suite-agnostic, unblocked today.
+  - **2. marshmallow: convert + verify + corpus-ify.** Zero refusals expected, so this is a bug
+    hunt on a suite the tool wasn't built against, not new machinery. Once green under
+    `velox --serial`, check the dump and generated output in as a corpus fixture (like the
+    `*_showcase` suites) so future drift is CI-caught.
+  - **3. httpx2: audit findings write-up.** Once step 0 clears it, run `audit` for real and
+    replace the extrapolated httpx row in oss-refactors-plan.md with measured numbers. Determines
+    what step 4 actually needs to build.
+  - **4. First prefactor codemod(s).** `prefactor/` does not exist yet. Build only the rule(s)
+    step 3's findings call for — upstream httpx's own audit showed just two `caplog` attribute
+    sites, which are *unsupported* rather than prefactorable, so this PR may end up small or
+    unnecessary. Don't build the general framework speculatively.
+  - **5. httpx2: convert + verify.** First conversion of a non-synthetic, non-corpus suite; expect
+    codegen bugs the corpus suites didn't exercise (real conftest layout, real plugin config). Get
+    it green under `velox --serial`.
+  - **6. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
+    index, hand-apply `@velox.solo`/`@velox.isolated` at whatever sites fail. Only build a
+    postfactor skill if the same pattern repeats often enough to be worth automating — otherwise
+    stays manual and the skill tier stays out of scope for Phase 4.
+  - **7. Write-up.** The exit deliverable: both suites, audit findings, verify results, and
+    httpx2's before/after concurrency.
+
+  Steps 1–2 are unblocked immediately; 0 and 3 gate whether 4–6 are needed at all or turn out
+  trivial.
 
 ## 10. Risks not already covered
 
