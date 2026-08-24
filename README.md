@@ -106,7 +106,7 @@ velox -s                           # live, id-prefixed output instead of capture
 - **[examples/](examples/)** — three worked suites: a FastAPI + async SQLAlchemy CRUD API, a
   pure-async library, and shared resources under concurrency. Each is runnable.
 - **[ROADMAP.md](ROADMAP.md)** — what isn't built yet, and what's next.
-- **[docs/rationale.md](docs/rationale.md)** — why velox is shaped the way it is. Read this before
+- **[plans/rationale.md](plans/rationale.md)** — why velox is shaped the way it is. Read this before
   changing anything load-bearing.
 
 ## Status

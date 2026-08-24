@@ -189,7 +189,7 @@ class LogRecords:
         `logger` are validated before the context manager is constructed or entered.
 
         Logger levels are process-global, so this call under concurrency can change what a
-        concurrent sibling captures for a logger of the same name. See `docs/rationale.md` for
+        concurrent sibling captures for a logger of the same name. See `plans/rationale.md` for
         which direction is safe.
         """
         resolved = _resolve_level(level)
@@ -352,7 +352,7 @@ def test_info() -> TestInfo:
 # Imported here, at the bottom of the module, not at the top: `capture.py` imports the classes
 # above from this module, creating a genuine import cycle. It resolves cleanly because every name
 # `capture.py` needs is already defined by the time control reaches this line — see
-# docs/rationale.md ("_builtins/fixtures.py / _builtins/capture.py import cycle") for the full
+# plans/rationale.md ("_builtins/fixtures.py / _builtins/capture.py import cycle") for the full
 # shape of it.
 from velox._builtins import capture as _capture  # noqa: E402
 

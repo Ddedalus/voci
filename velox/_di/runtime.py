@@ -124,7 +124,7 @@ class ScopeStore:
                 raise
             entry.closer = closer
             entry.future.set_result(value)
-        # Refcount reserved before awaiting, not after — see docs/rationale.md ("single-flight
+        # Refcount reserved before awaiting, not after — see plans/rationale.md ("single-flight
         # construction, refcounted teardown") for the race this ordering closes.
         entry.refcount += 1
         try:
@@ -207,7 +207,7 @@ async def setup(
     that list.
 
     `partial_module_keys`, if given, is where already-acquired `module`-scope keys go instead of
-    being released immediately on failure — see `docs/rationale.md` ("partial module-key
+    being released immediately on failure — see `plans/rationale.md` ("partial module-key
     handoff") for why `module` scope needs this and the other three don't.
     """
     # One `BuiltinContext` per `setup()` call, not per step: every step of the same test's plan

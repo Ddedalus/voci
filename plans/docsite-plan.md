@@ -3,61 +3,35 @@
 Internal working document. Plans a narrative-docs-plus-reference site for velox, structured and
 themed like [FastAPI's docs](../oss/fastapi/docs/en) (cloned at `oss/fastapi/` for reference). 
 
-## What "same look and feel" means
-
-FastAPI's docs run on [mkdocs](https://www.mkdocs.org/) + mkdocs-material, with content split
-into four kinds of page:
+## Structure
 
 - **Tutorial** (`tutorial/`) — ordered, narrative, one concept per page, each built around a
   runnable code sample.
 - **How-to** (`how-to/`) — short, task-focused recipes assuming the tutorial already happened.
 - **Reference** (`reference/`) — [mkdocstrings](https://mkdocstrings.github.io/)-generated API
   pages, one per public symbol group, rendered straight from docstrings.
+- **Migrating from pytest** - dedicated documentation on migrating existing test suites. Covers usage of velox-migrate and common manual edit patterns.
 - **About** (`about/`, plus `index.md`) — what it is, why, and orientation.
 
-The generator is [Zensical](https://zensical.org/), not mkdocs. mkdocs has had no maintainer
-since August 2024, which is why the Material for MkDocs team built Zensical as its successor
-rather than fork it; FastAPI's own build (`oss/fastapi/scripts/docs.py`) already runs a real
-production Zensical build alongside its mkdocs one, reading the same `mkdocs.yml`. Adopting this
-for velox means: Zensical as the site generator, its **modern** theme (Zensical's default —
-a fresh design, not a clone of Material's chrome), the same four-way split, and mkdocstrings for
-the reference section so it stays truthful to the source instead of hand-duplicated.
+The generator is [Zensical](https://zensical.org/) with **modern** theme and mkdocstrings.
 
-Zensical is alpha software (`Development Status :: 3 - Alpha` on PyPI, versions still `0.0.x`),
-under active development — multiple releases a week as of this writing. mkdocstrings support is
-explicitly "preliminary" (its author joined the Zensical team to build it, but some features,
-named as backlinks, aren't there yet); the wider plugin ecosystem (macros, tags, redirects,
-social cards) is still filling in. None of the gaps found so far touch what this plan needs —
-mkdocstrings' Python handler, and the pymdown-extensions family (admonitions, superfences,
-snippets) are both supported today, and are already default-enabled. Accepted trade-off: pin the
-version and expect breaking changes on upgrade, the way any alpha dependency is handled.
+Zensical is alpha software. None of the gaps found so far touch what this plan needs.
 
-## Where the site lives
-
-Internal working documents (this file included) live in `plans/`, not `docs/`.
+The site lives in `docs/`.
 
 ```
-zensical.toml                     repo root — see below for why
+zensical.toml                     # must be in repo root
 docs/
-  rationale.md                    existing, unchanged — canonical WHY doc, cited by README/CLAUDE.md
   index.md                        home page, adapted from README.md
-  guide/                          = FastAPI's tutorial/
+  guide/
   how-to/
+  migrating-pytest/
   reference/
   about/
   img/  css/  js/
 ```
 
-`zensical.toml` lives at the repo root, not inside `docs/`: `docs_dir` defaults to `docs`
-relative to the config file, and Zensical's docs_dir currently cannot be set to `.` — so putting
-the config next to `docs/` (the same place `pyproject.toml` and `justfile` already sit) gets the
-default for free, with no config file inside the published tree and no `docs/en/` locale layer
-(velox ships one language).
-
-Native format is `zensical.toml` (TOML), not `mkdocs.yml` — nothing here is migrating from an
-existing mkdocs project, and TOML already matches this repo's other config (`pyproject.toml`).
-Zensical's `mkdocs.yml` compatibility layer is a permanent feature, not a deprecation trap, so
-this isn't a one-way door if it turns out to matter.
+`zensical.toml` lives at the repo root as Zensical's docs_dir currently cannot be set to `.`.
 
 `rationale.md` needs no symlink or move: it already sits inside `docs_dir`, at the path README
 and `CLAUDE.md` already cite, and the site's nav just groups it under **About** without touching
@@ -104,7 +78,7 @@ Reference               (mkdocstrings, one page per __init__.py export group)
                             has no docstrings to render)
 About
   about/index.md           orientation, links to guide/reference
-  rationale.md             already at docs/rationale.md — nav just groups it under About
+  rationale.md             already at plans/rationale.md — nav just groups it under About
   about/alternatives.md    the one neutral pytest comparison from README.md, not expanded
                             ("Don't argue with pytest" — velox-docs skill)
 ```
@@ -173,7 +147,7 @@ a concrete reason to. Search is built in (Zensical's own client-side engine), no
    - `strict = true` in `zensical.toml` is the `mkdocs build --strict` equivalent, and it does
      fail the build on a link to a page that doesn't exist. `zensical build -s` is the same
      switch from the CLI.
-   - Link validation is scoped to `docs_dir`, so `docs/rationale.md`'s `../README.md` and
+   - Link validation is scoped to `docs_dir`, so `plans/rationale.md`'s `../README.md` and
      `../ROADMAP.md` links failed the build. They became a link to `guide/index.md` and an
      unlinked mention of `ROADMAP.md`. Every later page has to reach `examples/`, `README.md` or
      `ROADMAP.md` the same way — named, not linked out of the tree — until phase 6 settles

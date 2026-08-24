@@ -634,7 +634,7 @@ def _import_module(path: Path, module_name: str) -> object:
     submodule import without needing `sys.path` or a real `velox_tests` package to exist. When the
     hook applies it hands back a spec with itself as the loader, and `exec_module` below runs the
     AST rewrite; when it doesn't (or no hook is installed), `find_spec` returns `None` and this
-    falls back to plain `spec_from_file_location`. See `docs/rationale.md` ("meta-path hook
+    falls back to plain `spec_from_file_location`. See `plans/rationale.md` ("meta-path hook
     consulted directly") for the symlink edge case this leaves unresolved.
 
     importlib-only, no `sys.path` insertion. Any exception during `exec_module` propagates to the

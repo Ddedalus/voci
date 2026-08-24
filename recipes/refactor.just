@@ -3,7 +3,7 @@
 
 set working-directory := '..'
 
-# Install dependencies the refactor recipes need (ruff only — see docs/rationale.md)
+# Install dependencies the refactor recipes need (ruff only — see plans/rationale.md)
 init:
     uv add ruff --dev
 

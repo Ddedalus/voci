@@ -4,5 +4,5 @@
 `log_records` and `test_info` as `Fixture` objects, and the result types they hand back.
 `capture.py` routes captured stdout/stderr, logging, and `tmp_path` allocation for whichever test
 is currently running, through the providers `fixtures.py` wires in. The two modules import each
-other -- see docs/rationale.md for why that's deliberate and safe.
+other -- see plans/rationale.md for why that's deliberate and safe.
 """
