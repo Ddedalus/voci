@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import velox
-from velox._marks import decided, marks_of, merged
+from velox._marks import Marks, decided, marks_of, merged
 
 
 @pytest.mark.parametrize(
@@ -54,12 +54,12 @@ def test_marks_of_does_not_walk_the_mro() -> None:
         pass
 
     assert marks_of(Base).skip is not None
-    assert marks_of(Derived) == velox.Marks()
+    assert marks_of(Derived) == Marks()
 
 
 def test_marks_of_never_raises_on_dict_less_objects() -> None:
-    assert marks_of(object()) == velox.Marks()
-    assert marks_of(42) == velox.Marks()
+    assert marks_of(object()) == Marks()
+    assert marks_of(42) == Marks()
 
 
 def test_parametrize_rejects_empty_names() -> None:
@@ -111,7 +111,7 @@ def test_case_accepts_one_decorator_as_well_as_a_sequence() -> None:
 
 
 def test_case_without_marks_is_the_bare_value() -> None:
-    assert velox.case(1).marks == velox.Marks()
+    assert velox.case(1).marks == Marks()
 
 
 def test_parametrize_records_case_marks_aligned_with_its_values() -> None:

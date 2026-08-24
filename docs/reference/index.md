@@ -7,10 +7,10 @@ signature here is the signature you will import.
 move.
 
 - **[Fixtures](fixtures.md)** — `fixture`, `Depends`, `use`, and the types they involve
-  (`Fixture`, `Injection`, `Scope`).
+  (`Fixture`, `Scope`).
 - **[Marks](marks.md)** — `skip`, `skipif`, `xfail`, `tag`, `timeout`, `solo`, `isolated`,
-  `parametrize`, the records they attach, and the `Skipped`/`Failed` signals that raise the same
-  outcomes from inside a test.
+  `parametrize`, and the `Skipped`/`Failed` signals that raise the same outcomes from inside a
+  test.
 - **[Built-in fixtures](builtins.md)** — `tmp_path`, `tmp_path_factory`, `capture`, `log_records`,
   `test_info`, and their result types.
 - **[Assertions](assertions.md)** — `raises`, `approx`, `ExceptionInfo`, `Approx`.

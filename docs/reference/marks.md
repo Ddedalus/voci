@@ -6,10 +6,8 @@ object back, so marks stack freely and — apart from `parametrize`, whose stack
 which argument varies slowest — order does not matter; applying `skip`, `xfail` or `timeout`
 twice to one function raises `TypeError` rather than quietly keeping the last one.
 
-The record types below (`Skip`, `SkipIf`, `XFail`, `ParamSet`, gathered into `Marks`) are what a
-decorator stores and what the runner reads; you need to name them only when you inspect marks
-yourself. `Skipped` and `Failed` are the imperative counterparts of the skip and fail outcomes,
-raised from inside a running test or fixture rather than decided ahead of it.
+`Skipped` and `Failed` are the imperative counterparts of the skip and fail outcomes, raised from
+inside a running test or fixture rather than decided ahead of it.
 
 ## Skipping and expected failures
 
@@ -37,22 +35,6 @@ it.
 ::: velox.parametrize
 
 ::: velox.case
-
-## Records
-
-::: velox.Marks
-
-::: velox.Skip
-
-::: velox.SkipIf
-
-::: velox.XFail
-
-::: velox.ParamSet
-
-::: velox.ParamCase
-
-::: velox.MarkDecorator
 
 ## Runtime signals
 

@@ -8,7 +8,7 @@ built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`), and asser
 """
 
 from velox._assertions.approx import Approx, approx
-from velox._assertions.raises import ExceptionInfo, RaisesContext, raises
+from velox._assertions.raises import ExceptionInfo, raises
 from velox._builtins.fixtures import (
     Capture,
     LegacyPath,
@@ -25,15 +25,10 @@ from velox._builtins.fixtures import (
     tmpdir_factory,
 )
 from velox._collection.requires import use
-from velox._di.fixtures import Depends, Fixture, Injection, Scope, fixture
+from velox._di.fixtures import Depends, Fixture, Scope, fixture
 from velox._marks import (
     MarkDecorator,
-    Marks,
     ParamCase,
-    ParamSet,
-    Skip,
-    SkipIf,
-    XFail,
     case,
     isolated,
     parametrize,
@@ -56,22 +51,15 @@ __all__ = [
     "ExceptionInfo",
     "Failed",
     "Fixture",
-    "Injection",
     "LegacyPath",
     "LegacyTmpPathFactory",
     "LogRecords",
     "MarkDecorator",
-    "Marks",
     "ParamCase",
-    "ParamSet",
-    "RaisesContext",
     "Scope",
-    "Skip",
-    "SkipIf",
     "Skipped",
     "TestInfo",
     "TmpPathFactory",
-    "XFail",
     "__version__",
     "approx",
     "capture",

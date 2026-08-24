@@ -5,8 +5,8 @@ for one by putting `Depends(that_function)` in a parameter default. The dependen
 object itself, so there is nothing to look up by name. `Scope` decides how widely one constructed
 instance is shared, from a fresh instance per injection site up to one for the whole run, and `use`
 attaches a fixture to a module or package for the cases where the point is the setup rather than a
-value the test reads. `Fixture` and `Injection` are the objects velox builds out of those
-declarations.
+value the test reads. `Fixture` is the object `@velox.fixture()` builds out of the decorated
+function.
 
 ::: velox.fixture
 
@@ -22,5 +22,6 @@ underlying function as ordinary Python, with no injection.
 ::: velox.Fixture
     options:
       merge_init_into_class: false
-
-::: velox.Injection
+      # `plan` and `provider` are how the runtime constructs the value; both name types that
+      # aren't part of the public surface.
+      filters: ["!^_", "!^plan$", "!^provider$"]

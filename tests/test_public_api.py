@@ -11,7 +11,7 @@ import pytest
 
 import velox
 from velox import Depends
-from velox._marks import marks_of
+from velox._marks import Marks, marks_of
 
 
 @velox.fixture()
@@ -95,7 +95,7 @@ def test_marks_stack_into_one_record() -> None:
 def test_unmarked_function_has_an_empty_record() -> None:
     def target() -> None: ...
 
-    assert marks_of(target) == velox.Marks()
+    assert marks_of(target) == Marks()
 
 
 def test_parametrize_normalizes_names_and_cases() -> None:
