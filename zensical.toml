@@ -34,8 +34,8 @@ language = "en"
 # Both paths are relative to `docs/`, and the files under `docs/static/` are copied through to
 # the built site as-is. The SVG scales to whatever size the header gives it; the PNG is there for
 # the favicon, which browsers are less uniform about accepting as SVG.
-logo = "static/voci-logo-2.svg"
-favicon = "static/voci-logo-2.png"
+logo = "static/velox-logo-2.svg"
+favicon = "static/velox-logo-2.png"
 # A section's `index.md` is the section itself, so "Guide" in the nav opens `guide/index.md`
 # rather than expanding to a lone child of the same name.
 features = ["navigation.indexes"]
