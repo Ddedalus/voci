@@ -49,6 +49,8 @@ folds a mark into the function it is handed."""
 
 @dataclass(frozen=True, slots=True)
 class Skip:
+    """An unconditional skip and the reason reported for it."""
+
     reason: str
 
 
@@ -260,7 +262,7 @@ def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
 def solo[F: Callable[..., Any]](fn: F) -> F:
     """Mark this test to run alone, with nothing else scheduled alongside it.
 
-    Applied bare, with no parentheses. `_run.AdmissionGate` admits it only once nothing else is
+    Applied bare, with no parentheses. Such a test is admitted only once nothing else is
     running, and blocks every other test's admission until it finishes.
     """
     return _amend(fn, solo=True)
@@ -269,10 +271,10 @@ def solo[F: Callable[..., Any]](fn: F) -> F:
 def isolated[F: Callable[..., Any]](fn: F) -> F:
     """Mark this test to run alone in a subprocess, on its own fresh interpreter and loop.
 
-    Applied bare, with no parentheses. Still admitted through the same concurrency/`exclusive=`/
-    `solo` gate as every other test (`_run.AdmissionGate`) -- the subprocess is what's fresh, not
-    the scheduling. A module-scope fixture this test shares with in-process siblings is set up
-    and torn down separately inside the subprocess, not shared with them.
+    Applied bare, with no parentheses. Admitted through the same concurrency/`exclusive=`/`solo`
+    gate as every other test -- the subprocess is what's fresh, not the scheduling. A
+    module-scope fixture this test shares with in-process siblings is set up and torn down
+    separately inside the subprocess, not shared with them.
     """
     return _amend(fn, isolated=True)
 
@@ -288,7 +290,7 @@ def parametrize[F: Callable[..., Any]](
     names. Stacked decorators combine in a stable, defined order: outermost varies slowest.
     An entry written as `case(value, marks=...)` carries marks for that one case, folded into
     the test's own for the record that case expands into. Expanded into one test per case at
-    collection (`_collection.parametrize.cases_for`).
+    collection.
     """
     # Validated here, at decoration time: failing in the collector instead points the traceback
     # elsewhere, and a stale `ids` list would silently mislabel every later case instead of

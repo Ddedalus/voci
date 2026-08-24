@@ -14,8 +14,16 @@ nav = [
   { "Home" = "index.md" },
   { "Guide" = ["guide/index.md"] },
   { "How-to" = ["how-to/index.md"] },
-  { "Reference" = ["reference/index.md"] },
-  { "About" = ["about/index.md", "rationale.md"] },
+  { "Reference" = [
+      "reference/index.md",
+      "reference/fixtures.md",
+      "reference/marks.md",
+      "reference/builtins.md",
+      "reference/assertions.md",
+      "reference/fastapi.md",
+      "reference/cli.md",
+  ] },
+  { "About" = ["about/index.md"] },
 ]
 
 [project.theme]
@@ -23,6 +31,11 @@ nav = [
 # underneath us.
 variant = "modern"
 language = "en"
+# Both paths are relative to `docs/`, and the files under `docs/static/` are copied through to
+# the built site as-is. The SVG scales to whatever size the header gives it; the PNG is there for
+# the favicon, which browsers are less uniform about accepting as SVG.
+logo = "static/voci-logo-2.svg"
+favicon = "static/voci-logo-2.png"
 # A section's `index.md` is the section itself, so "Guide" in the nav opens `guide/index.md`
 # rather than expanding to a lone child of the same name.
 features = ["navigation.indexes"]
@@ -45,3 +58,27 @@ media = "(prefers-color-scheme: dark)"
 scheme = "slate"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to system preference"
+
+# Reference pages are rendered from the source by mkdocstrings, which Zensical loads as a
+# Markdown extension rather than a MkDocs plugin -- the table below is what it reads.
+[project.plugins.mkdocstrings.handlers.python]
+# The repo root, so `velox` and `velox.fastapi` resolve from the checkout being documented rather
+# than from whatever copy happens to be installed.
+paths = ["."]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "sphinx"
+# `velox/__init__.py` is the public surface; anything underscore-prefixed reached through it is
+# private and stays out of the rendered page.
+filters = ["!^_"]
+merge_init_into_class = true
+separate_signature = true
+show_root_heading = true
+show_signature_annotations = true
+# The source of a public symbol is a click away in the reader's own editor; inlining it here
+# doubles the length of every entry with the body of a decorator factory.
+show_source = false
+show_symbol_type_heading = true
+show_symbol_type_toc = true
+# Types in a signature link to their own page, so `Scope` in `fixture`'s signature is a way in.
+signature_crossrefs = true

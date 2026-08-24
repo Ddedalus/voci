@@ -30,6 +30,7 @@ class ExceptionInfo[E: BaseException]:
 
     @property
     def value(self) -> E:
+        """The caught exception. Reading it before the block exits raises `RuntimeError`."""
         # RuntimeError, not AttributeError: AttributeError from a property is swallowed by
         # `hasattr`, `getattr(info, "value", default)`, and most repr/debug machinery, so a test
         # that reads `.value` too early would see a silent default instead of this error.
@@ -39,14 +40,19 @@ class ExceptionInfo[E: BaseException]:
 
     @property
     def type(self) -> type[E]:
+        """The caught exception's class."""
         return type(self.value)
 
     @property
     def traceback(self) -> TracebackType | None:
+        """The caught exception's traceback."""
         return self.value.__traceback__
 
     def match(self, pattern: str | re.Pattern[str]) -> bool:
-        """`re.search` the string form of the exception. Returns True or raises AssertionError."""
+        """`re.search` `pattern` against the string form of the exception.
+
+        Returns True, or raises `AssertionError` if the pattern does not match.
+        """
         if re.search(pattern, str(self.value)) is None:
             raise AssertionError(f"pattern {pattern!r} does not match {str(self.value)!r}")
         return True
@@ -121,10 +127,13 @@ def raises(expected, func=None, *args, match=None, **kwargs):
     `ExceptionInfo` directly; a non-callable `func` raises `TypeError`.
 
     `match` always matches against the raised exception, in both forms — it is never one of
-    `func`'s `**kwargs`, so a call means the same thing regardless of which form invoked it.
+    `func`'s `**kwargs`, so a call means the same thing regardless of which form invoked it. It
+    is an `re.search` rather than a full match, so regex metacharacters in an otherwise literal
+    message need escaping.
 
-    `match` is an `re.search`, not a full match — pytest-compatible, including the gotcha that
-    regex metacharacters in a literal message need escaping.
+    An `expected` that would catch `asyncio.CancelledError` raises `TypeError`: velox enforces
+    test timeouts by cancellation, and a block that swallowed it would make that test
+    un-timeout-able.
     """
     if func is None:
         if args or kwargs:

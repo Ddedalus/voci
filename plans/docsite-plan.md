@@ -89,8 +89,9 @@ Embedding mechanism: `pymdownx.snippets` to pull a marked block out of an `examp
 
 Same mechanism as FastAPI: `mkdocstrings[python]`, `::: velox.fixture`-style directives, reading docstrings that already follow the velox-docs register. `filters: ['!^_']` to keep private names out, `show_root_heading`, `merge_init_into_class`, `signature_crossrefs` — 
 
-Configured under `[project.plugins.mkdocstrings.handlers.python]` in `zensical.toml`, per
-[Zensical's mkdocstrings docs](https://zensical.org/docs/setup/extensions/mkdocstrings/).
+Configured under `[project.plugins.mkdocstrings.handlers.python.options]` in `zensical.toml`, per
+[Zensical's mkdocstrings docs](https://zensical.org/docs/setup/extensions/mkdocstrings/). velox's
+docstrings use the `:param:` field syntax, so the handler reads them as `docstring_style = "sphinx"`.
 
 `reference/cli.md` is the one page mkdocstrings can't produce — argparse has no docstring-driven
 autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a script
@@ -104,12 +105,13 @@ autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a s
 ## Phasing
 
 1. ~~**Skeleton**~~ — **done.**: just recipes, config file, docs confirmed serving locally.
-2. **Reference** — mkdocstrings wired up, the five symbol-group pages, `reference/cli.md` plus its
-   generator script and check recipe.
+2. ~~**Reference**~~ — **done.**: mkdocstrings wired up, the five symbol-group pages,
+   `reference/cli.md` plus its generator script and `just docs check`.
 3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching
    `examples/` suite.
 4. **How-to** — the four recipe pages, each derived from a specific `examples/` file.
-5. **About** — `index.md`, a nav entry for the existing `rationale.md`, `alternatives.md`.
+5. **About** — `index.md`, `alternatives.md`. `rationale.md` is an internal document under
+   `plans/`, so a public "why" page is written fresh rather than linked.
 6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up decision once the repo is public — out of scope here.
 
 Each phase is a reviewable unit on its own branch, per the worktree workflow.

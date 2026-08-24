@@ -364,17 +364,18 @@ class Fixture[T]:
 
     @property
     def scope(self) -> Scope:
+        """How widely one constructed instance of this fixture is shared."""
         return self._scope
 
     @property
     def exclusive(self) -> Exclusive:
+        """The contention token, or `False` for a fixture that isn't exclusive."""
         return self._exclusive
 
     @property
     def provider(self) -> BuiltinProvider | None:
-        """`None` for every ordinary fixture. When set, `_di._construct` calls this instead of
-        `func` — see `builtin_fixture`. Not settable via `velox.fixture()`; only this package's
-        own `_builtins/fixtures.py` ever constructs a provider-backed `Fixture`."""
+        """Set on velox's own built-in fixtures, whose value the runtime supplies directly
+        rather than by calling `func`. `None` for every fixture built with `velox.fixture()`."""
         return self._provider
 
     @property
@@ -395,10 +396,9 @@ class Fixture[T]:
 
     @property
     def dependencies(self) -> tuple[Fixture[Any], ...]:
-        """The fixture nodes this one depends on, for graph walking.
+        """The fixtures this one depends on, in the order of its own `Depends(...)` sites.
 
-        Acyclic by construction: `Fixture.__init__` checks at build time, so a walker can
-        recurse over this without tracking a visited set.
+        Acyclic by construction: a cycle is rejected when the fixture is declared.
         """
         return tuple(i.source for i in self._plan)
 

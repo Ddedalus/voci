@@ -133,10 +133,15 @@ def approx(
     abs: float | None = None,
     nan_ok: bool = False,
 ) -> Approx:
-    """`assert value == velox.approx(0.3)`.
+    """A tolerant stand-in for `expected` in an `==`: `assert value == velox.approx(0.3)`.
 
     `expected` is a number, or a list, tuple, or dict of numbers compared elementwise under the
     same tolerances. A set raises `TypeError`, as does a container nested inside a list, tuple,
     or dict.
+
+    The default tolerances are `rel=1e-6` and `abs=1e-12`, whichever is looser. Naming `abs`
+    alone applies the absolute tolerance only; naming `rel` alone keeps the default absolute
+    tolerance underneath it, which is what makes a comparison against zero work. Two NaNs
+    compare equal only under `nan_ok=True`.
     """
     return Approx(expected, rel=rel, abs=abs, nan_ok=nan_ok)

@@ -18,22 +18,18 @@ __all__ = ["Failed", "Skipped"]
 
 class Skipped(BaseException):
     """Raise to skip the running test immediately -- the runtime counterpart of
-    `@velox.skip`/`@velox.skipif`, which decide once at collection instead. `_run.run._run_one`
-    catches this in both the setup and call phase and reports `Outcome.SKIPPED`, with
-    `str(self)` as the reason; whatever ran before the raise already ran, and fixtures already
-    acquired are still torn down normally.
+    `@velox.skip`/`@velox.skipif`, which decide once at collection instead.
 
-    A `BaseException`, not an `Exception` -- like pytest's own `Skipped`, so a test or fixture
-    body's `except Exception:` doesn't accidentally swallow the skip signal it was never meant to
-    catch.
+    Raised from a fixture or from the test body, it reports the test as skipped with `str(self)`
+    as the reason; whatever ran before the raise already ran, and fixtures already acquired are
+    torn down normally. A `BaseException`, not an `Exception`, so a test or fixture body's
+    `except Exception:` does not swallow the skip signal.
     """
 
 
 class Failed(BaseException):
     """Raise to fail the running test immediately, with a message rather than an assertion --
-    the runtime counterpart of writing `assert False, msg`. Caught nowhere specially in
-    `_run.run`: any exception already fails a test's call phase, so this is just a named
-    spelling of "fail with this message", for the cases pytest's own `pytest.fail()` covers.
+    a named spelling of `assert False, msg`.
 
     A `BaseException`, not an `Exception`, for the same reason `Skipped` is: a broad
     `except Exception:` around a test's own code must not swallow a deliberate failure signal.

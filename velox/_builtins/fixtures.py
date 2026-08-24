@@ -43,11 +43,12 @@ _RUNTIME = "provided by the velox runtime; not callable directly"
 @final
 @dataclass(frozen=True, slots=True)
 class TestInfo:
-    """The `request` replacement: read-only and small."""
+    """Read-only facts about the test that is running."""
 
     id: str
     """`relative/path/test_file.py::test_name[param-id]`."""
     tags: tuple[str, ...]
+    """Every name attached to this test by `@velox.tag(...)`."""
     timeout: float | None
     """The budget this test is actually held to, or `None` for no limit: a per-test
     `@velox.timeout(...)` mark if it carries one, else the suite's `--timeout`."""
@@ -67,10 +68,10 @@ class _CapturedText(Protocol):
 
 @final
 class Capture:
-    """The current test's captured stdout/stderr, live during the test.
+    """The current test's captured stdout and stderr.
 
-    Holds a reference to the test's `Sink`, not a snapshot: `.out`/`.err` read straight through
-    on every access, so text written after this fixture was injected is visible immediately.
+    A live view, not a snapshot: `.out`/`.err` read the capture buffers on every access, so text
+    written after this fixture was injected is visible immediately.
     """
 
     __slots__ = ("_source",)
@@ -143,12 +144,11 @@ _LOG_FORMAT = "%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s"
 
 @final
 class LogRecords:
-    """The `caplog` equivalent: structured records captured for this test.
+    """The `logging` records captured for the current test.
 
-    Wraps the live `deque[logging.LogRecord]` that `_capture._RoutingHandler.emit` appends to,
-    not a copy, so `.records`/`.messages`/`.text`/`.record_tuples` reflect records logged after
-    this fixture was injected, and `.clear()` empties the same container the handler is still
-    appending to rather than detaching a snapshot.
+    A live view, not a copy: `.records`/`.messages`/`.text`/`.record_tuples` reflect records
+    logged after this fixture was injected, and `.clear()` empties the container the capture
+    handler goes on appending to.
     """
 
     __slots__ = ("_records",)
@@ -188,9 +188,9 @@ class LogRecords:
         level inherits from (`Logger.getEffectiveLevel`'s walk up `.parent`). `level` and
         `logger` are validated before the context manager is constructed or entered.
 
-        Logger levels are process-global, so this call under concurrency can change what a
-        concurrent sibling captures for a logger of the same name. See `plans/rationale.md` for
-        which direction is safe.
+        Logger levels are process-global, so a concurrent test logging to a logger of the same
+        name is affected too: raising a level lets it capture more than it asked for, and
+        lowering one can leave its own `set_level` block empty.
         """
         resolved = _resolve_level(level)
         if logger is not None and not isinstance(logger, str):
@@ -201,12 +201,10 @@ class LogRecords:
 
 @final
 class TmpPathFactory:
-    """Session-scoped temp directory factory, sharing pytest's numbered-root and retention
-    policy.
+    """Session-scoped factory for temporary directories under the run's basetemp root.
 
-    `mktemp` numbers by construction, a per-basename counter starting at `0`, rather than
-    scanning the directory for a free number — so two tests calling `.mktemp(...)`
-    concurrently never collide.
+    `mktemp` numbers from a per-basename counter rather than by scanning for a free number, so
+    two tests calling it concurrently never collide.
     """
 
     __slots__ = ("_basetemp", "_counters")
@@ -216,6 +214,12 @@ class TmpPathFactory:
         self._counters: dict[str, int] = {}
 
     def mktemp(self, basename: str, *, numbered: bool = True) -> Path:
+        """Create and return a fresh directory under the basetemp root.
+
+        `numbered` appends a per-`basename` counter, so repeated calls with one basename each
+        get their own directory; `numbered=False` uses `basename` as given and raises
+        `FileExistsError` if that directory is already there.
+        """
         # `_capture` is bound at the bottom of this module, after this class is defined (see the
         # import-cycle note there); by the time anything can call `mktemp`, it's already bound.
         sanitized = _capture.sanitize_test_id(basename)
@@ -233,19 +237,18 @@ class TmpPathFactory:
         return path
 
     def getbasetemp(self) -> Path:
+        """The root directory every path this factory hands out lives under."""
         return self._basetemp
 
 
 @final
 class LegacyPath:
-    """A `pathlib.Path`, wrapped for suites still calling `.join`, `.strpath`, `/`, `.write` or
-    `.mkdir` on it the way pytest's own `tmpdir` does.
+    """A `pathlib.Path` wrapped in the `py.path.local` surface pytest's own `tmpdir` hands out:
+    `.join`, `.strpath`, `/`, `.write` and `.mkdir`.
 
-    Only that shape is implemented, and `.mkdir` is overridden rather than left to fall through:
-    it takes the name to create, not `Path.mkdir`'s `mode`/`parents`/`exist_ok`. Any other
-    attribute this class doesn't define falls through to the wrapped `Path`, which is exact for a
-    method the two share by coincidence (`.exists()`, ...) and raises `AttributeError` for one
-    that is `py.path.local`-only.
+    Any other attribute resolves on the wrapped `Path`, so one the two types share (`.exists()`,
+    `.read_text()`) behaves as `Path`'s and one that only `py.path.local` had raises
+    `AttributeError`.
     """
 
     __slots__ = ("_path",)
@@ -264,8 +267,7 @@ class LegacyPath:
         """Create and return the directory `.join(*args)` names.
 
         Shadows `Path.mkdir`, whose `mode`/`parents`/`exist_ok` keyword arguments this class
-        does not carry over, the way `py.path.local.mkdir` -- a different call, same name --
-        never did either.
+        does not carry over.
         """
         made = self.join(*args)
         made._path.mkdir()
@@ -371,21 +373,21 @@ test_info = builtin_fixture(test_info.func, provider=_capture.test_info_provider
 # `tmp_path_factory` rather than allocating a directory of their own: a test asking for both gets
 # the same directory either way, and `tmpdir_factory.mktemp(...)` shares `tmp_path_factory`'s own
 # numbering instead of starting a second counter over the same `basetemp`.
-def _tmpdir(tmp_path: Path = Depends(tmp_path)) -> LegacyPath:
+def tmpdir(tmp_path: Path = Depends(tmp_path)) -> LegacyPath:
+    """This test's `tmp_path`, wrapped as a `LegacyPath`."""
     raise NotImplementedError(_RUNTIME)
 
 
-def _tmpdir_factory(
+def tmpdir_factory(
     tmp_path_factory: TmpPathFactory = Depends(tmp_path_factory),
 ) -> LegacyTmpPathFactory:
+    """The session's `tmp_path_factory`, wrapped as a `LegacyTmpPathFactory`."""
     raise NotImplementedError(_RUNTIME)
 
 
-tmpdir = builtin_fixture(
-    _tmpdir, provider=_capture.tmpdir_provider, scope="function", name="tmpdir"
-)
+tmpdir = builtin_fixture(tmpdir, provider=_capture.tmpdir_provider, scope="function", name="tmpdir")
 tmpdir_factory = builtin_fixture(
-    _tmpdir_factory,
+    tmpdir_factory,
     provider=_capture.tmpdir_factory_provider,
     scope="session",
     name="tmpdir_factory",

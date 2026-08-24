@@ -72,4 +72,3 @@ uv pip install velox-test          # or: pip install velox-test
   scopes, concurrency, marks and selection one concept at a time.
 - **[How-to](how-to/index.md)** — short recipes for specific tasks, once the guide is behind you.
 - **[Reference](reference/index.md)** — every public symbol, rendered from the source.
-- **[Rationale](rationale.md)** — why velox is shaped the way it is.

@@ -354,16 +354,13 @@ def _install_state(app: FastAPI, record: _Install) -> _LayeredState:
 
 
 def uninstall(app: FastAPI) -> None:
-    """Undo `_install`: put back the `dependency_overrides` dict and the `state` object velox
-    found on `app`, and drop the memoised `lifespan()` fixture so a later call builds a fresh one.
+    """Put back the `dependency_overrides` dict and the `state` object velox found on `app`.
 
-    velox itself never calls this — the proxy is behaviourally identical to what it replaced for
-    any code holding no active layer, so nothing inside a velox run needs the original back. It
-    exists because this module is importable from anywhere and `_install` fires unconditionally on
-    the first `client()`: a notebook, an embedded uvicorn, or a script that happens to import the
-    same module a velox suite tests would otherwise go on serving `app` through velox's proxy for
-    the rest of the process. Symmetric with `_rewrite.uninstall`. Idempotent — uninstalling an app
-    that was never installed, or twice in a row, is a no-op.
+    The memoised `lifespan()` fixture for `app` is dropped too, so a later call builds a fresh one.
+    The proxies go in on the first `client()` call and outlive it, so this is what a process that
+    goes on serving the same `app` after the suite — a notebook, an embedded uvicorn — calls to get
+    the objects it built back. Idempotent: uninstalling an app velox never installed on, or twice
+    in a row, does nothing.
     """
     record = _INSTALLS.pop(app, None)
     if record is not None:
@@ -395,15 +392,6 @@ async def client(
 ) -> AsyncIterator[AsyncClient]:
     """An `httpx.AsyncClient` speaking to `app` in-process, with this test's overrides layered on.
 
-    :param app: your real app — the module-level `app = FastAPI()`, not a per-test copy.
-    :param overrides: `{dependency: replacement}`, with FastAPI's exact semantics. The value is a
-        *dependency callable*, so a fixture value is passed as `lambda: session`. velox does not
-        wrap non-callables for you: a silently-wrapped value would diverge from what the same
-        dict means when written by hand.
-    :param state: `{name: value}` layered over `app.state` for the duration, on top of whatever
-        the app already has.
-    :param base_url: what relative request paths are resolved against.
-
     Both the overrides layer and the state layer are pushed even when empty, so an
     `app.dependency_overrides[...] = ...` or `app.state.x = ...` write inside the `async with` is
     this test's and no one else's — including the one attribute a test never opted into by passing
@@ -417,6 +405,15 @@ async def client(
 
     No lifespan runs; `ASGITransport` never sends a lifespan scope, and velox does not fake one.
     For an app whose startup builds state the tests need, depend on `velox.fastapi.lifespan(app)`.
+
+    :param app: your real app — the module-level `app = FastAPI()`, not a per-test copy.
+    :param overrides: `{dependency: replacement}`, with FastAPI's exact semantics. The value is a
+        *dependency callable*, so a fixture value is passed as `lambda: session`. velox does not
+        wrap non-callables for you: a silently-wrapped value would diverge from what the same
+        dict means when written by hand.
+    :param state: `{name: value}` layered over `app.state` for the duration, on top of whatever
+        the app already has.
+    :param base_url: what relative request paths are resolved against.
     """
     record = _install(app)
     tokens: list[Token[Any]] = []
@@ -441,20 +438,21 @@ def lifespan(app: FastAPI) -> Fixture[FastAPI]:
 
     `client()` speaks HTTP scopes only through `ASGITransport`, so a lifespan that builds an
     engine or a connection pool needs a separate fixture, run once per suite rather than once per
-    test. Depend on this where the app's startup is what puts the state under test in place::
+    test. Depend on this where the app's startup is what puts the state under test in place:
 
-        started = velox.fastapi.lifespan(app)
+    ```python
+    started = velox.fastapi.lifespan(app)
 
-        async def test_it(_: FastAPI = Depends(started), c: AsyncClient = Depends(api_client)):
-            ...
+
+    async def test_it(_: FastAPI = Depends(started), c: AsyncClient = Depends(api_client)):
+        ...
+    ```
 
     Its writes land in the app's own state, since session setup runs outside any test's layer,
     which is exactly what makes them visible to every test.
 
-    Memoised per `app`: `Fixture` has no `__eq__`/`__hash__`, so the session cache keys on
-    identity, and calling this twice for the same app — a second test module, a helper that calls
-    it inside a fixture body — must return the *same* object, or the cache runs the app's startup
-    and shutdown once per call site instead of once per run.
+    Memoised per `app`, so every call site asking for one app's lifespan gets the same `Fixture`
+    object and the app's startup and shutdown run once for the whole suite.
     """
     found = _LIFESPANS.get(app)
     if found is not None:
