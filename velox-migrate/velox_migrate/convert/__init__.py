@@ -163,9 +163,10 @@ def _with_copies(module: cst.Module, work: FileWork) -> cst.Module:
     """`module` with each specialized copy written into it, in the pytest spelling it came in.
 
     A copy goes below the last thing it names, because that is usually the override it was
-    specialized for and a `Depends()` naming it is read where the copy's own `def` is. A copy the
-    module already binds was written by an earlier conversion, which is what leaves a converted
-    tree alone.
+    specialized for and a `Depends()` naming it is read where the copy's own `def` is — and, for
+    an override a test class wrote, above that class, whose methods read their defaults while its
+    body runs. A copy the module already binds was written by an earlier conversion, which is what
+    leaves a converted tree alone.
     """
     bound = set(layout.module_level_names(module.code))
     body = list(module.body)
@@ -173,7 +174,7 @@ def _with_copies(module: cst.Module, work: FileWork) -> cst.Module:
         if copy.symbol in bound:
             continue
         bound.add(copy.symbol)
-        body.insert(_below(body, copy.after), _definition(copy))
+        body.insert(min(_below(body, copy.after), _above(body, copy.before)), _definition(copy))
     return module.with_changes(body=body)
 
 
@@ -185,6 +186,20 @@ def _below(body: Sequence[cst.BaseStatement], names: Collection[str]) -> int:
         if isinstance(statement, cst.FunctionDef | cst.ClassDef) and statement.name.value in names
     ]
     return max(written) + 1 if written else len(body)
+
+
+def _above(body: Sequence[cst.BaseStatement], group: str | None) -> int:
+    """Where in `body` the class `group` names is, which nothing it reads can be written below."""
+    if group is None:
+        return len(body)
+    return next(
+        (
+            index
+            for index, statement in enumerate(body)
+            if isinstance(statement, cst.ClassDef) and statement.name.value == group
+        ),
+        len(body),
+    )
 
 
 def _definition(copy: plan.Duplicate) -> cst.FunctionDef:

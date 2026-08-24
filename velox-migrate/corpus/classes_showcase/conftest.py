@@ -1,8 +1,8 @@
 """The fixtures a class in this suite overrides, and the one written between them.
 
-`blog` is what makes the override cost more than itself: a class that redefines `user` reaches
-`blog` too, so a copy of `blog` wired to the class's own `user` is what the conversion has to
-write.
+`blog` and `digest` are what make the override cost more than itself: a class that redefines
+`user` reaches both, so the conversion has to write a copy of each, wired to the class's own
+`user` and then to each other rather than to what they were written against.
 """
 
 import pytest
@@ -16,3 +16,8 @@ def user():
 @pytest.fixture
 def blog(user):
     return f"blog:{user}"
+
+
+@pytest.fixture
+def digest(blog):
+    return f"digest:{blog}"

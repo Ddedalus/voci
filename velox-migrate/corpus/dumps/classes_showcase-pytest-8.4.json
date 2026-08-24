@@ -129,7 +129,7 @@
     "module": "test_classes",
     "qualname": "TestSiblings.base",
     "file": "test_classes.py",
-    "lineno": 32,
+    "lineno": 37,
     "wrapped": false
    }
   },
@@ -147,7 +147,7 @@
     "module": "test_classes",
     "qualname": "TestSameName.base",
     "file": "test_classes.py",
-    "lineno": 48,
+    "lineno": 68,
     "wrapped": false
    }
   },
@@ -327,11 +327,31 @@
     "module": "test_classes",
     "qualname": "TestSiblings.derived",
     "file": "test_classes.py",
-    "lineno": 28,
+    "lineno": 33,
     "wrapped": false
    }
   },
   "f11": {
+   "argname": "digest",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": ".",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [
+    "blog"
+   ],
+   "func": {
+    "module": "conftest",
+    "qualname": "digest",
+    "file": "conftest.py",
+    "lineno": 21,
+    "wrapped": false
+   }
+  },
+  "f12": {
    "argname": "doctest_namespace",
    "scope": "session",
    "params": null,
@@ -349,7 +369,7 @@
     "wrapped": false
    }
   },
-  "f12": {
+  "f13": {
    "argname": "monkeypatch",
    "scope": "function",
    "params": null,
@@ -367,7 +387,25 @@
     "wrapped": false
    }
   },
-  "f13": {
+  "f14": {
+   "argname": "nested",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "test_classes.py::TestSiblings",
+   "kind": "FixtureDef",
+   "direct_param": false,
+   "argnames": [],
+   "func": {
+    "module": "test_classes",
+    "qualname": "TestSiblings.nested",
+    "file": "test_classes.py",
+    "lineno": 45,
+    "wrapped": false
+   }
+  },
+  "f15": {
    "argname": "pytestconfig",
    "scope": "session",
    "params": null,
@@ -387,7 +425,7 @@
     "wrapped": false
    }
   },
-  "f14": {
+  "f16": {
    "argname": "record_property",
    "scope": "function",
    "params": null,
@@ -407,7 +445,7 @@
     "wrapped": false
    }
   },
-  "f15": {
+  "f17": {
    "argname": "record_testsuite_property",
    "scope": "session",
    "params": null,
@@ -427,7 +465,7 @@
     "wrapped": false
    }
   },
-  "f16": {
+  "f18": {
    "argname": "record_xml_attribute",
    "scope": "function",
    "params": null,
@@ -447,7 +485,7 @@
     "wrapped": false
    }
   },
-  "f17": {
+  "f19": {
    "argname": "recwarn",
    "scope": "function",
    "params": null,
@@ -465,7 +503,7 @@
     "wrapped": false
    }
   },
-  "f18": {
+  "f20": {
    "argname": "through_self",
    "scope": "function",
    "params": null,
@@ -479,11 +517,11 @@
     "module": "test_classes",
     "qualname": "TestSiblings.through_self",
     "file": "test_classes.py",
-    "lineno": 36,
+    "lineno": 41,
     "wrapped": false
    }
   },
-  "f19": {
+  "f21": {
    "argname": "tmp_path",
    "scope": "function",
    "params": null,
@@ -504,7 +542,7 @@
     "wrapped": false
    }
   },
-  "f20": {
+  "f22": {
    "argname": "tmp_path_factory",
    "scope": "session",
    "params": null,
@@ -524,7 +562,7 @@
     "wrapped": false
    }
   },
-  "f21": {
+  "f23": {
    "argname": "tmpdir",
    "scope": "function",
    "params": null,
@@ -544,7 +582,7 @@
     "wrapped": false
    }
   },
-  "f22": {
+  "f24": {
    "argname": "tmpdir_factory",
    "scope": "session",
    "params": null,
@@ -564,7 +602,7 @@
     "wrapped": false
    }
   },
-  "f23": {
+  "f25": {
    "argname": "user",
    "scope": "function",
    "params": null,
@@ -582,7 +620,7 @@
     "wrapped": false
    }
   },
-  "f24": {
+  "f26": {
    "argname": "user",
    "scope": "function",
    "params": null,
@@ -596,7 +634,7 @@
     "module": "test_classes",
     "qualname": "TestOverriding.user",
     "file": "test_classes.py",
-    "lineno": 14,
+    "lineno": 16,
     "wrapped": false
    }
   }
@@ -633,52 +671,58 @@
   "derived": [
    "f10"
   ],
-  "doctest_namespace": [
+  "digest": [
    "f11"
   ],
-  "monkeypatch": [
+  "doctest_namespace": [
    "f12"
   ],
-  "pytestconfig": [
+  "monkeypatch": [
    "f13"
   ],
-  "record_property": [
+  "nested": [
    "f14"
   ],
-  "record_testsuite_property": [
+  "pytestconfig": [
    "f15"
   ],
-  "record_xml_attribute": [
+  "record_property": [
    "f16"
   ],
-  "recwarn": [
+  "record_testsuite_property": [
    "f17"
   ],
-  "through_self": [
+  "record_xml_attribute": [
    "f18"
   ],
-  "tmp_path": [
+  "recwarn": [
    "f19"
   ],
-  "tmp_path_factory": [
+  "through_self": [
    "f20"
   ],
-  "tmpdir": [
+  "tmp_path": [
    "f21"
   ],
-  "tmpdir_factory": [
+  "tmp_path_factory": [
    "f22"
   ],
-  "user": [
-   "f23",
+  "tmpdir": [
+   "f23"
+  ],
+  "tmpdir_factory": [
    "f24"
+  ],
+  "user": [
+   "f25",
+   "f26"
   ]
  },
  "items": [
   {
    "nodeid": "test_classes.py::TestOverriding::test_the_override_wins",
    "path": "test_classes.py",
-   "lineno": 18,
+   "lineno": 20,
    "originalname": "test_the_override_wins",
    "cls": "TestOverriding",
    "own_markers": [],
@@ -696,15 +740,15 @@
    ],
    "name2fixturedefs": {
     "user": [
-     "f23",
-     "f24"
+     "f25",
+     "f26"
     ]
    }
   },
   {
    "nodeid": "test_classes.py::TestOverriding::test_what_is_written_between_follows_it",
    "path": "test_classes.py",
-   "lineno": 21,
+   "lineno": 23,
    "originalname": "test_what_is_written_between_follows_it",
    "cls": "TestOverriding",
    "own_markers": [],
@@ -726,15 +770,49 @@
      "f2"
     ],
     "user": [
-     "f23",
-     "f24"
+     "f25",
+     "f26"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_classes.py::TestOverriding::test_the_whole_chain_above_it_follows_it",
+   "path": "test_classes.py",
+   "lineno": 26,
+   "originalname": "test_the_whole_chain_above_it_follows_it",
+   "cls": "TestOverriding",
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "digest"
+   ],
+   "initialnames": [
+    "digest"
+   ],
+   "names_closure": [
+    "digest",
+    "blog",
+    "user"
+   ],
+   "name2fixturedefs": {
+    "digest": [
+     "f11"
+    ],
+    "blog": [
+     "f2"
+    ],
+    "user": [
+     "f25",
+     "f26"
     ]
    }
   },
   {
    "nodeid": "test_classes.py::TestSiblings::test_one_fixture_reaches_another",
    "path": "test_classes.py",
-   "lineno": 40,
+   "lineno": 57,
    "originalname": "test_one_fixture_reaches_another",
    "cls": "TestSiblings",
    "own_markers": [],
@@ -763,7 +841,7 @@
   {
    "nodeid": "test_classes.py::TestSiblings::test_a_class_attribute_is_still_readable",
    "path": "test_classes.py",
-   "lineno": 43,
+   "lineno": 60,
    "originalname": "test_a_class_attribute_is_still_readable",
    "cls": "TestSiblings",
    "own_markers": [],
@@ -781,14 +859,39 @@
    ],
    "name2fixturedefs": {
     "through_self": [
-     "f18"
+     "f20"
+    ]
+   }
+  },
+  {
+   "nodeid": "test_classes.py::TestSiblings::test_a_self_a_nested_def_declares_is_its_own",
+   "path": "test_classes.py",
+   "lineno": 63,
+   "originalname": "test_a_self_a_nested_def_declares_is_its_own",
+   "cls": "TestSiblings",
+   "own_markers": [],
+   "markers_with_origin": [],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "nested"
+   ],
+   "initialnames": [
+    "nested"
+   ],
+   "names_closure": [
+    "nested"
+   ],
+   "name2fixturedefs": {
+    "nested": [
+     "f14"
     ]
    }
   },
   {
    "nodeid": "test_classes.py::TestSameName::test_each_class_keeps_its_own",
    "path": "test_classes.py",
-   "lineno": 52,
+   "lineno": 72,
    "originalname": "test_each_class_keeps_its_own",
    "cls": "TestSameName",
    "own_markers": [],
@@ -813,7 +916,7 @@
   {
    "nodeid": "test_classes.py::test_a_module_level_test_still_resolves_the_conftest",
    "path": "test_classes.py",
-   "lineno": 56,
+   "lineno": 76,
    "originalname": "test_a_module_level_test_still_resolves_the_conftest",
    "cls": null,
    "own_markers": [],
@@ -835,7 +938,7 @@
      "f2"
     ],
     "user": [
-     "f23"
+     "f25"
     ]
    }
   }

@@ -327,6 +327,29 @@ def test_a_lifted_fixture_reads_a_class_attribute_through_the_class(version: str
     source = _target(conversion_of(CLASSES, version), "test_classes.py")
 
     assert "return TestSiblings.STAMP" in source
+    # The `self` a nested `def` declares is that function's, and the move leaves it alone.
+    assert "return self.marker" in source
+
+
+def test_a_chain_specialized_for_a_class_is_wired_copy_to_copy(version: str) -> None:
+    # Every link between the override and the tests that reach it is copied, and each copy names
+    # the copy below it rather than the definition it was written against.
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    assert "def blog_overriding(user=Depends(overriding_user)):" in source
+    assert "def digest_overriding(blog=Depends(blog_overriding)):" in source
+    assert source.index("def digest_overriding(") < source.index("class TestOverriding:")
+
+
+def test_a_module_imports_only_the_fixtures_its_own_code_names(version: str) -> None:
+    # `digest` is reached only through the copy written here, so importing the original would be
+    # an import nothing in the module reads.
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    imported = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
+
+    assert "from fixtures import blog" in imported
+    assert not [line for line in imported if "digest" in line]
 
 
 def test_the_parametrize_suite_converts_with_nothing_refused(version: str) -> None:
@@ -476,7 +499,9 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE])
+@pytest.mark.parametrize(
+    "suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE, CLASSES]
+)
 def test_converting_an_already_converted_tree_changes_nothing(
     suite: str, version: str, tmp_path: Path
 ) -> None:

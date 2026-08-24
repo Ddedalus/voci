@@ -82,18 +82,41 @@ class _ThroughClass(cst.CSTTransformer):
     Only an attribute the class body itself binds is ever read this way here: the audit refuses
     every other `self` under `VX033` before a fixture reaches this, so a `self` still standing is
     one the class name answers.
+
+    A `def` nested in the factory that declares a `self` of its own — a method on a class the
+    factory builds — is left alone, since that `self` is its own and the move does not touch it.
     """
 
     def __init__(self, holder: str) -> None:
         super().__init__()
         self._holder = holder
+        self._shadowed = 0
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        if _declares_receiver(node):
+            self._shadowed += 1
+        return True
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> cst.FunctionDef:
+        if _declares_receiver(original_node):
+            self._shadowed -= 1
+        return updated_node
 
     def leave_Attribute(
         self, original_node: cst.Attribute, updated_node: cst.Attribute
     ) -> cst.Attribute:
+        if self._shadowed:
+            return updated_node
         if isinstance(updated_node.value, cst.Name) and updated_node.value.value == "self":
             return updated_node.with_changes(value=cst.Name(self._holder))
         return updated_node
+
+
+def _declares_receiver(node: cst.FunctionDef) -> bool:
+    """Whether this `def` binds a `self` of its own, which shadows any `self` above it."""
+    return any(param.name.value == "self" for param in node.params.params)
 
 
 def _without_receiver(params: cst.Parameters) -> cst.Parameters:

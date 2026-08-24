@@ -255,6 +255,38 @@ class TestGroup:
     ]
 
 
+def test_an_annotation_with_no_value_binds_nothing_on_the_class() -> None:
+    # `client: Client` says what an instance will carry; reading it off the class raises, so the
+    # factory cannot be lifted.
+    source = """
+import pytest
+class TestGroup:
+    client: object
+    @pytest.fixture
+    def wired(self):
+        return self.client
+"""
+
+    assert _codes(source) == ["VX033"]
+
+
+def test_a_self_a_nested_def_declares_is_not_the_factorys() -> None:
+    # The inner `self` belongs to `label`, and lifting the factory out leaves it exactly where it
+    # was — reporting it would refuse a fixture that converts fine.
+    source = """
+import pytest
+class TestGroup:
+    @pytest.fixture
+    def built(self):
+        class Built:
+            def label(self):
+                return self.marker
+        return Built()
+"""
+
+    assert _codes(source) == []
+
+
 def test_a_plain_method_is_not_read_for_self_at_all() -> None:
     # Only a fixture is lifted out of its class; a test method keeps the receiver velox builds it.
     source = """

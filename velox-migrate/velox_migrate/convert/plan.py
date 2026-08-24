@@ -145,12 +145,15 @@ class Duplicate:
     """One fixture's source, re-bound for the subtree an override rules, to write into a module.
 
     `after` are the names this copy references, which is what decides where it goes: a `Depends()`
-    is read when the `def` under it is, so a copy is written below everything it names.
+    is read when the `def` under it is, so a copy is written below everything it names. `before`
+    names the test class the copy was specialized for, if it was one: a method's `Depends()`
+    default is read while the class body runs, so the copy has to be above the class as well.
     """
 
     symbol: str
     code: str
     after: tuple[str, ...]
+    before: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,9 +452,13 @@ def _declared_fixtures(sources: Mapping[str, str]) -> dict[str, dict[str, Declar
 
 
 def _written_in(declared: Mapping[str, Mapping[str, Declared]], file: str) -> frozenset[str]:
-    """Every name a `@pytest.fixture` in `file` is written under, whichever container holds it."""
+    """Every `@pytest.fixture` in `file`, named as the audit sites it.
+
+    A fixture written in a class is `TestGroup.factory` there, so that is what it is here: this
+    table exists to be matched against a finding's site.
+    """
     return frozenset(
-        entry.written
+        f"{entry.lift}.{entry.written}" if entry.lift else entry.written
         for container, found in declared.items()
         if container.partition("::")[0] == file
         for entry in found.values()
@@ -525,12 +532,15 @@ def _fixture_argname(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None
 
 
 def _yieldable_factories(sources: Mapping[str, str]) -> Mapping[str, frozenset[str]]:
-    """Per file, the module-level fixture factories a finalizer could become the teardown of.
+    """Per file, the fixture factories a finalizer could become the teardown of, as qualnames.
 
     A `yield` fixture hands its value over at one point in the body and tears down after it, so a
     factory has to have one place that point can go: no `yield` of its own, and no `return` except
     as the last thing it does. A `return` from inside a branch would become a `yield` the body
     then runs past.
+
+    Named the way the audit sites its findings — `TestGroup.factory` for one written in a class —
+    since matching one against the other is the whole use of this table.
     """
     found: dict[str, frozenset[str]] = {}
     for path, text in sources.items():
@@ -539,15 +549,19 @@ def _yieldable_factories(sources: Mapping[str, str]) -> Mapping[str, frozenset[s
         except (SyntaxError, ValueError):
             continue
         names = {
-            node.name
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            and _fixture_argname(node) is not None
-            and _yieldable(node)
+            _qualname(container, node)
+            for container, node in _fixture_definitions(path, tree)
+            if _fixture_argname(node) is not None and _yieldable(node)
         }
         if names:
             found[path] = frozenset(names)
     return found
+
+
+def _qualname(container: str, node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    """A definition named as the audit sites it: dotted from the class holding it, if any."""
+    holder = container.partition("::")[2]
+    return f"{holder}.{node.name}" if holder else node.name
 
 
 def _yieldable(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -973,26 +987,30 @@ def _consumers(
             continue
         module = layout.home_module(source)
         wanted = consumers.setdefault(module, set())
-        for edge in _resolved_at(ground_truth, fixture, fixture.visibility).values():
+        node = fixture.visibility
+        for edge in _resolved_at(ground_truth, fixture, node).values():
             if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(module, edge.key))
+                wanted.add(special.redirect(node, edge.key))
         body = _body_of(bodies, fixture)
         if body is not None:
             wanted |= {
-                special.redirect(module, key) for _, key in body.requested if key in converting
+                special.redirect(node, key) for _, key in body.requested if key in converting
             }
 
     for copy in special.copies.values():
         wanted = consumers.setdefault(copy.module, set())
         origin = ground_truth.fixture_defs[copy.origin]
+        # Redirected from the node the copy was specialized for, which is what `_work` writes its
+        # `Depends()` from: asking from the module instead would name the originals here and the
+        # copies there, and the module would import something nothing in it reads.
         for edge in _resolved_at(ground_truth, origin, copy.node).values():
             if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(copy.module, edge.key))
+                wanted.add(special.redirect(copy.node, edge.key))
         # A copy is the original's source, so it names everything the original's body named too.
         body = _body_of(bodies, origin)
         if body is not None:
             wanted |= {
-                special.redirect(copy.module, key) for _, key in body.requested if key in converting
+                special.redirect(copy.node, key) for _, key in body.requested if key in converting
             }
     return consumers
 
@@ -1079,6 +1097,9 @@ def _work(
                 symbol=copy.symbol,
                 code=copy.code,
                 after=tuple(injection.reference for injection in injections),
+                # The outermost class, which is the one written at the module level a copy has to
+                # come before; a nested group is inside its body and so is covered by that.
+                before=copy.node.split("::")[1] if "::" in copy.node else None,
             )
         )
         carried.setdefault(copy.host, []).extend(copy.imports)
@@ -1259,6 +1280,7 @@ def _injections(
         parametrized,
         special,
         asked=_by_name(fixture.argnames, names),
+        node=node if node is not None else fixture.visibility,
     )
     return _without_request(found, fixture.argnames, body, parametrized=parametrized)
 
