@@ -33,7 +33,8 @@ tests fail serially and in parallel, so none of the 203 tests the audit flagged 
 
 ## What the bug hunt found
 
-Four defects, all of them things the corpus suites had no case for.
+Four defects in what the suite itself needed, and seven more behind them once the machinery had a
+class-shaped override node to work with. None of the corpus suites had a case for any of them.
 
 **Fixtures written inside a test class were converted into broken code (VX032).** marshmallow
 writes 16 of them across 9 classes. A velox test class is pure namespacing, so a factory in one
@@ -58,10 +59,14 @@ converted to `ignore = [..., "tests/mypy_test_cases"]`, which velox matched agai
 names only and therefore ignored, collecting two files that are mypy fixtures rather than tests.
 `_collection/discovery.py` now matches a `/`-bearing entry the way pytest's `norecursedirs` does.
 
-A fifth defect surfaced only once `classes_showcase` existed: a test method in a class that
-overrides a fixture was wired to the original rather than to the specialized copy, because the
-redirect asked "is this module inside the override" instead of "is this test". Which definition a
-test resolves is a question about the test's node, not its file.
+**Everything a class node broke in the existing machinery.** Seven more defects surfaced once
+`classes_showcase` existed and the review went looking, and every one of them is the same
+mistake: code that had only ever seen a *directory* as an override node, asking a question about
+a file where it should have asked about a node. A test method in a class that overrides was wired
+to the original rather than to the copy; a copy in a two-link chain was wired to the definition it
+was written against rather than to the copy below it; a copy landed under the class whose methods
+read it; the audit's qualname sites stopped matching tables keyed by bare `def` name. The lesson
+is narrow and worth keeping: `under(node, consumer)` is only as good as the consumer handed to it.
 
 ## The five that still fail
 
@@ -75,7 +80,7 @@ library three call frames away is reading the test module's name.
 ## What this says about the tool
 
 The audit's headline number was right about the suite and wrong about the conversion. Every one of
-the four defects was a construct the audit had no row for at all, so it read as "converts
+the four constructs was one the matrix had no row for at all, so each read as "converts
 untouched" — the failure mode is silence, not a bad classification. The corpus suites were written
 alongside the machinery and so only covered what the machinery already knew about; a suite written
 by someone else is what finds the gap. That argues for the ladder in the plan being run against
