@@ -156,10 +156,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     ),
     _row(
         "VX005",
-        "conftest fixture overriding one from a parent directory",
+        "a fixture overriding one visible from further out",
         MECHANICAL,
         "The override and every fixture between it and the tests that reach it are generated as a "
-        "specialized chain named for the overriding directory.",
+        "specialized chain named for the directory or class the override rules.",
         target="a specialized fixture chain",
     ),
     _row(
@@ -384,6 +384,43 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "literal spelling, and an axis the hook composed with one the test was written with, "
         "have nothing this can write.",
         action="Write the cases out as a `@pytest.mark.parametrize` before converting.",
+    ),
+    _row(
+        "VX032",
+        "@pytest.fixture written inside a test class",
+        MECHANICAL,
+        "A velox test class is pure namespacing, with no fixtures of its own, so the factory is "
+        "lifted to the module level under a name carrying the class's, and the methods that "
+        "requested it name it there.",
+        target="a module-level fixture named for the class",
+    ),
+    _row(
+        "VX033",
+        "a fixture inside a test class reading its instance",
+        REFUSED,
+        "Lifting the factory out of the class takes `self` away with it, and a `self` naming "
+        "anything but an attribute the class body itself binds has no module-level spelling.",
+        action="Read the class attribute through the class, or move what the fixture needs off "
+        "the instance.",
+    ),
+    _row(
+        "VX034",
+        "a relative import in a suite module",
+        MECHANICAL,
+        "velox imports test modules under synthetic names, which a leading dot resolves against "
+        "nothing, so each becomes the absolute import of the same module.",
+        target="an absolute import",
+    ),
+    _row(
+        "VX035",
+        "a suite that reads its own module names",
+        UNSUPPORTED,
+        "velox imports each test module by path, under a synthetic `velox_tests.` name that makes "
+        "two files of the same name in different directories two modules. Anything keyed on "
+        "`__module__` — a class registry, a plugin lookup, a snapshot path — sees that name.",
+        action="Key on something the import name does not decide, or move what registers itself "
+        "out of the test module.",
+        detected=False,
     ),
     # --- marks and parametrization -------------------------------------------------------------
     _row(
@@ -1255,8 +1292,8 @@ def _validate() -> None:
             raise AssertionError(f"{c.code}: a marker category belongs to a `marker` row, only.")
         if c.disposition is not Disposition.MECHANICAL and c.action is None:
             raise AssertionError(f"{c.code}: anything but a mechanical row needs an action.")
-        if not c.detected and c.disposition is not Disposition.HAZARD:
-            raise AssertionError(f"{c.code}: only a hazard can go undetected.")
+        if not c.detected and c.converts:
+            raise AssertionError(f"{c.code}: a row conversion writes code for is not a blind spot.")
     for recipe in PLUGINS.values():
         if recipe.code not in BY_CODE:
             raise AssertionError(f"Plugin {recipe.dist} cites unknown row {recipe.code}.")

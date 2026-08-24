@@ -2268,3 +2268,45 @@ def test_x():
     applied = _untouched("VX214", source, _context("test_x"))
 
     assert _codes(applied) == ["VX223"]
+
+
+# --- VX034 relative imports --------------------------------------------------------------------
+
+
+def test_a_sibling_import_is_written_absolutely() -> None:
+    before = """from .support import STAMP
+
+
+def test_x():
+    assert STAMP
+"""
+    after = """from tests.support import STAMP
+
+
+def test_x():
+    assert STAMP
+"""
+    applied = _rewrite("VX034", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX034"]
+
+
+def test_an_import_from_the_package_itself_names_the_package() -> None:
+    before = "from . import support\n"
+    after = "from tests import support\n"
+
+    assert _codes(_rewrite("VX034", before, after, _context())) == ["VX034"]
+
+
+def test_an_import_reaching_above_the_root_is_left_as_it_was() -> None:
+    # Two levels up from `tests/test_suite.py` is outside what the suite was collected from, so
+    # there is no module here to name and the failure the suite already had is kept.
+    source = "from ...elsewhere import thing\n"
+
+    assert _untouched("VX034", source, _context()) == ()
+
+
+def test_an_absolute_import_is_not_a_relative_one() -> None:
+    source = "from tests.support import STAMP\nimport tests.support\n"
+
+    assert _untouched("VX034", source, _context()) == ()

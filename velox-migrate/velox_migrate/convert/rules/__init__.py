@@ -483,9 +483,14 @@ def _collect() -> tuple[Rule, ...]:
     Imported here rather than at the top of the module: every rule module is written in this
     module's vocabulary, so they are loaded once it holds all of it.
     """
-    from velox_migrate.convert.rules import bodies, cases, marks
+    from velox_migrate.convert.rules import bodies, cases, imports, marks
 
-    return tuple(sorted((*marks.RULES, *bodies.RULES, *cases.RULES), key=lambda rule: rule.code))
+    return tuple(
+        sorted(
+            (*marks.RULES, *bodies.RULES, *cases.RULES, *imports.RULES),
+            key=lambda rule: rule.code,
+        )
+    )
 
 
 RULES: tuple[Rule, ...] = _collect()

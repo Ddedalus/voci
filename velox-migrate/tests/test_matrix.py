@@ -36,12 +36,12 @@ def test_everything_that_does_not_convert_says_what_a_human_does_instead() -> No
             assert construct.action, construct.code
 
 
-def test_only_hazards_can_go_undetected() -> None:
+def test_nothing_conversion_writes_code_for_can_go_undetected() -> None:
     # A construct nothing can see is reported as a blind spot, and a blind spot that was meant to
     # be convertible would silently convert nothing.
     for construct in matrix.CONSTRUCTS:
         if not construct.detected:
-            assert construct.disposition is Disposition.HAZARD
+            assert not construct.converts
 
 
 def test_mechanical_and_marker_rows_are_the_ones_conversion_produces_code_for() -> None:

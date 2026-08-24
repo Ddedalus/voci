@@ -204,7 +204,7 @@ def _blind_spots(audit: Audit) -> list[str]:
     if audit.blind_spots:
         blocks.append(
             "No dump and no parse finds these, so no number above counts them. Each is a way a "
-            "suite can depend on running one test at a time:"
+            "converted suite can behave differently from the one pytest ran:"
         )
         blocks.append("\n".join(f"- {_blind_spot(row)}" for row in audit.blind_spots))
     if audit.unparsed:

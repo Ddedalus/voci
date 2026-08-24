@@ -1,7 +1,8 @@
 """Discovery: the walk that finds candidate test files.
 
-One walk from each given root, filtered by filename pattern and a set of ignored directory names,
-returning paths in a stable order.
+One walk from each given root, filtered by filename pattern and a set of ignored directories —
+each named either by bare directory name or by the path it ends with — returning paths in a stable
+order.
 """
 
 from __future__ import annotations
@@ -40,7 +41,8 @@ def discover_files(
     """One walk per root in `roots`, filtered to test files.
 
     - An entry in `roots` that is already a file is taken as-is, with no pattern check against
-      it. A directory is walked with `os.scandir`; entries named in `ignore_dirs` are pruned
+      it. A directory is walked with `os.scandir`; entries `ignore_dirs` names — by bare
+      directory name anywhere in the tree, or by a `/`-bearing path it ends with — are pruned
       without descending into them. A root that doesn't exist contributes nothing here — this
       function has no way to tell "typo'd path" from "a genuinely empty selection" apart, and
       shouldn't guess; `cli.main` validates `PATHS` before any root reaches this function, so a
@@ -113,12 +115,30 @@ def _walk(
             # and not a directory we can descend into.
             continue
         if is_dir:
-            if entry.name in ignore_dirs:
+            if _ignored(Path(entry.path), ignore_dirs):
                 continue
             results.extend(_walk(Path(entry.path), patterns, ignore_dirs, visited))
         elif _matches(entry.name, patterns):
             results.append(Path(entry.path))
     return results
+
+
+def _ignored(directory: Path, ignore_dirs: frozenset[str]) -> bool:
+    """Whether this directory is one of `ignore_dirs`, by its name or by the path it sits at.
+
+    A bare entry is a directory name, pruned wherever in the tree it turns up — `__pycache__`
+    means every `__pycache__`. An entry holding a `/` is a trailing run of directories, so a
+    suite with two `fixtures` directories can name the one it means (`tests/fixtures`) without
+    also excluding the other, and an absolute entry names exactly one place. This is pytest's
+    `norecursedirs` matching, which is where a converted suite's entries come from.
+    """
+    if directory.name in ignore_dirs:
+        return True
+    return any(
+        fnmatch.fnmatch(str(directory), entry if os.path.isabs(entry) else f"*{os.sep}{entry}")
+        for entry in ignore_dirs
+        if "/" in entry or os.sep in entry
+    )
 
 
 def _matches(name: str, patterns: Iterable[str]) -> bool:

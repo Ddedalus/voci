@@ -38,6 +38,29 @@ def test_ignores_default_ignore_dirs(tmp_path: Path) -> None:
     assert [path.name for path in found] == ["test_visible.py"]
 
 
+def test_an_ignore_entry_with_a_path_in_it_prunes_only_that_directory(tmp_path: Path) -> None:
+    # A bare name would prune both `fixtures` directories; the path says which one is meant. This
+    # is `norecursedirs` matching, so a converted suite's entries mean here what they meant under
+    # pytest.
+    _touch(tmp_path / "tests" / "fixtures" / "test_excluded.py")
+    _touch(tmp_path / "examples" / "fixtures" / "test_kept.py")
+
+    found = discover_files([tmp_path], ignore_dirs=frozenset({"tests/fixtures"}))
+
+    assert [path.name for path in found] == ["test_kept.py"]
+
+
+def test_an_ignore_path_matches_wherever_the_walk_starts(tmp_path: Path) -> None:
+    # velox walks from `rootdir/tests` when nothing names a path, so an entry written relative to
+    # the rootdir still has to match a directory the walk only reaches from further in.
+    _touch(tmp_path / "tests" / "mypy_cases" / "test_excluded.py")
+    _touch(tmp_path / "tests" / "test_kept.py")
+
+    found = discover_files([tmp_path / "tests"], ignore_dirs=frozenset({"tests/mypy_cases"}))
+
+    assert [path.name for path in found] == ["test_kept.py"]
+
+
 def test_explicit_file_passes_through_even_without_matching_pattern(tmp_path: Path) -> None:
     explicit = _touch(tmp_path / "conftest_helpers.py")
 

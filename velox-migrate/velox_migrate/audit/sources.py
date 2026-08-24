@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import libcst as cst
+import libcst.matchers as m
 from libcst.metadata import (
     CodePosition,
     CodeRange,
@@ -254,6 +255,9 @@ class _Frame:
     is_async: bool = False
     blocks: list[str] = field(default_factory=list)
     readouterr: list[cst.Call] = field(default_factory=list)
+    #: For a class frame, the names its own body binds — what a `self` inside it can still mean
+    #: once a fixture written there is lifted to the module level.
+    attributes: frozenset[str] = frozenset()
 
 
 class _Scanner(cst.CSTVisitor):
@@ -294,6 +298,14 @@ class _Scanner(cst.CSTVisitor):
                 is_async=node.asynchronous is not None,
             )
         )
+        if in_class and _is_fixture_def(node):
+            stranded = self._stranded_self(node, self._stack[-2].attributes)
+            if stranded is not None:
+                self._report(
+                    "VX033",
+                    stranded,
+                    f"`{self._function}` reads `self`, which the module level has no name for.",
+                )
         if (name in _CLASS_SETUP and in_class) or (name in _MODULE_SETUP and at_module_level):
             self._report(
                 "VX019",
@@ -322,7 +334,7 @@ class _Scanner(cst.CSTVisitor):
         self._stack.pop()
 
     def visit_ClassDef(self, node: cst.ClassDef) -> None:
-        self._stack.append(_Frame(name=node.name.value))
+        self._stack.append(_Frame(name=node.name.value, attributes=_class_attributes(node)))
         for base in node.bases:
             if self._names(base.value) & _TEST_CASE:
                 self._report(
@@ -773,6 +785,28 @@ class _Scanner(cst.CSTVisitor):
                 f"`{_render(target)}` writes `{root}`, which lives at module level.",
             )
 
+    def _stranded_self(
+        self, node: cst.FunctionDef, attributes: frozenset[str]
+    ) -> cst.CSTNode | None:
+        """The first `self` in this factory that lifting it out of the class would strand.
+
+        Reading an attribute the class body itself binds survives the move — the class is still
+        there to read it through. Everything else does not: `self` passed somewhere, an attribute
+        only an instance has, or an assignment onto the instance the test is about to be given.
+        """
+        for name in m.findall(node, m.Name("self")):
+            parent = self.get_metadata(ParentNodeProvider, name, None)
+            if isinstance(parent, cst.Param):
+                continue
+            if not isinstance(parent, cst.Attribute) or parent.value is not name:
+                return name
+            if parent.attr.value not in attributes:
+                return name
+            above = self.get_metadata(ParentNodeProvider, parent, None)
+            if isinstance(above, cst.AssignTarget | cst.AugAssign | cst.AnnAssign):
+                return name
+        return None
+
     def _report(
         self,
         code: str,
@@ -844,6 +878,45 @@ class _Scanner(cst.CSTVisitor):
             if frame.is_function:
                 return frame.is_async
         return False
+
+
+def _is_fixture_def(node: cst.FunctionDef) -> bool:
+    """Whether a `@pytest.fixture`, however it is spelled, is on this definition."""
+    for decorator in node.decorators:
+        target = decorator.decorator
+        if isinstance(target, cst.Call):
+            target = target.func
+        if isinstance(target, cst.Attribute) and target.attr.value == "fixture":
+            return True
+        if isinstance(target, cst.Name) and target.value == "fixture":
+            return True
+    return False
+
+
+def _class_attributes(node: cst.ClassDef) -> frozenset[str]:
+    """The names a class body binds directly: its methods, its nested classes, its assignments."""
+    found: set[str] = set()
+    for statement in node.body.body:
+        match statement:
+            case cst.FunctionDef() | cst.ClassDef():
+                found.add(statement.name.value)
+            case cst.SimpleStatementLine(body=body):
+                for small in body:
+                    if isinstance(small, cst.Assign | cst.AnnAssign):
+                        found |= _module_assigned(small)
+            case _:
+                pass
+    return frozenset(found)
+
+
+def _module_assigned(statement: cst.Assign | cst.AnnAssign) -> frozenset[str]:
+    """The plain names one assignment binds."""
+    targets = (
+        [target.target for target in statement.targets]
+        if isinstance(statement, cst.Assign)
+        else [statement.target]
+    )
+    return frozenset(target.value for target in targets if isinstance(target, cst.Name))
 
 
 def _module_level_names(module: cst.Module) -> frozenset[str]:

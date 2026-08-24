@@ -5,9 +5,10 @@ before it runs and green under velox only after `verify` says so — which is wh
 why no model reasons about a fixture body here, and why running it twice changes nothing the second
 time. Everything that needs a judgement is refused and named in the source instead.
 
-The order per file is fixed and matters. A specialized copy is written into its module first, in
-the pytest spelling it was duplicated from, so everything below translates it exactly as it
-translates the definitions that were already there. Then each enabled rule, in code order, each
+The order per file is fixed and matters. A fixture a test class wrote is lifted out to the module
+level first, and a specialized copy is written into its module next, both in the pytest spelling
+they came in, so everything below translates them exactly as it translates the definitions that
+were already there. Then each enabled rule, in code order, each
 matching only a pytest source form its own rewrite eliminates — and each reading the parameter
 names the suite wrote, which is why they run before the swap rather than after it: a body saying
 `capsys.readouterr()` is recognized by the `capsys` its enclosing signature still declares. Then
@@ -30,6 +31,7 @@ from velox_migrate.convert import (
     config,
     declarations,
     layout,
+    lift,
     markers,
     plan,
     rules,
@@ -95,7 +97,8 @@ def run(
             unreadable.append(path)
             continue
         try:
-            module = _with_copies(cst.parse_module(source or ""), work)
+            module = lift.apply(cst.parse_module(source or ""), work.fixtures)
+            module = _with_copies(module, work)
         except cst.ParserSyntaxError:
             unreadable.append(path)
             continue

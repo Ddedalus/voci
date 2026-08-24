@@ -41,7 +41,7 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 
 | Metric | Value |
 |--------|-------|
-| Test count | 652 (110 parametrized, 38 classes) |
+| Test count | 1188 measured (652 was a count of test functions, not of collected cases) |
 | Fixture graph | 19 fixtures / 1 conftest |
 | Plugin dependencies | **none** |
 | Estimated refusals | **none** |
@@ -60,6 +60,8 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 - Missing the ladder: no refusals to prefactor, no postfactor skills to apply.
 
 **Role:** Smoke test for the extractor and audit stages. If marshmallow's audit comes back non-mechanical, the tool has a bug.
+
+**Outcome (migrated):** the audit did come back mechanical and the conversion was still broken — 16 class-scoped fixtures the matrix had no row for. 1183 of 1188 tests pass under velox; see [marshmallow-migration.md](marshmallow-migration.md).
 
 ---
 
