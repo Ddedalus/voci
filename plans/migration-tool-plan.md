@@ -152,10 +152,12 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     `extract`/`audit`/`convert`. Runs pytest on the pre-migration tree and `velox --serial` on the
     converted tree, diffs outcomes through the id map, writes the divergence list. Both target
     suites need this before either closes out; suite-agnostic, unblocked today.
-  - **2. marshmallow: convert + verify + corpus-ify.** Zero refusals expected, so this is a bug
-    hunt on a suite the tool wasn't built against, not new machinery. Once green under
-    `velox --serial`, check the dump and generated output in as a corpus fixture (like the
-    `*_showcase` suites) so future drift is CI-caught.
+  - [x] **2. marshmallow: convert + verify + corpus-ify.** Done: 1183 of 1188 tests pass under
+    `velox --serial` and the same 1183 at full concurrency, with nothing refused. The bug hunt
+    found more than expected — see [marshmallow-migration.md](marshmallow-migration.md) for what
+    it turned up and what the five failures are. Corpus-ified as `classes_showcase` rather than as
+    a checked-in marshmallow dump: the dump is 2 MB per pytest version against 504 KB for the
+    whole existing corpus, and the machinery marshmallow exercised is what a showcase suite pins.
   - **3. httpx2: audit findings write-up.** Once step 0 clears it, run `audit` for real and
     replace the extrapolated httpx row in oss-refactors-plan.md with measured numbers. Determines
     what step 4 actually needs to build.

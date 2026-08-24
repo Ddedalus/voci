@@ -213,6 +213,91 @@ class TestGroup:
     ]
 
 
+def test_a_class_fixture_reading_a_class_attribute_survives_being_lifted() -> None:
+    # `MySchema` is written in the class body, so the class name still reaches it once the factory
+    # is a module-level object. Nothing to refuse.
+    source = """
+import pytest
+class TestGroup:
+    class MySchema:
+        pass
+    @pytest.fixture
+    def schema(self):
+        return self.MySchema()
+"""
+
+    assert _codes(source) == []
+
+
+def test_a_class_fixture_reading_anything_else_off_self_is_refused() -> None:
+    found = sources.scan_source(
+        """
+import pytest
+class TestGroup:
+    @pytest.fixture
+    def handed_on(self):
+        return helper(self)
+    @pytest.fixture
+    def instance_only(self):
+        return self.built_by_another_fixture
+    @pytest.fixture
+    def written_onto(self):
+        self.stamp = 1
+        return self.stamp
+""",
+        path=PATH,
+    )
+
+    assert [(f.code, f.site.function) for f in found] == [
+        ("VX033", "TestGroup.handed_on"),
+        ("VX033", "TestGroup.instance_only"),
+        ("VX033", "TestGroup.written_onto"),
+    ]
+
+
+def test_an_annotation_with_no_value_binds_nothing_on_the_class() -> None:
+    # `client: Client` says what an instance will carry; reading it off the class raises, so the
+    # factory cannot be lifted.
+    source = """
+import pytest
+class TestGroup:
+    client: object
+    @pytest.fixture
+    def wired(self):
+        return self.client
+"""
+
+    assert _codes(source) == ["VX033"]
+
+
+def test_a_self_a_nested_def_declares_is_not_the_factorys() -> None:
+    # The inner `self` belongs to `label`, and lifting the factory out leaves it exactly where it
+    # was — reporting it would refuse a fixture that converts fine.
+    source = """
+import pytest
+class TestGroup:
+    @pytest.fixture
+    def built(self):
+        class Built:
+            def label(self):
+                return self.marker
+        return Built()
+"""
+
+    assert _codes(source) == []
+
+
+def test_a_plain_method_is_not_read_for_self_at_all() -> None:
+    # Only a fixture is lifted out of its class; a test method keeps the receiver velox builds it.
+    source = """
+class TestGroup:
+    def test_a(self):
+        assert self.__class__
+"""
+
+    assert _codes(source) == []
+
+
 def test_a_familiar_name_outside_the_protocol_is_an_ordinary_function() -> None:
     # pytest calls `setup_method` on a class and `setup_function` on a module. A fixture called
     # `setup`, or a helper nested in a test, is neither, and reporting it would refuse tests that

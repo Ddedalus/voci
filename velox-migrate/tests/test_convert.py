@@ -27,6 +27,7 @@ from velox_migrate.convert.layout import Import
 STANDALONE = "test_it.py"
 
 BODIES = "bodies_showcase"
+CLASSES = "classes_showcase"
 MECHANICAL = "mechanical_showcase"
 DECLARATIONS = "declarations_showcase"
 FIXTURES = "fixtures_showcase"
@@ -276,6 +277,81 @@ def test_the_converted_overrides_suite_keeps_every_pytest_node_id(
     assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / OVERRIDES)
 
 
+def _target(result: convert.Conversion, path: str) -> str:
+    """What the conversion writes to `path`, for the assertions that read the output directly."""
+    return next(edit.new_text or "" for edit in result.edits.edits if edit.path == path)
+
+
+def test_the_classes_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(CLASSES, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_classes_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for lifting: a velox test class has no fixtures, so every factory written in one is
+    # a module-level object by the time the class's own methods are constructed.
+    tree = tmp_path / CLASSES
+    converted(CLASSES, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_the_converted_classes_suite_keeps_every_pytest_node_id(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / CLASSES
+    converted(CLASSES, version, tree)
+
+    assert ids_under(VELOX, tree) == ids_under(PYTEST, CORPUS / CLASSES)
+
+
+def test_a_lifted_fixture_is_named_for_its_class_and_written_above_it(version: str) -> None:
+    # Two classes bind `base`, which one module level cannot, and a `Depends()` default is read
+    # while the class body runs, which is why the order matters as much as the name.
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    assert "def siblings_base(" in source
+    assert "def same_name_base(" in source
+    assert source.index("def siblings_derived(") > source.index("def siblings_base(")
+    assert source.index("class TestSiblings:") > source.index("def siblings_derived(")
+
+
+def test_a_lifted_fixture_reads_a_class_attribute_through_the_class(version: str) -> None:
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    assert "return TestSiblings.STAMP" in source
+    # The `self` a nested `def` declares is that function's, and the move leaves it alone.
+    assert "return self.marker" in source
+
+
+def test_a_chain_specialized_for_a_class_is_wired_copy_to_copy(version: str) -> None:
+    # Every link between the override and the tests that reach it is copied, and each copy names
+    # the copy below it rather than the definition it was written against.
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    assert "def blog_overriding(user=Depends(overriding_user)):" in source
+    assert "def digest_overriding(blog=Depends(blog_overriding)):" in source
+    assert source.index("def digest_overriding(") < source.index("class TestOverriding:")
+
+
+def test_a_module_imports_only_the_fixtures_its_own_code_names(version: str) -> None:
+    # `digest` is reached only through the copy written here, so importing the original would be
+    # an import nothing in the module reads.
+    source = _target(conversion_of(CLASSES, version), "test_classes.py")
+
+    imported = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
+
+    assert "from fixtures import blog" in imported
+    assert not [line for line in imported if "digest" in line]
+
+
 def test_the_parametrize_suite_converts_with_nothing_refused(version: str) -> None:
     result = conversion_of(PARAMETRIZE, version)
 
@@ -423,7 +499,9 @@ def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path:
     assert "test_marks.py::test_parametrize_two_argnames[None-True]" in collected
 
 
-@pytest.mark.parametrize("suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE])
+@pytest.mark.parametrize(
+    "suite", [MECHANICAL, DECLARATIONS, OVERRIDES, BODIES, PARAMETRIZE, CLASSES]
+)
 def test_converting_an_already_converted_tree_changes_nothing(
     suite: str, version: str, tmp_path: Path
 ) -> None:

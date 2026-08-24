@@ -14,6 +14,7 @@ the import aliases by directory.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -115,6 +116,31 @@ def owning_file(fixture: FixtureDef) -> str | None:
     return str(PurePosixPath(node) / CONFTEST)
 
 
+def snake(holder: str) -> str:
+    """A test class's name as the part of an object name that says which class it belongs to.
+
+    `TestFieldSerialization` is `field_serialization` and `TestHTTPClient` is `http_client`: the
+    `Test` prefix is what made pytest collect the class and says nothing about the fixture.
+    """
+    stem = holder.removeprefix("Test").lstrip("_") or holder
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", stem).lower()
+
+
+def owning_container(fixture: FixtureDef) -> str | None:
+    """Where in its file a fixture's factory is written: the file itself, or `file::Class`.
+
+    Two classes in one module may each write a `schema`, which the file alone cannot tell apart,
+    so the container is what a fixture's binding name is looked up under. Only the file decides
+    where the object ends up — a lifted fixture lands at the module level of the file it came
+    from — so this answers a different question from `owning_file` and neither replaces the other.
+    """
+    file = owning_file(fixture)
+    if file is None:
+        return None
+    holder = fixture.visibility.partition("::")[2]
+    return f"{file}::{holder}" if holder else file
+
+
 def home_module(source: str) -> str:
     """The module a fixture written in `source` ends up in."""
     path = PurePosixPath(source)
@@ -141,8 +167,8 @@ def plan(
 ) -> Layout:
     """Place `fixtures`, given the symbol each is bound to and who imports it.
 
-    `symbols` maps an owning file and a fixture's argname onto the name its factory is written
-    under, which only the source can say. `consumers` maps each file onto the fixture keys the
+    `symbols` maps an owning container and a fixture's argname onto the name its factory is bound
+    to once translated, which only the source can say. `consumers` maps each file onto the keys the
     code in it names. `source_of` reads a file's text, for the names a module already binds and to
     say whether a `fixtures.py` is already there. `placed` are fixtures whose module the caller
     has already settled — a specialized copy is written into the module its override lives in —
@@ -153,8 +179,8 @@ def plan(
     homes: dict[str, Home] = dict(placed)
     moves: dict[str, str] = {}
     for key, fixture in sorted(fixtures.items()):
-        source = owning_file(fixture)
-        symbol = symbols.get((source, fixture.argname)) if source is not None else None
+        source, container = owning_file(fixture), owning_container(fixture)
+        symbol = symbols.get((container, fixture.argname)) if container is not None else None
         if source is None or symbol is None:
             continue
         module = home_module(source)

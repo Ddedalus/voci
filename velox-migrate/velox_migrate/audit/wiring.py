@@ -116,6 +116,18 @@ def _fixture_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Findi
 
 
 def _suite_fixture(fixture: FixtureDef, reach: Reach) -> Iterator[Finding]:
+    holder = fixture.visibility.partition("::")[2]
+    if holder:
+        yield Finding(
+            code="VX032",
+            message=(
+                f"`{fixture.argname}` is written inside `{holder}`, and is lifted to the module "
+                "level under a name carrying the class's."
+            ),
+            site=_fixture_site(fixture),
+            tests=reach.tests_of_fixture(fixture.key),
+            detail={"fixture": fixture.argname, "class": holder},
+        )
     if fixture.scope in ("class", "package"):
         wider = "module" if fixture.scope == "class" else "session"
         yield Finding(

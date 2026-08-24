@@ -14,7 +14,7 @@ emitting a `Depends()` that names an object nobody built.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -118,6 +118,10 @@ class FixtureWork:
     `carried` is the case list an indirect parametrization moves onto this fixture, and `None` for
     every fixture whose cases are its own or which has none: `params=` and `ids=` a suite wrote
     itself travel with the decorator rather than through here.
+
+    `written` is the name the factory is written under and `symbol` the name the translation binds
+    it to, which differ only for a fixture `lift` names the test class of: that one is moved out
+    to the module level before anything else is rewritten.
     """
 
     key: str
@@ -127,6 +131,8 @@ class FixtureWork:
     injections: tuple[Injection, ...]
     parametrized: bool
     carried: Carried | None = None
+    written: str = ""
+    lift: str | None = None
 
     @property
     def request_param(self) -> Injection | None:
@@ -139,12 +145,15 @@ class Duplicate:
     """One fixture's source, re-bound for the subtree an override rules, to write into a module.
 
     `after` are the names this copy references, which is what decides where it goes: a `Depends()`
-    is read when the `def` under it is, so a copy is written below everything it names.
+    is read when the `def` under it is, so a copy is written below everything it names. `before`
+    names the test class the copy was specialized for, if it was one: a method's `Depends()`
+    default is read while the class body runs, so the copy has to be above the class as well.
     """
 
     symbol: str
     code: str
     after: tuple[str, ...]
+    before: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,9 +262,9 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
     }
     items = _items_by_qualname(ground_truth, blocked_tests)
     symbols = {
-        (file, argname): symbol
-        for file, found in declared.items()
-        for argname, symbol in found.items()
+        (container, argname): entry.symbol
+        for container, found in declared.items()
+        for argname, entry in found.items()
     }
     plan_layout = layout.plan(
         converting,
@@ -315,6 +324,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             ground_truth,
             plan_layout,
             sources=sources,
+            declared=declared,
             converting=converting,
             items=items,
             blocked_tests=blocked_tests,
@@ -409,31 +419,98 @@ def _translatable(ground_truth: GroundTruth) -> dict[str, FixtureDef]:
     }
 
 
-def _declared_fixtures(sources: Mapping[str, str]) -> dict[str, dict[str, str]]:
-    """Per file, the argname of each `@pytest.fixture` in it against the name it is written under.
+def _declared_fixtures(sources: Mapping[str, str]) -> dict[str, dict[str, Declared]]:
+    """Per container, the argname of each `@pytest.fixture` in it against how it is bound.
 
     The dump records where a fixture's *factory* is, which a decorator can move to another module
-    entirely, so the binding name only the source can give.
+    entirely, so the name it is written under only the source can give.
 
-    Only module-level definitions count. A fixture written inside a class or another function binds
-    no name a `Depends()` could import, and leaving it out of this table is what refuses it.
+    A container is a file, or a `file::Class` for the fixtures a test class writes: velox test
+    classes are pure namespacing, so those are lifted to the module level, and the name each is
+    lifted to is settled here — once per file, since that is the scope a lifted name has to be
+    free in. A fixture written inside a function binds no name a `Depends()` could import, and
+    leaving it out of this table is what refuses it.
     """
-    declared: dict[str, dict[str, str]] = {}
+    declared: dict[str, dict[str, Declared]] = {}
     for path, text in sources.items():
         try:
             tree = ast.parse(text)
         except (SyntaxError, ValueError):
             continue
-        found: dict[str, str] = {}
-        for node in tree.body:
-            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
+        taken = set(layout.module_level_names(text))
+        for container, node in _fixture_definitions(path, tree):
             argname = _fixture_argname(node)
-            if argname is not None:
-                found[argname] = node.name
-        if found:
-            declared[path] = found
+            if argname is None:
+                continue
+            lift = container.partition("::")[2]
+            symbol = _lifted_name(lift, node.name, taken) if lift else node.name
+            taken.add(symbol)
+            declared.setdefault(container, {})[argname] = Declared(
+                written=node.name, symbol=symbol, lift=lift or None
+            )
     return declared
+
+
+def _written_in(declared: Mapping[str, Mapping[str, Declared]], file: str) -> frozenset[str]:
+    """Every `@pytest.fixture` in `file`, named as the audit sites it.
+
+    A fixture written in a class is `TestGroup.factory` there, so that is what it is here: this
+    table exists to be matched against a finding's site.
+    """
+    return frozenset(
+        f"{entry.lift}.{entry.written}" if entry.lift else entry.written
+        for container, found in declared.items()
+        if container.partition("::")[0] == file
+        for entry in found.values()
+    )
+
+
+def _fixture_definitions(
+    path: str, tree: ast.Module
+) -> Iterator[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Every function a `@pytest.fixture` could be on, against the container it is written in.
+
+    Module level first, then each class in source order, so a lifted name is settled against the
+    names already written at the module level before any class competes for one.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            yield path, node
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for member in node.body:
+            if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
+                yield f"{path}::{node.name}", member
+
+
+def _lifted_name(holder: str, written: str, taken: Collection[str]) -> str:
+    """The module-level name a fixture written in class `holder` is lifted to.
+
+    Always carries the class's name, even where the bare one is free: two classes writing a
+    `schema` are the ordinary case, and a rule that renames only the second would make which
+    fixture keeps its name depend on the order they happen to be written in.
+    """
+    stem = layout.snake(holder)
+    candidate = f"{stem}_{written}" if stem else written
+    name, suffix = candidate, 2
+    while name in taken:
+        name = f"{candidate}_{suffix}"
+        suffix += 1
+    return name
+
+
+@dataclass(frozen=True, slots=True)
+class Declared:
+    """How one `@pytest.fixture` is bound: as its source writes it, and as the rewrite leaves it.
+
+    `written` and `symbol` differ only for a fixture `lift` names the class of, which is lifted to
+    the module level under a name of its own.
+    """
+
+    written: str
+    symbol: str
+    lift: str | None = None
 
 
 def _fixture_argname(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
@@ -455,12 +532,15 @@ def _fixture_argname(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None
 
 
 def _yieldable_factories(sources: Mapping[str, str]) -> Mapping[str, frozenset[str]]:
-    """Per file, the module-level fixture factories a finalizer could become the teardown of.
+    """Per file, the fixture factories a finalizer could become the teardown of, as qualnames.
 
     A `yield` fixture hands its value over at one point in the body and tears down after it, so a
     factory has to have one place that point can go: no `yield` of its own, and no `return` except
     as the last thing it does. A `return` from inside a branch would become a `yield` the body
     then runs past.
+
+    Named the way the audit sites its findings — `TestGroup.factory` for one written in a class —
+    since matching one against the other is the whole use of this table.
     """
     found: dict[str, frozenset[str]] = {}
     for path, text in sources.items():
@@ -469,15 +549,19 @@ def _yieldable_factories(sources: Mapping[str, str]) -> Mapping[str, frozenset[s
         except (SyntaxError, ValueError):
             continue
         names = {
-            node.name
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            and _fixture_argname(node) is not None
-            and _yieldable(node)
+            _qualname(container, node)
+            for container, node in _fixture_definitions(path, tree)
+            if _fixture_argname(node) is not None and _yieldable(node)
         }
         if names:
             found[path] = frozenset(names)
     return found
+
+
+def _qualname(container: str, node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    """A definition named as the audit sites it: dotted from the class holding it, if any."""
+    holder = container.partition("::")[2]
+    return f"{holder}.{node.name}" if holder else node.name
 
 
 def _yieldable(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -503,7 +587,7 @@ def _bodies(
     audit: Audit,
     ground_truth: GroundTruth,
     *,
-    declared: Mapping[str, Mapping[str, str]],
+    declared: Mapping[str, Mapping[str, Declared]],
     yieldable: Mapping[str, frozenset[str]],
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     translatable: Mapping[str, FixtureDef],
@@ -538,7 +622,7 @@ def _bodies(
         owned = (
             function in yieldable.get(file, frozenset())
             if finding.code == "VX013"
-            else function in declared.get(file, {}).values() or site in items
+            else function in _written_in(declared, file) or site in items
         )
         wanted = _requested(ground_truth, finding, node, translatable)
         if site not in writing:
@@ -684,7 +768,7 @@ def _blocked_fixtures(
     ground_truth: GroundTruth,
     translatable: Mapping[str, FixtureDef],
     refusals: tuple[Finding, ...],
-    declared: Mapping[str, Mapping[str, str]],
+    declared: Mapping[str, Mapping[str, Declared]],
     overrides: Sequence[audit_wiring.Override],
     bodies: Mapping[tuple[str, str], Body],
     carried: Mapping[str, Carried] = {},
@@ -713,8 +797,8 @@ def _blocked_fixtures(
             }
 
     for key, fixture in translatable.items():
-        source = layout.owning_file(fixture)
-        if source is None or fixture.argname not in declared.get(source, {}):
+        container = layout.owning_container(fixture)
+        if container is None or fixture.argname not in declared.get(container, {}):
             # No source declares it under a name a `Depends()` could import.
             blocked.add(key)
 
@@ -858,6 +942,17 @@ def _items_by_qualname(
     return {key: tuple(items) for key, items in grouped.items()}
 
 
+def _node_of(path: str, qualname: str) -> str:
+    """The visibility node a test sits at: its module, or the class chain written above it.
+
+    Which definition of an overridden name a test resolves is decided by where the test is, and a
+    method in a class that redefines one is inside that override while the module holding it is
+    not.
+    """
+    *groups, _ = qualname.split(".")
+    return "::".join([path, *groups])
+
+
 def _consumers(
     ground_truth: GroundTruth,
     converting: Mapping[str, FixtureDef],
@@ -872,17 +967,18 @@ def _consumers(
         consumers.setdefault(declaration.container, set()).update(
             special.redirect(declaration.container, key) for key in declaration.keys
         )
-    for (path, _), cases in items.items():
+    for (path, qualname), cases in items.items():
         wanted = consumers.setdefault(path, set())
+        node = _node_of(path, qualname)
         item = cases[0]
         for name in item.argnames:
             resolved = item.resolve(name)
             if resolved is not None and resolved.key in converting:
-                wanted.add(special.redirect(path, resolved.key))
+                wanted.add(special.redirect(node, resolved.key))
         body = _body_of_item(bodies, item)
         if body is not None:
             wanted |= {
-                special.redirect(path, key) for _, key in body.requested if key in converting
+                special.redirect(node, key) for _, key in body.requested if key in converting
             }
 
     for fixture in converting.values():
@@ -891,26 +987,30 @@ def _consumers(
             continue
         module = layout.home_module(source)
         wanted = consumers.setdefault(module, set())
-        for edge in _resolved_at(ground_truth, fixture, fixture.visibility).values():
+        node = fixture.visibility
+        for edge in _resolved_at(ground_truth, fixture, node).values():
             if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(module, edge.key))
+                wanted.add(special.redirect(node, edge.key))
         body = _body_of(bodies, fixture)
         if body is not None:
             wanted |= {
-                special.redirect(module, key) for _, key in body.requested if key in converting
+                special.redirect(node, key) for _, key in body.requested if key in converting
             }
 
     for copy in special.copies.values():
         wanted = consumers.setdefault(copy.module, set())
         origin = ground_truth.fixture_defs[copy.origin]
+        # Redirected from the node the copy was specialized for, which is what `_work` writes its
+        # `Depends()` from: asking from the module instead would name the originals here and the
+        # copies there, and the module would import something nothing in it reads.
         for edge in _resolved_at(ground_truth, origin, copy.node).values():
             if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(copy.module, edge.key))
+                wanted.add(special.redirect(copy.node, edge.key))
         # A copy is the original's source, so it names everything the original's body named too.
         body = _body_of(bodies, origin)
         if body is not None:
             wanted |= {
-                special.redirect(copy.module, key) for _, key in body.requested if key in converting
+                special.redirect(copy.node, key) for _, key in body.requested if key in converting
             }
     return consumers
 
@@ -920,6 +1020,7 @@ def _work(
     plan_layout: Layout,
     *,
     sources: Mapping[str, str],
+    declared: Mapping[str, Mapping[str, Declared]],
     converting: Mapping[str, FixtureDef],
     items: Mapping[tuple[str, str], tuple[Item, ...]],
     blocked_tests: frozenset[str],
@@ -933,15 +1034,18 @@ def _work(
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
-        source = layout.owning_file(fixture)
+        source, container = layout.owning_file(fixture), layout.owning_container(fixture)
         home = plan_layout.home(key)
-        if source is None or home is None:
+        if source is None or container is None or home is None:
             continue
+        entry = declared.get(container, {}).get(fixture.argname)
         fixtures_by_file.setdefault(source, []).append(
             FixtureWork(
                 key=key,
                 argname=fixture.argname,
                 symbol=home.symbol,
+                written=entry.written if entry is not None else home.symbol,
+                lift=entry.lift if entry is not None else None,
                 scope=SCOPES.get(fixture.scope, "function"),
                 injections=_injections(
                     ground_truth,
@@ -981,6 +1085,7 @@ def _work(
                 key=copy.key,
                 argname=copy.symbol,
                 symbol=copy.symbol,
+                written=copy.symbol,
                 scope=SCOPES.get(copy.scope, "function"),
                 injections=injections,
                 parametrized=copy.parametrized or borrowed is not None,
@@ -992,6 +1097,9 @@ def _work(
                 symbol=copy.symbol,
                 code=copy.code,
                 after=tuple(injection.reference for injection in injections),
+                # The outermost class, which is the one written at the module level a copy has to
+                # come before; a nested group is inside its body and so is covered by that.
+                before=copy.node.split("::")[1] if "::" in copy.node else None,
             )
         )
         carried.setdefault(copy.host, []).extend(copy.imports)
@@ -1003,7 +1111,14 @@ def _work(
             TestWork(
                 qualname=qualname,
                 injections=_test_injections(
-                    ground_truth, cases[0], plan_layout, path, converting, special, bodies
+                    ground_truth,
+                    cases[0],
+                    plan_layout,
+                    path,
+                    converting,
+                    special,
+                    bodies,
+                    node=_node_of(path, qualname),
                 ),
             )
         )
@@ -1165,6 +1280,7 @@ def _injections(
         parametrized,
         special,
         asked=_by_name(fixture.argnames, names),
+        node=node if node is not None else fixture.visibility,
     )
     return _without_request(found, fixture.argnames, body, parametrized=parametrized)
 
@@ -1177,6 +1293,7 @@ def _test_injections(
     converting: Mapping[str, FixtureDef],
     special: Specialization,
     bodies: Mapping[tuple[str, str], Body] = {},
+    node: str | None = None,
 ) -> tuple[Injection, ...]:
     body = _body_of_item(bodies, item)
     resolved: dict[str, FixtureDef | None] = {name: item.resolve(name) for name in item.argnames}
@@ -1190,6 +1307,7 @@ def _test_injections(
         False,
         special,
         asked=_by_name(item.argnames, names),
+        node=node,
     )
     return _without_request(found, item.argnames, body, parametrized=False)
 
@@ -1245,6 +1363,7 @@ def _from_names(
     parametrized: bool,
     special: Specialization,
     asked: frozenset[str] = frozenset(),
+    node: str | None = None,
 ) -> tuple[Injection, ...]:
     found: list[Injection] = []
     for name in names:
@@ -1256,8 +1375,11 @@ def _from_names(
         if fixture is None or fixture.direct_param:
             continue
         if fixture.key in converting:
-            # Inside the subtree an override rules, the object is that subtree's copy.
-            key = special.redirect(consumer, fixture.key)
+            # Inside the subtree an override rules, the object is that subtree's copy. Which
+            # subtree is a question about where the consumer sits, and which module it imports
+            # from is a question about the file — a test method in a class that overrides is
+            # inside the subtree while its module is not, so the two are asked separately.
+            key = special.redirect(node if node is not None else consumer, fixture.key)
             home = plan_layout.home(key)
             if home is None:
                 continue

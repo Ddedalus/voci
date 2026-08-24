@@ -173,8 +173,8 @@ def _copy(
     taken: set[str],
     destination: str,
 ) -> Copy | None:
-    source = layout.owning_file(origin)
-    symbol = symbols.get((source, origin.argname)) if source is not None else None
+    source, container = layout.owning_file(origin), layout.owning_container(origin)
+    symbol = symbols.get((container, origin.argname)) if container is not None else None
     text = source_of(source) if source is not None else None
     if source is None or symbol is None or text is None:
         return None
@@ -202,8 +202,9 @@ def _copy(
 
 
 def _suffix(node: str) -> str:
-    """What a copy is named for: the directory the override rules, or the module holding it."""
-    name = PurePosixPath(node.partition("::")[0]).name
+    """What a copy is named for: the class or directory the override rules, else its module."""
+    file, _, holder = node.partition("::")
+    name = layout.snake(holder) if holder else PurePosixPath(file).name
     cleaned = "".join(character if character.isalnum() else "_" for character in name)
     return cleaned.removesuffix("_py").strip("_") or "specialized"
 

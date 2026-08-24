@@ -5,9 +5,10 @@ before it runs and green under velox only after `verify` says so — which is wh
 why no model reasons about a fixture body here, and why running it twice changes nothing the second
 time. Everything that needs a judgement is refused and named in the source instead.
 
-The order per file is fixed and matters. A specialized copy is written into its module first, in
-the pytest spelling it was duplicated from, so everything below translates it exactly as it
-translates the definitions that were already there. Then each enabled rule, in code order, each
+The order per file is fixed and matters. A fixture a test class wrote is lifted out to the module
+level first, and a specialized copy is written into its module next, both in the pytest spelling
+they came in, so everything below translates them exactly as it translates the definitions that
+were already there. Then each enabled rule, in code order, each
 matching only a pytest source form its own rewrite eliminates — and each reading the parameter
 names the suite wrote, which is why they run before the swap rather than after it: a body saying
 `capsys.readouterr()` is recognized by the `capsys` its enclosing signature still declares. Then
@@ -30,6 +31,7 @@ from velox_migrate.convert import (
     config,
     declarations,
     layout,
+    lift,
     markers,
     plan,
     rules,
@@ -95,7 +97,8 @@ def run(
             unreadable.append(path)
             continue
         try:
-            module = _with_copies(cst.parse_module(source or ""), work)
+            module = lift.apply(cst.parse_module(source or ""), work.fixtures)
+            module = _with_copies(module, work)
         except cst.ParserSyntaxError:
             unreadable.append(path)
             continue
@@ -160,9 +163,10 @@ def _with_copies(module: cst.Module, work: FileWork) -> cst.Module:
     """`module` with each specialized copy written into it, in the pytest spelling it came in.
 
     A copy goes below the last thing it names, because that is usually the override it was
-    specialized for and a `Depends()` naming it is read where the copy's own `def` is. A copy the
-    module already binds was written by an earlier conversion, which is what leaves a converted
-    tree alone.
+    specialized for and a `Depends()` naming it is read where the copy's own `def` is — and, for
+    an override a test class wrote, above that class, whose methods read their defaults while its
+    body runs. A copy the module already binds was written by an earlier conversion, which is what
+    leaves a converted tree alone.
     """
     bound = set(layout.module_level_names(module.code))
     body = list(module.body)
@@ -170,7 +174,7 @@ def _with_copies(module: cst.Module, work: FileWork) -> cst.Module:
         if copy.symbol in bound:
             continue
         bound.add(copy.symbol)
-        body.insert(_below(body, copy.after), _definition(copy))
+        body.insert(min(_below(body, copy.after), _above(body, copy.before)), _definition(copy))
     return module.with_changes(body=body)
 
 
@@ -182,6 +186,20 @@ def _below(body: Sequence[cst.BaseStatement], names: Collection[str]) -> int:
         if isinstance(statement, cst.FunctionDef | cst.ClassDef) and statement.name.value in names
     ]
     return max(written) + 1 if written else len(body)
+
+
+def _above(body: Sequence[cst.BaseStatement], group: str | None) -> int:
+    """Where in `body` the class `group` names is, which nothing it reads can be written below."""
+    if group is None:
+        return len(body)
+    return next(
+        (
+            index
+            for index, statement in enumerate(body)
+            if isinstance(statement, cst.ClassDef) and statement.name.value == group
+        ),
+        len(body),
+    )
 
 
 def _definition(copy: plan.Duplicate) -> cst.FunctionDef:

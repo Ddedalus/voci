@@ -299,7 +299,7 @@ def test_a_hazard_in_a_fixture_reaches_the_tests_that_request_it(hazards: Audit)
 def test_the_blind_spots_are_the_constructs_no_audit_can_see(hazards: Audit) -> None:
     spots = {construct.code for construct in hazards.blind_spots}
 
-    assert spots == {"VX414", "VX415", "VX416"}
+    assert spots == {"VX035", "VX414", "VX415", "VX416"}
     assert all(construct.action for construct in hazards.blind_spots)
 
 
