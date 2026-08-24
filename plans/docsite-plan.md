@@ -33,14 +33,7 @@ docs/
 
 `zensical.toml` lives at the repo root as Zensical's docs_dir currently cannot be set to `.`.
 
-`rationale.md` needs no symlink or move: it already sits inside `docs_dir`, at the path README
-and `CLAUDE.md` already cite, and the site's nav just groups it under **About** without touching
-where the file lives.
-
 ## Navigation
-
-Each page here is real content mapped to something velox already does — nothing on this list
-describes unbuilt behavior (`ROADMAP.md` stays the only place that happens).
 
 ```
 Home                    index.md
@@ -78,98 +71,46 @@ Reference               (mkdocstrings, one page per __init__.py export group)
                             has no docstrings to render)
 About
   about/index.md           orientation, links to guide/reference
-  rationale.md             already at plans/rationale.md — nav just groups it under About
   about/alternatives.md    the one neutral pytest comparison from README.md, not expanded
                             ("Don't argue with pytest" — velox-docs skill)
 ```
 
-Every guide/how-to page must pass the velox-docs skill's rules: no counterfactuals, no `spec/`
-citations, no ROADMAP content, docstring register matched in reference pages because it's pulled
-verbatim from source.
+Every guide/how-to page must pass the velox-docs skill's rules.
 
-## Code samples: reuse `examples/`, don't build a parallel `docs_src/`
+## Code samples: reuse `examples/`
 
-Plan: guide pages carry short, hand-written inline snippets (a fixture, a test — a few lines,
-matching the density already in `README.md`'s own example), and each page links out to the
-`examples/` suite that demonstrates the fully worked version.
+Plan: guide pages carry short, hand-written inline snippets (a fixture, a test — a few lines), and each page links out to the `examples/` suite that demonstrates the fully worked version.
 
-Trade-off accepted: inline snippets aren't independently test-run the way `docs_src/` files are
-in FastAPI. Mitigation — keep every inline snippet short enough to eyeball against the
-`reference/` page for the symbols it uses (which *is* generated from live source), and prefer
-lifting a snippet verbatim from an `examples/` file (with a line-range comment noting the source)
-over writing a new one from scratch.
+Trade-off accepted: inline snippets aren't independently test-run.
 
-Embedding mechanism: `pymdownx.snippets` — pymdown-extensions is default-enabled under Zensical,
-same as under mkdocs-material — to pull a marked block out of an `examples/` file into a fenced
-code block.
+Embedding mechanism: `pymdownx.snippets` to pull a marked block out of an `examples/` file.
 
 ## Reference pages: mkdocstrings
 
-Same mechanism as FastAPI: `mkdocstrings[python]`, `::: velox.fixture`-style directives, reading
-docstrings that already follow the velox-docs register. `filters: ['!^_']` to keep private names
-out, `show_root_heading`, `merge_init_into_class`, `signature_crossrefs` — the same options
-FastAPI sets, since they're generic mkdocstrings behavior, not Zensical- or FastAPI-specific.
+Same mechanism as FastAPI: `mkdocstrings[python]`, `::: velox.fixture`-style directives, reading docstrings that already follow the velox-docs register. `filters: ['!^_']` to keep private names out, `show_root_heading`, `merge_init_into_class`, `signature_crossrefs` — 
+
 Configured under `[project.plugins.mkdocstrings.handlers.python]` in `zensical.toml`, per
 [Zensical's mkdocstrings docs](https://zensical.org/docs/setup/extensions/mkdocstrings/).
 
 `reference/cli.md` is the one page mkdocstrings can't produce — argparse has no docstring-driven
 autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a script
-(`scripts/gen_cli_reference.py`) that imports `velox.cli.build_parser()` and renders its help text
-into the page, plus a `--check` mode wired into `just docs check` the same way `just vendor check`
-guards the vendored tree, so the reference can't drift from the real flags.
-
-## Theme
-
-`variant = "modern"` — Zensical's default, so this needs no config beyond stating it explicitly
-against a future default change. It's a different, newer design than Material's classic chrome,
-so FastAPI's `theme:` feature list (`navigation.tabs`, `toc.follow`, and so on — all classic-variant
-options) doesn't carry over; modern's own defaults are the baseline, customized only once there's
-a concrete reason to. Search is built in (Zensical's own client-side engine), no plugin needed.
-`logo`/`favicon` skipped for v1 — no brand art exists yet; flag as a follow-up.
+(`scripts/gen_cli_reference.py`) that imports `velox.cli.build_parser()` and renders its help text into the page, plus a `--check` mode wired into `just docs check.
 
 ## Tooling
 
-- `pyproject.toml`: new `[dependency-groups] docs` — `zensical`, `mkdocstrings[python]` (same
-  pairing FastAPI's own `pyproject.toml` uses).
-- `justfile`: `docs-serve` (`zensical serve`), `docs-build` (`zensical build`), `docs-check`
-  (`gen_cli_reference.py --check`, then `docs-build`) — same shape as the existing
-  `vendor`/`vendor-check` pair. Both read `zensical.toml` from the repo root by default, so no
-  `-f`/`--config-file` flag is needed as long as `just` runs recipes from the root.
-- A broken internal link fails the build, the way `mkdocs build --strict` did: `strict = true` in
-  `zensical.toml` (equivalently `zensical build -s`), confirmed against a link to a page that
-  doesn't exist.
+- `pyproject.toml`: new `[dependency-groups] docs` — `zensical`, `mkdocstrings[python]`
+- `just docs` module
 
 ## Phasing
 
-1. ~~**Skeleton**~~ — **done.** `zensical.toml`, theme config, `index.md` adapted from
-   `README.md`, an `index.md` per section, `docs-serve`/`docs-build` recipes, `docs` dependency
-   group. What it settled:
-   - `strict = true` in `zensical.toml` is the `mkdocs build --strict` equivalent, and it does
-     fail the build on a link to a page that doesn't exist. `zensical build -s` is the same
-     switch from the CLI.
-   - Link validation is scoped to `docs_dir`, so `plans/rationale.md`'s `../README.md` and
-     `../ROADMAP.md` links failed the build. They became a link to `guide/index.md` and an
-     unlinked mention of `ROADMAP.md`. Every later page has to reach `examples/`, `README.md` or
-     `ROADMAP.md` the same way — named, not linked out of the tree — until phase 6 settles
-     `repo_url`.
-   - The modern variant renders light-only unless `[[project.theme.palette]]` entries are
-     declared; the three from Zensical's own starter config (system/light/dark) put the toggle in
-     the header.
-   - `navigation.indexes` is the one theme feature enabled, so `guide/index.md` *is* the Guide nav
-     entry rather than a lone child of it.
-   - `docs` joins `dev` in `[tool.uv] default-groups`. Left out, `just docs build` installs the
-     docs toolchain and the next `just sync` uninstalls it again.
-   - Zensical is pinned exactly (`zensical==0.0.56`), per the alpha trade-off above.
-   - `guide/index.md` is written for real rather than stubbed — install, first test, shape of a
-     suite — since a placeholder would have to describe a page that doesn't exist.
+1. ~~**Skeleton**~~ — **done.**: just recipes, config file, docs confirmed serving locally.
 2. **Reference** — mkdocstrings wired up, the five symbol-group pages, `reference/cli.md` plus its
    generator script and check recipe.
 3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching
    `examples/` suite.
 4. **How-to** — the four recipe pages, each derived from a specific `examples/` file.
 5. **About** — `index.md`, a nav entry for the existing `rationale.md`, `alternatives.md`.
-6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up
-   decision once the repo is public — out of scope here.
+6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up decision once the repo is public — out of scope here.
 
 Each phase is a reviewable unit on its own branch, per the worktree workflow.
 
