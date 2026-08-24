@@ -1,9 +1,6 @@
 # Built-in fixtures
 
-velox ships a handful of fixtures for the things most suites need from a runner: a temporary
-directory, the output and log records a test produced, and the identity of the test itself. They
-are asked for exactly like your own — import the name and put it in a parameter default, as
-`Depends(velox.tmp_path)` — and each one is paired below with the type it hands to the test.
+velox ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `Depends(velox.tmp_path)`.
 
 ## Temporary directories
 

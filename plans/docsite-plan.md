@@ -120,4 +120,3 @@ Each phase is a reviewable unit on its own branch, per the worktree workflow.
 
 - **Hosting.** Not decided here — the repo isn't public yet, so there's nowhere to point a
   `site_url`/`repo_url` at. Revisit at phase 6.
-- **Brand art.** No logo/favicon exist. Zensical's modern-theme defaults until that changes.

@@ -1,13 +1,8 @@
 # Marks
 
-A mark is a decorator that folds one frozen record into the decorated function, where the
-collector reads it back in a single attribute lookup. Each decorator hands the same function
-object back, so marks stack freely and — apart from `parametrize`, whose stacking order fixes
-which argument varies slowest — order does not matter; applying `skip`, `xfail` or `timeout`
-twice to one function raises `TypeError` rather than quietly keeping the last one.
+A mark is a decorator attaching a fixed value to the underlying function: fixture or test.
 
-`Skipped` and `Failed` are the imperative counterparts of the skip and fail outcomes, raised from
-inside a running test or fixture rather than decided ahead of it.
+For clarity, `skip`, `xfail` or `timeout` applied twice will raise `TypeError`. Othr marks can be stacked freely.
 
 ## Skipping and expected failures
 
@@ -19,10 +14,13 @@ inside a running test or fixture rather than decided ahead of it.
 
 ## Selection and execution
 
-`tag` labels a test for selection; the remaining three shape how the runner schedules and bounds
-it.
+You can assign string labels to tests, which can then be selected via the CLI.
 
 ::: velox.tag
+
+## Execution isolation
+
+For tests that may not play nicely with concurrency, velox provides isolated execution marks.
 
 ::: velox.timeout
 
@@ -36,7 +34,9 @@ it.
 
 ::: velox.case
 
-## Runtime signals
+## Stopping a test from within
+
+Two exception classes are provided to force a test result from within the body.
 
 ::: velox.Skipped
 

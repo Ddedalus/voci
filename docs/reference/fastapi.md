@@ -1,13 +1,11 @@
 # FastAPI
 
-`velox.fastapi` gives each test its own dependency overrides and its own `app.state` against the
-one module-level `app = FastAPI()` your application already defines. Both of those are per-app
-data in FastAPI, shared by every test that touches the app; velox swaps each attribute, once per
-app, for a proxy that layers this test's values over the app's own, so tests running concurrently
-read and write their own layer through the same app object.
+Velox provides utilities to work with FastAPI applications more easily.
+FastAPI exposes two mutable objects on the app, which could break under concurrent test execution: state and dependency overrides.
 
-The module needs `fastapi` and `httpx`, which the core package does not require, and
-`velox/__init__.py` does not import it. Reach it by name:
+Velox allows you to swap these out for asyncio-aware proxies, which behave exactly the same, but isolate test cases.
+
+You must have `fastapi` and `httpx` installed to import these objects.
 
 ```python
 import velox.fastapi
