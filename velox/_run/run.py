@@ -42,6 +42,7 @@ import signal
 import threading
 import time
 import traceback
+from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,10 +79,10 @@ IsolatedConfig = _isolated.IsolatedConfig
 #: service's latency, not by CPU.
 DEFAULT_CONCURRENCY = 16
 
-#: How long a cancelled test's fixture teardown gets before the run stops waiting for it. The
-#: run is already ending when this applies, so the budget answers "how long is it worth waiting
-#: for a clean release of whatever this test held" -- generous enough for a container to stop or
-#: a connection pool to drain, short enough that Ctrl-C still feels like Ctrl-C.
+#: How long the fixture teardown of a test the run stopped waiting for -- cancelled, or timed out
+#: -- gets before the run stops waiting for that too. The budget answers "how long is it worth
+#: waiting for a clean release of whatever this test held" -- generous enough for a container to
+#: stop or a connection pool to drain, short enough that Ctrl-C still feels like Ctrl-C.
 DEFAULT_TEARDOWN_GRACE = 5.0
 
 
@@ -216,8 +217,8 @@ async def _run_one(
 
     `stop`, when the run has one, is both how a cancellation is recognized as the run's
     own doing rather than a sibling's collateral damage and where the teardown of a
-    cancelled test gets its time box -- past which the test reports CANCELLED with a note
-    that its fixtures may not have been fully released.
+    cancelled -- or timed-out -- test gets its time box, past which the test reports
+    CANCELLED/TIMEOUT with a note that its fixtures may not have been fully released.
     """
     start = time.monotonic()
     setup_failure: str | None = None
@@ -355,24 +356,27 @@ async def _run_one(
         # key[0] is the scope tag every key _di.key_for returns starts with.
         module_keys = tuple(key for key in keys if key[0] == "module")
         other_keys = tuple(key for key in keys if key[0] != "module")
-        # Time-boxed only for a cancelled test, where the run is already ending and a
-        # fixture that waits on something that will never come would hold it open. An
-        # ordinary test's teardown keeps the budget it has always had: none.
-        grace = stop.teardown_grace if cancelled and stop is not None else None
+        # Time-boxed for a cancelled test, where the run is already ending and a fixture
+        # that waits on something that will never come would hold it open -- and for a
+        # timed-out one, where the fixture the deadline just fired on is the first suspect:
+        # an unbounded teardown there would hang the whole run (holding its admission slot)
+        # in exactly the case `--timeout` exists to bound. An ordinary test's teardown keeps
+        # the budget it has always had: none.
+        grace = stop.teardown_grace if (cancelled or timed_out) and stop is not None else None
         try:
             async with asyncio.timeout(grace):
                 await _di.teardown(store, other_keys)
         except TimeoutError:
-            # Only reachable when `grace` is not None, i.e. on the cancellation path,
-            # where the result is CANCELLED and this becomes a note on it. Said out loud
-            # too: a leaked container or connection is worth knowing about while the run
-            # is still on screen, not only in the result the reporter drops for a
-            # cancelled test.
+            # Only reachable when `grace` is not None, i.e. on the cancellation or timeout
+            # path, where the result is CANCELLED/TIMEOUT and this becomes a note on it.
+            # Said out loud too: a leaked container or connection is worth knowing about
+            # while the run is still on screen, not only in the result the reporter drops.
+            why = "the run being stopped" if cancelled else "this test's timeout"
             teardown_failure = (
-                f"teardown did not finish within {grace}s of the run being stopped -- the "
+                f"teardown did not finish within {grace}s of {why} -- the "
                 f"fixture may not have been fully torn down"
             )
-            teardown_summary = f"teardown exceeded its {grace}s cancellation budget"
+            teardown_summary = f"teardown exceeded its {grace}s grace budget"
             if stop is not None:
                 stop.note(f"velox: {record.id}: {teardown_failure}")
         except (KeyboardInterrupt, SystemExit):
@@ -427,6 +431,11 @@ async def _run_one(
         extra = call_failure if call_failure is not None else setup_failure
         if extra is not None:
             failure = f"{failure}\n\n{extra}"
+        # A teardown that overran the grace above is part of what this test left behind, and
+        # TIMEOUT is the only outcome that reports it -- the branches below all read
+        # `teardown_failure` for themselves.
+        if teardown_failure is not None:
+            failure = f"{failure}\n\n{teardown_failure}"
     elif cancelled:
         # Ahead of every phase's own failure, and of `xfail`: whatever this test was
         # about to report, it didn't get to finish saying it.
@@ -484,6 +493,16 @@ def solo_for_patching(record: TestRecord) -> bool:
 
 
 @final
+@dataclass(slots=True)
+class _Waiter:
+    """One test queued on `AdmissionGate`, with the future `release` completes to admit it."""
+
+    tokens: frozenset[object]
+    solo: bool
+    future: asyncio.Future[None]
+
+
+@final
 class AdmissionGate:
     """The single point every dispatched test is admitted through: bounds how many run at once,
     and, within that bound, coordinates `exclusive=` fixtures and `@velox.solo`.
@@ -497,49 +516,101 @@ class AdmissionGate:
     never deadlock each holding a token the other needs. A `solo` test is admitted only once
     nothing else is running, and blocks every other admission until it releases. Waiters have no
     fairness guarantee (`ROADMAP.md`).
+
+    Releasing hands the freed slot straight to a waiter rather than waking the queue to race for
+    it: `run_suite` creates every test's task up front, so the queue is the whole suite, and
+    re-testing every waiter's admission predicate on every release made admission quadratic in
+    the number of tests (a 16k-test suite spent ~23s of wall clock doing nothing else). `_wake`
+    scans from the head only as far as the free capacity allows, which for the ordinary case --
+    a waiter with no tokens at the head of the queue -- is one step.
     """
 
     def __init__(self, concurrency: int) -> None:
-        self._condition = asyncio.Condition()
         self._concurrency = concurrency
         self._running = 0
         self._running_tokens: set[object] = set()
         self._solo_active = False
+        self._waiters: deque[_Waiter] = deque()
 
     async def acquire(self, tokens: frozenset[object], *, solo: bool) -> None:
-        async with self._condition:
-            if solo:
-                await self._condition.wait_for(lambda: self._running == 0)
-                self._solo_active = True
+        # Admitted on the spot when the gate has room, queue or no queue: a waiter here is
+        # held up by a token or a solo lock, not by anything this caller could wait behind,
+        # and making it wait anyway would leave a free slot idle. This is the same
+        # barge-ahead the previous `Condition` had, and the same lack of a fairness
+        # guarantee (`ROADMAP.md`).
+        if self._admits(tokens, solo=solo):
+            self._take(tokens, solo=solo)
+            return
+        waiter = _Waiter(tokens, solo, asyncio.get_running_loop().create_future())
+        self._waiters.append(waiter)
+        try:
+            await waiter.future
+        except asyncio.CancelledError:
+            if waiter.future.done() and not waiter.future.cancelled():
+                # Admitted by a `release` that ran before this cancellation was delivered:
+                # the slot is already taken on this test's behalf, and its caller will never
+                # reach the `finally` that would give it back.
+                self.release(tokens, solo=solo)
             else:
-                await self._condition.wait_for(
-                    lambda: (
-                        self._running < self._concurrency
-                        and not self._solo_active
-                        and self._running_tokens.isdisjoint(tokens)
-                    )
-                )
-                self._running_tokens |= tokens
-            self._running += 1
+                self._waiters.remove(waiter)
+            raise
 
-    async def release(self, tokens: frozenset[object], *, solo: bool) -> None:
-        # Shielded: the caller (`dispatch_one`'s own outer `finally`) may already have a
-        # cancellation pending -- a sibling's KeyboardInterrupt/SystemExit propagating through
-        # `asyncio.TaskGroup`, or `on_result` raising. Letting that interrupt the wait for
-        # `_condition`'s lock before the bookkeeping below ran would leave `_running`/
-        # `_running_tokens` permanently stuck, deadlocking every other test still waiting on
-        # this gate for the rest of the run. `shield` lets that cancellation reach the caller
-        # immediately while this still finishes in the background.
-        await asyncio.shield(self._release(tokens, solo=solo))
+    def release(self, tokens: frozenset[object], *, solo: bool) -> None:
+        """Give back what `acquire` took, and admit whoever that makes room for.
 
-    async def _release(self, tokens: frozenset[object], *, solo: bool) -> None:
-        async with self._condition:
-            self._running -= 1
-            if solo:
-                self._solo_active = False
-            else:
-                self._running_tokens -= tokens
-            self._condition.notify_all()
+        Synchronous on purpose. The caller (`dispatch_one`'s own outer `finally`) may already
+        have a cancellation pending -- a sibling's `KeyboardInterrupt`/`SystemExit` propagating
+        through `asyncio.TaskGroup`, or `on_result` raising -- and a release that could suspend
+        is a release that can be interrupted before its bookkeeping runs, leaving `_running`/
+        `_running_tokens` stuck and every test still queued on this gate deadlocked for the rest
+        of the run. Nothing here awaits, so there is no point for that to happen at.
+        """
+        self._running -= 1
+        if solo:
+            self._solo_active = False
+        else:
+            self._running_tokens -= tokens
+        self._wake()
+
+    def _admits(self, tokens: frozenset[object], *, solo: bool) -> bool:
+        """Whether the gate's current state has room for this test right now."""
+        if solo:
+            return self._running == 0
+        return (
+            self._running < self._concurrency
+            and not self._solo_active
+            and self._running_tokens.isdisjoint(tokens)
+        )
+
+    def _take(self, tokens: frozenset[object], *, solo: bool) -> None:
+        """Book one admission's worth of state. Always paired with a later `release`."""
+        if solo:
+            self._solo_active = True
+        else:
+            self._running_tokens |= tokens
+        self._running += 1
+
+    def _wake(self) -> None:
+        """Admit every queued waiter the state now has room for, from the head of the queue.
+
+        The scan stops as soon as the gate is full again, so a release that frees one slot
+        costs one step in the ordinary case; it walks past waiters held up by a token or a
+        solo lock, since a later waiter may still fit in the slot they cannot use. Each
+        waiter's admission is booked here, not when its coroutine resumes, so nothing can be
+        admitted twice into the same slot.
+        """
+        index = 0
+        while index < len(self._waiters) and not self._solo_active:
+            waiter = self._waiters[index]
+            if not self._admits(waiter.tokens, solo=waiter.solo):
+                if self._running >= self._concurrency:
+                    # Full, and only a release can change that -- which will call this again.
+                    return
+                index += 1
+                continue
+            del self._waiters[index]
+            self._take(waiter.tokens, solo=waiter.solo)
+            waiter.future.set_result(None)
 
 
 def _current_task() -> asyncio.Task[Any] | None:
@@ -734,7 +805,9 @@ def run_suite(
     A second Ctrl-C raises `KeyboardInterrupt` on the spot instead, which aborts the call
     and returns nothing, the same as a `KeyboardInterrupt`/`SystemExit` raised by a test.
     A cancelled test gets `teardown_grace` seconds to release its fixtures before the run
-    stops waiting for it.
+    stops waiting for it, and so does a test whose own `--timeout`/`@velox.timeout(...)`
+    budget expired -- an unbounded teardown there would hold that test's admission slot and
+    hang the run outright.
 
     `loop_watchdog` is how many seconds the event loop may go unresponsive before the
     blocking call holding it is named on stderr (`safety.LoopWatchdog`); `None` or a
@@ -866,10 +939,11 @@ def run_suite(
                         stop.request("maxfail")
             finally:
                 # Skipped only when the run was aborted outright: this task is then being
-                # finalized by the garbage collector, long after the loop it would need was
-                # closed, and there is no test left waiting on the gate to admit anyway.
+                # finalized by the garbage collector, long after the loop was closed -- and
+                # admitting a waiter means completing its future, which still needs that
+                # loop. There is no test left waiting on the gate to admit anyway.
                 if not stop.aborting:
-                    await gate.release(tokens, solo=solo)
+                    gate.release(tokens, solo=solo)
 
             # Fired in real completion order, before the logical-order results slot
             # below is written, so a streaming reporter never sees a filled slot

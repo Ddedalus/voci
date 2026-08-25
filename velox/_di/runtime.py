@@ -65,6 +65,14 @@ def key_for(
             return ("call", id(fixture), test_id, step_id, next(_call_site_ids), param_key)
 
 
+class _ConstructionCancelled(Exception):
+    """Handed to everyone parked on a fixture whose constructor was cancelled before it finished:
+    that key was never built, so the right answer is to build it now rather than to inherit the
+    interrupt. Never escapes `ScopeStore.acquire`, which is the only code that awaits an entry's
+    future.
+    """
+
+
 @final
 @dataclass(slots=True)
 class _Entry:
@@ -107,31 +115,56 @@ class ScopeStore:
         exception instead of re-running (and re-failing) `build()`, giving one comprehensible
         error instead of many identical ones. Refcounting only happens on the success path: a key
         nobody ever successfully acquired has nothing that needs releasing.
+
+        A construction *cancelled* out from under its requester is the one failure not cached that
+        way: the fixture said nothing about itself, the run just stopped waiting for it (a
+        `@velox.timeout` budget expiring, `--maxfail`, a Ctrl-C), and caching that would make one
+        test's deadline every later test's `CancelledError`. The half-built entry is dropped
+        instead, so the next requester of that key constructs it for real, and anyone already
+        parked on it retries rather than inheriting an interrupt that was never theirs.
         """
-        entry = self._entries.get(key)
-        if entry is None:
-            entry = self._entries[key] = _Entry(
-                scope=scope, fixture=fixture, future=asyncio.get_running_loop().create_future()
-            )
+        while True:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = self._entries[key] = _Entry(
+                    scope=scope, fixture=fixture, future=asyncio.get_running_loop().create_future()
+                )
+                try:
+                    value, closer = await build()
+                except asyncio.CancelledError:
+                    self._forget(key, entry)
+                    raise
+                except BaseException as exc:
+                    entry.future.set_exception(exc)
+                    # `.exception()` marks the exception retrieved (avoiding asyncio's "Future
+                    # exception was never retrieved" warning at GC time) without clearing it, so
+                    # a later concurrent or waiting requester still sees and raises the same
+                    # exception.
+                    entry.future.exception()
+                    raise
+                entry.closer = closer
+                entry.future.set_result(value)
+            # Refcount reserved before awaiting, not after — see plans/rationale.md ("single-flight
+            # construction, refcounted teardown") for the race this ordering closes.
+            entry.refcount += 1
             try:
-                value, closer = await build()
-            except BaseException as exc:
-                entry.future.set_exception(exc)
-                # `.exception()` marks the exception retrieved (avoiding asyncio's "Future
-                # exception was never retrieved" warning at GC time) without clearing it, so a
-                # later concurrent or waiting requester still sees and raises the same exception.
-                entry.future.exception()
+                return await entry.future
+            except _ConstructionCancelled:
+                # The constructor was interrupted, not this requester: go around and build it.
+                entry.refcount -= 1
+            except BaseException:
+                entry.refcount -= 1
                 raise
-            entry.closer = closer
-            entry.future.set_result(value)
-        # Refcount reserved before awaiting, not after — see plans/rationale.md ("single-flight
-        # construction, refcounted teardown") for the race this ordering closes.
-        entry.refcount += 1
-        try:
-            return await entry.future
-        except BaseException:
-            entry.refcount -= 1
-            raise
+
+    def _forget(self, key: CacheKey, entry: _Entry) -> None:
+        """Drop a `key` whose construction was cancelled, and hand every requester already parked
+        on it the retry marker `acquire` loops on. Guarded on identity: only the entry this
+        constructor created is its to remove."""
+        if self._entries.get(key) is entry:
+            del self._entries[key]
+        entry.future.set_exception(_ConstructionCancelled())
+        # Marks it retrieved without clearing it -- see the sibling call in `acquire`.
+        entry.future.exception()
 
     async def release(self, key: CacheKey) -> None:
         """Decrement `key`'s refcount; tear it down (and forget it) if that reached zero.

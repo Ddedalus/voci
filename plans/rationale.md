@@ -229,6 +229,15 @@ pending future already failed without awaiting it.
 exception instead of re-running a `build()` that will fail again. Both `release` and `aclose` leave
 failed entries alone. Cleaning them up eagerly looks tidier and is wrong.
 
+**A *cancelled* entry does not.** A `build()` interrupted partway — a `@velox.timeout(...)` budget
+expiring on whichever test happened to be the one constructing, `--maxfail`, a Ctrl-C — is the one
+failure that says nothing about the fixture. Caching it makes one test's deadline every later
+test's `CancelledError`: a shared `session`-scope fixture is only ever constructed once, so the
+whole suite behind it inherits an interrupt none of those tests was ever sent. The half-built entry
+is dropped instead, and anyone already parked on its future is handed an internal retry marker
+(`_ConstructionCancelled`) that sends them back around `acquire`'s loop to build it for real. That
+marker never escapes `acquire`, which is the only code that awaits an entry's future.
+
 **Teardown order relies on a precondition that lives outside the class.** `aclose` tears down in
 reverse insertion order, which is only valid because `setup` walks an already-topologically-sorted
 plan forwards and `build()` never calls back into `acquire`. Every dependency is therefore inserted
@@ -339,25 +348,37 @@ second gate behind it would put the wrong thing in `_running`: a test piled up w
 contended token or a solo lock would already hold a concurrency slot while it waits, so enough
 same-token tests could fill every slot with waiters and starve every *unrelated* test out of the
 suite too — the opposite failure from the one solo admission has to avoid. Deciding all three in
-one `wait_for` predicate means a waiting test holds nothing: it isn't counted in `_running` and
+one `_admits` predicate means a waiting test holds nothing: it isn't counted in `_running` and
 doesn't occupy a slot, so unrelated tests are admitted around it exactly as if it didn't exist. A
 test's exclusive-token set is acquired and released as one atomic step, for its whole footprint at
 once, never one token at a time, so two tests can never deadlock each holding a token the other is
 waiting for.
 
-**`AdmissionGate.release` is shielded from cancellation.** Every other per-test cleanup step in
-`dispatch_one` (worker-slot release, `current_test_context.reset`, module-scope teardown) is either
-synchronous or already swallows a collateral `CancelledError` into an `ERROR` result rather than
-letting it escape — `run_suite`'s own invariant is that nothing but `KeyboardInterrupt`/
-`SystemExit` ever leaves a dispatched task. `release`'s state update requires acquiring the gate's
-lock first, and that `await` is exactly where a collateral cancellation (a sibling's interrupt
-propagating through `asyncio.TaskGroup`, or `on_result` raising) can land, before the
-decrement/notify ever runs. Skipping that update, unlike skipping some other cleanup, doesn't just
-affect the one test: it leaves `_running`/`_running_tokens` permanently wrong, which can deadlock
-every other test still waiting on the same gate for the rest of the run. `asyncio.shield` lets the
-cancellation reach the caller immediately while the update finishes in the background, so the
-caller's own cancellation semantics are unchanged but the gate's bookkeeping can't be left
-half-done.
+**`release` hands its freed slot to a waiter; it doesn't wake the queue to race for it.** The gate
+was an `asyncio.Condition` whose every release called `notify_all`, so every waiter re-tested its
+own admission predicate on every release. `run_suite` creates every test's task up front, so the
+queue is the whole suite and that is quadratic in its size — measured at ~23s of wall clock for
+16k trivial tests, against 0.6s once the release admits directly. `_wake` instead scans from the
+head of a `deque` only as far as the free capacity allows and books each admission itself, which
+for the ordinary case (a waiter with no exclusive tokens at the head) is one step. It walks *past*
+a waiter held up by a token or a solo lock rather than stopping there, since a later waiter may
+still fit in the slot that one cannot use — the same barge-ahead the `Condition` had, and the same
+absent fairness guarantee (`ROADMAP.md`). Booking the admission inside `release` rather than when
+the waiter's coroutine resumes is what keeps two tests from ever being admitted into one slot; the
+cost is that a waiter cancelled in the tick between the two has to give the slot back itself,
+which `acquire`'s own `except asyncio.CancelledError` does.
+
+**`AdmissionGate.release` is synchronous.** Every other per-test cleanup step in `dispatch_one`
+(worker-slot release, `current_test_context.reset`, module-scope teardown) is either synchronous or
+already swallows a collateral `CancelledError` into an `ERROR` result rather than letting it escape
+— `run_suite`'s own invariant is that nothing but `KeyboardInterrupt`/`SystemExit` ever leaves a
+dispatched task. Any `await` inside `release` is somewhere a collateral cancellation (a sibling's
+interrupt propagating through `asyncio.TaskGroup`, or `on_result` raising) can land before the
+state update runs. Skipping that update, unlike skipping some other cleanup, doesn't just affect
+the one test: it leaves `_running`/`_running_tokens` permanently wrong, which can deadlock every
+other test still waiting on the same gate for the rest of the run. Having nothing to await removes
+the window outright — where the previous `Condition`-based gate needed an `asyncio.shield` around
+its release to reach the same guarantee.
 
 **A test's `--timeout`/`@velox.timeout(...)` budget starts inside `_run_one`, after admission, not
 at dispatch.** Time spent waiting for `AdmissionGate.acquire` — behind a `@velox.solo` test, or
@@ -365,6 +386,16 @@ behind another test holding the same `exclusive=` token — is not counted again
 clock at dispatch would turn "this test's setup/call/teardown took too long" and "this test waited
 behind a contended resource" into the same `TIMEOUT` outcome, though they point at unrelated fixes:
 raise the budget or find the blocking call, versus reduce contention or accept the wait.
+
+**A timed-out test's teardown is time-boxed too, not just a cancelled one's.** An ordinary test's
+teardown has no budget: velox can't tell a fixture that legitimately takes a while from one that
+has stopped making progress, and guessing wrong would fail working suites. A test whose
+`--timeout` just fired is the case where that guess is already made — the fixture the deadline
+landed on is the first suspect for hanging on the way out too, and its teardown runs while the
+test still holds its admission slot. Left unbounded there, one hung `finally` hangs the entire run
+with nothing reported at all, which is precisely the failure `--timeout` exists to bound. The
+cancellation path's `teardown_grace` covers it, and an overrun is reported on the `TIMEOUT` result
+and on stderr rather than being waited out.
 
 **The worker pool is sized to at least `concurrency`, and never below Python's own default.**
 The floor at `concurrency` is what stops one sync test from waiting for a thread while its own
