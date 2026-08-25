@@ -60,6 +60,14 @@ Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplica
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
 seeing an opening.
 
+## An `@velox.isolated` subprocess has no deadline of its own
+`--timeout` is handed to the subprocess's own `run_suite` call, which arms it around the test —
+so nothing bounds the time *before* that: interpreter startup, importing the test module, and
+re-collecting it. A module that hangs at import leaves the parent waiting on `communicate()`
+forever, holding that test's admission slot, with no way out but Ctrl-C. Bounding it from the
+parent needs a decision on what the budget covers, since a legitimately slow import (a module
+pulling in a large dependency) must not read as a timed-out test.
+
 **Reporting.** JUnit XML and GitHub annotations.
 
 

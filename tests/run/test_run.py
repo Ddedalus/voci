@@ -1014,31 +1014,132 @@ def test_piled_up_exclusive_contenders_never_take_a_concurrency_slot_from_others
     assert peak() > 1
 
 
-def test_admission_gate_release_survives_cancellation_while_waiting_for_its_lock() -> None:
-    """`AdmissionGate.release` is shielded: a cancellation delivered while it's still waiting to
-    acquire the gate's own lock must not skip the bookkeeping it's about to do -- that would leave
-    `_running`/`_running_tokens` stuck, deadlocking every other test still waiting on the gate for
-    the rest of the run."""
+def test_admission_gate_release_cannot_be_interrupted_partway() -> None:
+    """`AdmissionGate.release` is synchronous, so there is no point at which a cancellation
+    already pending on its caller can interrupt it partway and leave `_running`/`_running_tokens`
+    stuck -- which would deadlock every other test still waiting on the gate for the rest of the
+    run. Released from inside a task that is already cancelling, which is exactly the shape
+    `dispatch_one`'s outer `finally` runs in when a sibling's interrupt propagates."""
 
     async def scenario() -> None:
         gate = AdmissionGate(concurrency=4)
         await gate.acquire(frozenset({"db"}), solo=False)
 
-        # Hold the gate's own lock so the `release()` call below is forced to actually suspend
-        # waiting for it, instead of taking the uncontended (and so uncancellable) fast path.
-        await gate._condition.acquire()
-        try:
-            release_task = asyncio.ensure_future(gate.release(frozenset({"db"}), solo=False))
-            await asyncio.sleep(0.01)  # let it start waiting on the lock
-            release_task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await release_task
-        finally:
-            gate._condition.release()
+        async def release_while_cancelling() -> None:
+            try:
+                await asyncio.sleep(60)
+            finally:
+                gate.release(frozenset({"db"}), solo=False)
 
-        # The shielded release keeps running in the background even though the caller above
-        # was cancelled -- give it a tick to finish.
-        await asyncio.sleep(0.01)
+        task = asyncio.ensure_future(release_while_cancelling())
+        await asyncio.sleep(0)  # let it reach the sleep
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert gate._running == 0
+        assert gate._running_tokens == set()
+
+    run_async(scenario())
+
+
+def test_admission_gate_admits_a_waiter_freed_slot_without_rescanning_the_queue() -> None:
+    """A release hands its freed slot straight to a queued waiter instead of waking the whole
+    queue to race for it. With every test's task created up front the queue is the whole suite,
+    so re-testing every waiter's predicate on every release is quadratic in the suite's size."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=1)
+        await gate.acquire(frozenset(), solo=False)
+
+        waiting = [asyncio.ensure_future(gate.acquire(frozenset(), solo=False)) for _ in range(3)]
+        await asyncio.sleep(0)
+        assert len(gate._waiters) == 3
+
+        gate.release(frozenset(), solo=False)
+        # Booked synchronously, inside `release` -- the admitted waiter holds the slot before
+        # its own coroutine has had a chance to resume, so nothing else can take it first.
+        assert gate._running == 1
+        assert len(gate._waiters) == 2
+        await waiting[0]
+
+        for task in waiting[1:]:
+            gate.release(frozenset(), solo=False)
+            await task
+        gate.release(frozenset(), solo=False)
+        assert gate._running == 0
+        assert not gate._waiters
+
+    run_async(scenario())
+
+
+def test_admission_gate_forgets_a_waiter_cancelled_before_it_is_admitted() -> None:
+    """A queued test cancelled while it waits leaves nothing behind: no queue entry for a later
+    release to hand a slot to (which nobody would ever give back), and no accounting of its own."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=1)
+        await gate.acquire(frozenset(), solo=False)
+
+        waiter = asyncio.ensure_future(gate.acquire(frozenset({"db"}), solo=False))
+        await asyncio.sleep(0)
+        assert len(gate._waiters) == 1
+
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert not gate._waiters
+
+        gate.release(frozenset(), solo=False)
+        assert gate._running == 0
+        assert gate._running_tokens == set()
+
+    run_async(scenario())
+
+
+def test_admission_gate_release_skips_a_waiter_cancelled_but_not_yet_dequeued() -> None:
+    """`Task.cancel` cancels the future its target is suspended on synchronously, so a cancelled
+    waiter is still in the queue until its own coroutine resumes to take itself out. A `release`
+    landing in that window must drop it rather than complete its future -- which would raise
+    `InvalidStateError` after having already booked it a slot nobody is left to give back."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=1)
+        await gate.acquire(frozenset(), solo=False)
+
+        waiter = asyncio.ensure_future(gate.acquire(frozenset(), solo=False))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        assert gate._waiters[0].future.cancelled()  # cancelled, still queued
+
+        gate.release(frozenset(), solo=False)
+        assert gate._running == 0
+        assert not gate._waiters
+
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    run_async(scenario())
+
+
+def test_admission_gate_gives_back_a_slot_its_waiter_was_cancelled_before_claiming() -> None:
+    """The one-tick window where a waiter has been admitted (its slot booked by `release`) but
+    its own coroutine hasn't resumed yet to find out. A cancellation landing there must hand the
+    slot back: the caller never reaches the `finally` that would release it, so the slot would
+    otherwise be held by nobody for the rest of the run."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=1)
+        await gate.acquire(frozenset({"db"}), solo=False)
+
+        waiter = asyncio.ensure_future(gate.acquire(frozenset({"db"}), solo=False))
+        await asyncio.sleep(0)
+        gate.release(frozenset({"db"}), solo=False)
+        assert gate._running == 1  # booked for `waiter`, which has not resumed yet
+
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
         assert gate._running == 0
         assert gate._running_tokens == set()
 
@@ -1480,6 +1581,89 @@ def test_timeout_survives_the_body_substituting_a_different_exception() -> None:
     assert result.failure is not None
     assert "timeout" in result.failure.lower()
     assert "cleanup did something else instead" in result.failure
+
+
+def test_timeout_while_building_a_shared_fixture_does_not_poison_it_for_later_tests() -> None:
+    """The timed-out test's deadline is its own. A `session`-scope fixture it happened to be
+    constructing when the budget expired must still be built for the tests behind it, rather than
+    every one of them erroring with the `CancelledError` that stopped the first."""
+    builds: list[int] = []
+
+    @velox.fixture(scope="session")
+    async def slow() -> AsyncIterator[str]:
+        builds.append(1)
+        await asyncio.sleep(0.06)
+        yield "db"
+
+    @velox.timeout(0.02)
+    async def times_out(db: str = velox.Depends(slow)) -> None:
+        raise AssertionError("must never run: setup timed out")
+
+    async def uses_slow(db: str = velox.Depends(slow)) -> None:
+        assert db == "db"
+
+    records = [
+        _record(0, times_out, "test_times_out", plan=plan_for(times_out)),
+        _record(1, uses_slow, "test_a", plan=plan_for(uses_slow)),
+        _record(2, uses_slow, "test_b", plan=plan_for(uses_slow)),
+    ]
+
+    results = run_suite(records, concurrency=1)
+
+    assert [r.outcome for r in results] == [Outcome.TIMEOUT, Outcome.PASSED, Outcome.PASSED]
+    # Rebuilt once by the test behind the timed-out one, then shared from the cache as usual.
+    assert len(builds) == 2
+
+
+def test_a_timed_out_waiter_on_a_shared_fixture_does_not_take_its_siblings_down_with_it() -> None:
+    """The concurrent shape of the above: the test whose budget expires is one of the *waiters*
+    on the shared construction, not the one running it. Its deadline is still its own -- the test
+    actually constructing the fixture must finish, and every other waiter must get the value."""
+
+    @velox.fixture(scope="session")
+    async def slow() -> AsyncIterator[str]:
+        await asyncio.sleep(0.1)
+        yield "db"
+
+    async def patient(db: str = velox.Depends(slow)) -> None:
+        assert db == "db"
+
+    @velox.timeout(0.02)
+    async def impatient(db: str = velox.Depends(slow)) -> None:
+        raise AssertionError("must never run: setup timed out")
+
+    records = [
+        _record(0, patient, "test_first", plan=plan_for(patient)),
+        _record(1, impatient, "test_impatient", plan=plan_for(impatient)),
+        _record(2, patient, "test_third", plan=plan_for(patient)),
+    ]
+
+    results = run_suite(records, concurrency=3)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.TIMEOUT, Outcome.PASSED]
+
+
+def test_a_timed_out_tests_teardown_is_bounded_rather_than_hanging_the_run() -> None:
+    """The fixture a `--timeout` just fired on is the first suspect for hanging in its own
+    teardown too. Leaving that teardown unbounded would hold the test's admission slot forever
+    and hang the whole run with nothing reported -- exactly the failure `--timeout` exists to
+    bound -- so a timed-out test's teardown gets the same grace a cancelled one's does."""
+
+    @velox.fixture()
+    async def never_tears_down() -> AsyncIterator[str]:
+        yield "x"
+        await asyncio.sleep(60)
+
+    async def hangs(v: str = velox.Depends(never_tears_down)) -> None:
+        await asyncio.sleep(10)
+
+    records = [_record(0, hangs, "test_hangs", plan=plan_for(hangs))]
+
+    (result,) = run_suite(records, timeout=0.02, teardown_grace=0.05)
+
+    assert result.outcome is Outcome.TIMEOUT
+    assert result.failure is not None
+    assert "may not have been fully torn down" in result.failure
 
 
 def test_timeout_clock_starts_after_admission_not_at_dispatch() -> None:
