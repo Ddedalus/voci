@@ -552,7 +552,10 @@ class AdmissionGate:
                 # reach the `finally` that would give it back.
                 self.release(tokens, solo=solo)
             else:
-                self._waiters.remove(waiter)
+                # `Task.cancel` cancels this future synchronously, so a `release` in the same
+                # tick may already have dropped this waiter from the queue -- see `_wake`.
+                with contextlib.suppress(ValueError):
+                    self._waiters.remove(waiter)
             raise
 
     def release(self, tokens: frozenset[object], *, solo: bool) -> None:
@@ -602,6 +605,13 @@ class AdmissionGate:
         index = 0
         while index < len(self._waiters) and not self._solo_active:
             waiter = self._waiters[index]
+            if waiter.future.done():
+                # Cancelled while queued: `Task.cancel` cancels the future it is suspended on
+                # right there, before the coroutine resumes to take itself out of the queue.
+                # Dropping it here rather than admitting it is what keeps a slot from being
+                # handed to a test that is already gone -- and nobody would give it back.
+                del self._waiters[index]
+                continue
             if not self._admits(waiter.tokens, solo=waiter.solo):
                 if self._running >= self._concurrency:
                     # Full, and only a release can change that -- which will call this again.

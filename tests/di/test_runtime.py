@@ -279,6 +279,38 @@ def test_a_requester_parked_on_a_cancelled_construction_rebuilds_rather_than_inh
     assert len(calls) == 2
 
 
+def test_cancelling_one_waiter_leaves_the_shared_construction_intact_for_everyone_else() -> None:
+    """An entry's future is shared by every requester of that key, so awaiting it directly would
+    make it the awaiting *task*'s own `_fut_waiter` -- and cancelling any one waiter would cancel
+    the construction out from under the constructor and every other waiter too. Only the cancelled
+    requester may be affected, and its reserved refcount must come back."""
+
+    async def scenario() -> tuple[object, object, int]:
+        store = ScopeStore()
+        fx = velox.fixture(scope="session")(lambda: None)
+        key = ("session", 1, None)
+
+        async def build():
+            await asyncio.sleep(0.02)
+            return "value", None
+
+        constructing = asyncio.ensure_future(store.acquire(key, "session", fx, build))
+        await asyncio.sleep(0)
+        doomed = asyncio.ensure_future(store.acquire(key, "session", fx, build))
+        survivor = asyncio.ensure_future(store.acquire(key, "session", fx, build))
+        await asyncio.sleep(0)
+
+        doomed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await doomed
+
+        return await constructing, await survivor, store._entries[key].refcount
+
+    built, shared, refcount = run(scenario())
+    assert built == shared == "value"
+    assert refcount == 2  # the cancelled waiter's reservation was refunded
+
+
 # Exception caching: a broken session fixture fails every dependent with the same exception.
 # ------------------------------------------------------------------------------------------
 

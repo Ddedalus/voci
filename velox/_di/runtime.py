@@ -148,7 +148,14 @@ class ScopeStore:
             # construction, refcounted teardown") for the race this ordering closes.
             entry.refcount += 1
             try:
-                return await entry.future
+                # Shielded: the entry's future is shared by everyone waiting on this key, and
+                # awaiting it directly makes it the waiting task's own `_fut_waiter` -- so
+                # cancelling any one waiter (its `@velox.timeout` budget expiring, a
+                # `--maxfail`/Ctrl-C stop) would cancel the future out from under the
+                # constructor and every other waiter too, turning one test's deadline into an
+                # `InvalidStateError` for the fixture and a `CancelledError` for its siblings.
+                # `shield` gives this caller its own future to be cancelled instead.
+                return await asyncio.shield(entry.future)
             except _ConstructionCancelled:
                 # The constructor was interrupted, not this requester: go around and build it.
                 entry.refcount -= 1

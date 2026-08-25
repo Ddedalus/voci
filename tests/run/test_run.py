@@ -1097,6 +1097,31 @@ def test_admission_gate_forgets_a_waiter_cancelled_before_it_is_admitted() -> No
     run_async(scenario())
 
 
+def test_admission_gate_release_skips_a_waiter_cancelled_but_not_yet_dequeued() -> None:
+    """`Task.cancel` cancels the future its target is suspended on synchronously, so a cancelled
+    waiter is still in the queue until its own coroutine resumes to take itself out. A `release`
+    landing in that window must drop it rather than complete its future -- which would raise
+    `InvalidStateError` after having already booked it a slot nobody is left to give back."""
+
+    async def scenario() -> None:
+        gate = AdmissionGate(concurrency=1)
+        await gate.acquire(frozenset(), solo=False)
+
+        waiter = asyncio.ensure_future(gate.acquire(frozenset(), solo=False))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        assert gate._waiters[0].future.cancelled()  # cancelled, still queued
+
+        gate.release(frozenset(), solo=False)
+        assert gate._running == 0
+        assert not gate._waiters
+
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    run_async(scenario())
+
+
 def test_admission_gate_gives_back_a_slot_its_waiter_was_cancelled_before_claiming() -> None:
     """The one-tick window where a waiter has been admitted (its slot booked by `release`) but
     its own coroutine hasn't resumed yet to find out. A cancellation landing there must hand the
@@ -1588,6 +1613,34 @@ def test_timeout_while_building_a_shared_fixture_does_not_poison_it_for_later_te
     assert [r.outcome for r in results] == [Outcome.TIMEOUT, Outcome.PASSED, Outcome.PASSED]
     # Rebuilt once by the test behind the timed-out one, then shared from the cache as usual.
     assert len(builds) == 2
+
+
+def test_a_timed_out_waiter_on_a_shared_fixture_does_not_take_its_siblings_down_with_it() -> None:
+    """The concurrent shape of the above: the test whose budget expires is one of the *waiters*
+    on the shared construction, not the one running it. Its deadline is still its own -- the test
+    actually constructing the fixture must finish, and every other waiter must get the value."""
+
+    @velox.fixture(scope="session")
+    async def slow() -> AsyncIterator[str]:
+        await asyncio.sleep(0.1)
+        yield "db"
+
+    async def patient(db: str = velox.Depends(slow)) -> None:
+        assert db == "db"
+
+    @velox.timeout(0.02)
+    async def impatient(db: str = velox.Depends(slow)) -> None:
+        raise AssertionError("must never run: setup timed out")
+
+    records = [
+        _record(0, patient, "test_first", plan=plan_for(patient)),
+        _record(1, impatient, "test_impatient", plan=plan_for(impatient)),
+        _record(2, patient, "test_third", plan=plan_for(patient)),
+    ]
+
+    results = run_suite(records, concurrency=3)
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.TIMEOUT, Outcome.PASSED]
 
 
 def test_a_timed_out_tests_teardown_is_bounded_rather_than_hanging_the_run() -> None:

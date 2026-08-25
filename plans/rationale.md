@@ -238,6 +238,14 @@ is dropped instead, and anyone already parked on its future is handed an interna
 (`_ConstructionCancelled`) that sends them back around `acquire`'s loop to build it for real. That
 marker never escapes `acquire`, which is the only code that awaits an entry's future.
 
+**Waiters await the entry's future through an `asyncio.shield`.** An entry's future is shared by
+everyone asking for that key, and awaiting it bare makes it the awaiting *task*'s own
+`_fut_waiter` — which `Task.cancel` cancels directly. One waiter's `@velox.timeout` expiring would
+therefore cancel the construction out from under the constructor (whose `set_result` then raises
+`InvalidStateError`) and every other waiter alongside it, from a deadline none of them was given.
+The shield gives each caller a private future to be cancelled instead, so a cancellation reaches
+exactly the requester it was aimed at.
+
 **Teardown order relies on a precondition that lives outside the class.** `aclose` tears down in
 reverse insertion order, which is only valid because `setup` walks an already-topologically-sorted
 plan forwards and `build()` never calls back into `acquire`. Every dependency is therefore inserted
@@ -366,7 +374,11 @@ still fit in the slot that one cannot use — the same barge-ahead the `Conditio
 absent fairness guarantee (`ROADMAP.md`). Booking the admission inside `release` rather than when
 the waiter's coroutine resumes is what keeps two tests from ever being admitted into one slot; the
 cost is that a waiter cancelled in the tick between the two has to give the slot back itself,
-which `acquire`'s own `except asyncio.CancelledError` does.
+which `acquire`'s own `except asyncio.CancelledError` does. The mirror of that window is a waiter
+cancelled *before* being admitted: `Task.cancel` cancels the future it is suspended on right
+there, but the waiter stays in the queue until its coroutine resumes, so `_wake` has to drop an
+already-completed future rather than book it a slot — which the old `notify_all` got for free from
+`Condition`'s own `if not fut.done()`.
 
 **`AdmissionGate.release` is synchronous.** Every other per-test cleanup step in `dispatch_one`
 (worker-slot release, `current_test_context.reset`, module-scope teardown) is either synchronous or
