@@ -148,10 +148,11 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     refused — velox only runs asyncio) alongside anyio/asyncio (VX320, converts mechanically), and
     has the fork changed the conftest/fixture graph. Decides whether httpx2 is viable as an exit
     suite as-is.
-  - **1. `verify` subcommand.** The one pipeline stage in §4 with no code yet — `cli.py` has only
-    `extract`/`audit`/`convert`. Runs pytest on the pre-migration tree and `velox --serial` on the
-    converted tree, diffs outcomes through the id map, writes the divergence list. Both target
-    suites need this before either closes out; suite-agnostic, unblocked today.
+  - [x] **1. `verify` subcommand.** Runs pytest on the pre-migration tree and `velox --serial` on
+    the converted tree, diffs outcomes through the id map, writes the divergence list. pytest's
+    half reports through `outcomes.py`, a second copyable single-file plugin, since a terminal
+    summary is not a per-test record; velox's is read off `-v`'s own lines. `--record` takes the
+    pytest half before `convert --write` overwrites the tree it would have run in.
   - [x] **2. marshmallow: convert + verify + corpus-ify.** Done: 1183 of 1188 tests pass under
     `velox --serial` and the same 1183 at full concurrency, with nothing refused. The bug hunt
     found more than expected — see [marshmallow-migration.md](marshmallow-migration.md) for what
