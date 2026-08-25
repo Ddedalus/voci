@@ -3,9 +3,11 @@
 `extract` is a convenience wrapper: it runs pytest, as a subprocess, with the extractor plugin
 loaded. Where that environment cannot be arranged, `velox_migrate/extractor.py` copied next to
 the suite and loaded with `-p extractor` does the same job. `audit` reads what `extract` wrote,
-plus the suite's own sources, and writes the report.
+plus the suite's own sources, and writes the report. `verify` shells out to both runners, one per
+tree, and compares what each said about every test.
 
-Nothing here imports pytest. `extract` shells out to it, and every other stage reads the dump.
+Nothing here imports pytest. `extract` and `verify` shell out to it, and every other stage reads
+what those wrote.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from pathlib import Path
 from velox_migrate import schema
 from velox_migrate.audit import DEFAULT_BUDGET, sources_of
 from velox_migrate.model import GroundTruth
+from velox_migrate.verify.runners import DEFAULT_BASELINE
 
 # Kept in step with `extractor.DEFAULT_OUT`, which cannot be imported from: the extractor is a
 # standalone file that imports nothing from this package.
@@ -27,6 +30,9 @@ DEFAULT_OUT = os.path.join(".velox-migrate", "ground-truth.json")
 
 REPORT_NAME = "migration-report.md"
 FINDINGS_NAME = "findings.json"
+
+VERIFY_REPORT_NAME = "verify-report.md"
+VERIFY_NAME = "verify.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,6 +180,85 @@ def _parser() -> argparse.ArgumentParser:
         help="print the diff without the plan",
     )
     convert.set_defaults(run=_convert)
+
+    verify = commands.add_parser(
+        "verify",
+        help="run both runners and compare the converted suite's outcomes against pytest's",
+        description=(
+            "Run pytest on the pre-migration tree and velox on the converted one, then compare "
+            "the two test for test. Prints the divergences and writes them as artifacts; exits "
+            "1 when anything diverged. Anything after `--` is passed to pytest unchanged, so it "
+            "needs --before, the run that has a pytest side."
+        ),
+    )
+    verify.add_argument(
+        "paths",
+        nargs="*",
+        metavar="PATH",
+        help=(
+            "what to run, passed to both runners (default: each runner's own configuration). "
+            "Narrowing both sides needs --before; a baseline is only comparable against the "
+            "selection it was recorded over"
+        ),
+    )
+    verify.add_argument(
+        "-b",
+        "--before",
+        default=None,
+        metavar="DIR",
+        help=(
+            "the tree still holding the pytest suite, run there to record the baseline "
+            "(default: no pytest run at all — the baseline recorded by an earlier --record is "
+            "read instead, which is what `convert --write` rewriting in place leaves you with)"
+        ),
+    )
+    verify.add_argument(
+        "-a",
+        "--after",
+        default=".",
+        metavar="DIR",
+        help="the converted tree, run under velox (default: the current directory)",
+    )
+    verify.add_argument(
+        "--baseline",
+        default=DEFAULT_BASELINE,
+        metavar="PATH",
+        help=f"where pytest's outcomes are written and read back (default: {DEFAULT_BASELINE})",
+    )
+    verify.add_argument(
+        "--record",
+        action="store_true",
+        help=(
+            "record the baseline from --before and stop: the half to run before converting, "
+            "when the conversion is going to rewrite that tree in place"
+        ),
+    )
+    verify.add_argument(
+        "-c",
+        "--concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "what concurrency to run velox at (default: 1, serial — the run that separates a "
+            "conversion defect from a suite that does not survive running concurrently)"
+        ),
+    )
+    verify.add_argument(
+        "-o",
+        "--out",
+        default=None,
+        metavar="DIR",
+        help=f"where to write {VERIFY_REPORT_NAME} and {VERIFY_NAME} (default: beside the "
+        "baseline)",
+    )
+    verify.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="write the artifacts without printing the summary",
+    )
+    verify.set_defaults(run=_verify)
     return parser
 
 
@@ -274,6 +359,61 @@ def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
     elif diff:
         print("\nnothing written; pass --write to apply")
     return 0
+
+
+def _verify(args: argparse.Namespace, passthrough: list[str]) -> int:
+    from velox_migrate import verify
+    from velox_migrate.verify import report as verify_report
+
+    # Both runners run with their own tree as the working directory, so every path this command
+    # was given relative to *this* one has to be resolved before either of them starts.
+    baseline = Path(args.baseline).resolve()
+    before_tree = Path(args.before).resolve() if args.before else None
+
+    if args.record:
+        if before_tree is None:
+            print(
+                "velox-migrate: `--record` records the pytest side, so it needs `--before` "
+                "pointing at the tree that still holds the pytest suite.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            recorded = verify.run_pytest(
+                before_tree, out=baseline, paths=args.paths, extra=passthrough
+            )
+        except verify.RunnerError as exc:
+            print(f"velox-migrate: {exc}", file=sys.stderr)
+            return 1
+        if not args.quiet:
+            print(f"recorded {len(recorded.outcomes)} outcomes to {baseline}")
+        return 0
+
+    try:
+        verification = verify.run(
+            before_tree=before_tree,
+            after_tree=Path(args.after).resolve(),
+            baseline=baseline,
+            paths=args.paths,
+            concurrency=args.concurrency,
+            pytest_args=passthrough,
+        )
+    except verify.RunnerError as exc:
+        print(f"velox-migrate: {exc}", file=sys.stderr)
+        return 1
+
+    out = Path(args.out).resolve() if args.out else baseline.parent
+    out.mkdir(parents=True, exist_ok=True)
+    report_path, payload_path = out / VERIFY_REPORT_NAME, out / VERIFY_NAME
+    verify_report.write_markdown(verification, report_path)
+    verify_report.write_payload(verification, payload_path)
+
+    if not args.quiet:
+        print(verify_report.terminal(verification))
+        print(f"\nwrote {report_path} and {payload_path}")
+    # A divergence is a result rather than an error, and an exit code is what lets the run be
+    # used as the gate the workflow recommends it as.
+    return 0 if verification.ok else 1
 
 
 def _load(args: argparse.Namespace) -> tuple[GroundTruth, Path] | None:

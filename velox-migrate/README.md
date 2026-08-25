@@ -128,6 +128,49 @@ dependence, teardown timing, state behind application code — are named in the 
 counted, and any source file that could not be read is listed with a note that the body-level counts
 are lower bounds while it is.
 
+## Verifying a conversion
+
+`verify` runs both runners and compares them test for test: pytest on the tree that still holds
+the pytest suite, velox on the converted one. Ids survive the conversion verbatim, so the two
+verdicts line up by id, and every id they disagree about is the review queue.
+
+```console
+$ velox-migrate verify --before ../service-pytest --after .
+1188 tests under pytest   1188 under velox   1183 agreed   5 diverged
+outcome (5) — ran under both and ended differently
+  tests/test_registry.py::test_serializer_must_have_meta            passed -> failed
+  ...
+
+wrote .velox-migrate/verify-report.md and .velox-migrate/verify.json
+```
+
+The exit status is 0 when everything agreed and 1 when anything did not, so the comparison can be
+the gate of a migration branch. `verify-report.md` lists the whole queue — the terminal summary
+caps each kind — and `verify.json` carries the same content for tooling.
+
+velox runs at `--concurrency 1` unless `-c` says otherwise. A serial run is what separates "the
+conversion changed what the suite does" from "the suite does not survive tests overlapping": once
+it agrees, raising concurrency asks a question about the suite, and the audit's hazard census is
+the index to triage the answers with.
+
+`convert --write` rewrites the tree in place, which leaves no pytest suite to run afterwards.
+Record the pytest half first, then compare against the recording:
+
+```console
+$ velox-migrate verify --record --before .   # -> .velox-migrate/pytest-outcomes.json
+$ velox-migrate convert --write
+$ velox-migrate verify --after .
+```
+
+Both halves have to run in one environment, since one command runs both. Where pytest's half runs
+somewhere velox-migrate cannot be installed, `velox_migrate/outcomes.py` is a single file that
+imports only pytest — the same arrangement as the extractor. Copy it in, run the suite, copy the
+JSON back out and pass it as `--baseline`:
+
+```console
+$ pytest -p outcomes --outcomes-out pytest-outcomes.json
+```
+
 ## Development
 
 ```console
