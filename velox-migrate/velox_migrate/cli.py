@@ -187,14 +187,19 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Run pytest on the pre-migration tree and velox on the converted one, then compare "
             "the two test for test. Prints the divergences and writes them as artifacts; exits "
-            "1 when anything diverged. Anything after `--` is passed to pytest unchanged."
+            "1 when anything diverged. Anything after `--` is passed to pytest unchanged, so it "
+            "needs --before, the run that has a pytest side."
         ),
     )
     verify.add_argument(
         "paths",
         nargs="*",
         metavar="PATH",
-        help="what to run, passed to both runners (default: each runner's own configuration)",
+        help=(
+            "what to run, passed to both runners (default: each runner's own configuration). "
+            "Narrowing both sides needs --before; a baseline is only comparable against the "
+            "selection it was recorded over"
+        ),
     )
     verify.add_argument(
         "-b",

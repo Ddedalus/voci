@@ -83,12 +83,18 @@ class Verification:
 
     @property
     def ok(self) -> bool:
-        """True when every test ran under both runners and ended the same way, and neither
-        runner reported a collection error."""
+        """True when both runners ran the suite, every test ended the same way under each, and
+        neither reported a collection error.
+
+        A comparison of two runs that collected nothing is not ok: a mistyped path leaves both
+        runners with nothing to disagree about, and the gate this answers must not pass on it.
+        """
+        if not self.before.outcomes and not self.after.outcomes:
+            return False
         return (
             not self.divergences
             and not self.before.collection_errors
-            and (not self.after.collection_errors)
+            and not self.after.collection_errors
         )
 
     def by_kind(self) -> dict[str, tuple[Divergence, ...]]:
@@ -126,18 +132,26 @@ def run(
     paths: list[str] | None = None,
     concurrency: int = 1,
     pytest_args: list[str] | None = None,
-    velox_args: list[str] | None = None,
 ) -> Verification:
     """Both halves and the comparison. `before_tree` is `None` when the pre-migration tree is
     already gone — `convert --write` rewrites in place — in which case the baseline recorded
-    before the conversion stands in for it."""
+    before the conversion stands in for it.
+
+    Raises `RunnerError` for anything that leaves the two sides describing different runs: a
+    runner that stopped short, or an argument that would narrow only one of them.
+    """
     paths = paths or []
     if before_tree is None:
+        if paths or pytest_args:
+            raise RunnerError(
+                "without `--before` there is no pytest run to narrow: the baseline records "
+                "whatever the run that wrote it collected, and narrowing only velox would "
+                "report the rest of the suite as tests the conversion lost. Re-record the "
+                "baseline over the same selection, or pass `--before`."
+            )
         loaded = load_record(baseline)
         before = record(loaded, tree=Path(loaded.get("rootpath", ".")))
     else:
         before = run_pytest(before_tree, out=baseline, paths=paths, extra=list(pytest_args or []))
-    after = run_velox(
-        after_tree, paths=paths, concurrency=concurrency, extra=list(velox_args or [])
-    )
+    after = run_velox(after_tree, paths=paths, concurrency=concurrency)
     return compare(before, after)

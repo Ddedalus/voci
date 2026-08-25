@@ -52,6 +52,12 @@ _VELOX_SKIPPED_HEADER = re.compile(r"^--- skipped \d+ tests? ---$")
 
 _VELOX_COLLECTION_ERROR = re.compile(r"^(.+?) COLLECTION ERROR$")
 
+#: What ends the run's own output and begins the report about it: a `---` section header, or the
+#: bare `OUTCOME id` heading of a failure's detail block. Everything past it — tracebacks, each
+#: failing test's captured output, the short summary's `OUTCOME id - reason` lines — is prose that
+#: can look like a verdict line, and only the skipped section is read out of it.
+_VELOX_EPILOGUE = re.compile(r"^--- .+ ---$|^([A-Z]+) (\S.*)$")
+
 #: What velox calls its outcomes, lowercased, matching `velox._run.run.Outcome`. Only used to
 #: tell a per-test line from a line of test output that happens to look like one.
 _VELOX_OUTCOMES = frozenset(
@@ -100,13 +106,14 @@ def run_pytest(tree: Path, *, out: Path, paths: list[str], extra: list[str]) -> 
         "-m",
         "pytest",
         *paths,
+        # Before the passthrough, so a suite that needs its own `--tb` or `-v` gets it.
+        "-q",
+        "--tb=no",
         *extra,
         "-p",
         "velox_migrate.outcomes",
         "--outcomes-out",
         str(out),
-        "-q",
-        "--tb=no",
     ]
     completed, duration = _run(command, tree)
     if not out.is_file():
@@ -114,10 +121,19 @@ def run_pytest(tree: Path, *, out: Path, paths: list[str], extra: list[str]) -> 
             f"pytest exited {completed.returncode} in {tree} without recording any outcome:\n"
             f"{_tail(completed)}"
         )
+    if completed.returncode not in CLEAN_EXIT_STATUSES:
+        # The record exists but describes only the tests pytest reached before it stopped, and
+        # every test it never reached would read as one the conversion lost.
+        out.unlink(missing_ok=True)
+        raise RunnerError(
+            f"pytest exited {completed.returncode} in {tree}, so it never ran the whole suite "
+            f"and there is nothing to compare against. Fix whatever it reports — the output is "
+            f"pytest's own:\n{_tail(completed)}"
+        )
     return record(load_record(out), tree=tree, duration=duration, command=command)
 
 
-def run_velox(tree: Path, *, paths: list[str], concurrency: int, extra: list[str]) -> Run:
+def run_velox(tree: Path, *, paths: list[str], concurrency: int) -> Run:
     """Run the converted suite under velox at `concurrency`, reading `-v`'s lines back."""
     executable = _velox_executable()
     if executable is None:
@@ -125,13 +141,15 @@ def run_velox(tree: Path, *, paths: list[str], concurrency: int, extra: list[str
             "no `velox` command on PATH. `verify` runs both runners, so velox has to be "
             "installed in this environment alongside pytest."
         )
-    command = [executable, *paths, *extra, "--concurrency", str(concurrency), "-v"]
+    command = [executable, *paths, "--concurrency", str(concurrency), "-v"]
     completed, duration = _run(command, tree)
     outcomes, errors = parse_velox(completed.stdout)
-    if not outcomes and completed.returncode not in CLEAN_EXIT_STATUSES:
+    if completed.returncode not in CLEAN_EXIT_STATUSES:
+        # An interrupted or misconfigured run reports on part of the suite at most, and the part
+        # it never reached is indistinguishable from tests the conversion lost.
         raise RunnerError(
-            f"velox exited {completed.returncode} in {tree} without running any test:\n"
-            f"{_tail(completed)}"
+            f"velox exited {completed.returncode} in {tree}, so it never ran the whole suite "
+            f"and there is nothing to compare:\n{_tail(completed)}"
         )
     return Run(
         runner="velox",
@@ -147,15 +165,18 @@ def run_velox(tree: Path, *, paths: list[str], concurrency: int, extra: list[str
 def parse_velox(output: str) -> tuple[dict[str, str], tuple[str, ...]]:
     """The outcome per test id, and the files that failed to collect, from a `-v` run's output.
 
-    A test's own captured output is printed too, under the failures it belongs to, so a line is
-    only read as a verdict when its first word is an outcome velox actually reports.
+    Only the run's own lines are read as verdicts. Everything from the first failure block or
+    section header onwards is the report about the run — tracebacks, captured output, the short
+    summary — where a line looking like a verdict is a coincidence, and only the list of tests a
+    `skip` mark kept out of the run is taken from it.
     """
     outcomes: dict[str, str] = {}
     errors: list[str] = []
     in_skipped = False
+    in_epilogue = False
     for line in output.splitlines():
         if _VELOX_SKIPPED_HEADER.match(line):
-            in_skipped = True
+            in_skipped, in_epilogue = True, True
             continue
         if in_skipped:
             # The section runs to the first blank line; each entry is `id - reason`. An id
@@ -167,13 +188,19 @@ def parse_velox(output: str) -> tuple[dict[str, str], tuple[str, ...]]:
             skipped_id = line.split(" - ", 1)[0].strip()
             outcomes.setdefault(skipped_id, "skipped")
             continue
+        error = _VELOX_COLLECTION_ERROR.match(line)
+        if error:
+            errors.append(error.group(1).strip())
+            continue
+        if in_epilogue:
+            continue
         match = _VELOX_LINE.match(line)
         if match and match.group(1).lower() in _VELOX_OUTCOMES:
             outcomes[match.group(2).strip()] = match.group(1).lower()
             continue
-        error = _VELOX_COLLECTION_ERROR.match(line)
-        if error:
-            errors.append(error.group(1).strip())
+        epilogue = _VELOX_EPILOGUE.match(line)
+        if epilogue and (epilogue.group(1) is None or epilogue.group(1).lower() in _VELOX_OUTCOMES):
+            in_epilogue = True
     return outcomes, tuple(errors)
 
 
@@ -195,6 +222,14 @@ def load_record(path: Path) -> dict:
         raise RunnerError(
             f"{path} is version {found!r}, and this tool writes and reads version "
             f"{OUTCOMES_VERSION}. Re-record the baseline."
+        )
+    status = loaded.get("exit_status")
+    if status not in CLEAN_EXIT_STATUSES:
+        # A baseline outlives the tree it was recorded from, so a run that stopped short has to
+        # be refused every time it is read rather than only when it was written.
+        raise RunnerError(
+            f"{path} was recorded from a pytest run that exited {status}, which means it stopped "
+            "before running the whole suite. Re-record the baseline."
         )
     return loaded
 

@@ -208,6 +208,30 @@ def test_a_file_velox_could_not_import_is_reported_as_a_collection_error() -> No
     assert errors == ("tests/test_a.py",)
 
 
+def test_the_short_test_summary_is_not_read_as_more_verdicts() -> None:
+    # Its lines are `OUTCOME id - reason`, and a reason ending in a duration — any timing
+    # assertion — is a verdict line down to the last character.
+    output = (
+        "PASSED    tests/test_a.py::test_fast                           0.01s\n"
+        "FAILED tests/test_a.py::test_slow\n"
+        "Traceback (most recent call last):\n"
+        "--- short test summary ---\n"
+        "FAILED tests/test_a.py::test_slow - AssertionError: took 1.23s\n"
+    )
+
+    parsed, _ = verify.parse_velox(output)
+
+    assert parsed == {"tests/test_a.py::test_fast": "passed"}
+
+
+def test_a_run_of_a_suite_neither_runner_collected_is_not_a_pass() -> None:
+    # What a mistyped path leaves: two runners with nothing to disagree about, and a gate that
+    # would otherwise report a whole suite verified.
+    verification = verify.compare(run("pytest", {}), run("velox", {}))
+
+    assert not verification.ok
+
+
 def test_a_baseline_from_another_version_of_the_tool_is_refused(tmp_path: Path) -> None:
     baseline = tmp_path / "pytest-outcomes.json"
     baseline.write_text(json.dumps({"outcomes_version": 99, "tests": {}}), encoding="utf-8")
@@ -219,6 +243,46 @@ def test_a_baseline_from_another_version_of_the_tool_is_refused(tmp_path: Path) 
 def test_a_missing_baseline_says_how_to_record_one(tmp_path: Path) -> None:
     with pytest.raises(verify.RunnerError, match="--record"):
         verify.load_record(tmp_path / "nothing.json")
+
+
+def test_a_baseline_from_a_run_that_stopped_short_is_refused(tmp_path: Path) -> None:
+    # The record outlives the tree it was taken from, so the run's own verdict has to be checked
+    # every time it is read, not only when it was written.
+    baseline = tmp_path / "pytest-outcomes.json"
+    baseline.write_text(
+        json.dumps({"outcomes_version": 1, "exit_status": 2, "tests": {"t.py::a": "passed"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(verify.RunnerError, match="stopped before running the whole suite"):
+        verify.load_record(baseline)
+
+
+def test_a_pytest_run_that_stopped_short_records_nothing_to_compare_against(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "suite"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_stops.py").write_text(
+        "def test_one():\n    raise KeyboardInterrupt\n\n\ndef test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "pytest-outcomes.json"
+
+    with pytest.raises(verify.RunnerError, match="never ran the whole suite"):
+        verify.run_pytest(tree, out=baseline, paths=[], extra=[])
+
+    assert not baseline.exists()
+
+
+def test_narrowing_a_run_the_baseline_stands_in_for_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(verify.RunnerError, match="no pytest run to narrow"):
+        verify.run(
+            before_tree=None,
+            after_tree=tmp_path,
+            baseline=tmp_path / "pytest-outcomes.json",
+            paths=["tests/test_one.py"],
+        )
 
 
 def test_the_report_lists_every_divergence_the_terminal_summary_elides() -> None:
