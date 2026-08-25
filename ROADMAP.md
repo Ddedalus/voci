@@ -27,9 +27,10 @@ test earns for returning a value or dropping a coroutine un-awaited · the repor
 **Codegen**: velox-migrate, plans:
 High-level in `plans/migration-tool-plan.md`
 
-Next: smoke-test on real open-source suites:
-1. Marshmallow
-2. httpx2 (successor to https, active development)
+Next: smoke-test on real open-source suites — httpx2 (successor to httpx, active development).
+
+- `convert --write` applies its edits before it prints the plan and diff, so a reader who stops
+  reading part-way through cannot be left holding a tree that is half converted.
 
 ## docs
 High-level plan in `plans/docsite-plan.md`
