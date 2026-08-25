@@ -32,6 +32,7 @@ from velox._report import terminal as _report
 from velox._run import isolated as _isolated
 from velox._run import run as _run
 from velox._run import safety as _safety
+from velox._wallclock import PROCESS_START
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -422,14 +423,14 @@ def _resolve_layered(cli_value, config_value, default=None):
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Started as the first thing main() does, not around run_suite alone: argument
-    # parsing, config resolution, discovery, and collection (importing every test
-    # module) all happen before a single test runs, and a run that spends its time
+    # The process start, not the top of main(): interpreter startup, importing velox,
+    # argument parsing, config resolution, discovery, and collection (importing every
+    # test module) all happen before a single test runs, and a run that spends its time
     # there rather than executing should say so, not report a "wall" time that only
-    # covers the fast part. This is the closest velox's own process can get to what
-    # `time velox` reports -- the remaining gap is interpreter/`uv` startup before
-    # this line ever executes, which no timer inside the process can see.
-    wall_start = time.monotonic()
+    # covers the fast part. What remains between this and `time velox` is the launcher
+    # in front of the interpreter -- `uv run` and the console script -- which no timer
+    # inside the process can see.
+    wall_start = PROCESS_START
 
     parser = build_parser()
     args = parser.parse_args(argv)

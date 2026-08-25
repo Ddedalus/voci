@@ -17,8 +17,7 @@ document extrapolated, which was a count of test *functions* rather than of coll
 holds read-only submodules pinned at a commit. Running the conversion there would dirty the
 submodule for every other purpose it serves.
 
-One environment holds all three: the suite (so its own package imports), pytest (so `extract` can
-collect it and so there is a before to compare against), and velox plus velox-migrate. The suite's
+The suite's
 own `uv run pytest` will not do — that resolves marshmallow's `uv.lock`, which knows nothing about
 velox.
 

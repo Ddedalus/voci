@@ -7,6 +7,10 @@ built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`), and asser
 (`raises`, `approx`).
 """
 
+# First, and before the imports below: on a platform that can't report its own process
+# start time, `PROCESS_START` falls back to the instant this line runs, and the cost of
+# importing the rest of the package should land inside a reported run, not before it.
+from velox import _wallclock as _wallclock
 from velox._assertions.approx import Approx, approx
 from velox._assertions.raises import ExceptionInfo, raises
 from velox._builtins.fixtures import (
