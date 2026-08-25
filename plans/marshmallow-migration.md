@@ -10,14 +10,39 @@ The audit did come back mechanical. The conversion did not.
 
 ## What was run
 
-`oss/marshmallow` at `c7b559a`, copied out of the submodule, `pip install -e .` plus pytest 9.1.1
-in its own environment. Green under pytest at 1188 tests — not the 652 the selection document
-extrapolated, which was a count of test *functions* rather than of collected cases.
+`oss/marshmallow` at `c7b559a`, green under pytest at 1188 tests — not the 652 the selection
+document extrapolated, which was a count of test *functions* rather than of collected cases.
 
-    velox-migrate extract      # 1188 tests, clean
-    velox-migrate audit        # 0 blocked, 0 refused
-    velox-migrate convert --write
-    velox                      # 1183 passed
+**Copy the suite out of `oss/` first.** `convert --write` rewrites the tree in place, and `oss/`
+holds read-only submodules pinned at a commit. Running the conversion there would dirty the
+submodule for every other purpose it serves.
+
+One environment holds all three: the suite (so its own package imports), pytest (so `extract` can
+collect it and so there is a before to compare against), and velox plus velox-migrate. The suite's
+own `uv run pytest` will not do — that resolves marshmallow's `uv.lock`, which knows nothing about
+velox.
+
+```bash
+cp -r oss/marshmallow /tmp/mm && rm -rf /tmp/mm/.git /tmp/mm/.venv
+cd /tmp/mm
+uv venv --python 3.13
+uv pip install -e . -e ~/velox -e ~/velox/velox-migrate pytest simplejson
+
+uv run pytest -q                       # the before: 1188 passed
+uv run velox-migrate extract           # -> .velox-migrate/ground-truth.json
+uv run velox-migrate audit             # -> migration-report.md, findings.json
+uv run velox-migrate convert --write   # rewrites the tree
+uv run velox --serial                  # the after: 1183 passed
+uv run velox                           # same 1183, at concurrency
+```
+
+`~/velox` is wherever this repo is checked out; the two `-e` paths are what make the `velox` and
+`velox-migrate` commands resolve inside that environment.
+
+Do not pipe `convert --write` into `head`. It prints the whole plan and diff before it writes, so
+closing the pipe early kills it partway through and leaves a half-converted tree with a zero exit
+status from the pipeline — the failure looks like hundreds of collection errors rather than like
+an error. Redirect to a file if the diff is too long to read inline.
 
 ## Result
 
