@@ -37,6 +37,8 @@ If **material** uncertainty exists after plan or implementation, explain and onl
 clarified. When asked to implement a roadmap item, delete its entry from ROADMAP.md as part of the
 worktree.
 
+> WARNING: EnterWorktree requires user approval. You must call this ASAP in the session, before user goes away. Do this before planning and code exploration.
+ 
 ## Branch workflow
 
 Only branch in the current worktree if explicitly asked. Do not merge until instructed.
