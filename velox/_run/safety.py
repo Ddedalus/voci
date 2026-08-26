@@ -27,7 +27,6 @@ import sys
 import threading
 import time
 import traceback
-import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -36,6 +35,7 @@ from pathlib import Path
 from types import CodeType
 from typing import Any, final
 
+from velox import _warnings
 from velox._assertions._vendor.saferepr import saferepr
 
 __all__ = [
@@ -324,11 +324,9 @@ _unawaited: ContextVar[list[Unawaited] | None] = ContextVar(
     "velox_unawaited_coroutines", default=None
 )
 
-#: `warnings.catch_warnings()` entered by `install` and exited by `uninstall`: it saves and
-#: restores `warnings.filters` and `warnings.showwarning` together, invalidating the per-module
-#: warning registries on both ends the way hand-restoring the two lists would not.
-_warnings_scope: warnings.catch_warnings | None = None
-_previous_showwarning: Any = None
+#: Whether this module's hook is currently registered with `_warnings`, so a nested run's
+#: `install` reports that the outer one already did it.
+_hook_registered = False
 
 
 def install() -> bool:
@@ -337,56 +335,41 @@ def install() -> bool:
     it -- `False` if an enclosing run already did, whose `uninstall` is then not this caller's
     to do.
 
-    The warning is filtered to `always` rather than left at Python's default of once per source
-    location: a parametrized test that forgets an `await` forgets it at the same line in every
-    case, and only the first would otherwise be reported.
+    Needs `_warnings.install` to have put the shim in place, which is what this hook is
+    consulted by.
     """
-    global _warnings_scope, _previous_showwarning
-    if _warnings_scope is not None:
+    global _hook_registered
+    if _hook_registered:
         return False
-    scope = warnings.catch_warnings()
-    scope.__enter__()
-    _previous_showwarning = warnings.showwarning
-    warnings.filterwarnings(
-        "always", category=RuntimeWarning, message="coroutine .* was never awaited"
-    )
-    warnings.showwarning = _showwarning
-    _warnings_scope = scope
+    _warnings.register_swallow(_swallow_unawaited)
+    _hook_registered = True
     return True
 
 
 def uninstall() -> None:
     """Restore what `install` replaced. Idempotent, and safe from a `finally`."""
-    global _warnings_scope, _previous_showwarning
-    scope, _warnings_scope = _warnings_scope, None
-    _previous_showwarning = None
-    if scope is not None:
-        scope.__exit__(None, None, None)
+    global _hook_registered
+    if _hook_registered:
+        _warnings.unregister_swallow(_swallow_unawaited)
+        _hook_registered = False
 
 
-def _showwarning(
-    message: Warning | str,
-    category: type[Warning],
-    filename: str,
-    lineno: int,
-    file: Any = None,
-    line: str | None = None,
-) -> None:
-    """`warnings.showwarning`'s replacement for the run. Files an un-awaited coroutine against
-    the running test and swallows it -- the test's own failure says it better than a warning
-    printed into whatever output the test was producing at the time. Everything else, including
-    an un-awaited coroutine with no test to attribute it to, goes where it was already going.
-    """
+def _swallow_unawaited(
+    message: Warning | str, category: type[Warning], filename: str, lineno: int
+) -> bool:
+    """Claim an un-awaited coroutine for the running test's call phase, so the test's own
+    failure reports it instead of a warning printed into whatever output that test was
+    producing at the time. One raised with no test to attribute it to is left alone."""
     collected = _unawaited.get()
-    if collected is not None and _is_never_awaited(message, category):
-        collected.append(
-            Unawaited(
-                what=str(message).removesuffix(_NEVER_AWAITED),
-                where=f"{_short_path(filename)}:{lineno}",
-            )
+    if collected is None or not _is_never_awaited(message, category):
+        return False
+    collected.append(
+        Unawaited(
+            what=str(message).removesuffix(_NEVER_AWAITED),
+            where=f"{_short_path(filename)}:{lineno}",
         )
-        return
-    _previous_showwarning(message, category, filename, lineno, file, line)
+    )
+    return True
 
 
 def _is_never_awaited(message: Warning | str, category: type[Warning]) -> bool:

@@ -87,7 +87,9 @@ These are behavior changes migration cannot fix silently, and each gets an expli
 - **Session/module fixture teardown timing** ([04](04-dependency-injection.md) §3).
 - **Blocking calls** — flag imports of known-sync libraries in test paths and point at
   `velox doctor` ([11](11-runtime-safety.md)).
-- **Per-test warning filters**, which become no-ops in concurrent mode ([11](11-runtime-safety.md) §3).
+- **`warnings.catch_warnings()` in a test body**, which re-points process-global state every
+  concurrent sibling is reading ([11](11-runtime-safety.md) §3). Per-test `filterwarnings` marks
+  carry over unchanged.
 
 ## 6. MVP (of the tool, in M3)
 

@@ -15,17 +15,21 @@ import pytest
 from _support import make_record as _record
 from _support import run_async
 
+from velox import _warnings
 from velox._run import safety
 
 
 @pytest.fixture
 def installed_hook() -> Iterator[None]:
-    """`safety.install()` for one test, undone whatever the test does."""
+    """`safety.install()` for one test, undone whatever the test does. The shim it registers
+    its hook with is `_warnings.install`'s, so that goes up first and comes down last."""
+    _warnings.install()
     safety.install()
     try:
         yield
     finally:
         safety.uninstall()
+        _warnings.uninstall()
 
 
 async def _helper() -> int:
@@ -99,7 +103,8 @@ def test_a_coroutine_dropped_inside_the_window_is_collected(installed_hook: None
 
 def test_the_same_line_is_collected_every_time_it_runs(installed_hook: None) -> None:
     """Python's default filter shows one warning per source location; a parametrized test
-    forgets its `await` at the same line in every case, so the filter is set to `always`."""
+    forgets its `await` at the same line in every case, and the run-wide `always` filter is what
+    keeps the second and third from being dropped."""
     for _ in range(3):
         with safety.watch_unawaited() as collected:
             _helper()  # pyrefly: ignore[unused-coroutine]  -- the whole point of these tests
@@ -126,12 +131,13 @@ def test_install_reports_whether_it_was_the_one_that_installed() -> None:
         safety.uninstall()
 
 
-def test_uninstall_restores_the_previous_showwarning() -> None:
-    before = warnings.showwarning
-    safety.install()
-    assert warnings.showwarning is not before
+def test_uninstall_unregisters_the_hook(installed_hook: None) -> None:
     safety.uninstall()
-    assert warnings.showwarning is before
+    with safety.watch_unawaited() as collected:
+        _helper()  # pyrefly: ignore[unused-coroutine]  -- the whole point of these tests
+
+    assert collected == []
+    safety.install()  # Restored for `installed_hook`'s own teardown.
 
 
 # `code_index`: which test a blocked frame belongs to.

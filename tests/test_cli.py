@@ -1615,3 +1615,153 @@ def test_a_ctrl_c_exits_two_and_still_prints_the_report(
     assert status == 2
     assert "INTERRUPTED (Ctrl-C)" in out
     assert "2 cancelled" in out
+
+
+# ------------------------------------------------------------------------------------------
+# Warning filters
+# ------------------------------------------------------------------------------------------
+
+_WARNING_SUITE = (
+    "import warnings\n\n"
+    "async def test_warns():\n"
+    "    warnings.warn('legacy call', DeprecationWarning, stacklevel=1)\n"
+)
+
+
+def test_a_warning_is_reported_without_failing_the_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write("test_sample.py", _WARNING_SUITE)
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "--- warnings summary (1) ---" in out
+    assert "DeprecationWarning: legacy call" in out
+    assert "1 warning" in out
+
+
+def test_dash_w_ignore_silences_a_warning(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write("test_sample.py", _WARNING_SUITE)
+
+    status = main([str(project.root), "-W", "ignore::DeprecationWarning"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "warnings summary" not in out
+
+
+def test_dash_w_error_fails_the_test_that_raised_the_warning(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write("test_sample.py", _WARNING_SUITE)
+
+    status = main([str(project.root), "-W", "error::DeprecationWarning"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "DeprecationWarning: legacy call" in out
+
+
+def test_dash_w_outranks_configured_filterwarnings(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['ignore::DeprecationWarning']\n")
+    chdir_project.write("test_sample.py", _WARNING_SUITE)
+
+    status = main(["-W", "error::DeprecationWarning"])
+
+    assert status == 1
+    assert "DeprecationWarning: legacy call" in capsys.readouterr().out
+
+
+def test_a_filterwarnings_mark_outranks_both(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['error::DeprecationWarning']\n")
+    chdir_project.write(
+        "test_sample.py",
+        "import warnings\n\nimport velox\n\n"
+        "@velox.filterwarnings('ignore::DeprecationWarning')\n"
+        "async def test_warns():\n"
+        "    warnings.warn('legacy call', DeprecationWarning, stacklevel=1)\n",
+    )
+
+    status = main(["-W", "error::DeprecationWarning"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "warnings summary" not in out
+
+
+def test_a_mark_filter_does_not_reach_a_concurrently_running_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point of filtering per test rather than through `warnings.filters`: one
+    test's `ignore` must not silence a sibling dispatched alongside it."""
+    project.write(
+        "test_sample.py",
+        "import asyncio\nimport warnings\n\nimport velox\n\n"
+        "@velox.filterwarnings('ignore::DeprecationWarning')\n"
+        "async def test_silenced():\n"
+        "    for _ in range(50):\n"
+        "        warnings.warn('quiet', DeprecationWarning, stacklevel=1)\n"
+        "        await asyncio.sleep(0)\n\n"
+        "async def test_loud():\n"
+        "    for _ in range(50):\n"
+        "        warnings.warn('heard', DeprecationWarning, stacklevel=1)\n"
+        "        await asyncio.sleep(0)\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "DeprecationWarning: heard" in out
+    assert "quiet" not in out
+
+
+def test_a_warning_raised_at_import_is_attributed_to_no_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import warnings\n\n"
+        "warnings.warn('at import', UserWarning, stacklevel=1)\n\n"
+        "async def test_ok():\n    pass\n",
+    )
+
+    status = main([str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "UserWarning: at import" in out
+    assert "(no test running)" in out
+
+
+def test_a_malformed_dash_w_is_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_passing_test()
+
+    status = main([str(project.root), "-W", "shout::UserWarning"])
+
+    assert status == 4
+    assert "unknown action" in capsys.readouterr().err
+
+
+def test_the_json_report_carries_the_warnings_a_test_raised(project: Project) -> None:
+    project.write("test_sample.py", _WARNING_SUITE)
+    report = project.root / "report.json"
+
+    main([str(project.root), "--report-json", str(report)])
+
+    data = json.loads(report.read_text())
+    (entry,) = data["tests"]
+    (warning,) = entry["warnings"]
+    assert warning["category"] == "DeprecationWarning"
+    assert warning["message"] == "legacy call"
+    assert warning["count"] == 1

@@ -11,18 +11,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from velox import __version__
 from velox._collection.collect import CollectionError, Skipped, TestRecord
 from velox._run.run import TestResult
+from velox._warnings import RecordedWarning
 
 __all__ = ["REPORT_VERSION", "write_report"]
 
 #: Bumped whenever the record's shape changes below.
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class _TestReportEntry:
     outcome: str
     duration: float
     failure_reason: str | None
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 def write_report(
@@ -45,6 +47,7 @@ def write_report(
     rootdir: Path,
     exit_status: int,
     wall_clock: float,
+    session_warnings: Sequence[RecordedWarning] = (),
 ) -> None:
     """Write `path` the record of this run: one entry per test that ran plus one per test a skip
     mark kept out of the run entirely, ordered the way `records`/`skipped` collected them, so a
@@ -52,6 +55,10 @@ def write_report(
 
     `failure_reason` is `failure_summary` -- the short one-line "ExceptionType: message" already
     read straight off the exception, not the full traceback `-v` never printed either.
+
+    Each entry carries the warnings that test raised, aggregated by warning and location the
+    way the terminal summary groups them; `session_warnings` -- the ones raised with no test
+    running -- are the report's own top-level `warnings`.
 
     `records` seeds nothing about which tests ran (`results` is already the run's own authoritative
     list -- same reasoning as `Reporter.finish`), but does give collection order to sort by: `id`
@@ -64,6 +71,7 @@ def write_report(
             outcome=result.outcome.value,
             duration=result.duration,
             failure_reason=result.failure_summary,
+            warnings=[asdict(warning) for warning in result.warnings],
         )
         for result in results
     ] + [
@@ -80,6 +88,7 @@ def write_report(
         "exit_status": exit_status,
         "wall_clock": wall_clock,
         "collection_errors": [str(error.path) for error in collection_errors],
+        "warnings": [asdict(warning) for warning in session_warnings],
         "tests": [asdict(entry) for entry in entries],
     }
 

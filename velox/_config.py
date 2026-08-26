@@ -5,10 +5,10 @@ stopping at the git root, and turns that table into a validated `Config`. The di
 becomes the run's rootdir. One file, one table — there is no inheritance and no per-directory
 config.
 
-Seven keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
-`test_file_patterns`, `ignore` and `env`. Anything else is an error, as is a value of the wrong
-type or shape. `cli.py` merges the resulting `Config` against the command line and the built-in
-defaults.
+Eight keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
+`test_file_patterns`, `ignore`, `env` and `filterwarnings`. Anything else is an error, as is a
+value of the wrong type or shape. `cli.py` merges the resulting `Config` against the command line
+and the built-in defaults.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+
+from velox import _warnings
 
 __all__ = ["Config", "ConfigError", "resolve"]
 
@@ -31,6 +33,7 @@ _KNOWN_KEYS = frozenset(
         "test_file_patterns",
         "ignore",
         "env",
+        "filterwarnings",
     }
 )
 
@@ -71,6 +74,10 @@ class Config:
     #: shared `dict` in place out from under whoever else holds this `Config`. `MappingProxyType`
     #: closes that gap the same way a `tuple` does for `testpaths`/`ignore`/`test_file_patterns`.
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    #: Warning filter specs, lowest precedence first, in `-W`'s own
+    #: `action:message:category:module:lineno` form. `None` when the key wasn't set, which is
+    #: how `cli.py` tells "no filters configured" from a deliberately empty list.
+    filterwarnings: tuple[str, ...] | None = None
 
 
 def resolve(explicit_paths: Sequence[Path]) -> Config:
@@ -179,7 +186,22 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
         ),
         ignore=_str_list(table.get("ignore"), key="ignore", source=source),
         env=_str_dict(table.get("env"), key="env", source=source),
+        filterwarnings=_filterwarnings(table.get("filterwarnings"), source=source),
     )
+
+
+def _filterwarnings(value: object, *, source: Path) -> tuple[str, ...] | None:
+    """`[tool.velox] filterwarnings` must be a list of filter specs, each parseable -- a typo in
+    a category name is an error here rather than a filter that silently never matches."""
+    specs = _str_list(value, key="filterwarnings", source=source)
+    if specs is None:
+        return None
+    for spec in specs:
+        try:
+            _warnings.parse_filter(spec)
+        except _warnings.FilterError as exc:
+            raise ConfigError(f"{source}: 'filterwarnings': {exc}") from exc
+    return specs
 
 
 def _concurrency(value: object, *, source: Path) -> int | None:

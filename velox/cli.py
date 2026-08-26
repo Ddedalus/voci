@@ -20,7 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _config
+from velox import __version__, _config, _warnings
 from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
@@ -207,6 +207,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="List the N slowest tests at the end of the run. Under concurrency the slowest "
         "test is what the wall clock can't drop below, so this is the list to read before "
         "tuning --concurrency. Default: 0, no such list.",
+    )
+    parser.add_argument(
+        "-W",
+        dest="filterwarnings",
+        action="append",
+        default=[],
+        metavar="SPEC",
+        help="Add a warning filter, as action:message:category:module:lineno -- "
+        "'error', 'ignore::DeprecationWarning', 'error:.*legacy:UserWarning'. Repeatable; a "
+        "later filter outranks an earlier one, and all of them outrank [tool.velox] "
+        "filterwarnings. Every warning a run raises is reported either way; a filter decides "
+        "which are silenced and which fail the test that raised them.",
     )
     parser.add_argument(
         "--collect-only",
@@ -590,6 +602,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    # Both tiers, in precedence order rather than layered like the scalars above: warning
+    # filters accumulate, and the last one to match a warning is the one that decides it,
+    # so a `-W` on the command line simply follows what [tool.velox] already said.
+    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
+    try:
+        # Parsed here only to reject a bad spec as the usage error it is -- run_suite parses
+        # the same strings again for itself, since a spec also has to survive the trip to an
+        # @velox.isolated test's subprocess.
+        _warnings.parse_filters(args.filterwarnings)
+    except _warnings.FilterError as exc:
+        print(f"velox: -W {exc}", file=sys.stderr)
+        return 4
+
     # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
     # relative to wherever [tool.velox] was declared, so they're resolved against
     # config.rootdir here, not cwd().
@@ -671,7 +696,11 @@ def main(argv: list[str] | None = None) -> int:
     # unbound name. False is also the safer fallback value -- it makes finally attempt
     # an uninstall(), not skip one.
     hook_already_installed = False
+    warnings_installed = False
     try:
+        # Ahead of _rewrite.install and of the first test-module import below: a module that
+        # warns at import time warns during collection, and this is what records it.
+        warnings_installed = _warnings.install(_warnings.parse_filters(effective_filterwarnings))
         # Must be installed before any test module is imported below -- a module
         # already in sys.modules can't retroactively be rewritten. warn already
         # happened inside plan above, so this call is handed the decision it made
@@ -788,6 +817,7 @@ def main(argv: list[str] | None = None) -> int:
             # 0 means "off" at the CLI; run_suite spells that None, and treats a
             # non-positive number the same way regardless.
             loop_watchdog=effective_watchdog or None,
+            filterwarnings=effective_filterwarnings,
             # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
             # isolated test's subprocess must reproduce what this run actually decided
             # (a --assert=rewrite request can still fall back to plain), not re-derive
@@ -833,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
             results,
             wall_clock=wall_clock,
             unattributed_output=unattributed,
+            session_warnings=_warnings.session_warnings(),
             not_run=not_run,
             not_run_label=stopped_by,
             deselected=len(collected.deselected),
@@ -857,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
                 rootdir=rootdir,
                 exit_status=exit_status,
                 wall_clock=wall_clock,
+                session_warnings=_warnings.session_warnings(),
             )
         return exit_status
     except KeyboardInterrupt:
@@ -879,6 +911,10 @@ def main(argv: list[str] | None = None) -> int:
         # a nested main()) that installed its own hook first must keep it.
         if not hook_already_installed:
             _rewrite.uninstall()
+        # Same rule, and the same reason: `warnings.showwarning` is process-global, so a
+        # nested main() leaves the outer call's shim in place for the outer call to remove.
+        if warnings_installed:
+            _warnings.uninstall()
         # Symmetric with hook_already_installed above: only remove what this call put
         # on sys.path, and only if it's still there.
         if sys_path_inserted:

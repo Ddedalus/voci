@@ -79,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                 # default", which is what an older parent's config file leaves behind.
                 loop_watchdog=config.get("loop_watchdog"),
                 teardown_grace=config.get("teardown_grace") or _run.DEFAULT_TEARDOWN_GRACE,
+                filterwarnings=config.get("filterwarnings") or (),
                 already_isolated=True,
             )
             data = result_to_json(results[0])

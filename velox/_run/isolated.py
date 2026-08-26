@@ -20,7 +20,8 @@ import contextlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +69,7 @@ def result_to_json(result: Any) -> dict[str, Any]:
             {"name": r.name, "levelname": r.levelname, "message": r.getMessage()}
             for r in result.log_records
         ],
+        "warnings": [asdict(w) for w in result.warnings],
     }
 
 
@@ -96,6 +98,7 @@ async def run_isolated(
     scratch_dir: Path,
     loop_watchdog: float | None = None,
     teardown_grace: float | None = None,
+    filterwarnings: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Run `record` alone in a fresh subprocess and return its result as a JSON-shaped dict
     (`result_to_json`'s own shape). Always returns -- never raises `asyncio.CancelledError` --
@@ -108,8 +111,9 @@ async def run_isolated(
     `timeout` is this test's own effective budget (suite-wide, or its `@velox.timeout(...)`
     override) -- handed to the subprocess's own `run_suite` call, which enforces it exactly the
     way it would for an in-process test. Nothing here imposes a second, redundant timeout.
-    `loop_watchdog` and `teardown_grace` travel the same way, so the subprocess runs its one
-    test under the settings the parent run was given rather than the built-in defaults.
+    `loop_watchdog`, `teardown_grace` and `filterwarnings` travel the same way, so the subprocess
+    runs its one test under the settings the parent run was given rather than the built-in
+    defaults.
     """
     start = time.monotonic()
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +134,7 @@ async def run_isolated(
                 "timeout": timeout,
                 "loop_watchdog": loop_watchdog,
                 "teardown_grace": teardown_grace,
+                "filterwarnings": list(filterwarnings),
                 "basetemp": str(child_basetemp),
                 "assert_mode": config.assert_mode,
                 "assert_cache_dir": (

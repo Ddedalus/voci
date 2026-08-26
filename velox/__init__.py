@@ -2,9 +2,9 @@
 
 This is the whole public surface — everything else is private and may move. It exports
 dependency injection (`fixture`, `Depends`, `Scope`, `use`), marks for selecting and shaping tests
-(`skip`, `xfail`, `parametrize`, `tag`, ...), runtime skip/fail signals (`Skipped`, `Failed`),
-built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`), and assertion helpers
-(`raises`, `approx`).
+(`skip`, `xfail`, `parametrize`, `tag`, `filterwarnings`, ...), runtime skip/fail signals
+(`Skipped`, `Failed`), built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`),
+and assertion helpers (`raises`, `approx`).
 """
 
 # First, and before the imports below: on a platform that can't report its own process
@@ -34,6 +34,7 @@ from velox._marks import (
     MarkDecorator,
     ParamCase,
     case,
+    filterwarnings,
     isolated,
     parametrize,
     skip,
@@ -68,6 +69,7 @@ __all__ = [
     "approx",
     "capture",
     "case",
+    "filterwarnings",
     "fixture",
     "isolated",
     "log_records",

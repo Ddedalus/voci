@@ -5,9 +5,9 @@ short test summary.
 prints the moment every one of its tests has finished, in real completion order, so
 output starts appearing before the whole suite is done. `Reporter.finish` runs once,
 after `run_suite` returns, and prints everything that belongs in logical (collection)
-order instead: failure details, the short summary, unattributed output, the slowest
-tests (`--durations`), the `unittest.mock` solo-scheduling cost, and the counts the run
-ends on.
+order instead: failure details, the short summary, unattributed output, the warnings the
+run raised, the slowest tests (`--durations`), the `unittest.mock` solo-scheduling cost,
+and the counts the run ends on.
 
 `verbosity` scales what the streaming half prints, and nothing else: `-v` adds a line
 per test as it finishes plus the reason behind every skip, `-q` reduces each file to one
@@ -17,6 +17,7 @@ what a run found is never what gets quieter.
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from typing import TextIO
 from velox._collection.collect import Skipped, TestRecord
 from velox._report import color as _color
 from velox._run.run import FAILING_OUTCOMES, Outcome, TestResult, solo_for_patching
+from velox._warnings import RecordedWarning
 
 __all__ = ["Reporter"]
 
@@ -41,6 +43,18 @@ _PATH_COLUMN_MAX_WIDTH = 72
 #: longer id simply pushes its own duration right rather than being elided: unlike a file
 #: block's path column, an id is what the reader copies back into the next `velox` invocation.
 _ID_COLUMN_WIDTH = 56
+
+#: How many test ids the warnings summary names under one warning before it counts the rest.
+#: A deprecation the whole suite trips over is one line of news, not one line per test.
+_WARNING_SOURCES_LISTED = 3
+
+#: Where the warnings summary files a warning raised with no test running: during collection,
+#: or in a session fixture's teardown after the last test finished.
+_NO_TEST_RUNNING = "(no test running)"
+
+#: Past this, a warning's own text is elided in the middle for the summary. Long enough for a
+#: real deprecation message, short enough that one warning stays one line on a normal terminal.
+_WARNING_MESSAGE_WIDTH = 120
 
 
 @dataclass
@@ -272,6 +286,7 @@ class Reporter:
         *,
         wall_clock: float,
         unattributed_output: list[str] | None = None,
+        session_warnings: Sequence[RecordedWarning] = (),
         not_run: int = 0,
         not_run_label: str = "--maxfail",
         deselected: int = 0,
@@ -282,8 +297,10 @@ class Reporter:
         `on_result` buffered internally. Prints, in order: failure details (one block
         per `FAILING_OUTCOMES` result, traceback plus captured sections), the short
         test summary (one line per `FAILING_OUTCOMES` result), unattributed output if
-        any, the reasons behind the run's skips under `-v`, what `unittest.mock` patching
-        cost in drained wall clock, and the counts the run ends on.
+        any, every warning the run raised, the reasons behind the run's skips under `-v`,
+        what `unittest.mock` patching cost in drained wall clock, and the counts the run
+        ends on. `session_warnings` are the ones no test was running to be attributed --
+        `_warnings.session_warnings()`; a test's own ride on its `TestResult`.
         `captured_stdout`/`captured_stderr` are shown only when `capture_passthrough` is
         off, since passthrough already echoed them live; `log_records` are always shown,
         since they're never echoed live. `not_run` (tests a stopped run never started),
@@ -337,6 +354,7 @@ class Reporter:
             for section in unattributed_output:
                 print(section, file=self.stream)
 
+        warned = self._print_warnings(results, session_warnings)
         self._print_skip_reasons(results)
         self._print_durations(results)
         self._print_patching_cost(results, wall_clock=wall_clock)
@@ -348,6 +366,7 @@ class Reporter:
             not_run_label=not_run_label,
             deselected=deselected,
             collection_errors=collection_errors,
+            warnings=warned,
         )
         self.stream.flush()
 
@@ -360,6 +379,7 @@ class Reporter:
         not_run_label: str,
         deselected: int,
         collection_errors: int,
+        warnings: int = 0,
     ) -> None:
         """The counts a run ends on: everything that went wrong on its own line, then one
         line of totals.
@@ -420,6 +440,10 @@ class Reporter:
                 # color however many tests it took out.
                 (deselected, "deselected", _color.GRAY),
                 (not_run, f"not run ({not_run_label})", _color.YELLOW),
+                # Not an outcome and not counted into `total`: a warning is something the
+                # run found on top of what every test reported, and one test can raise
+                # several.
+                (warnings, _plural(warnings, "warning"), _color.YELLOW),
             ),
             _color.paint(
                 f"{wall_clock:.2f}s wall ({_concurrency(results, wall_clock)})",
@@ -432,6 +456,45 @@ class Reporter:
     def _counts(self, *fields: tuple[int, str, str]) -> str:
         """`color.counts` against this reporter's own color setting."""
         return _color.counts(*fields, enabled=self._color_enabled)
+
+    def _print_warnings(
+        self, results: list[TestResult], session_warnings: Sequence[RecordedWarning]
+    ) -> int:
+        """Every warning the run raised, grouped by what was warned about and where, and
+        returning how many there were in total:
+
+            --- warnings summary (4) ---
+            src/legacy.py:12 DeprecationWarning: old_api() is deprecated, use new_api()
+              tests/test_api.py::test_list, tests/test_api.py::test_create (x2)
+
+        Grouped rather than listed per test: one deprecated call reached from a hundred tests
+        is one thing to fix, and the location is what says which. A test that raised the same
+        warning more than once carries the count.
+        """
+        sources: dict[tuple[str, str, str], list[str]] = {}
+        total = 0
+        attributed = [(result.id, result.warnings) for result in results]
+        for source, warnings in [*attributed, (_NO_TEST_RUNNING, tuple(session_warnings))]:
+            for warning in warnings:
+                total += warning.count
+                key = (_short_location(warning), warning.category, warning.message)
+                label = source if warning.count == 1 else f"{source} (x{warning.count})"
+                sources.setdefault(key, []).append(label)
+        if not sources:
+            return 0
+
+        print(file=self.stream)
+        print(f"--- warnings summary ({total}) ---", file=self.stream)
+        for (location, category, message), raised_by in sources.items():
+            where = _color.paint(location, _color.GRAY, enabled=self._color_enabled)
+            name = _color.paint(category, _color.YELLOW, enabled=self._color_enabled)
+            print(f"{where} {name}: {_warning_text(message)}", file=self.stream)
+            listed = raised_by[:_WARNING_SOURCES_LISTED]
+            rest = len(raised_by) - len(listed)
+            line = ", ".join(listed) + (f", +{rest} more" if rest else "")
+            painted = _color.paint(line, _color.GRAY, enabled=self._color_enabled)
+            print(f"  {painted}", file=self.stream)
+        return total
 
     def _print_skip_reasons(self, results: list[TestResult]) -> None:
         """`-v`'s section for every skipped test, each with its reason -- a `skip` mark's
@@ -531,6 +594,24 @@ def _elide_middle(text: str, width: int) -> str:
     head = keep // 2
     tail = keep - head
     return f"{text[:head]}...{text[len(text) - tail :]}" if tail else text[:width]
+
+
+def _short_location(warning: RecordedWarning) -> str:
+    """Where a warning was raised, with the current directory stripped off a path under it --
+    the same "nearby paths read as nearby" treatment every id in this report already gets. A
+    path outside it (a warning from an installed dependency) is left absolute."""
+    try:
+        relative = os.path.relpath(warning.filename, Path.cwd())
+    except ValueError:
+        return warning.location
+    return warning.location if relative.startswith("..") else f"{relative}:{warning.lineno}"
+
+
+def _warning_text(message: str) -> str:
+    """A warning's own text as one summary line: its first line, elided in the middle past
+    `_WARNING_MESSAGE_WIDTH`."""
+    first_line = message.splitlines()[0] if message else ""
+    return _elide_middle(first_line, _WARNING_MESSAGE_WIDTH)
 
 
 def _failure_reason(result: TestResult) -> str:

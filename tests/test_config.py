@@ -218,6 +218,30 @@ def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> Non
     assert config.test_file_patterns == ("check_*.py",)
 
 
+def test_filterwarnings_round_trips_in_the_order_it_was_written(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject(
+        "[tool.velox]\nfilterwarnings = ['error', 'ignore::DeprecationWarning']\n",
+    )
+
+    config = resolve([tmp_path])
+
+    assert config.filterwarnings == ("error", "ignore::DeprecationWarning")
+
+
+def test_filterwarnings_must_be_a_list_of_strings(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.velox]\nfilterwarnings = 'error'\n")
+
+    with pytest.raises(ConfigError, match="filterwarnings"):
+        resolve([tmp_path])
+
+
+def test_an_unparseable_filter_spec_is_a_config_error(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.velox]\nfilterwarnings = ['ignore::NotAWarning']\n")
+
+    with pytest.raises(ConfigError, match="NotAWarning"):
+        resolve([tmp_path])
+
+
 def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:
     """`watchdog_threshold` is not a recognized key -- an unknown key is a `ConfigError`."""
     Project(tmp_path).write_pyproject("[tool.velox]\nwatchdog_threshold = 1.0\n")
