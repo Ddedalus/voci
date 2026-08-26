@@ -27,7 +27,7 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 | `caplog.text`, `.record_tuples`, `.clear()`, `.handler` | VX206 | unsupported | API mismatch |
 | `tmpdir`, `tmpdir_factory` | VX208 | unsupported | `tmp_path` is the only builtin |
 | `pytest.warns`, `recwarn`, `deprecated_call` | VX216 | unsupported, serializing | warns requires solo execution |
-| `@pytest.mark.filterwarnings` | VX108 | unsupported, serializing | incompatible with velox's per-test patching |
+| `@pytest.mark.filterwarnings` | VX108 | mechanical | `@velox.filterwarnings(...)`, same specs |
 | conftest hooks (`pytest_configure`, `pytest_collection_modifyitems`, …) | VX022 | unsupported | cannot hook into velox collection |
 | monkeypatch | VX401 | hazard, serializing | process-global state mutates under concurrency |
 | `os.environ` writes | VX402 | hazard, serializing | idem |
@@ -122,13 +122,12 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 | Test count | 691 (32 parametrized, 45 classes) |
 | Fixture graph | 21 fixtures / 1 conftest |
 | Plugin dependencies | pytest-timeout, trio |
-| Estimated refusals | VX307 (filterwarnings=error) blocks conversion, VX014 ×1 |
+| Estimated refusals | VX014 ×1 |
 | Monkeypatch uses | 6 |
 | Async story | parametrized fixture returning asyncio.run or trio.run |
 
 **Audit findings:**
 - Fixture chain exercises params= rewrite path: one fixture returns `request.param` over parametrized `_asyncio_run` and `trio.run` (Phase 3 indirect handling).
-- `filterwarnings = ["error"]` in pytest.ini (VX307, unsupported) — warnings cannot be treated as failures under velox's per-test isolation.
 - One `request.addfinalizer` (VX014) in a test that cannot convert; refusal is honest and pointed.
 - Trio dependency; the async story is present but not the core migration path.
 
@@ -159,10 +158,8 @@ almost four times.
   than a codemod.
 - `clean_environ`, autouse in the root conftest, is the whole 88% — flask's arc on four times the
   suite.
-- `filterwarnings = ["error"]` suite-wide (VX307) has no velox spelling, so warnings stop failing
-  after conversion. No stage of the pipeline catches what that hides.
-- Small honest drops: 34 codspeed benchmarks, 6 httpbin, 7 `@pytest.mark.trio`, 12 `pytest.warns`,
-  9 `filterwarnings` tests.
+- Small honest drops: 34 codspeed benchmarks, 6 httpbin, 7 `@pytest.mark.trio`, 12 `pytest.warns`
+  tests.
 
 **Role:** the Phase 4 exit suite. Four times flask's size, the same concurrency arc, a real
 plugin-wired async story, and no override chains — which is also its one weakness as a corpus:
@@ -182,7 +179,7 @@ like marshmallow, it never fires the specialization machinery.
 **Blockers:** Hypothesis plugin (VX030/VX323, unsupported); `pytest_configure` hook (VX022, unsupported). Both require special handling beyond the core codegen.
 
 ### click
-**Blockers:** 40 `capfd` uses (VX203, unsupported); `filterwarnings = "error"` (VX307, unsupported); pytest-randomly. Prefactor would need to rewrite to capsys, which is non-trivial. Similar issue to starlette.
+**Blockers:** 40 `capfd` uses (VX203, unsupported); pytest-randomly. Prefactor would need to rewrite to capsys, which is non-trivial. Similar issue to starlette.
 
 ### uvicorn
 **Blockers:** pytest-mock (VX219, serializing); 12 `pytest.param(marks=)` sites (VX102); tests that bind real network ports (VX413, hazard). The network binding is the killer — under concurrent execution the tests interfere with each other, making any run result unreliable.
@@ -206,7 +203,7 @@ like marshmallow, it never fires the specialization machinery.
    - Prefactor (pin `anyio_backend` to asyncio), convert, verify, concurrency triage.
    - Document the arc: naive conversion = 88% serialized on one autouse `clean_environ` →
      unwinding it recovers concurrency.
-   - Write up what stays under pytest and why, and the VX307 divergence nothing catches.
+   - Write up what stays under pytest and why.
    - Measure throughput before/after; report in the write-up.
 
 3. **flask or rich (optional secondary)**

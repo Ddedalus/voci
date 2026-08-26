@@ -29,7 +29,7 @@ Too much fuss for rare syntax:
 ## Why these were left off the candidate list
 
 - **VX006, VX012, VX027, VX028, VX029, VX030** — These involve dynamic or computed fixture lookup and fixture-override specialization. The fixes would require more implicit dependency-injection machinery. [[feedback-minimize-implicit-di]] already flags this territory as deferred, pending a deliberate architectural call.
-- **VX016, VX020, VX021, VX022, VX023, VX203, VX216, VX307, VX308** — These need new subsystems (plugin CLI surface, unittest lifecycle, doctest collection, hook protocol, file-descriptor capture, process-global warning filters under concurrency). Not "simple" feature additions.
+- **VX016, VX020, VX021, VX022, VX023, VX203, VX216, VX308** — These need new subsystems (plugin CLI surface, unittest lifecycle, doctest collection, hook protocol, file-descriptor capture, recorded-warning assertions). Not "simple" feature additions.
 - **VX113** — Double marks (e.g., two `@velox.skip` on one test) are deliberate validation errors, not gaps.
 - **VX019, VX215** — The matrix's own `action` text describes a tool rewrite the migration tool could perform today, not a velox gap.
 - **Hazard block (VX401–VX416)** — These exist because velox runs tests concurrently. "Fixing" them would mean abandoning concurrency.

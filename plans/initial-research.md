@@ -345,9 +345,10 @@ Two regions on a tty:
    (the concurrent replacement for `PYTEST_CURRENT_TEST`).
 2. **Warnings filters are process-global.** `catch_warnings` save/restores a global list;
    concurrent restore clobbers. (3.14's context-aware warnings fixes this properly; can't
-   rely on it for 3.11–3.13.) Collect globally with a `showwarning` shim attributing via the
-   capture ContextVar; per-test `filterwarnings` marks honored only in serial/isolated mode —
-   warn loudly, don't silently pretend.
+   rely on it for 3.11–3.13.) The way out is to stop asking CPython to decide: pin the global
+   filter to `always` so nothing is dropped before a `showwarning` shim sees it, attribute via
+   the capture ContextVar, and evaluate the filter stack in the shim against the raising
+   test's own marks — correct at any concurrency, on any version.
 3. **Ctrl-C choreography.** `loop.add_signal_handler(SIGINT)` → cancel the top TaskGroup →
    in-flight tests report `interrupted` → teardowns run under `asyncio.shield` with a hard
    timeout (leaked containers/schemas after Ctrl-C are a terrible first impression) →

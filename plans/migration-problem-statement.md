@@ -245,8 +245,6 @@ count and file/line list, because each is a reason a migrated suite goes red at
   between them per site is a judgement call the report should surface with enough context that a
   human makes it quickly — including *how much of the suite* ends up serialized, since that number
   is what makes adoption rational or not.
-- **Per-test warning filters** — `@pytest.mark.filterwarnings` and `filterwarnings` in ini. The
-  warnings module is process-global; per-test filters cannot be honored while tests overlap.
 - **Blocking synchronous calls** in test or fixture bodies (sync DB drivers, `requests`,
   `time.sleep`, blocking file/network I/O). One blocking call in an `async def` freezes the whole
   loop and destroys the value proposition. Sync `def` tests are safer — they run on an executor thread — which makes
@@ -291,11 +289,12 @@ deliverable is a clear "unsupported, here is the manual path, here are the N tes
 
 pytest configuration lives in `pytest.ini`, `pyproject.toml`, `setup.cfg`, or `tox.ini`, and CI
 invocations carry more of it on the command line. What maps: `testpaths`; `python_files` →
-`test_file_patterns`; `norecursedirs` → `ignore`; `pytest-timeout`'s timeout → `timeout`. What has
+`test_file_patterns`; `norecursedirs` → `ignore`; `pytest-timeout`'s timeout → `timeout`;
+`filterwarnings`, whose specs velox reads the same way. What has
 no home: `addopts` (each flag needs individual treatment), `markers` registration (velox tags need
 no declaration), `asyncio_mode`, `xfail_strict` (must be pushed down into each `@velox.xfail`),
-`filterwarnings` (§6), `log_cli`, `console_output_style`, `required_plugins`, `pytest_plugins`,
-and every option added by `pytest_addoption` in a conftest. Unknown `[tool.velox]` keys are a hard
+`log_cli`, `console_output_style`, `required_plugins`, `pytest_plugins`, and every option added by
+`pytest_addoption` in a conftest. Unknown `[tool.velox]` keys are a hard
 error, so the tool cannot leave anything speculative in the generated config.
 
 The environment matters too: `env = {...}` in `[tool.velox]` is suite-wide, which is the natural
