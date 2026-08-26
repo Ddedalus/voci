@@ -13,6 +13,7 @@ what those wrote.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -50,7 +51,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 2
-    return args.run(args, passthrough)
+    try:
+        return args.run(args, passthrough)
+    except BrokenPipeError:
+        # Whoever was reading has gone: a pager quit part of the way down, or `head` had its
+        # lines. Every command does its writing before it prints, so there is nothing left to
+        # report and this is an ordinary exit rather than a traceback.
+        _swallow_stdout()
+        return 0
+
+
+def _swallow_stdout() -> None:
+    """Point stdout's file descriptor at the void, so the flush at shutdown cannot raise too."""
+    # A stdout that is not a real file -- a capture, a StringIO -- has no descriptor to redirect.
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -137,7 +152,8 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Translate the suite's wiring, marks, bodies and configuration into their velox "
             "spelling, refusing anything that needs a decision and naming it in the source. "
-            "Prints the plan and a diff; writes nothing without --write."
+            "Prints the plan and a diff; writes nothing without --write, and with it writes "
+            "everything before printing either."
         ),
     )
     convert.add_argument(
@@ -157,7 +173,8 @@ def _parser() -> argparse.ArgumentParser:
     convert.add_argument(
         "--write",
         action="store_true",
-        help="apply the rewrite; without this the diff is printed and nothing changes",
+        help="apply the rewrite, before the plan and diff are printed; without this the diff is "
+        "printed and nothing changes",
     )
     convert.add_argument(
         "--disable",
@@ -347,14 +364,26 @@ def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
         disabled=[code.strip() for code in args.disable.split(",") if code.strip()],
     )
 
+    # The rewrite lands before a line of it is printed. A reader who closes a pager part of the
+    # way down the diff kills this process where it stands, and the tree they are left with is
+    # the converted one either way rather than however far the writing had got.
+    diff = result.edits.diff()
+    try:
+        written = result.edits.apply(root) if args.write else ()
+    except OSError as exc:
+        print(
+            f"velox-migrate: {exc}\nThe tree under {root} holds some of the conversion and not "
+            "the rest. Restore it before converting it again.",
+            file=sys.stderr,
+        )
+        return 1
+
     if not args.quiet:
         print(report.plan(result))
         print()
-    diff = result.edits.diff()
     print(diff if diff else "no change")
 
     if args.write:
-        written = result.edits.apply(root)
         print(f"\nwrote {len(written)} file(s) under {root}")
     elif diff:
         print("\nnothing written; pass --write to apply")
