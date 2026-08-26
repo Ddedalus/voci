@@ -11,7 +11,8 @@ them that way, constants they share with the rest of the package mirrored rather
 may use LibCST, its one dependency. `velox_migrate/matrix.py` is the support matrix: one row per
 pytest construct, keyed by a `VXnnn` code that report sections, `VELOX-TODO` markers and rewrite
 rules all reconcile against — classification decisions belong in that table, not in the code that
-reads it.
+reads it. `docs/migrate/matrix.md` is rendered from it by
+`scripts/gen_support_matrix.py`, so a new or changed row needs `just docs matrix`.
 
 `corpus/` holds pytest suites that exist to be extracted from and converted rather than run
 directly, so it's excluded from ruff and pyrefly. `corpus/dumps/` holds their checked-in

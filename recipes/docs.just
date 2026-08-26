@@ -13,9 +13,14 @@ build *args:
 cli *args:
     uv run python scripts/gen_cli_reference.py "$@"
 
-# Verify the site builds and that reference/cli.md still matches `velox --help`. Builds clean:
+# Regenerate docs/migrate/matrix.md from the support matrix (`--check` to verify only)
+matrix *args:
+    uv run python scripts/gen_support_matrix.py "$@"
+
+# Verify the site builds and that the generated pages still match their sources. Builds clean:
 # Zensical's incremental cache keys on Markdown content, so a reference page whose only input
 # changed -- a docstring in velox/ -- would otherwise be served from the previous render.
 check:
     uv run python scripts/gen_cli_reference.py --check
+    uv run python scripts/gen_support_matrix.py --check
     uv run zensical build --clean

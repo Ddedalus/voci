@@ -14,7 +14,7 @@ nav = [
   { "Home" = "index.md" },
   { "Guide" = ["guide/index.md"] },
   { "How-to" = ["how-to/index.md"] },
-  { "Migrating" = ["migrate/index.md"] },
+  { "Migrating" = ["migrate/index.md", "migrate/matrix.md"] },
   { "Reference" = [
       "reference/index.md",
       "reference/fixtures.md",

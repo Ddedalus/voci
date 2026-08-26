@@ -21,6 +21,55 @@ Everything downstream starts from that first artifact. A migration is only as go
 of the suite's fixture wiring, and pytest is the only thing that knows that picture exactly — so
 the tool asks pytest rather than deducing it from the sources.
 
+## How much of pytest carries over
+
+Most of a suite is a spelling change. Fixtures, parametrization, marks, the capture and temporary
+directory builtins, `raises` and `approx` all have a velox counterpart the conversion writes for
+you:
+
+| pytest | velox |
+| --- | --- |
+| `conftest.py` and name-based lookup | a module you import, and `Depends(fixture)` |
+| fixture scopes: function, class, module, package, session | call, function, module, session — class widens to module, package to session |
+| `autouse=True`, `@pytest.mark.usefixtures` | one `velox.use(...)` on the module or package |
+| `@pytest.mark.parametrize`, `pytest.param` | `@velox.parametrize`, `velox.case`, with pytest's ids kept verbatim |
+| indirect parametrization | `params=` on the fixture itself |
+| `skip`, `skipif`, `xfail`, custom marks | `@velox.skip`, `@velox.skipif`, `@velox.xfail`, `@velox.tag` |
+| `capsys`, `caplog`, `tmp_path`, `tmpdir` | `velox.capture`, `velox.log_records`, `tmp_path`, `velox.tmpdir` |
+| `pytest.raises`, `pytest.approx` | `velox.raises`, `velox.approx` |
+| `pytest-asyncio`, `anyio`, `event_loop` fixtures | deleted — velox runs async tests itself |
+| `pytest-xdist` | deleted — velox is concurrent within one process |
+
+Some of it has no counterpart, and a suite leaning on one of these has to give it up or keep that
+part under pytest:
+
+| pytest | Why velox has nothing for it |
+| --- | --- |
+| `unittest.TestCase`, doctests, nose-style collection | velox collects functions and `class Test*` methods, and nothing else |
+| `conftest.py` hooks, `pytest_addoption`, plugin-provided fixtures and marks | there is no hook protocol to plug into: injection is the extension point, and no hook dispatch on the hot path is a design invariant |
+| `pytest.warns`, `recwarn`, `deprecated_call`, `filterwarnings` | the warnings filter is one process-global list, and velox's tests share the process |
+| `capfd`, `capsysbinary`, `capfdbinary` | velox captures by replacing `sys.stdout` and `sys.stderr`, so a write to file descriptor 1 by a subprocess or a C extension goes uncaptured, and there is no binary variant |
+| `pytestconfig`, `cache`, `record_property`, `pytester` | each is a handle on pytest's own machinery |
+| `pytest.importorskip`, `pytest.xfail()` as a statement | a decision made partway through a body has no runtime call to make it with — guard the import and use `@velox.skipif`, or mark the test `@velox.xfail` outright |
+| a non-asyncio event loop — trio, tornado | velox runs the suite on one asyncio loop |
+
+The plugin and hook system, and `unittest`/`doctest`/`nose` collection, are absent by design
+rather than pending.
+
+A smaller group converts only once you have edited the suite by hand — xunit `setup_method` and
+friends, a `conftest.py` override whose specialized chain would fan out past the budget, a
+`request` object passed to another function. The audit counts each as blocked and names the file
+and line, so the work is a list rather than a search.
+
+A last category converts untouched and then costs you concurrency. `monkeypatch`, writes to
+`os.environ`, `unittest.mock.patch`, `mocker`, a frozen clock, `os.chdir` — anything patching state
+the whole process shares — makes velox schedule that test alone, since nothing else can safely run
+beside it. The audit reports that share of the suite up front, because it is the part concurrency
+cannot speed up.
+
+The [support matrix](matrix.md) is the full table: every construct, its code, what it becomes, and
+what to do where the answer is nothing.
+
 ## Extract the ground truth
 
 Collect the suite, run nothing, write the dump:
