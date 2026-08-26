@@ -54,9 +54,9 @@ deselected in 27.3s**, no network-marked test skipped and no plugin missing. Tha
 | VX324 | unsupported | 23 | 294 | `anyio_backend` parametrized over trio |
 | VX030 | unsupported | 4 | 29 | `benchmark`/`codspeed_benchmark` (pytest-codspeed), `httpbin`/`httpbin_secure` |
 | VX216 | unsupported | 6 | 12 | `pytest.warns`, `deprecated_call` |
-| VX108 | unsupported | 6 | 9 | `@pytest.mark.filterwarnings` |
+| VX108 | mechanical | 6 | 9 | `@pytest.mark.filterwarnings` |
 | VX112 | unsupported | 2 | 7 | `@pytest.mark.trio` |
-| VX307 | unsupported | 1 | — | `filterwarnings = ["error"]` in `pyproject.toml` |
+| VX307 | mechanical | 1 | — | `filterwarnings = ["error"]` in `pyproject.toml` |
 | VX402 | hazard | 5 | 1739 | `os.environ` writes, autouse in the root conftest |
 | VX413 | hazard | 89 | 133 | a fixed host and port |
 | VX401 | hazard | 4 | 37 | monkeypatch |
@@ -149,10 +149,10 @@ one-fixture change rather than a codemod, so **step 4 may still not need `prefac
 the same conclusion the plan reached from upstream's caplog numbers, by a different route.
 
 What stays out of the migration either way: 34 pytest-codspeed benchmark tests, 6 pytest-httpbin
-tests, 7 `@pytest.mark.trio` tests, 12 `pytest.warns` tests, 9 `filterwarnings` tests. Around 68
-cases, 4% of what is left after the trio half — small enough to name in the write-up.
+tests, 7 `@pytest.mark.trio` tests, 12 `pytest.warns` tests. Around 59 cases, 3% of what is left
+after the trio half — small enough to name in the write-up.
 
-The suite-wide `filterwarnings = ["error"]` (VX307) is the one to watch. It has no velox spelling,
-so a warning httpx2 currently treats as a failure becomes a warning again after conversion, and a
-test that passes for that reason will pass under velox for a different one. Nothing in `verify`
-catches that; it belongs in the write-up beside the blind spots.
+The counts above predate `@velox.filterwarnings` and `[tool.velox] filterwarnings`, which carry
+VX108 and VX307 across mechanically: the suite-wide `filterwarnings = ["error"]` reaches
+`pyproject.toml` and the 6 per-test marks are rewritten in place, so a warning httpx2 treats as a
+failure stays one. Re-run the audit before step 4 to get the totals under the current matrix.

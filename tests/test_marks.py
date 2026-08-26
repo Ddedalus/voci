@@ -231,3 +231,32 @@ def test_merged_lets_a_case_stand_in_for_the_test_where_only_one_mark_can() -> N
 @velox.timeout(5)
 @velox.xfail("test")
 def _marked_test() -> None: ...
+
+
+def test_filterwarnings_accumulates_outermost_last() -> None:
+    """The tuple's order is its precedence: later specs win, and decorators apply bottom-up,
+    so the outermost one lands last and outranks the ones under it."""
+
+    @velox.filterwarnings("error::DeprecationWarning")
+    @velox.filterwarnings("ignore::UserWarning", "once::ResourceWarning")
+    def target() -> None: ...
+
+    assert marks_of(target).filterwarnings == (
+        "ignore::UserWarning",
+        "once::ResourceWarning",
+        "error::DeprecationWarning",
+    )
+
+
+def test_filterwarnings_rejects_a_malformed_spec_where_it_was_written() -> None:
+    with pytest.raises(ValueError, match="unknown action"):
+        velox.filterwarnings("nope::UserWarning")
+
+
+def test_a_cases_filters_are_folded_in_after_the_tests_own() -> None:
+    @velox.filterwarnings("ignore::UserWarning")
+    def target() -> None: ...
+
+    folded = merged(marks_of(target), velox.case(1, marks=velox.filterwarnings("error")).marks)
+
+    assert folded.filterwarnings == ("ignore::UserWarning", "error")

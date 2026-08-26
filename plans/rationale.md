@@ -465,13 +465,14 @@ which answer the question. Everything inside is the test's own call chain, which
 
 **Un-awaited coroutines ride CPython's own warning rather than a coroutine tracker.** The
 interpreter already reports every coroutine whose last reference goes away un-started, at the
-moment it goes away — which for one a test created is inside that test's own call phase. Routing
-`warnings.showwarning` to whichever test is running is a `ContextVar` read; tracking coroutine
+moment it goes away — which for one a test created is inside that test's own call phase. Reading
+which test is running off a `ContextVar` when that warning arrives is free; tracking coroutine
 creation instead would mean a `sys.setprofile`-class hook on the hot path of every test in the
 suite to catch a mistake that, once caught, is a one-line fix. The trade is that a coroutine
 deliberately kept alive past the end of the test that made it is filed against whoever is running
-when it is finally collected. The filter is set to `always` rather than Python's default of once
-per source location, since a parametrized test forgets its `await` at the same line in every case.
+when it is finally collected. This is a hook registered with `_warnings.py`'s shim rather than a
+second `showwarning` of its own, and it claims the warning outright: the test's own failure says
+it better, and no user filter should be able to silence it.
 
 **A sync test stuck in a worker thread is named, not waited for.** Nothing in Python can interrupt
 a thread: cancelling the future that awaits one abandons the wait, not the call. So the executor
@@ -483,6 +484,37 @@ until that call returns; the difference is whether the user is told why.
 **A test that returns a value or drops a coroutine fails regardless of `@velox.xfail`.** `xfail`
 re-reads what the call phase *raised*. Neither of these raises anything: they are a test that ran
 to the end while checking nothing, which no mark can have predicted and no `raises=` can match.
+
+## `_warnings.py` — warning filters
+
+**Filters are evaluated in velox's own shim, not written into `warnings.filters`.** That list is
+process-global and CPython consults it before `showwarning` is ever reached, so a per-test filter
+installed there governs every test dispatched alongside, and `catch_warnings`' save/restore of it
+races every concurrent test's own. The way out is to stop asking CPython to decide: the run-wide
+filter is set to `always`, which makes every warning reach the shim undropped, and the shim reads
+the filters of whichever test raised it off a `ContextVar`. Nothing about the mechanism is a
+concession to a Python version — a filter that says `ignore` on one test and `error` on the next
+means exactly that, at any concurrency.
+
+**The `error` action raises out of `warnings.warn(...)` itself.** An exception raised inside
+`showwarning` propagates through the call that warned, so the failure lands on the phase that
+reached the deprecated call — a fixture's setup errors, a test body's fails — with that call chain
+in the traceback. Recording the warning and failing the test afterwards would put the failure on
+velox's own frame and leave the reader to work out which of a hundred calls produced it.
+
+**CPython's per-module warning registries are bypassed, and dedup is per test.** Those registries
+are what make Python report a warning once per source location for the whole process; under a
+concurrent runner that means the first test to reach a deprecated call is the only one the summary
+can attribute it to. `always` skips them, and each test's collector counts repeats for itself, so
+"which tests reach this call" has a real answer. The cost is that `once`, `default` and `module`
+collapse to "record it once and stop counting" within a test rather than reproducing three
+distinct registry scopes — a distinction that changes a number in the summary and nothing else.
+
+**A warning's location is a filename; a filter's `module` field is a dotted name.** `showwarning`
+is handed no module, so the shim resolves the filename back through a `sys.modules` index, falling
+back to the filename with `.py` stripped — CPython's own fallback for code no imported module
+claims, which is what a test module velox imported by path is. The index is rebuilt only when
+`sys.modules` changes size, and only for a run that actually has a `module`-narrowed filter.
 
 ## `_mocking.py` — `unittest.mock` patching
 

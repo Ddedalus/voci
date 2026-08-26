@@ -21,6 +21,7 @@ nav = [
       "reference/marks.md",
       "reference/builtins.md",
       "reference/assertions.md",
+      "reference/warnings.md",
       "reference/fastapi.md",
       "reference/cli.md",
   ] },

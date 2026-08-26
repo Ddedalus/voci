@@ -16,11 +16,12 @@ import math
 import os
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _config
+from velox import __version__, _config, _warnings
 from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
@@ -207,6 +208,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="List the N slowest tests at the end of the run. Under concurrency the slowest "
         "test is what the wall clock can't drop below, so this is the list to read before "
         "tuning --concurrency. Default: 0, no such list.",
+    )
+    parser.add_argument(
+        "-W",
+        dest="filterwarnings",
+        action="append",
+        default=[],
+        metavar="SPEC",
+        help="Add a warning filter, as action:message:category:module:lineno -- "
+        "'error', 'ignore::DeprecationWarning', 'error:.*legacy:UserWarning'. Repeatable; a "
+        "later filter outranks an earlier one, and all of them outrank [tool.velox] "
+        "filterwarnings. Every warning a run raises is reported either way; a filter decides "
+        "which are silenced and which fail the test that raised them.",
     )
     parser.add_argument(
         "--collect-only",
@@ -433,6 +446,29 @@ def _resolve_layered(cli_value, config_value, default=None):
     return default
 
 
+def _report_warnings(rootdir: Path) -> None:
+    """Print the warnings a run raised on its way to an exit that never reaches `Reporter`."""
+    _report.print_warnings(
+        [(_report.NO_TEST_RUNNING, _warnings.session_warnings())],
+        stream=sys.stdout,
+        rootdir=rootdir,
+        color_enabled=_color.color_enabled(sys.stdout),
+    )
+
+
+def _parse_filters(
+    config: _config.Config, from_cli: Sequence[str]
+) -> tuple[str | None, tuple[_warnings.WarningFilter, ...]]:
+    """The run's warning filters, `[tool.velox]`'s first and the `-W` ones after — or a usage
+    error naming whichever of the two wrote the spec that couldn't be parsed."""
+    configured = config.filterwarnings or ()
+    try:
+        return None, _warnings.parse_filters((*configured, *from_cli))
+    except _warnings.FilterError as exc:
+        source = f"{config.source} 'filterwarnings':" if exc.spec in configured else "-W"
+        return f"{source} {exc}", ()
+
+
 def main(argv: list[str] | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -590,6 +626,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 4
 
+    # Both tiers, in precedence order rather than layered like the scalars above: warning
+    # filters accumulate, and the last one to match a warning is the one that decides it,
+    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
+    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
+    # class the suite defines itself is not importable before then.
+    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
+
     # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
     # relative to wherever [tool.velox] was declared, so they're resolved against
     # config.rootdir here, not cwd().
@@ -671,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
     # unbound name. False is also the safer fallback value -- it makes finally attempt
     # an uninstall(), not skip one.
     hook_already_installed = False
+    warnings_installed = False
     try:
         # Must be installed before any test module is imported below -- a module
         # already in sys.modules can't retroactively be rewritten. warn already
@@ -684,6 +728,15 @@ def main(argv: list[str] | None = None) -> int:
         # install's signature to accept a pre-discovered file list.
         hook_already_installed = _rewrite.installed_hook() is not None
         _rewrite.install(roots, setup=setup, warn=False)
+        # After the hook, and before the first test-module import below: resolving a filter's
+        # category imports the module holding it, which for one of the suite's own must go
+        # through the rewrite hook like any other, and a module that warns at import time warns
+        # during collection, which this is what records.
+        problem, session_filters = _parse_filters(config, args.filterwarnings)
+        if problem is not None:
+            print(f"velox: {problem}", file=sys.stderr)
+            return 4
+        warnings_installed = _warnings.install(session_filters)
         # config.test_file_patterns/config.ignore replace discover_files's own
         # defaults outright when set, not add to them -- a user who wants "the
         # defaults plus one more" repeats the defaults themselves. is not None, not
@@ -733,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"velox: no test matches {', '.join(repr(name) for name in missing)}",
                     file=sys.stderr,
                 )
+                _report_warnings(rootdir)
                 return 4
 
         # Shared with reporter's own coloring (it resolves the same thing internally
@@ -742,7 +796,11 @@ def main(argv: list[str] | None = None) -> int:
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
-            return _report_collection(collected, color_enabled=color_enabled)
+            status = _report_collection(collected, color_enabled=color_enabled)
+            # Collection is what imports every test module, so a module that warns at import
+            # has warned by now -- and this is the only report this run will print.
+            _report_warnings(rootdir)
+            return status
 
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
@@ -764,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
             stream=sys.stdout,
             verbosity=verbosity,
             durations=args.durations,
+            rootdir=rootdir,
         )
 
         # Set by run_suite's own on_interrupt callback, from the loop, the first time a
@@ -788,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
             # 0 means "off" at the CLI; run_suite spells that None, and treats a
             # non-positive number the same way regardless.
             loop_watchdog=effective_watchdog or None,
+            filterwarnings=effective_filterwarnings,
             # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
             # isolated test's subprocess must reproduce what this run actually decided
             # (a --assert=rewrite request can still fall back to plain), not re-derive
@@ -833,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
             results,
             wall_clock=wall_clock,
             unattributed_output=unattributed,
+            session_warnings=_warnings.session_warnings(),
             not_run=not_run,
             not_run_label=stopped_by,
             deselected=len(collected.deselected),
@@ -857,6 +918,7 @@ def main(argv: list[str] | None = None) -> int:
                 rootdir=rootdir,
                 exit_status=exit_status,
                 wall_clock=wall_clock,
+                session_warnings=_warnings.session_warnings(),
             )
         return exit_status
     except KeyboardInterrupt:
@@ -879,6 +941,10 @@ def main(argv: list[str] | None = None) -> int:
         # a nested main()) that installed its own hook first must keep it.
         if not hook_already_installed:
             _rewrite.uninstall()
+        # Same rule, and the same reason: `warnings.showwarning` is process-global, so a
+        # nested main() leaves the outer call's shim in place for the outer call to remove.
+        if warnings_installed:
+            _warnings.uninstall()
         # Symmetric with hook_already_installed above: only remove what this call put
         # on sys.path, and only if it's still there.
         if sys_path_inserted:

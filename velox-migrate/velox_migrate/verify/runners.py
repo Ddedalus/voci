@@ -27,7 +27,7 @@ OUTCOMES_VERSION = 1
 # Kept in step with `velox._report.json_report.REPORT_VERSION`, which cannot be imported from
 # either: `verify` runs velox as a subprocess in a tree of its own, possibly a different
 # environment from the one velox-migrate itself is installed in.
-VELOX_REPORT_VERSION = 1
+VELOX_REPORT_VERSION = 2
 
 __all__ = [
     "DEFAULT_BASELINE",

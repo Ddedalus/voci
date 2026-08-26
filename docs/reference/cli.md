@@ -31,7 +31,8 @@ $ velox --help
 usage: velox [-h] [--version] [-k EXPR] [-m EXPR] [--assert {rewrite,plain}]
              [--rewrite-cache DIR] [--concurrency N] [--timeout SECONDS]
              [--loop-watchdog SECONDS] [--capture no] [-s] [--serial] [--maxfail N] [-x] [-v]
-             [-q] [--durations N] [--collect-only] [--report-json PATH] [--basetemp DIR]
+             [-q] [--durations N] [-W SPEC] [--collect-only] [--report-json PATH]
+             [--basetemp DIR]
              [paths ...]
 ```
 
@@ -133,6 +134,13 @@ summary and every end-of-run section are printed regardless.
 List the N slowest tests at the end of the run. Under concurrency the slowest test is what the wall
 clock can't drop below, so this is the list to read before tuning --concurrency. Default: 0, no such
 list.
+
+### `-W SPEC`
+
+Add a warning filter, as action:message:category:module:lineno -- 'error',
+'ignore::DeprecationWarning', 'error:.\*legacy:UserWarning'. Repeatable; a later filter outranks an
+earlier one, and all of them outrank \[tool.velox\] filterwarnings. Every warning a run raises is
+reported either way; a filter decides which are silenced and which fail the test that raised them.
 
 ### `--collect-only`
 

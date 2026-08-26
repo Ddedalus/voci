@@ -67,19 +67,22 @@ faulthandler dump without terminating — a free "what is it doing right now" fo
 list, and concurrent restores clobber each other. Python 3.14's context-aware warnings fix this
 properly, but 3.13 (our floor) cannot rely on it (R§8.2).
 
-**The design:**
+**The design:** stop asking CPython to decide, and decide in the shim instead.
 
-- Collect warnings **globally** with a `showwarning` shim that attributes each warning to a test via
-  the capture ContextVar ([09](09-capture-and-logging.md)). Attribution works; suppression does not.
-- Per-test `filterwarnings` marks are honored **only in serial or isolated mode**. In concurrent
-  mode, a per-test filter is a lie, so velox **warns loudly, once, naming the tests** that requested
-  filters — it does not silently pretend to apply them.
-- Session-level filters (config `filterwarnings = [...]`, applied at startup) work fine and are the
-  recommended mechanism.
-- `-W error`-style global escalation works; a warning escalated to an exception fails the test that
-  raised it, attributed normally.
-- Roadmap: when 3.14 is the floor, per-test filters become correct via context-aware warnings, and
-  the restriction lifts with no API change.
+- The process-wide filter is set to `always`, so every warning reaches a `showwarning` shim
+  undropped, attributed to a test via a ContextVar ([09](09-capture-and-logging.md)).
+- The shim evaluates the filter stack itself, reading the *raising test's* filters off that
+  ContextVar. Per-test `filterwarnings` marks are therefore correct at any concurrency, including
+  suppression and escalation — no serial-mode restriction, and nothing to lift when 3.14 becomes
+  the floor.
+- Three tiers, lowest first: config `filterwarnings = [...]`, `-W`, then the test's own marks. The
+  last filter to match a warning decides it.
+- `error` raises the warning out of the `warnings.warn(...)` that produced it, failing the phase
+  that reached that call.
+- Warnings that survive filtering are aggregated by warning and location and reported at the end of
+  the run, alongside a `warnings` field in `--report-json`.
+- What remains process-global is `catch_warnings()` in user code: a test that enters one changes
+  what its concurrent siblings see, for as long as it is open.
 
 ## 4. Unraisables and orphan task exceptions
 

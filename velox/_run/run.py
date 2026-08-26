@@ -43,12 +43,12 @@ import threading
 import time
 import traceback
 from collections import deque
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO, cast, final
 
-from velox import _mocking
+from velox import _mocking, _warnings
 from velox._builtins import capture as _capture
 from velox._collection.collect import CollectionError, TestRecord
 from velox._di import runtime as _di
@@ -145,6 +145,10 @@ class TestResult:
     captured_stdout: str = ""
     captured_stderr: str = ""
     log_records: tuple[logging.LogRecord, ...] = ()
+    #: What this test warned about, aggregated by warning and location. Populated for every
+    #: outcome, not only failing ones: a passing test's deprecation warning is the whole point
+    #: of the end-of-run summary.
+    warnings: tuple[_warnings.RecordedWarning, ...] = ()
 
 
 def _summarize_exception(exc: BaseException) -> str:
@@ -777,6 +781,7 @@ def run_suite(
     on_interrupt: Callable[[], None] | None = None,
     loop_watchdog: float | None = _safety.DEFAULT_LOOP_WATCHDOG,
     teardown_grace: float = DEFAULT_TEARDOWN_GRACE,
+    filterwarnings: Sequence[str] = (),
     isolated: IsolatedConfig | None = None,
     already_isolated: bool = False,
 ) -> list[TestResult]:
@@ -824,6 +829,11 @@ def run_suite(
     non-positive value turns that off. It reports and never fails a test: velox has no
     way to tell a blocking call apart from a fixture that legitimately takes a while.
 
+    `filterwarnings` is the run's own warning filters, in `action:message:category:module:lineno`
+    form and lowest precedence first, under which every test's warnings are collected onto its
+    `TestResult.warnings`; a `@velox.filterwarnings(...)` mark layers over them for one test.
+    Warnings raised with no test running are `_warnings.session_warnings()`.
+
     `module`-scope fixtures are released once every test of that module has finished,
     not as each test's own teardown runs, so a module fixture stays alive for its
     still-running siblings. `unattributed_output`, if given, is populated with whatever
@@ -850,6 +860,10 @@ def run_suite(
                 f"own assertion-rewrite decision) to re-collect it"
             )
 
+    # Parsed before anything is installed: a malformed spec is a usage error, and one that
+    # surfaced after `_capture.install` had swapped out sys.stdout would print into nothing.
+    session_filters = _warnings.parse_filters(filterwarnings)
+
     results: list[TestResult | None] = [None] * len(records)
     store = _di.ScopeStore()
 
@@ -868,6 +882,7 @@ def run_suite(
     # Set before the try, like `cli.main`'s own hook bookkeeping: if `_mocking.install` itself
     # raised, the finally must not try to undo something that was never done.
     guard_installed = False
+    warnings_installed = False
     unawaited_installed = False
     #: Set below, once there is a loop to watch; named here so the outer `finally` can stop
     #: it whatever happened in between.
@@ -877,6 +892,8 @@ def run_suite(
         # brought `unittest.mock` in and this finds it (`_mocking.install`). False when an
         # enclosing run already installed the guard, whose uninstall is then not ours to do.
         guard_installed = _mocking.install()
+        # Before `_safety.install`, whose hook the shim this puts in place is what consults.
+        warnings_installed = _warnings.install(session_filters)
         unawaited_installed = _safety.install()
         worker_slots = _capture.WorkerSlots(concurrency)
         gate = AdmissionGate(concurrency)
@@ -1022,6 +1039,10 @@ def run_suite(
                         scratch_dir=capture_setup.basetemp_root / ".velox-isolated",
                         loop_watchdog=loop_watchdog,
                         teardown_grace=teardown_grace,
+                        # The session's filters only: the subprocess re-collects the test
+                        # from its own source, so its `@velox.filterwarnings` mark comes
+                        # back with it rather than being handed over.
+                        filterwarnings=filterwarnings,
                     )
                 )
                 # `run_isolated` kills its subprocess and reports rather than propagating a
@@ -1057,25 +1078,30 @@ def run_suite(
             )
             token = _capture.current_test_context.set(test_context)
             try:
-                try:
-                    result, module_keys = await _run_one(
-                        record, store, timeout=test_timeout, stop=stop
-                    )
-                finally:
-                    worker_slots.release(slot)
+                # Opened over the same span as the sink, for the same reason: a warning
+                # raised by a fixture this test set up, or by the module teardown it owes
+                # its module, is this test's to answer for.
+                with _warnings.collecting(_warnings.parse_filters(marks.filterwarnings)) as warned:
+                    try:
+                        result, module_keys = await _run_one(
+                            record, store, timeout=test_timeout, stop=stop
+                        )
+                    finally:
+                        worker_slots.release(slot)
 
-                if module_keys:
-                    pending_module_keys.setdefault(record.path, []).extend(module_keys)
-                # Inside this test's current_test_context: if this test is the module's
-                # last, a module-scope fixture's own teardown print is attributed to it.
-                await flush_module_scope(record)
+                    if module_keys:
+                        pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                    # Inside this test's current_test_context: if this test is the module's
+                    # last, a module-scope fixture's own teardown print is attributed to it.
+                    await flush_module_scope(record)
             finally:
                 # Reset only now that nothing else this test's envelope owns --
                 # including, for the module's last test, that module's own fixture
                 # teardown -- could still write into sink.
                 _capture.current_test_context.reset(token)
 
-            # Captured output is only worth keeping for a failing result.
+            # Captured output is only worth keeping for a failing result; warnings are worth
+            # keeping whatever the test did.
             if result.outcome in FAILING_OUTCOMES:
                 result = dataclasses.replace(
                     result,
@@ -1083,7 +1109,8 @@ def run_suite(
                     captured_stderr=sink.err,
                     log_records=tuple(sink.log_records),
                 )
-            return result
+            recorded = warned.recorded()
+            return dataclasses.replace(result, warnings=recorded) if recorded else result
 
         # Constructed synchronously, outside the loop, so the finally below can shut
         # this down directly without going through the loop at all. At least one worker
@@ -1194,6 +1221,8 @@ def run_suite(
             _mocking.uninstall()
         if unawaited_installed:
             _safety.uninstall()
+        if warnings_installed:
+            _warnings.uninstall()
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         # Before _capture.uninstall(), so `real_stderr` is still the stream nothing else is
@@ -1348,6 +1377,9 @@ def _result_from_json(data: dict[str, Any]) -> TestResult:
             )
             for rec in data["log_records"]
         ),
+        # Absent from the dicts a subprocess that never ran the test at all produces
+        # (`isolated._crash_result`, and the worker's own re-collection failure).
+        warnings=tuple(_warnings.RecordedWarning(**w) for w in data.get("warnings", ())),
     )
 
 

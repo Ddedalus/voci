@@ -21,6 +21,8 @@ and Ctrl-C, both cancelling what is in flight · `--serial`, `--collect-only`, `
 `--durations` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the event-loop watchdog and the failure a
 test earns for returning a value or dropping a coroutine un-awaited · the reporter · `--report-json`
+· warning collection and the end-of-run summary, with filters from `[tool.velox] filterwarnings`,
+`-W` and `@velox.filterwarnings(...)`, the per-test ones honored under any concurrency
 · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Next

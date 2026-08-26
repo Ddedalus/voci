@@ -85,11 +85,11 @@ def test_the_payload_totals_are_the_numbers_the_summary_computed() -> None:
     assert totals["tests"] == 10
     assert totals["findings"] == len(audit.findings)
     assert totals["by_disposition"] == {
-        "unsupported": 3,
+        "unsupported": 2,
         "refused": 1,
         "hazard": 2,
         "marker": 1,
-        "mechanical": 1,
+        "mechanical": 2,
     }
     assert totals["clean_tests"] == 5
     assert totals["marker_tests"] == 1

@@ -5,10 +5,10 @@ stopping at the git root, and turns that table into a validated `Config`. The di
 becomes the run's rootdir. One file, one table — there is no inheritance and no per-directory
 config.
 
-Seven keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
-`test_file_patterns`, `ignore` and `env`. Anything else is an error, as is a value of the wrong
-type or shape. `cli.py` merges the resulting `Config` against the command line and the built-in
-defaults.
+Eight keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
+`test_file_patterns`, `ignore`, `env` and `filterwarnings`. Anything else is an error, as is a
+value of the wrong type or shape. `cli.py` merges the resulting `Config` against the command line
+and the built-in defaults.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ _KNOWN_KEYS = frozenset(
         "test_file_patterns",
         "ignore",
         "env",
+        "filterwarnings",
     }
 )
 
@@ -71,6 +72,12 @@ class Config:
     #: shared `dict` in place out from under whoever else holds this `Config`. `MappingProxyType`
     #: closes that gap the same way a `tuple` does for `testpaths`/`ignore`/`test_file_patterns`.
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    #: Warning filter specs, lowest precedence first, in `-W`'s own
+    #: `action:message:category:module:lineno` form. Only the shape is checked here: a spec names
+    #: a warning category, and resolving one can import the suite's own code, which has no
+    #: business happening while the config that says where that code lives is still being read.
+    #: `cli.py` parses them once `rootdir` is on `sys.path`.
+    filterwarnings: tuple[str, ...] | None = None
 
 
 def resolve(explicit_paths: Sequence[Path]) -> Config:
@@ -179,6 +186,7 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
         ),
         ignore=_str_list(table.get("ignore"), key="ignore", source=source),
         env=_str_dict(table.get("env"), key="env", source=source),
+        filterwarnings=_str_list(table.get("filterwarnings"), key="filterwarnings", source=source),
     )
 
 

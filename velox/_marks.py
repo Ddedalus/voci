@@ -1,9 +1,9 @@
 """Marks: decorators that attach one frozen record to the decorated function.
 
 Marks are objects, not strings: `skip`, `skipif`, `xfail`, `parametrize`, `tag`, `timeout`,
-`solo` and `isolated` each fold one frozen record into the function's `__velox_marks__`. Every
-decorator returns the *same* function object with that attribute replaced, so stacking is
-order-independent except for `parametrize` (see below).
+`filterwarnings`, `solo` and `isolated` each fold one frozen record into the function's
+`__velox_marks__`. Every decorator returns the *same* function object with that attribute
+replaced, so stacking is order-independent except for `parametrize` (see below).
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from velox import _warnings
 
 __all__ = [
     "NO_MARKS",
@@ -25,6 +27,7 @@ __all__ = [
     "XFail",
     "case",
     "decided",
+    "filterwarnings",
     "holds",
     "isolated",
     "marks_of",
@@ -105,6 +108,10 @@ class Marks:
     xfail: XFail | None = None
     tags: tuple[str, ...] = ()
     timeout: float | None = None
+    filterwarnings: tuple[str, ...] = ()
+    """Filter specs layered over the run's own, later ones winning. Kept as written rather than
+    parsed: `_warnings.parse_filter` has already validated each at decoration time, and the
+    text is what a report about it quotes."""
     solo: bool = False
     isolated: bool = False
     parametrizations: tuple[ParamSet, ...] = ()
@@ -151,6 +158,7 @@ def merged(base: Marks, extra: Marks) -> Marks:
         xfail=extra.xfail or base.xfail,
         tags=(*base.tags, *extra.tags),
         timeout=base.timeout if extra.timeout is None else extra.timeout,
+        filterwarnings=(*base.filterwarnings, *extra.filterwarnings),
         solo=base.solo or extra.solo,
         isolated=base.isolated or extra.isolated,
         parametrizations=base.parametrizations,
@@ -255,6 +263,24 @@ def timeout[F: Callable[..., Any]](seconds: float) -> Callable[[F], F]:
         if not (math.isfinite(seconds) and seconds > 0):
             raise ValueError(f"timeout must be a positive, finite number of seconds, got {seconds}")
         return _amend(fn, timeout=seconds)
+
+    return decorate
+
+
+def filterwarnings[F: Callable[..., Any]](*specs: str) -> Callable[[F], F]:
+    """Filter the warnings this test raises, with `action:message:category:module:lineno` specs
+    -- `"error"`, `"ignore::DeprecationWarning"`, `"error:.*legacy:UserWarning"`.
+
+    Each spec is layered over the run's own `filterwarnings`/`-W` filters, and the last one to
+    match a warning is the one that decides it: later specs win over earlier ones, and an outer
+    decorator's win over an inner one's. `error` raises the warning where it was warned, failing
+    the phase that raised it. Every spec is parsed here, so a bad one is an error at import.
+    """
+    for spec in specs:
+        _warnings.parse_filter(spec)
+
+    def decorate(fn: F) -> F:
+        return _amend(fn, filterwarnings=(*marks_of(fn).filterwarnings, *specs))
 
     return decorate
 

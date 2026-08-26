@@ -1,5 +1,6 @@
 """Tests for `velox._report.terminal.Reporter`: per-file scrollback blocks, end-of-run sections
-(failure details, short summary, unattributed output, wall-vs-concurrency), and path elision --
+(failure details, short summary, unattributed output, the warnings summary,
+wall-vs-concurrency), and path elision --
 exercised directly against hand-built `TestResult`s and a `StringIO` stream.
 """
 
@@ -18,6 +19,7 @@ from velox._marks import marks_of
 from velox._report.terminal import Reporter, _elide_middle, _failure_reason
 from velox._run.run import Outcome
 from velox._run.run import TestResult as Result
+from velox._warnings import RecordedWarning
 
 _EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
 
@@ -67,6 +69,7 @@ def _result(
     captured_stdout: str = "",
     captured_stderr: str = "",
     log_records: tuple[logging.LogRecord, ...] = (),
+    warnings: tuple[RecordedWarning, ...] = (),
 ) -> Result:
     return Result(
         id=id,
@@ -78,6 +81,7 @@ def _result(
         captured_stdout=captured_stdout,
         captured_stderr=captured_stderr,
         log_records=log_records,
+        warnings=warnings,
     )
 
 
@@ -103,6 +107,7 @@ def _reporter(
     capture_passthrough: bool = False,
     verbosity: int = 0,
     durations: int = 0,
+    rootdir: Path | None = None,
 ) -> tuple[Reporter, io.StringIO]:
     """A Reporter over a fresh StringIO, returned alongside it."""
     stream = io.StringIO()
@@ -112,6 +117,7 @@ def _reporter(
             skipped=skipped or [],
             capture_passthrough=capture_passthrough,
             stream=stream,
+            rootdir=rootdir,
             verbosity=verbosity,
             durations=durations,
         ),
@@ -1081,3 +1087,126 @@ def test_the_not_run_label_names_whatever_stopped_the_run() -> None:
     )
 
     assert "2 not run (interrupted)" in stream.getvalue()
+
+
+# ------------------------------------------------------------------------------------------
+# The warnings summary
+# ------------------------------------------------------------------------------------------
+
+
+def _warning(
+    message: str = "old_api() is deprecated",
+    category: str = "DeprecationWarning",
+    filename: str = "/pkg/legacy.py",
+    lineno: int = 12,
+    count: int = 1,
+) -> RecordedWarning:
+    return RecordedWarning(
+        category=category, message=message, filename=filename, lineno=lineno, count=count
+    )
+
+
+def test_no_warnings_prints_no_section() -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0)
+    reporter, stream = _reporter([_test_record(result.id, path)])
+
+    reporter.finish([result], wall_clock=1.0)
+
+    assert "warnings summary" not in stream.getvalue()
+
+
+def test_one_warning_names_its_location_category_and_test() -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(),))
+    reporter, stream = _reporter([_test_record(result.id, path)])
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "--- warnings summary (1) ---" in out
+    assert "/pkg/legacy.py:12 DeprecationWarning: old_api() is deprecated" in out
+    assert f"  {result.id}" in out
+    assert "1 warning" in out
+
+
+def test_one_warning_from_several_tests_is_one_entry() -> None:
+    path = Path("f.py")
+    results = [_result(f"{path}::test_{i}", i, warnings=(_warning(),)) for i in range(2)]
+    reporter, stream = _reporter([_test_record(r.id, path, index=i) for i, r in enumerate(results)])
+
+    reporter.finish(results, wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert out.count("/pkg/legacy.py:12 DeprecationWarning") == 1
+    assert f"{results[0].id}, {results[1].id}" in out
+    assert "2 warnings" in out
+
+
+def test_a_repeated_warning_carries_its_count() -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(count=3),))
+    reporter, stream = _reporter([_test_record(result.id, path)])
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert f"{result.id} (x3)" in out
+    assert "--- warnings summary (3) ---" in out
+
+
+def test_only_the_first_few_tests_are_named_under_one_warning() -> None:
+    path = Path("f.py")
+    results = [_result(f"{path}::test_{i}", i, warnings=(_warning(),)) for i in range(5)]
+    reporter, stream = _reporter([_test_record(r.id, path, index=i) for i, r in enumerate(results)])
+
+    reporter.finish(results, wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "+2 more" in out
+    assert results[4].id not in out.split("warnings summary")[1]
+
+
+def test_a_warning_with_no_test_running_is_labelled_as_such() -> None:
+    reporter, stream = _reporter([])
+
+    reporter.finish([], wall_clock=1.0, session_warnings=[_warning(message="at import")])
+
+    out = stream.getvalue()
+    assert "at import" in out
+    assert "(no test running)" in out
+
+
+def test_a_location_under_the_rootdir_is_read_against_it(tmp_path: Path) -> None:
+    """Every id this reporter prints is rootdir-relative; a warning's location reads the same
+    way when the file is under the rootdir."""
+    path = Path("f.py")
+    source = tmp_path / "pkg" / "legacy.py"
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(filename=str(source)),))
+    reporter, stream = _reporter([_test_record(result.id, path)], rootdir=tmp_path)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    assert "pkg/legacy.py:12 DeprecationWarning" in stream.getvalue()
+
+
+def test_a_location_outside_the_rootdir_stays_absolute(tmp_path: Path) -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(filename="/opt/dep/net.py"),))
+    reporter, stream = _reporter([_test_record(result.id, path)], rootdir=tmp_path)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    assert "/opt/dep/net.py:12 DeprecationWarning" in stream.getvalue()
+
+
+def test_only_a_warnings_first_line_is_summarized() -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(message="head\ntail"),))
+    reporter, stream = _reporter([_test_record(result.id, path)])
+
+    reporter.finish([result], wall_clock=1.0)
+
+    out = stream.getvalue()
+    assert "DeprecationWarning: head" in out
+    assert "tail" not in out

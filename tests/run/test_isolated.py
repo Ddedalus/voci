@@ -92,6 +92,7 @@ def test_result_to_json_round_trips_a_test_result() -> None:
         "captured_stdout": "out",
         "captured_stderr": "err",
         "log_records": [{"name": "pkg.mod", "levelname": "WARNING", "message": "disk nearly full"}],
+        "warnings": [],
     }
 
 

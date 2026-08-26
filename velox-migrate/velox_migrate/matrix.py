@@ -485,12 +485,10 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX108",
         "@pytest.mark.filterwarnings",
-        UNSUPPORTED,
-        "Warning filters are process-global, and velox runs tests concurrently in one process, so "
-        "a per-test filter cannot be honoured.",
-        action="Move the filter into the test body with `warnings.catch_warnings`, and mark the "
-        "test `@velox.solo`.",
-        serialized=True,
+        MECHANICAL,
+        "Becomes `@velox.filterwarnings(...)`, which takes the same filter specs and governs the "
+        "test that carries it alone, whatever else is running.",
+        target="@velox.filterwarnings(...)",
     ),
     _row(
         "VX109",
@@ -813,11 +811,9 @@ CONSTRUCTS: tuple[Construct, ...] = (
     _row(
         "VX307",
         "filterwarnings",
-        UNSUPPORTED,
-        "A suite-wide warning filter has no `[tool.velox]` key, and the warnings module is "
-        "process-global.",
-        action="Set the filter in a session fixture if it is global, or per test with "
-        "`warnings.catch_warnings`.",
+        MECHANICAL,
+        "Carried to `[tool.velox]`'s own `filterwarnings`, which takes the same filter specs.",
+        target="[tool.velox] filterwarnings",
         suite_level=True,
     ),
     _row(
