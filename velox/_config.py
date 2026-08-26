@@ -20,8 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
-from velox import _warnings
-
 __all__ = ["Config", "ConfigError", "resolve"]
 
 _KNOWN_KEYS = frozenset(
@@ -75,8 +73,10 @@ class Config:
     #: closes that gap the same way a `tuple` does for `testpaths`/`ignore`/`test_file_patterns`.
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     #: Warning filter specs, lowest precedence first, in `-W`'s own
-    #: `action:message:category:module:lineno` form. `None` when the key wasn't set, which is
-    #: how `cli.py` tells "no filters configured" from a deliberately empty list.
+    #: `action:message:category:module:lineno` form. Only the shape is checked here: a spec names
+    #: a warning category, and resolving one can import the suite's own code, which has no
+    #: business happening while the config that says where that code lives is still being read.
+    #: `cli.py` parses them once `rootdir` is on `sys.path`.
     filterwarnings: tuple[str, ...] | None = None
 
 
@@ -186,22 +186,8 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
         ),
         ignore=_str_list(table.get("ignore"), key="ignore", source=source),
         env=_str_dict(table.get("env"), key="env", source=source),
-        filterwarnings=_filterwarnings(table.get("filterwarnings"), source=source),
+        filterwarnings=_str_list(table.get("filterwarnings"), key="filterwarnings", source=source),
     )
-
-
-def _filterwarnings(value: object, *, source: Path) -> tuple[str, ...] | None:
-    """`[tool.velox] filterwarnings` must be a list of filter specs, each parseable -- a typo in
-    a category name is an error here rather than a filter that silently never matches."""
-    specs = _str_list(value, key="filterwarnings", source=source)
-    if specs is None:
-        return None
-    for spec in specs:
-        try:
-            _warnings.parse_filter(spec)
-        except _warnings.FilterError as exc:
-            raise ConfigError(f"{source}: 'filterwarnings': {exc}") from exc
-    return specs
 
 
 def _concurrency(value: object, *, source: Path) -> int | None:

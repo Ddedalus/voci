@@ -235,11 +235,12 @@ def test_filterwarnings_must_be_a_list_of_strings(tmp_path: Path) -> None:
         resolve([tmp_path])
 
 
-def test_an_unparseable_filter_spec_is_a_config_error(tmp_path: Path) -> None:
+def test_a_filter_spec_is_not_parsed_here(tmp_path: Path) -> None:
+    """Resolving a spec's category imports the module holding it, which for one the suite
+    defines itself needs a `sys.path` this has not finished deciding. `cli.main` parses them."""
     Project(tmp_path).write_pyproject("[tool.velox]\nfilterwarnings = ['ignore::NotAWarning']\n")
 
-    with pytest.raises(ConfigError, match="NotAWarning"):
-        resolve([tmp_path])
+    assert resolve([tmp_path]).filterwarnings == ("ignore::NotAWarning",)
 
 
 def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:

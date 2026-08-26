@@ -107,6 +107,7 @@ def _reporter(
     capture_passthrough: bool = False,
     verbosity: int = 0,
     durations: int = 0,
+    rootdir: Path | None = None,
 ) -> tuple[Reporter, io.StringIO]:
     """A Reporter over a fresh StringIO, returned alongside it."""
     stream = io.StringIO()
@@ -116,6 +117,7 @@ def _reporter(
             skipped=skipped or [],
             capture_passthrough=capture_passthrough,
             stream=stream,
+            rootdir=rootdir,
             verbosity=verbosity,
             durations=durations,
         ),
@@ -1175,19 +1177,27 @@ def test_a_warning_with_no_test_running_is_labelled_as_such() -> None:
     assert "(no test running)" in out
 
 
-def test_a_location_under_the_current_directory_is_relative(tmp_path: Path) -> None:
+def test_a_location_under_the_rootdir_is_read_against_it(tmp_path: Path) -> None:
     """Every id this reporter prints is rootdir-relative; a warning's location reads the same
-    way when the file is under the current directory."""
+    way when the file is under the rootdir."""
     path = Path("f.py")
     source = tmp_path / "pkg" / "legacy.py"
     result = _result(f"{path}::test_ok", 0, warnings=(_warning(filename=str(source)),))
-    reporter, stream = _reporter([_test_record(result.id, path)])
+    reporter, stream = _reporter([_test_record(result.id, path)], rootdir=tmp_path)
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.chdir(tmp_path)
-        reporter.finish([result], wall_clock=1.0)
+    reporter.finish([result], wall_clock=1.0)
 
     assert "pkg/legacy.py:12 DeprecationWarning" in stream.getvalue()
+
+
+def test_a_location_outside_the_rootdir_stays_absolute(tmp_path: Path) -> None:
+    path = Path("f.py")
+    result = _result(f"{path}::test_ok", 0, warnings=(_warning(filename="/opt/dep/net.py"),))
+    reporter, stream = _reporter([_test_record(result.id, path)], rootdir=tmp_path)
+
+    reporter.finish([result], wall_clock=1.0)
+
+    assert "/opt/dep/net.py:12 DeprecationWarning" in stream.getvalue()
 
 
 def test_only_a_warnings_first_line_is_summarized() -> None:

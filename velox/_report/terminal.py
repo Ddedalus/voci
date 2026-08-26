@@ -29,7 +29,7 @@ from velox._report import color as _color
 from velox._run.run import FAILING_OUTCOMES, Outcome, TestResult, solo_for_patching
 from velox._warnings import RecordedWarning
 
-__all__ = ["Reporter"]
+__all__ = ["NO_TEST_RUNNING", "Reporter", "print_warnings"]
 
 #: Bounds on `_print_file_block`'s path column, which is otherwise sized to the longest
 #: path the run collected. The floor keeps a shallow tree's short paths from pulling the
@@ -50,7 +50,7 @@ _WARNING_SOURCES_LISTED = 3
 
 #: Where the warnings summary files a warning raised with no test running: during collection,
 #: or in a session fixture's teardown after the last test finished.
-_NO_TEST_RUNNING = "(no test running)"
+NO_TEST_RUNNING = "(no test running)"
 
 #: Past this, a warning's own text is elided in the middle for the summary. Long enough for a
 #: real deprecation message, short enough that one warning stays one line on a normal terminal.
@@ -78,6 +78,9 @@ class Reporter:
     #: `--durations N`: how many of the slowest tests `finish` lists. 0 (the default) prints no
     #: such section at all.
     durations: int = 0
+    #: Where the run's ids are rootdir-relative to, so a warning's own location can be read the
+    #: same way. `None` leaves every warning location absolute.
+    rootdir: Path | None = None
 
     #: Resolved once, at construction, rather than re-checked on every print.
     is_tty: bool = field(init=False)
@@ -460,41 +463,13 @@ class Reporter:
     def _print_warnings(
         self, results: list[TestResult], session_warnings: Sequence[RecordedWarning]
     ) -> int:
-        """Every warning the run raised, grouped by what was warned about and where, and
-        returning how many there were in total:
-
-            --- warnings summary (4) ---
-            src/legacy.py:12 DeprecationWarning: old_api() is deprecated, use new_api()
-              tests/test_api.py::test_list, tests/test_api.py::test_create (x2)
-
-        Grouped rather than listed per test: one deprecated call reached from a hundred tests
-        is one thing to fix, and the location is what says which. A test that raised the same
-        warning more than once carries the count.
-        """
-        sources: dict[tuple[str, str, str], list[str]] = {}
-        total = 0
         attributed = [(result.id, result.warnings) for result in results]
-        for source, warnings in [*attributed, (_NO_TEST_RUNNING, tuple(session_warnings))]:
-            for warning in warnings:
-                total += warning.count
-                key = (_short_location(warning), warning.category, warning.message)
-                label = source if warning.count == 1 else f"{source} (x{warning.count})"
-                sources.setdefault(key, []).append(label)
-        if not sources:
-            return 0
-
-        print(file=self.stream)
-        print(f"--- warnings summary ({total}) ---", file=self.stream)
-        for (location, category, message), raised_by in sources.items():
-            where = _color.paint(location, _color.GRAY, enabled=self._color_enabled)
-            name = _color.paint(category, _color.YELLOW, enabled=self._color_enabled)
-            print(f"{where} {name}: {_warning_text(message)}", file=self.stream)
-            listed = raised_by[:_WARNING_SOURCES_LISTED]
-            rest = len(raised_by) - len(listed)
-            line = ", ".join(listed) + (f", +{rest} more" if rest else "")
-            painted = _color.paint(line, _color.GRAY, enabled=self._color_enabled)
-            print(f"  {painted}", file=self.stream)
-        return total
+        return print_warnings(
+            [*attributed, (NO_TEST_RUNNING, session_warnings)],
+            stream=self.stream,
+            rootdir=self.rootdir,
+            color_enabled=self._color_enabled,
+        )
 
     def _print_skip_reasons(self, results: list[TestResult]) -> None:
         """`-v`'s section for every skipped test, each with its reason -- a `skip` mark's
@@ -596,12 +571,57 @@ def _elide_middle(text: str, width: int) -> str:
     return f"{text[:head]}...{text[len(text) - tail :]}" if tail else text[:width]
 
 
-def _short_location(warning: RecordedWarning) -> str:
-    """Where a warning was raised, with the current directory stripped off a path under it --
-    the same "nearby paths read as nearby" treatment every id in this report already gets. A
-    path outside it (a warning from an installed dependency) is left absolute."""
+def print_warnings(
+    sources: Sequence[tuple[str, Sequence[RecordedWarning]]],
+    *,
+    stream: TextIO,
+    rootdir: Path | None,
+    color_enabled: bool,
+) -> int:
+    """Print every warning `sources` carries, grouped by what was warned about and where, and
+    return how many there were in total:
+
+        --- warnings summary (4) ---
+        src/legacy.py:12 DeprecationWarning: old_api() is deprecated, use new_api()
+          tests/test_api.py::test_list, tests/test_api.py::test_create (x2)
+
+    Grouped rather than listed per test: one deprecated call reached from a hundred tests is one
+    thing to fix, and the location is what says which. Each `sources` entry is what raised the
+    warnings under it -- a test id, or `NO_TEST_RUNNING` -- and one that raised the same warning
+    more than once carries the count. Nothing at all is printed when there is nothing to print.
+    """
+    raised_by: dict[tuple[str, str, str], list[str]] = {}
+    total = 0
+    for source, warnings in sources:
+        for warning in warnings:
+            total += warning.count
+            key = (_short_location(warning, rootdir), warning.category, warning.message)
+            label = source if warning.count == 1 else f"{source} (x{warning.count})"
+            raised_by.setdefault(key, []).append(label)
+    if not raised_by:
+        return 0
+
+    print(file=stream)
+    print(f"--- warnings summary ({total}) ---", file=stream)
+    for (location, category, message), labels in raised_by.items():
+        where = _color.paint(location, _color.GRAY, enabled=color_enabled)
+        name = _color.paint(category, _color.YELLOW, enabled=color_enabled)
+        print(f"{where} {name}: {_warning_text(message)}", file=stream)
+        listed = labels[:_WARNING_SOURCES_LISTED]
+        rest = len(labels) - len(listed)
+        line = ", ".join(listed) + (f", +{rest} more" if rest else "")
+        print(f"  {_color.paint(line, _color.GRAY, enabled=color_enabled)}", file=stream)
+    return total
+
+
+def _short_location(warning: RecordedWarning, rootdir: Path | None) -> str:
+    """Where a warning was raised, read against `rootdir` when it is under it -- the same
+    rootdir-relative spelling every test id in this report has. A path outside it (a warning from
+    an installed dependency) is left absolute, as is every path when there is no rootdir."""
+    if rootdir is None:
+        return warning.location
     try:
-        relative = os.path.relpath(warning.filename, Path.cwd())
+        relative = os.path.relpath(warning.filename, rootdir)
     except ValueError:
         return warning.location
     return warning.location if relative.startswith("..") else f"{relative}:{warning.lineno}"

@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import overload
@@ -445,6 +446,29 @@ def _resolve_layered(cli_value, config_value, default=None):
     return default
 
 
+def _report_warnings(rootdir: Path) -> None:
+    """Print the warnings a run raised on its way to an exit that never reaches `Reporter`."""
+    _report.print_warnings(
+        [(_report.NO_TEST_RUNNING, _warnings.session_warnings())],
+        stream=sys.stdout,
+        rootdir=rootdir,
+        color_enabled=_color.color_enabled(sys.stdout),
+    )
+
+
+def _parse_filters(
+    config: _config.Config, from_cli: Sequence[str]
+) -> tuple[str | None, tuple[_warnings.WarningFilter, ...]]:
+    """The run's warning filters, `[tool.velox]`'s first and the `-W` ones after — or a usage
+    error naming whichever of the two wrote the spec that couldn't be parsed."""
+    configured = config.filterwarnings or ()
+    try:
+        return None, _warnings.parse_filters((*configured, *from_cli))
+    except _warnings.FilterError as exc:
+        source = f"{config.source} 'filterwarnings':" if exc.spec in configured else "-W"
+        return f"{source} {exc}", ()
+
+
 def main(argv: list[str] | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -604,16 +628,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Both tiers, in precedence order rather than layered like the scalars above: warning
     # filters accumulate, and the last one to match a warning is the one that decides it,
-    # so a `-W` on the command line simply follows what [tool.velox] already said.
+    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
+    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
+    # class the suite defines itself is not importable before then.
     effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
-    try:
-        # Parsed here only to reject a bad spec as the usage error it is -- run_suite parses
-        # the same strings again for itself, since a spec also has to survive the trip to an
-        # @velox.isolated test's subprocess.
-        _warnings.parse_filters(args.filterwarnings)
-    except _warnings.FilterError as exc:
-        print(f"velox: -W {exc}", file=sys.stderr)
-        return 4
 
     # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
     # relative to wherever [tool.velox] was declared, so they're resolved against
@@ -698,9 +716,6 @@ def main(argv: list[str] | None = None) -> int:
     hook_already_installed = False
     warnings_installed = False
     try:
-        # Ahead of _rewrite.install and of the first test-module import below: a module that
-        # warns at import time warns during collection, and this is what records it.
-        warnings_installed = _warnings.install(_warnings.parse_filters(effective_filterwarnings))
         # Must be installed before any test module is imported below -- a module
         # already in sys.modules can't retroactively be rewritten. warn already
         # happened inside plan above, so this call is handed the decision it made
@@ -713,6 +728,15 @@ def main(argv: list[str] | None = None) -> int:
         # install's signature to accept a pre-discovered file list.
         hook_already_installed = _rewrite.installed_hook() is not None
         _rewrite.install(roots, setup=setup, warn=False)
+        # After the hook, and before the first test-module import below: resolving a filter's
+        # category imports the module holding it, which for one of the suite's own must go
+        # through the rewrite hook like any other, and a module that warns at import time warns
+        # during collection, which this is what records.
+        problem, session_filters = _parse_filters(config, args.filterwarnings)
+        if problem is not None:
+            print(f"velox: {problem}", file=sys.stderr)
+            return 4
+        warnings_installed = _warnings.install(session_filters)
         # config.test_file_patterns/config.ignore replace discover_files's own
         # defaults outright when set, not add to them -- a user who wants "the
         # defaults plus one more" repeats the defaults themselves. is not None, not
@@ -762,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"velox: no test matches {', '.join(repr(name) for name in missing)}",
                     file=sys.stderr,
                 )
+                _report_warnings(rootdir)
                 return 4
 
         # Shared with reporter's own coloring (it resolves the same thing internally
@@ -771,7 +796,11 @@ def main(argv: list[str] | None = None) -> int:
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
-            return _report_collection(collected, color_enabled=color_enabled)
+            status = _report_collection(collected, color_enabled=color_enabled)
+            # Collection is what imports every test module, so a module that warns at import
+            # has warned by now -- and this is the only report this run will print.
+            _report_warnings(rootdir)
+            return status
 
         capture_passthrough = args.capture == "no" or args.capture_s
         # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
@@ -793,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
             stream=sys.stdout,
             verbosity=verbosity,
             durations=args.durations,
+            rootdir=rootdir,
         )
 
         # Set by run_suite's own on_interrupt callback, from the loop, the first time a

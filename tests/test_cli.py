@@ -1765,3 +1765,57 @@ def test_the_json_report_carries_the_warnings_a_test_raised(project: Project) ->
     assert warning["category"] == "DeprecationWarning"
     assert warning["message"] == "legacy call"
     assert warning["count"] == 1
+
+
+def test_a_filter_can_name_a_warning_class_the_suite_defines(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Resolving a spec's category imports the module holding it, which for one of the suite's
+    own only resolves once the rootdir is on `sys.path`."""
+    chdir_project.write_pyproject(
+        "[tool.velox]\nfilterwarnings = ['error::myapp.warnings.LegacyWarning']\n"
+    )
+    chdir_project.write("myapp/__init__.py", "")
+    chdir_project.write("myapp/warnings.py", "class LegacyWarning(UserWarning): pass\n")
+    chdir_project.write(
+        "test_sample.py",
+        "import warnings\n\nfrom myapp.warnings import LegacyWarning\n\n"
+        "async def test_warns():\n"
+        "    warnings.warn('legacy', LegacyWarning, stacklevel=1)\n",
+    )
+
+    status = main([])
+
+    assert status == 1
+    assert "LegacyWarning: legacy" in capsys.readouterr().out
+
+
+def test_a_malformed_configured_filter_names_the_config_file(
+    chdir_project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['shout::UserWarning']\n")
+    chdir_project.write_passing_test()
+
+    status = main([])
+
+    err = capsys.readouterr().err
+    assert status == 4
+    assert "pyproject.toml" in err
+    assert "unknown action" in err
+
+
+def test_collect_only_still_reports_what_collection_warned_about(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import warnings\n\n"
+        "warnings.warn('at import', UserWarning, stacklevel=1)\n\n"
+        "async def test_ok():\n    pass\n",
+    )
+
+    status = main([str(project.root), "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "UserWarning: at import" in out

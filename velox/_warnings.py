@@ -61,7 +61,15 @@ MAX_DISTINCT_WARNINGS = 1000
 
 class FilterError(ValueError):
     """A filter spec that can't be parsed: an unknown action or category, a bad regex, or more
-    than the five `action:message:category:module:lineno` fields."""
+    than the five `action:message:category:module:lineno` fields.
+
+    `spec` is the text that couldn't be parsed, so a caller holding several tiers of specs can
+    say which of them wrote it.
+    """
+
+    def __init__(self, spec: str, problem: str) -> None:
+        super().__init__(f"{spec!r}: {problem}")
+        self.spec = spec
 
 
 @final
@@ -123,7 +131,7 @@ def parse_filter(spec: str) -> WarningFilter:
     parts = spec.split(":")
     if len(parts) > 5:
         raise FilterError(
-            f"{spec!r}: too many fields -- expected at most action:message:category:module:lineno"
+            spec, "too many fields -- expected at most action:message:category:module:lineno"
         )
     parts += [""] * (5 - len(parts))
     action_text, message, category_text, module, lineno_text = (part.strip() for part in parts)
@@ -149,7 +157,7 @@ def _action(text: str, *, spec: str) -> Action:
     for action in _ACTIONS:
         if action.startswith(text):
             return action
-    raise FilterError(f"{spec!r}: unknown action {text!r} (one of {', '.join(_ACTIONS)})")
+    raise FilterError(spec, f"unknown action {text!r} (one of {', '.join(_ACTIONS)})")
 
 
 def _pattern(text: str, *, field: str, spec: str, flags: int) -> re.Pattern[str] | None:
@@ -158,7 +166,7 @@ def _pattern(text: str, *, field: str, spec: str, flags: int) -> re.Pattern[str]
     try:
         return re.compile(text, flags)
     except re.error as exc:
-        raise FilterError(f"{spec!r}: {field} {text!r} is not a valid regex: {exc}") from exc
+        raise FilterError(spec, f"{field} {text!r} is not a valid regex: {exc}") from exc
 
 
 def _category(text: str, *, spec: str) -> type[Warning]:
@@ -172,13 +180,13 @@ def _category(text: str, *, spec: str) -> type[Warning]:
         try:
             found: object = getattr(importlib.import_module(module_name), class_name)
         except (ImportError, AttributeError) as exc:
-            raise FilterError(f"{spec!r}: can't resolve warning category {text!r}: {exc}") from exc
+            raise FilterError(spec, f"can't resolve warning category {text!r}: {exc}") from exc
     else:
         found = getattr(builtins, class_name, None)
         if found is None:
-            raise FilterError(f"{spec!r}: unknown warning category {text!r}")
+            raise FilterError(spec, f"unknown warning category {text!r}")
     if not (isinstance(found, type) and issubclass(found, Warning)):
-        raise FilterError(f"{spec!r}: {text!r} is not a Warning subclass")
+        raise FilterError(spec, f"{text!r} is not a Warning subclass")
     return found
 
 
@@ -188,9 +196,9 @@ def _lineno(text: str, *, spec: str) -> int:
     try:
         lineno = int(text)
     except ValueError as exc:
-        raise FilterError(f"{spec!r}: lineno {text!r} is not an integer") from exc
+        raise FilterError(spec, f"lineno {text!r} is not an integer") from exc
     if lineno < 0:
-        raise FilterError(f"{spec!r}: lineno {lineno} is negative")
+        raise FilterError(spec, f"lineno {lineno} is negative")
     return lineno
 
 
