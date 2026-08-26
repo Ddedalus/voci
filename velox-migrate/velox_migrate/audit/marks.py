@@ -8,14 +8,13 @@ exactly.
 
 from __future__ import annotations
 
-import ast
 from collections.abc import Iterator
 
 from velox_migrate import matrix
 from velox_migrate.audit import wiring
 from velox_migrate.audit.findings import Finding, Site
 from velox_migrate.audit.reach import Reach
-from velox_migrate.model import GroundTruth, Item
+from velox_migrate.model import GroundTruth, Item, literal
 
 # Marks velox records once per test, so two of them is a collection error rather than a contest.
 SCALAR_MARKS = frozenset({"skip", "xfail", "timeout"})
@@ -122,16 +121,9 @@ def _usefixtures_with_origin(item: Item) -> Iterator[tuple[str, str]]:
         if mark.name != "usefixtures":
             continue
         for argument in mark.args:
-            name = _literal(argument)
+            name = literal(argument)
             if isinstance(name, str):
                 yield name, mark.origin or _SESSION
-
-
-def _literal(text: str) -> object:
-    try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
-        return None
 
 
 def _origin_site(origin: str, path: str) -> Site:

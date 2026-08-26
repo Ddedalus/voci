@@ -872,14 +872,15 @@ class _Scanner(cst.CSTVisitor):
     def _takes(self, name: str) -> bool:
         """Whether `name` here is the fixture pytest injects, rather than an ordinary parameter.
 
-        The innermost `def` that declares the parameter decides, since it shadows any above it,
-        and it only means the fixture when pytest is what calls that `def`. A suite whose domain
-        objects are called `request` — an HTTP client's, a web framework's — otherwise reads as
-        one holding the fixture in every handler it writes.
+        The innermost `def` that declares the parameter decides, since it shadows any above it.
+        Only `request` also asks who calls that `def`: it is the one of these names a suite spells
+        for an object of its own — an HTTP request, a web framework's — and a suite full of them
+        otherwise reads as one holding pytest's in every handler it writes. The rest are pytest's
+        alone, so a helper the suite hands one to is still where the hazard is written.
         """
         for frame in reversed(self._stack):
             if frame.is_function and name in frame.params:
-                return frame.injects
+                return frame.injects if name == REQUEST else True
         return False
 
     def _binds(self, name: str) -> bool:

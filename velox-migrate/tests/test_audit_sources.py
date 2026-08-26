@@ -214,6 +214,20 @@ def handler(request):
     assert _codes(source) == []
 
 
+def test_a_builtin_handed_to_a_helper_is_still_read_there() -> None:
+    # `request` is the only one of these names a suite also spells for an object of its own, so
+    # the rest are pytest's wherever they are declared: the helper is where the hazard is written.
+    source = """
+def _patch_env(monkeypatch):
+    monkeypatch.setenv("TZ", "UTC")
+
+def test_a(monkeypatch):
+    _patch_env(monkeypatch)
+"""
+
+    assert _codes(source) == ["VX401"]
+
+
 def test_a_test_and_a_test_method_take_the_request_pytest_injects() -> None:
     source = """
 def test_engine(request):

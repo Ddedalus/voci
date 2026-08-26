@@ -119,6 +119,13 @@ Each was invisible to the corpus, which has no async plugin in it at all; `tests
 grafts anyio's wiring onto a corpus dump rather than adding a suite, since what needed pinning is
 what the plugin does to a dump.
 
+**Not fixed: VX324 reads callspecs, so a backend chosen in a fixture body is invisible.** A suite
+whose own `anyio_backend` returns `"trio"` unparametrized runs entirely on trio with nothing
+reported — the value is in a function body, which is the source scan's half of the audit, and the
+scan has no notion of which fixture decides a loop. The shape that matters here is the parametrized
+one, which is anyio's default and what every suite that has not thought about it gets. Worth a row
+of its own only if a suite is ever found that pins the wrong backend deliberately.
+
 **Not fixed: VX413 over-reports on a URL-heavy suite.** 89 of its sites are strings like
 `"http://localhost:8080/"` handed to a *mock* network backend — no port is ever bound. The row's
 heuristic is a host-and-port literal, and narrowing it to calls that bind would miss the ones that

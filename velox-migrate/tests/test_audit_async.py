@@ -42,22 +42,48 @@ _BACKEND_DEF: dict[str, Any] = {
 }
 
 
+_PINNED_KEY = "suite-anyio-backend"
+
+_PINNED_DEF: dict[str, Any] = {
+    "argname": "anyio_backend",
+    "scope": "function",
+    "params": None,
+    "ids": None,
+    "autouse": False,
+    "visibility": "",
+    "kind": "FixtureDef",
+    "direct_param": False,
+    "argnames": [],
+    "func": {
+        "module": "conftest",
+        "qualname": "anyio_backend",
+        "file": "conftest.py",
+        "lineno": 1,
+        "wrapped": False,
+    },
+}
+
+
 def _dump() -> dict[str, Any]:
     text = (DUMPS / f"{SUITE}-pytest-9.1.json").read_text(encoding="utf-8")
     return json.loads(text)
 
 
-def _with_anyio(*backends: str) -> dict[str, Any]:
+def _with_anyio(*backends: str, options: bool = False, pinned: bool = False) -> dict[str, Any]:
     """The corpus dump as anyio leaves it: one case per backend, per test it marks.
 
     Only the tests that carry no callspec of their own are marked, so the parametrization the
-    corpus suite already has stays readable beside the one grafted on here.
+    corpus suite already has stays readable beside the one grafted on here. `options` writes each
+    parameter as anyio's `(name, options)` pair rather than as a bare name, and `pinned` adds the
+    suite's own `anyio_backend` above the plugin's, which is what pinning the backend looks like.
     """
     dump = _dump()
     dump["plugins"]["distinfo"].append(
         {"plugin": "anyio.pytest_plugin", "dist": "anyio", "version": "4.13.0"}
     )
     dump["fixture_defs"][BACKEND_KEY] = _BACKEND_DEF
+    if pinned:
+        dump["fixture_defs"][_PINNED_KEY] = _PINNED_DEF
 
     items: list[dict[str, Any]] = []
     for item in dump["items"]:
@@ -77,11 +103,12 @@ def _with_anyio(*backends: str) -> dict[str, Any]:
             case["usefixtures"] = [BACKEND_KEY]
             case["initialnames"] = [BACKEND_KEY, *case["initialnames"]]
             case["names_closure"] = [BACKEND_KEY, *case["names_closure"]]
-            case["name2fixturedefs"][BACKEND_KEY] = [BACKEND_KEY]
+            chain = [BACKEND_KEY, _PINNED_KEY] if pinned else [BACKEND_KEY]
+            case["name2fixturedefs"][BACKEND_KEY] = chain
             case["callspec"] = {
                 "id": backend,
                 "idlist": [backend],
-                "params": {BACKEND_KEY: f"'{backend}'"},
+                "params": {BACKEND_KEY: f"('{backend}', {{}})" if options else f"'{backend}'"},
                 "indices": {BACKEND_KEY: index},
                 "marks": [],
             }
@@ -116,6 +143,29 @@ def test_a_backend_parametrization_over_asyncio_alone_is_nothing_to_report() -> 
     result = _audit(_with_anyio("asyncio"))
 
     assert _by_code(result, "VX324") == ()
+
+
+def test_a_backend_named_in_a_pair_with_its_options_is_read_the_same_way() -> None:
+    # anyio takes either the backend's name or a `(name, options)` pair, and a suite that passes
+    # uvloop options to asyncio parametrizes over the pair form for every backend it lists.
+    result = _audit(_with_anyio("asyncio", "trio", options=True))
+
+    findings = _by_code(result, "VX324")
+    assert findings
+    assert all(finding.detail["backend"] == "trio" for finding in findings)
+
+
+def test_pinning_the_backend_in_the_suite_does_not_hand_its_marks_back() -> None:
+    # The prefactor for this is a suite-level `anyio_backend`, which wins the name without
+    # stopping anyio from hanging the mark — so the mark is still the plugin's wiring.
+    result = _audit(_with_anyio("asyncio", pinned=True))
+
+    named = {
+        finding.detail.get("fixture")
+        for code in ("VX009", "VX010")
+        for finding in _by_code(result, code)
+    }
+    assert BACKEND_KEY not in named
 
 
 def test_the_usefixtures_mark_the_plugin_hangs_on_a_test_is_not_the_suites() -> None:

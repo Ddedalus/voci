@@ -16,7 +16,7 @@ import ast
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from velox_migrate import matrix
+from velox_migrate import matrix, model
 from velox_migrate.audit.findings import Finding, Site
 from velox_migrate.audit.reach import Reach
 from velox_migrate.model import FixtureDef, GroundTruth, Item
@@ -109,7 +109,11 @@ def plugin_wired(ground_truth: GroundTruth) -> frozenset[str]:
     """
     provider = _providers(ground_truth)
     names: set[str] = set()
-    for fixture in reached(ground_truth).values():
+    # Every definition the dump carries rather than the ones tests resolve: a suite that pins the
+    # backend defines an `anyio_backend` of its own, which wins the name without stopping anyio
+    # from hanging the mark. What makes the mark the plugin's is that the plugin defines the name
+    # at all, not which definition the override contest ended on.
+    for fixture in ground_truth.fixture_defs.values():
         if in_suite(fixture):
             continue
         root = (fixture.func.module or "").split(".")[0]
@@ -142,8 +146,8 @@ def _backend_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
         value = item.callspec.params.get(_BACKEND_FIXTURE)
         if value is None:
             continue
-        backend = _literal(value)
-        if isinstance(backend, str) and backend != _ASYNCIO:
+        backend = _backend_name(model.literal(value))
+        if backend is not None and backend != _ASYNCIO:
             grouped.setdefault((item.path, backend), []).append(item.nodeid)
 
     for (path, backend), tests in sorted(
@@ -416,12 +420,17 @@ def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
                 )
 
 
-def _literal(text: str) -> object:
-    """The value the dump's `repr` of a parameter stands for, or `None` when it is not one."""
-    try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
-        return None
+def _backend_name(value: object) -> str | None:
+    """The backend a parameter of `anyio_backend` names, whichever of its two shapes it took.
+
+    anyio takes either the backend's name or a `(name, options)` pair, so a suite that passes
+    uvloop options to asyncio, or that names its own trio clock, parametrizes over tuples.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, tuple | list) and value and isinstance(value[0], str):
+        return value[0]
+    return None
 
 
 def _parametrized_names(argnames: str) -> tuple[str, ...]:

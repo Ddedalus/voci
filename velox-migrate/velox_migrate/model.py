@@ -9,6 +9,7 @@ fixture it overrides.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,19 @@ from velox_migrate.schema import DumpError
 # pytest lists `request` in a closure like any other name, but it has no definition and nothing
 # downstream treats it as a fixture.
 REQUEST = "request"
+
+
+def literal(text: str) -> object:
+    """The value a dump's `repr` of a mark argument or a parameter stands for.
+
+    Everything the extractor cannot serialize survives as the text of its `repr`, so a reader that
+    wants the value back has to evaluate it, and gets `None` for the ones that were never
+    literals — a fixture object, a class, a lambda in a `parametrize` list.
+    """
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
