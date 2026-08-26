@@ -24,10 +24,11 @@ from velox_migrate.verify.runners import (
     Run,
     RunnerError,
     load_record,
-    parse_velox,
+    load_velox_report,
     record,
     run_pytest,
     run_velox,
+    velox_record,
 )
 
 __all__ = [
@@ -38,11 +39,12 @@ __all__ = [
     "Verification",
     "compare",
     "load_record",
-    "parse_velox",
+    "load_velox_report",
     "record",
     "run",
     "run_pytest",
     "run_velox",
+    "velox_record",
 ]
 
 #: What a divergence is, worst first — the order the review queue is listed in. `missing` leads:
