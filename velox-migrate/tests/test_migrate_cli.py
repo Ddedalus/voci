@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +13,10 @@ import pytest
 
 from velox_migrate import cli, extractor, schema
 
-SUITE = Path(__file__).resolve().parents[1] / "corpus" / "fixtures_showcase"
+CORPUS = Path(__file__).resolve().parents[1] / "corpus"
+SUITE = CORPUS / "fixtures_showcase"
+# A checked-in dump of SUITE, so the convert tests need no pytest run of their own.
+DUMP = CORPUS / "dumps" / "fixtures_showcase-pytest-8.4.json"
 
 
 def test_the_cli_names_the_same_default_output_as_the_plugin() -> None:
@@ -175,3 +180,71 @@ def test_auditing_against_the_wrong_tree_refuses_rather_than_reporting_no_hazard
 
     assert code == 1
     assert "--root" in capsys.readouterr().err
+
+
+class _ClosedPipe:
+    """A stdout that fails every write, as the far end of a pipe does once its reader quits."""
+
+    def write(self, text: str) -> int:
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+    def flush(self) -> None:
+        pass
+
+
+def _copy_of_showcase(tmp_path: Path, name: str) -> Path:
+    suite = tmp_path / name
+    shutil.copytree(SUITE, suite)
+    return suite
+
+
+def _tree(root: Path) -> dict[str, str]:
+    """Every source file under `root`, keyed by its relative path."""
+    return {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in sorted(root.rglob("*.py"))
+        if "__pycache__" not in path.parts
+    }
+
+
+def test_converting_without_write_says_so_and_leaves_the_tree_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    suite = _copy_of_showcase(tmp_path, "suite")
+    before = _tree(suite)
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite)])
+
+    assert code == 0
+    assert "nothing written; pass --write to apply" in capsys.readouterr().out
+    assert _tree(suite) == before
+
+
+def test_converting_with_write_rewrites_the_tree_and_counts_the_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    suite = _copy_of_showcase(tmp_path, "suite")
+    before = _tree(suite)
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 0
+    assert "file(s) under" in capsys.readouterr().out
+    assert _tree(suite) != before
+
+
+def test_a_reader_who_quits_part_way_through_the_diff_still_gets_the_whole_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reading the plan through a pager and quitting it kills this process on its next write. The
+    # tree that is left behind has to be the converted one, not however much of it had been
+    # printed before the pipe closed.
+    read = _copy_of_showcase(tmp_path, "read")
+    assert cli.main(["convert", "-d", str(DUMP), "-r", str(read), "--write"]) == 0
+    interrupted = _copy_of_showcase(tmp_path, "interrupted")
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
+
+    with pytest.raises(BrokenPipeError):
+        cli.main(["convert", "-d", str(DUMP), "-r", str(interrupted), "--write"])
+
+    assert _tree(interrupted) == _tree(read)

@@ -38,10 +38,9 @@ uv run velox                           # same 1183, at concurrency
 `~/velox` is wherever this repo is checked out; the two `-e` paths are what make the `velox` and
 `velox-migrate` commands resolve inside that environment.
 
-Do not pipe `convert --write` into `head`. It prints the whole plan and diff before it writes, so
-closing the pipe early kills it partway through and leaves a half-converted tree with a zero exit
-status from the pipeline — the failure looks like hundreds of collection errors rather than like
-an error. Redirect to a file if the diff is too long to read inline.
+`convert --write` writes the whole tree before it prints a line of the plan or the diff, so
+piping it into `head` or quitting the pager early leaves the converted suite intact. Redirect to a
+file if the diff is too long to read inline.
 
 ## Result
 
