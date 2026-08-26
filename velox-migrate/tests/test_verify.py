@@ -145,83 +145,55 @@ def test_a_run_that_could_not_collect_is_not_a_clean_verification() -> None:
     assert "could not collect u.py" in verify_report.terminal(verification)
 
 
-def test_velox_output_is_read_back_test_for_test() -> None:
-    output = (
-        "config: none\n"
-        "PASSED    tests/test_a.py::test_one                            0.01s\n"
-        "PASSED    tests/test_a.py::test_two[b b]                       0.00s\n"
-        "CANCELLED tests/test_a.py::test_three                          0.00s\n"
-        "FAIL  tests/test_a.py                        3 tests  Σ 0.01s   (1 failed)\n"
-    )
+def _velox_report(**overrides: object) -> dict:
+    base: dict = {
+        "report_version": 1,
+        "runner": "velox",
+        "exit_status": 0,
+        "collection_errors": [],
+        "tests": [
+            {"id": "tests/test_a.py::test_one", "outcome": "passed", "duration": 0.01},
+            {
+                "id": "tests/test_a.py::test_two[b b]",
+                "outcome": "passed",
+                "duration": 0.0,
+            },
+            {
+                "id": "tests/test_a.py::test_three",
+                "outcome": "cancelled",
+                "duration": 0.0,
+            },
+        ],
+    }
+    base.update(overrides)
+    return base
 
-    parsed, errors = verify.parse_velox(output)
 
-    assert parsed == {
+def test_a_velox_report_is_read_back_test_for_test() -> None:
+    run = verify.velox_record(_velox_report(), tree=Path("."))
+
+    assert run.outcomes == {
         "tests/test_a.py::test_one": "passed",
         "tests/test_a.py::test_two[b b]": "passed",
         "tests/test_a.py::test_three": "cancelled",
     }
-    assert errors == ()
 
 
-def test_a_tests_own_output_is_not_read_as_a_verdict() -> None:
-    # A failing test's captured output is printed under it, and nothing stops it from looking
-    # like a report line. Only velox's own outcome words are read as one.
-    output = (
-        "PASSED    tests/test_a.py::test_one                            0.01s\n"
-        "--- captured stdout ---\n"
-        "ELAPSED   whatever the test decided to print                   1.00s\n"
+def test_a_velox_reports_collection_errors_carry_through() -> None:
+    run = verify.velox_record(
+        _velox_report(collection_errors=["tests/test_a.py"], tests=[]), tree=Path(".")
     )
 
-    parsed, _ = verify.parse_velox(output)
-
-    assert parsed == {"tests/test_a.py::test_one": "passed"}
-
-
-def test_tests_a_skip_mark_kept_out_of_the_run_are_still_read_as_skipped() -> None:
-    # They never reach a per-test line, and pytest reports them as skipped, so without the
-    # section every skip-marked test in the suite would read as one velox never ran.
-    output = (
-        "SKIPPED   tests/test_a.py::test_runtime                        0.00s\n"
-        "\n"
-        "--- skipped 2 tests ---\n"
-        "tests/test_a.py::test_marked - not yet\n"
-        "tests/test_a.py::test_runtime - nope\n"
-        "\n"
-        "1 skipped\n"
-    )
-
-    parsed, _ = verify.parse_velox(output)
-
-    assert parsed == {
-        "tests/test_a.py::test_runtime": "skipped",
-        "tests/test_a.py::test_marked": "skipped",
-    }
+    assert run.outcomes == {}
+    assert run.collection_errors == ("tests/test_a.py",)
 
 
-def test_a_file_velox_could_not_import_is_reported_as_a_collection_error() -> None:
-    output = "tests/test_a.py COLLECTION ERROR\nTraceback (most recent call last):\n"
+def test_a_velox_report_from_another_version_of_the_tool_is_refused(tmp_path: Path) -> None:
+    report = tmp_path / "velox-report.json"
+    report.write_text(json.dumps(_velox_report(report_version=99)), encoding="utf-8")
 
-    parsed, errors = verify.parse_velox(output)
-
-    assert parsed == {}
-    assert errors == ("tests/test_a.py",)
-
-
-def test_the_short_test_summary_is_not_read_as_more_verdicts() -> None:
-    # Its lines are `OUTCOME id - reason`, and a reason ending in a duration — any timing
-    # assertion — is a verdict line down to the last character.
-    output = (
-        "PASSED    tests/test_a.py::test_fast                           0.01s\n"
-        "FAILED tests/test_a.py::test_slow\n"
-        "Traceback (most recent call last):\n"
-        "--- short test summary ---\n"
-        "FAILED tests/test_a.py::test_slow - AssertionError: took 1.23s\n"
-    )
-
-    parsed, _ = verify.parse_velox(output)
-
-    assert parsed == {"tests/test_a.py::test_fast": "passed"}
+    with pytest.raises(verify.RunnerError, match="report version"):
+        verify.load_velox_report(report)
 
 
 def test_a_run_of_a_suite_neither_runner_collected_is_not_a_pass() -> None:

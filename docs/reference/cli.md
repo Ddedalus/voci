@@ -31,7 +31,7 @@ $ velox --help
 usage: velox [-h] [--version] [-k EXPR] [-m EXPR] [--assert {rewrite,plain}]
              [--rewrite-cache DIR] [--concurrency N] [--timeout SECONDS]
              [--loop-watchdog SECONDS] [--capture no] [-s] [--serial] [--maxfail N] [-x] [-v]
-             [-q] [--durations N] [--collect-only] [--basetemp DIR]
+             [-q] [--durations N] [--collect-only] [--report-json PATH] [--basetemp DIR]
              [paths ...]
 ```
 
@@ -138,6 +138,12 @@ list.
 
 Print the id of every selected test, in the order they would run, and exit without running any of
 them.
+
+### `--report-json PATH`
+
+Write one JSON record of the run to PATH: an outcome, duration and failure reason per test, so a
+consumer reads the result as data instead of parsing this reporter's own output. Not written for
+--collect-only, which never runs anything to report on.
 
 ### `--basetemp DIR`
 

@@ -28,6 +28,7 @@ from velox._collection import discovery as _discovery
 from velox._collection import selection as _selection
 from velox._collection import targets as _targets
 from velox._report import color as _color
+from velox._report import json_report as _json_report
 from velox._report import terminal as _report
 from velox._run import isolated as _isolated
 from velox._run import run as _run
@@ -213,6 +214,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the id of every selected test, in the order they would run, and exit "
         "without running any of them.",
+    )
+    parser.add_argument(
+        "--report-json",
+        dest="report_json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Write one JSON record of the run to PATH: an outcome, duration and failure reason "
+        "per test, so a consumer reads the result as data instead of parsing this reporter's own "
+        "output. Not written for --collect-only, which never runs anything to report on.",
     )
     # A fresh, numbered session root by default (see
     # _capture.DEFAULT_BASETEMP_RETENTION), or this override. Validated by hand in
@@ -831,9 +842,23 @@ def main(argv: list[str] | None = None) -> int:
         # 2, not what the partial results happen to add up to: an interrupted run never
         # got to the point of having a verdict, and exiting 0 because the tests that did
         # finish passed would let a Ctrl-C read as success in CI.
-        if interrupted:
-            return 2
-        return _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
+        exit_status = (
+            2
+            if interrupted
+            else _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
+        )
+        if args.report_json is not None:
+            _json_report.write_report(
+                args.report_json,
+                records=collected.records,
+                results=results,
+                skipped=collected.skipped,
+                collection_errors=collected.errors,
+                rootdir=rootdir,
+                exit_status=exit_status,
+                wall_clock=wall_clock,
+            )
+        return exit_status
     except KeyboardInterrupt:
         # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second
         # one (the deliberate "abort now" path), or one that landed while this call was

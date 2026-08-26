@@ -1,7 +1,7 @@
 """Running each side of a verification, and reading its outcomes back.
 
-pytest reports through `velox_migrate.outcomes`, which writes a JSON record; velox has no such
-plugin seam, so its side is read off `-v`'s own per-test lines. Both produce the same `Run`.
+pytest reports through `velox_migrate.outcomes`, which writes a JSON record; velox reports through
+its own `--report-json`. Both produce the same `Run`.
 
 Every runner is a subprocess. The two trees are different checkouts of the same suite and each
 runner insists on being the one collecting its tree, so nothing here imports either.
@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,14 +24,21 @@ from pathlib import Path
 DEFAULT_BASELINE = os.path.join(".velox-migrate", "pytest-outcomes.json")
 OUTCOMES_VERSION = 1
 
+# Kept in step with `velox._report.json_report.REPORT_VERSION`, which cannot be imported from
+# either: `verify` runs velox as a subprocess in a tree of its own, possibly a different
+# environment from the one velox-migrate itself is installed in.
+VELOX_REPORT_VERSION = 1
+
 __all__ = [
     "DEFAULT_BASELINE",
     "Run",
     "RunnerError",
     "load_record",
+    "load_velox_report",
     "record",
     "run_pytest",
     "run_velox",
+    "velox_record",
 ]
 
 # pytest's own "collection finished" statuses, plus velox's: all passed, something failed, and
@@ -39,30 +46,6 @@ __all__ = [
 # stopped short of reporting on the whole suite, and comparing against it would read every test
 # it never reached as a divergence.
 CLEAN_EXIT_STATUSES = frozenset({0, 1, 5})
-
-#: `-v`'s per-test line: an outcome word, the id, and the duration it ends on. The id column is
-#: padded rather than clipped, and an id can hold spaces (a `[case id]` may), so the duration is
-#: what bounds it on the right.
-_VELOX_LINE = re.compile(r"^([A-Z]+) +(.+?) +\d+\.\d+s$")
-
-#: The header of `-v`'s section listing tests a `skip` mark kept out of the run entirely. They
-#: never reach a per-test line, and pytest reports them as skipped, so without this half the
-#: suite's skips would read as tests velox never ran.
-_VELOX_SKIPPED_HEADER = re.compile(r"^--- skipped \d+ tests? ---$")
-
-_VELOX_COLLECTION_ERROR = re.compile(r"^(.+?) COLLECTION ERROR$")
-
-#: What ends the run's own output and begins the report about it: a `---` section header, or the
-#: bare `OUTCOME id` heading of a failure's detail block. Everything past it — tracebacks, each
-#: failing test's captured output, the short summary's `OUTCOME id - reason` lines — is prose that
-#: can look like a verdict line, and only the skipped section is read out of it.
-_VELOX_EPILOGUE = re.compile(r"^--- .+ ---$|^([A-Z]+) (\S.*)$")
-
-#: What velox calls its outcomes, lowercased, matching `velox._run.run.Outcome`. Only used to
-#: tell a per-test line from a line of test output that happens to look like one.
-_VELOX_OUTCOMES = frozenset(
-    {"passed", "failed", "error", "skipped", "timeout", "xfailed", "xpassed", "cancelled"}
-)
 
 
 class RunnerError(Exception):
@@ -134,74 +117,42 @@ def run_pytest(tree: Path, *, out: Path, paths: list[str], extra: list[str]) -> 
 
 
 def run_velox(tree: Path, *, paths: list[str], concurrency: int) -> Run:
-    """Run the converted suite under velox at `concurrency`, reading `-v`'s lines back."""
+    """Run the converted suite under velox at `concurrency`, reading `--report-json` back.
+
+    The report goes to a scratch file of this call's own — nothing downstream needs it to
+    outlive the call, unlike the pytest baseline `run_pytest` leaves on disk.
+    """
     executable = _velox_executable()
     if executable is None:
         raise RunnerError(
             "no `velox` command on PATH. `verify` runs both runners, so velox has to be "
             "installed in this environment alongside pytest."
         )
-    command = [executable, *paths, "--concurrency", str(concurrency), "-v"]
-    completed, duration = _run(command, tree)
-    outcomes, errors = parse_velox(completed.stdout)
-    if completed.returncode not in CLEAN_EXIT_STATUSES:
-        # An interrupted or misconfigured run reports on part of the suite at most, and the part
-        # it never reached is indistinguishable from tests the conversion lost.
-        raise RunnerError(
-            f"velox exited {completed.returncode} in {tree}, so it never ran the whole suite "
-            f"and there is nothing to compare:\n{_tail(completed)}"
-        )
-    return Run(
-        runner="velox",
-        tree=tree,
-        outcomes=outcomes,
-        collection_errors=errors,
-        exit_status=completed.returncode,
-        duration=duration,
-        command=tuple(command),
-    )
-
-
-def parse_velox(output: str) -> tuple[dict[str, str], tuple[str, ...]]:
-    """The outcome per test id, and the files that failed to collect, from a `-v` run's output.
-
-    Only the run's own lines are read as verdicts. Everything from the first failure block or
-    section header onwards is the report about the run — tracebacks, captured output, the short
-    summary — where a line looking like a verdict is a coincidence, and only the list of tests a
-    `skip` mark kept out of the run is taken from it.
-    """
-    outcomes: dict[str, str] = {}
-    errors: list[str] = []
-    in_skipped = False
-    in_epilogue = False
-    for line in output.splitlines():
-        if _VELOX_SKIPPED_HEADER.match(line):
-            in_skipped, in_epilogue = True, True
-            continue
-        if in_skipped:
-            # The section runs to the first blank line; each entry is `id - reason`. An id
-            # holding that separator inside a `[case id]` would take the reason with it, which
-            # costs a divergence line rather than a wrong verdict.
-            if not line.strip():
-                in_skipped = False
-                continue
-            skipped_id = line.split(" - ", 1)[0].strip()
-            outcomes.setdefault(skipped_id, "skipped")
-            continue
-        error = _VELOX_COLLECTION_ERROR.match(line)
-        if error:
-            errors.append(error.group(1).strip())
-            continue
-        if in_epilogue:
-            continue
-        match = _VELOX_LINE.match(line)
-        if match and match.group(1).lower() in _VELOX_OUTCOMES:
-            outcomes[match.group(2).strip()] = match.group(1).lower()
-            continue
-        epilogue = _VELOX_EPILOGUE.match(line)
-        if epilogue and (epilogue.group(1) is None or epilogue.group(1).lower() in _VELOX_OUTCOMES):
-            in_epilogue = True
-    return outcomes, tuple(errors)
+    with tempfile.TemporaryDirectory() as scratch:
+        report_path = Path(scratch) / "velox-report.json"
+        command = [
+            executable,
+            *paths,
+            "--concurrency",
+            str(concurrency),
+            "--report-json",
+            str(report_path),
+        ]
+        completed, duration = _run(command, tree)
+        if not report_path.is_file():
+            raise RunnerError(
+                f"velox exited {completed.returncode} in {tree} without writing a report:\n"
+                f"{_tail(completed)}"
+            )
+        if completed.returncode not in CLEAN_EXIT_STATUSES:
+            # An interrupted or misconfigured run reports on part of the suite at most, and the
+            # part it never reached is indistinguishable from tests the conversion lost.
+            raise RunnerError(
+                f"velox exited {completed.returncode} in {tree}, so it never ran the whole suite "
+                f"and there is nothing to compare:\n{_tail(completed)}"
+            )
+        loaded = load_velox_report(report_path)
+    return velox_record(loaded, tree=tree, duration=duration, command=command)
 
 
 def load_record(path: Path) -> dict:
@@ -242,6 +193,39 @@ def record(
         runner=str(loaded.get("runner", "pytest")),
         tree=tree,
         outcomes={str(key): str(value) for key, value in loaded.get("tests", {}).items()},
+        collection_errors=tuple(str(entry) for entry in loaded.get("collection_errors", ())),
+        exit_status=int(loaded.get("exit_status", 0)),
+        duration=duration,
+        command=tuple(command or ()),
+    )
+
+
+def load_velox_report(path: Path) -> dict:
+    """The JSON `--report-json` wrote at `path`, refused unless this tool understands its
+    shape."""
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RunnerError(f"{path} is not a readable report: {exc}") from None
+    if not isinstance(loaded, dict) or loaded.get("report_version") != VELOX_REPORT_VERSION:
+        found = loaded.get("report_version") if isinstance(loaded, dict) else None
+        raise RunnerError(
+            f"{path} is report version {found!r}, and this tool reads version "
+            f"{VELOX_REPORT_VERSION}. Is the `velox` on PATH the version `verify` expects?"
+        )
+    return loaded
+
+
+def velox_record(
+    loaded: dict, *, tree: Path, duration: float = 0.0, command: list[str] | None = None
+) -> Run:
+    """A loaded `--report-json` record as a `Run`. `verify` only needs the outcome per id --
+    `--report-json`'s own duration and failure reason per test are for a consumer with more to
+    say about a divergence than `compare` does."""
+    return Run(
+        runner=str(loaded.get("runner", "velox")),
+        tree=tree,
+        outcomes={str(entry["id"]): str(entry["outcome"]) for entry in loaded.get("tests", ())},
         collection_errors=tuple(str(entry) for entry in loaded.get("collection_errors", ())),
         exit_status=int(loaded.get("exit_status", 0)),
         duration=duration,

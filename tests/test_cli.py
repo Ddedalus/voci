@@ -4,6 +4,7 @@ end to end (discover -> collect -> run -> report -> exit code).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -1426,6 +1427,88 @@ def test_bad_durations_value_is_a_usage_error(capsys: pytest.CaptureFixture[str]
     status = main(["--durations=-1"])
     assert status == 4
     assert "--durations" in capsys.readouterr().err
+
+
+def test_main_report_json_writes_one_record_per_test(project: Project, tmp_path: Path) -> None:
+    """`--report-json` is `main`'s machine-readable alternative to the terminal reporter: one
+    record per test, carrying exactly what a consumer can't get from `-v` today -- outcome,
+    duration and a failure reason, read as data rather than parsed back out of printed text."""
+    project.write(
+        "test_sample.py",
+        "async def test_pass():\n    pass\n\n"
+        "async def test_fail():\n    x = 1\n    assert x == 2\n",
+    )
+    out = tmp_path / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}"])
+
+    assert status == 1
+    report = json.loads(out.read_text())
+    assert report["runner"] == "velox"
+    assert report["exit_status"] == 1
+    assert report["collection_errors"] == []
+    tests = {entry["id"]: entry for entry in report["tests"]}
+    assert set(tests) == {"test_sample.py::test_pass", "test_sample.py::test_fail"}
+    passed = tests["test_sample.py::test_pass"]
+    assert passed["outcome"] == "passed"
+    assert passed["failure_reason"] is None
+    assert isinstance(passed["duration"], float)
+    failed = tests["test_sample.py::test_fail"]
+    assert failed["outcome"] == "failed"
+    assert "AssertionError" in (failed["failure_reason"] or "")
+
+
+def test_main_report_json_includes_skip_marked_tests(project: Project, tmp_path: Path) -> None:
+    """A `skip`-marked test never reaches `run_suite` at all (collection keeps it out of
+    `records`), so without this it would be invisible to a `--report-json` consumer entirely --
+    not merely missing a duration, but absent from the file."""
+    project.write(
+        "test_sample.py",
+        "import velox\n\n@velox.skip('not ready')\nasync def test_skipped():\n    pass\n",
+    )
+    out = tmp_path / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}"])
+
+    assert status == 0
+    report = json.loads(out.read_text())
+    (entry,) = report["tests"]
+    assert entry["id"] == "test_sample.py::test_skipped"
+    assert entry["outcome"] == "skipped"
+    assert entry["failure_reason"] == "not ready"
+
+
+def test_main_report_json_includes_collection_errors(project: Project, tmp_path: Path) -> None:
+    project.write("test_broken.py", "raise RuntimeError('boom')\n")
+    out = tmp_path / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}"])
+
+    assert status == 1
+    report = json.loads(out.read_text())
+    assert report["collection_errors"] == ["test_broken.py"]
+    assert report["tests"] == []
+
+
+def test_main_report_json_not_written_for_collect_only(project: Project, tmp_path: Path) -> None:
+    """`--collect-only` never runs anything, so there is no run to report on."""
+    project.write_passing_test()
+    out = tmp_path / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}", "--collect-only"])
+
+    assert status == 0
+    assert not out.exists()
+
+
+def test_main_report_json_creates_parent_directories(project: Project, tmp_path: Path) -> None:
+    project.write_passing_test()
+    out = tmp_path / "nested" / "dir" / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}"])
+
+    assert status == 0
+    assert out.is_file()
 
 
 def test_main_runs_class_grouped_tests_end_to_end(

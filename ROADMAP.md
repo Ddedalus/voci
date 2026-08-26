@@ -20,19 +20,10 @@ selection by `path.py::test_name` id, `-k` and `@velox.tag` with `-m` · `-x`/`-
 and Ctrl-C, both cancelling what is in flight · `--serial`, `--collect-only`, `-v`/`-q` and
 `--durations` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the event-loop watchdog and the failure a
-test earns for returning a value or dropping a coroutine un-awaited · the reporter ·
-`[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
+test earns for returning a value or dropping a coroutine un-awaited · the reporter · `--report-json`
+· `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
 
 ## Next
-
-**A machine-readable run report.** `--report-json PATH` writes one record per test — id, outcome,
-duration, failure reason — so a consumer reads a run's result as data rather than by parsing the
-terminal reporter. `velox-migrate verify` is the first such consumer and today reads velox's `-v`
-lines back: `verify/runners.py` carries a regex per line shape, a rule that stops reading at the
-run's epilogue so a short-summary line is not mistaken for a verdict, and a second pass over the
-skipped section for tests a `skip` mark kept out of the run entirely. All three collapse into a
-`json.loads` once the record exists, and the pytest side already works this way through
-`velox_migrate/outcomes.py`.
 
 **Codegen**: velox-migrate, plans:
 High-level in `plans/migration-tool-plan.md`
