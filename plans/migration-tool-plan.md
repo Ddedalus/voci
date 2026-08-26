@@ -140,14 +140,16 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.* Target
   suites: marshmallow (smoke — expected zero refusals) and httpx2, pydantic's fork of httpx
   (exit suite). Selection methodology and upstream-httpx numbers are in
-  [oss-refactors-plan.md](oss-refactors-plan.md); httpx2 itself is unaudited as of writing, so its
-  numbers there are inherited from httpx, not measured. Sequenced as:
+  [oss-refactors-plan.md](oss-refactors-plan.md), where httpx2's row is now measured rather than
+  inherited from httpx — see [httpx2-audit.md](httpx2-audit.md). Sequenced as:
 
-  - **0. Scope httpx2** (spike, no code). Run the existing `audit` against it and check what the
-    inherited httpx numbers don't answer: does it still parametrize over `pytest-trio` (VX323,
-    refused — velox only runs asyncio) alongside anyio/asyncio (VX320, converts mechanically), and
-    has the fork changed the conftest/fixture graph. Decides whether httpx2 is viable as an exit
-    suite as-is.
+  - [x] **0. Scope httpx2** (spike, no code). Viable, and four times the size the inherited httpx
+    numbers said. It does still run on trio, in a way neither question anticipated: anyio's own
+    `anyio_backend` fixture is parametrized over both backends, so 294 of 1991 cases are the trio
+    half of an async matrix the suite never writes. The fixture graph is simpler than flask's, with
+    no overrides. The spike was not free of code after all — it found four audit defects, all of
+    them a name read without asking who wrote it, and the numbers below are the ones after the fix.
+    See [httpx2-audit.md](httpx2-audit.md).
   - [x] **1. `verify` subcommand.** Runs pytest on the pre-migration tree and `velox --serial` on
     the converted tree, diffs outcomes through the id map, writes the divergence list. pytest's
     half reports through `outcomes.py`, a second copyable single-file plugin, since a terminal
@@ -159,13 +161,14 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
     it turned up and what the five failures are. Corpus-ified as `classes_showcase` rather than as
     a checked-in marshmallow dump: the dump is 2 MB per pytest version against 504 KB for the
     whole existing corpus, and the machinery marshmallow exercised is what a showcase suite pins.
-  - **3. httpx2: audit findings write-up.** Once step 0 clears it, run `audit` for real and
-    replace the extrapolated httpx row in oss-refactors-plan.md with measured numbers. Determines
-    what step 4 actually needs to build.
-  - **4. First prefactor codemod(s).** `prefactor/` does not exist yet. Build only the rule(s)
-    step 3's findings call for — upstream httpx's own audit showed just two `caplog` attribute
-    sites, which are *unsupported* rather than prefactorable, so this PR may end up small or
-    unnecessary. Don't build the general framework speculatively.
+  - [x] **3. httpx2: audit findings write-up.** Done with step 0, since fixing what the audit got
+    wrong was what produced the numbers worth writing up. 342 blocked of 1991, 88.0% serial on one
+    autouse `clean_environ`, no override chains.
+  - **4. First prefactor codemod(s).** `prefactor/` still does not exist, and step 3's findings do
+    not clearly call for it: httpx2's one prefactor is a suite-level `anyio_backend` fixture
+    returning `"asyncio"`, which is a fixture to write rather than a rule to run. Write it by hand
+    for step 5 and let the tier stay unbuilt unless a second suite wants the same rule. Don't build
+    the general framework speculatively.
   - **5. httpx2: convert + verify.** First conversion of a non-synthetic, non-corpus suite; expect
     codegen bugs the corpus suites didn't exercise (real conftest layout, real plugin config). Get
     it green under `velox --serial`.
@@ -176,8 +179,8 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   - **7. Write-up.** The exit deliverable: both suites, audit findings, verify results, and
     httpx2's before/after concurrency.
 
-  Steps 1–2 are unblocked immediately; 0 and 3 gate whether 4–6 are needed at all or turn out
-  trivial.
+  Steps 0–3 are done. 0 and 3 were meant to gate whether 4–6 are needed at all: 4 stays unbuilt,
+  and 5–6 are where the size of the suite starts to bite.
 
 ## 10. Risks not already covered
 

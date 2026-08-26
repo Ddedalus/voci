@@ -32,8 +32,14 @@ from velox_migrate.audit.findings import Finding, Site
 
 # `request`, `capsys`, `caplog`, `monkeypatch` and `mocker` arrive as fixture parameters rather
 # than as imports, so no qualified name resolves them. They are recognized by name, and only where
-# an enclosing `def` takes them as a parameter — a local called `request` is not pytest's.
+# an enclosing `def` pytest itself calls takes them as a parameter — a local called `request`, or a
+# parameter of a function the suite calls itself, is not pytest's.
 REQUEST = "request"
+
+# What pytest collects as a test, which with a fixture factory is the whole of what it injects
+# into. `python_functions` can widen it; a suite that has changed it is reported under VX302, and
+# reads here as one whose helpers are not tests, which is the conservative direction.
+_TEST_PREFIX = "test"
 
 # What each `request` attribute reaches, for the message. `config` is here for the reads other than
 # `getoption`, which has its own row.
@@ -253,6 +259,10 @@ class _Frame:
     locals: frozenset[str] = frozenset()
     is_function: bool = False
     is_async: bool = False
+    #: Whether pytest fills this function's parameters in. Only a fixture factory and a test have
+    #: their arguments injected; every other `def` is called by code that passes its own, so a
+    #: parameter named `request` there is that code's object rather than pytest's.
+    injects: bool = False
     blocks: list[str] = field(default_factory=list)
     readouterr: list[cst.Call] = field(default_factory=list)
     #: For a class frame, the names its own body binds — what a `self` inside it can still mean
@@ -296,6 +306,8 @@ class _Scanner(cst.CSTVisitor):
                 locals=_assigned_names(node),
                 is_function=True,
                 is_async=node.asynchronous is not None,
+                injects=_is_fixture_def(node)
+                or (name.startswith(_TEST_PREFIX) and (at_module_level or in_class)),
             )
         )
         if in_class and _is_fixture_def(node):
@@ -858,7 +870,17 @@ class _Scanner(cst.CSTVisitor):
         return isinstance(node, cst.Name) and node.value == name and self._takes(name)
 
     def _takes(self, name: str) -> bool:
-        return any(frame.is_function and name in frame.params for frame in self._stack)
+        """Whether `name` here is the fixture pytest injects, rather than an ordinary parameter.
+
+        The innermost `def` that declares the parameter decides, since it shadows any above it,
+        and it only means the fixture when pytest is what calls that `def`. A suite whose domain
+        objects are called `request` — an HTTP client's, a web framework's — otherwise reads as
+        one holding the fixture in every handler it writes.
+        """
+        for frame in reversed(self._stack):
+            if frame.is_function and name in frame.params:
+                return frame.injects
+        return False
 
     def _binds(self, name: str) -> bool:
         """Whether an enclosing function has a name of its own, so a module-level one is hidden."""

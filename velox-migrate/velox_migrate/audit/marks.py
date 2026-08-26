@@ -12,6 +12,7 @@ import ast
 from collections.abc import Iterator
 
 from velox_migrate import matrix
+from velox_migrate.audit import wiring
 from velox_migrate.audit.findings import Finding, Site
 from velox_migrate.audit.reach import Reach
 from velox_migrate.model import GroundTruth, Item
@@ -37,6 +38,7 @@ def _usefixtures_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[F
     # `usefixtures` mark widens is decided by comparing against the module's other tests.
     covered: dict[tuple[str, str], set[str]] = {}
     origins: dict[tuple[str, str], str] = {}
+    plugin_wired = wiring.plugin_wired(ground_truth)
 
     for item in ground_truth.items:
         if item.path is None:
@@ -44,6 +46,10 @@ def _usefixtures_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[F
         for name, origin in _usefixtures_with_origin(item):
             if origin == _SESSION:
                 # Written in the ini file, so it already applies to every test.
+                continue
+            if name in plugin_wired:
+                # The mark is the plugin's own wiring rather than anything the suite wrote, and
+                # migration deletes the plugin, so there is no declaration to place.
                 continue
             covered.setdefault((item.path, name), set()).add(item.nodeid)
             origins.setdefault((item.path, name), origin)

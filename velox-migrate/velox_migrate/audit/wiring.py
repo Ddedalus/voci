@@ -37,6 +37,12 @@ _SCANNED_ELSEWHERE = frozenset({"VX401"})
 # invented for it.
 _SYNTHETIC_PREFIXES = ("_xunit_", "_unittest_")
 
+# The fixture an async plugin parametrizes to pick the event loop a test runs on, and the one
+# value of it velox has. anyio's default is both backends when trio is installed, which doubles
+# the case list rather than announcing itself in any test's source.
+_BACKEND_FIXTURE = "anyio_backend"
+_ASYNCIO = "asyncio"
+
 
 def findings(
     ground_truth: GroundTruth, reach: Reach, *, budget: int = DEFAULT_BUDGET
@@ -47,6 +53,7 @@ def findings(
     found += _override_findings(ground_truth, reach, budget=budget)
     found += _autouse_findings(ground_truth, reach)
     found += _indirect_findings(ground_truth)
+    found += _backend_findings(ground_truth)
     return found
 
 
@@ -93,6 +100,26 @@ def in_suite(fixture: FixtureDef) -> bool:
     return file is not None and not file.startswith("${") and not file.startswith("/")
 
 
+def plugin_wired(ground_truth: GroundTruth) -> frozenset[str]:
+    """The fixture names a plugin wires in itself, and whose whole job the runner already does.
+
+    anyio hangs `usefixtures("anyio_backend")` off every test it marks, so a suite that never
+    writes `usefixtures` collects hundreds of the marks. Naming one is the plugin's wiring, not
+    the suite's, and migration deletes the plugin rather than translating it.
+    """
+    provider = _providers(ground_truth)
+    names: set[str] = set()
+    for fixture in reached(ground_truth).values():
+        if in_suite(fixture):
+            continue
+        root = (fixture.func.module or "").split(".")[0]
+        if root in ("_pytest", "pytest"):
+            continue
+        if matrix.plugin(provider.get(root, root.replace("_", "-"))).code == "VX320":
+            names.add(fixture.argname)
+    return frozenset(names)
+
+
 def reached(ground_truth: GroundTruth) -> dict[str, FixtureDef]:
     """The fixture definitions some collected test resolves, keyed as the dump keys them.
 
@@ -100,6 +127,38 @@ def reached(ground_truth: GroundTruth) -> dict[str, FixtureDef]:
     is described by what its tests reach rather than by what was installed alongside them.
     """
     return {fixture.key: fixture for item in ground_truth.items for fixture in item.walk()}
+
+
+def _backend_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
+    """The cases a backend parametrization schedules on a loop velox does not run.
+
+    Grouped per module: the parametrization is one decision taken for the whole suite, and listing
+    it per case would bury every other finding under one plugin default.
+    """
+    grouped: dict[tuple[str | None, str], list[str]] = {}
+    for item in ground_truth.items:
+        if item.callspec is None:
+            continue
+        value = item.callspec.params.get(_BACKEND_FIXTURE)
+        if value is None:
+            continue
+        backend = _literal(value)
+        if isinstance(backend, str) and backend != _ASYNCIO:
+            grouped.setdefault((item.path, backend), []).append(item.nodeid)
+
+    for (path, backend), tests in sorted(
+        grouped.items(), key=lambda pair: (pair[0][0] or "", pair[0][1])
+    ):
+        yield Finding(
+            code="VX324",
+            message=(
+                f"`{_BACKEND_FIXTURE}` is parametrized over `{backend}`, which "
+                f"{len(tests)} case(s) in this module run on."
+            ),
+            site=Site(path),
+            tests=tuple(sorted(tests)),
+            detail={"fixture": _BACKEND_FIXTURE, "backend": backend},
+        )
 
 
 def _fixture_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Finding]:
@@ -355,6 +414,14 @@ def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
                     tests=cases,
                     detail={"fixture": argname, "cases": len(cases)},
                 )
+
+
+def _literal(text: str) -> object:
+    """The value the dump's `repr` of a parameter stands for, or `None` when it is not one."""
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
 
 
 def _parametrized_names(argnames: str) -> tuple[str, ...]:
