@@ -136,22 +136,37 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 
 ---
 
-### httpx — The Async Story
+### httpx2 — The Async Story
+
+The row below is **measured**, against `pydantic/httpx2` rather than upstream httpx: it is the
+audit reported in [httpx2-audit.md](httpx2-audit.md), which supersedes the extrapolated httpx
+numbers that stood here (539 tests, "VX206 ×2", 7 fixtures) and were wrong about the scale by
+almost four times.
 
 | Metric | Value |
 |--------|-------|
-| Test count | 539 (44 parametrized, 2 classes) |
-| Fixture graph | 7 fixtures / 1 conftest |
-| Plugin dependencies | anyio, trio |
-| Estimated refusals | VX206 ×2 (caplog attributes) |
-| Async footprint | trio/anyio parametrization, async test methods |
+| Test count | 1991 collected, 1973 green under pytest in 27.3s |
+| Fixture graph | 14 fixtures / 2 conftests, **0 overrides** |
+| Plugin dependencies | anyio, pytest-trio, pytest-httpbin, pytest-codspeed, flaky |
+| Blocked | 342 tests (17.2%), 294 of them the trio half of `anyio_backend` |
+| Serializing hazards | VX402 ×5 — one autouse `clean_environ` reaches 1739 tests |
+| Naive serial share | 88.0% |
 
-**Why conditional:**
-- Strong async coverage (parametrized fixtures over `trio.run`, anyio); if velox's async story needs testing, httpx is the proof.
-- Minor refusals (caplog.text/record_tuples in 2 places only).
-- Smaller than flask/rich/jinja; narrower scope.
+**Audit findings:**
+- anyio parametrizes `anyio_backend` over `("asyncio", "trio")` whenever trio is installed, so
+  every async test exists twice and half of it has no loop to run on (VX324 ×23, 294 cases). A
+  suite-level `anyio_backend` returning `"asyncio"` is the prefactor, and it is one fixture rather
+  than a codemod.
+- `clean_environ`, autouse in the root conftest, is the whole 88% — flask's arc on four times the
+  suite.
+- `filterwarnings = ["error"]` suite-wide (VX307) has no velox spelling, so warnings stop failing
+  after conversion. No stage of the pipeline catches what that hides.
+- Small honest drops: 34 codspeed benchmarks, 6 httpbin, 7 `@pytest.mark.trio`, 12 `pytest.warns`,
+  9 `filterwarnings` tests.
 
-**Role:** If Phase 4 includes async test verification, httpx is the candidate. Otherwise, skip.
+**Role:** the Phase 4 exit suite. Four times flask's size, the same concurrency arc, a real
+plugin-wired async story, and no override chains — which is also its one weakness as a corpus:
+like marshmallow, it never fires the specialization machinery.
 
 ---
 
@@ -183,20 +198,25 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
    - If audit shows unexpected refusals, stop and fix the tool.
    - If clean, proceed to verify stage (once implemented).
 
-2. **flask (exit suite + write-up)**
-   - Extract, audit, prefactor (VX210 rewrites), convert, verify, postfactor skills.
-   - Document the arc: "naive conversion = 100% serialized due to autouse monkeypatch → prefactor removes autouse → actual concurrency recovered."
-   - Write up the refusals (VX14/17 in purge_module, VX405 in test_apps) and explain why they're honest.
-   - Measure throughput before/after prefactoring; report in the write-up.
+   Done — see [marshmallow-migration.md](marshmallow-migration.md). The audit was clean and the
+   conversion was not.
 
-3. **rich (optional secondary)**
-   - If flask alone suffices for Phase 4, skip.
-   - If a "larger suite" proof or performance/scale data is desired, extract → audit → prefactor → verify on rich as a second test case.
+2. **httpx2 (exit suite + write-up)** — flask held this slot until httpx2 was scoped; the numbers
+   above are why it changed hands. Audit done, see [httpx2-audit.md](httpx2-audit.md).
+   - Prefactor (pin `anyio_backend` to asyncio), convert, verify, concurrency triage.
+   - Document the arc: naive conversion = 88% serialized on one autouse `clean_environ` →
+     unwinding it recovers concurrency.
+   - Write up what stays under pytest and why, and the VX307 divergence nothing catches.
+   - Measure throughput before/after; report in the write-up.
+
+3. **flask or rich (optional secondary)**
+   - If httpx2 alone suffices for Phase 4, skip.
+   - flask is the one candidate with override chains and 19 `pytest.raises` call-form sites, so it
+     is what to reach for if the prefactor tier needs a codemod to justify existing.
 
 ### Future Extensions (Phase 5+)
 
 - **starlette:** After a tmpdir→tmp_path prefactor codemod is built.
-- **httpx:** If async test support needs validation.
 - **jinja:** If indirect parametrization and params= rewrites need deeper exercise.
 
 ---

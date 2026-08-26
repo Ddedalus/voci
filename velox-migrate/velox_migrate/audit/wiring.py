@@ -16,7 +16,7 @@ import ast
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from velox_migrate import matrix
+from velox_migrate import matrix, model
 from velox_migrate.audit.findings import Finding, Site
 from velox_migrate.audit.reach import Reach
 from velox_migrate.model import FixtureDef, GroundTruth, Item
@@ -37,6 +37,12 @@ _SCANNED_ELSEWHERE = frozenset({"VX401"})
 # invented for it.
 _SYNTHETIC_PREFIXES = ("_xunit_", "_unittest_")
 
+# The fixture an async plugin parametrizes to pick the event loop a test runs on, and the one
+# value of it velox has. anyio's default is both backends when trio is installed, which doubles
+# the case list rather than announcing itself in any test's source.
+_BACKEND_FIXTURE = "anyio_backend"
+_ASYNCIO = "asyncio"
+
 
 def findings(
     ground_truth: GroundTruth, reach: Reach, *, budget: int = DEFAULT_BUDGET
@@ -47,6 +53,7 @@ def findings(
     found += _override_findings(ground_truth, reach, budget=budget)
     found += _autouse_findings(ground_truth, reach)
     found += _indirect_findings(ground_truth)
+    found += _backend_findings(ground_truth)
     return found
 
 
@@ -93,6 +100,30 @@ def in_suite(fixture: FixtureDef) -> bool:
     return file is not None and not file.startswith("${") and not file.startswith("/")
 
 
+def plugin_wired(ground_truth: GroundTruth) -> frozenset[str]:
+    """The fixture names a plugin wires in itself, and whose whole job the runner already does.
+
+    anyio hangs `usefixtures("anyio_backend")` off every test it marks, so a suite that never
+    writes `usefixtures` collects hundreds of the marks. Naming one is the plugin's wiring, not
+    the suite's, and migration deletes the plugin rather than translating it.
+    """
+    provider = _providers(ground_truth)
+    names: set[str] = set()
+    # Every definition the dump carries rather than the ones tests resolve: a suite that pins the
+    # backend defines an `anyio_backend` of its own, which wins the name without stopping anyio
+    # from hanging the mark. What makes the mark the plugin's is that the plugin defines the name
+    # at all, not which definition the override contest ended on.
+    for fixture in ground_truth.fixture_defs.values():
+        if in_suite(fixture):
+            continue
+        root = (fixture.func.module or "").split(".")[0]
+        if root in ("_pytest", "pytest"):
+            continue
+        if matrix.plugin(provider.get(root, root.replace("_", "-"))).code == "VX320":
+            names.add(fixture.argname)
+    return frozenset(names)
+
+
 def reached(ground_truth: GroundTruth) -> dict[str, FixtureDef]:
     """The fixture definitions some collected test resolves, keyed as the dump keys them.
 
@@ -100,6 +131,38 @@ def reached(ground_truth: GroundTruth) -> dict[str, FixtureDef]:
     is described by what its tests reach rather than by what was installed alongside them.
     """
     return {fixture.key: fixture for item in ground_truth.items for fixture in item.walk()}
+
+
+def _backend_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
+    """The cases a backend parametrization schedules on a loop velox does not run.
+
+    Grouped per module: the parametrization is one decision taken for the whole suite, and listing
+    it per case would bury every other finding under one plugin default.
+    """
+    grouped: dict[tuple[str | None, str], list[str]] = {}
+    for item in ground_truth.items:
+        if item.callspec is None:
+            continue
+        value = item.callspec.params.get(_BACKEND_FIXTURE)
+        if value is None:
+            continue
+        backend = _backend_name(model.literal(value))
+        if backend is not None and backend != _ASYNCIO:
+            grouped.setdefault((item.path, backend), []).append(item.nodeid)
+
+    for (path, backend), tests in sorted(
+        grouped.items(), key=lambda pair: (pair[0][0] or "", pair[0][1])
+    ):
+        yield Finding(
+            code="VX324",
+            message=(
+                f"`{_BACKEND_FIXTURE}` is parametrized over `{backend}`, which "
+                f"{len(tests)} case(s) in this module run on."
+            ),
+            site=Site(path),
+            tests=tuple(sorted(tests)),
+            detail={"fixture": _BACKEND_FIXTURE, "backend": backend},
+        )
 
 
 def _fixture_findings(ground_truth: GroundTruth, reach: Reach) -> Iterator[Finding]:
@@ -355,6 +418,19 @@ def _indirect_findings(ground_truth: GroundTruth) -> Iterator[Finding]:
                     tests=cases,
                     detail={"fixture": argname, "cases": len(cases)},
                 )
+
+
+def _backend_name(value: object) -> str | None:
+    """The backend a parameter of `anyio_backend` names, whichever of its two shapes it took.
+
+    anyio takes either the backend's name or a `(name, options)` pair, so a suite that passes
+    uvloop options to asyncio, or that names its own trio clock, parametrizes over tuples.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, tuple | list) and value and isinstance(value[0], str):
+        return value[0]
+    return None
 
 
 def _parametrized_names(argnames: str) -> tuple[str, ...]:

@@ -870,6 +870,15 @@ CONSTRUCTS: tuple[Construct, ...] = (
         action="Keep those tests under pytest, or drop the plugin's use.",
         suite_level=True,
     ),
+    _row(
+        "VX324",
+        "a case parametrized onto an event loop other than asyncio",
+        UNSUPPORTED,
+        "velox runs every async test on asyncio, so the cases a backend fixture produces for "
+        "another loop have nothing to run on and disappear with it.",
+        action="Pin the backend fixture to asyncio, and keep the other loop's coverage under "
+        "pytest.",
+    ),
     # --- hazards -------------------------------------------------------------------------------
     _row(
         "VX401",
@@ -1234,6 +1243,10 @@ PLUGIN_MARKS: Mapping[str, str] = {
     "httpx_mock": "pytest-httpx",
     "benchmark": "pytest-benchmark",
     "subtests": "pytest-subtests",
+    # `asyncio` and `anyio` are the runner's own answer and belong in `KNOWN_MARKS`; `trio` is not,
+    # because velox runs no loop but asyncio, and a tag that silently reschedules a test onto one
+    # is the whole reason this row exists.
+    "trio": "pytest-trio",
 }
 
 # Marks pytest itself, or the runner, answers — so a mark outside this set and outside
@@ -1249,7 +1262,6 @@ KNOWN_MARKS: frozenset[str] = frozenset(
         "timeout",
         "asyncio",
         "anyio",
-        "trio",
         "tryfirst",
         "trylast",
         "hookwrapper",

@@ -28,7 +28,8 @@ test earns for returning a value or dropping a coroutine un-awaited · the repor
 **Codegen**: velox-migrate, plans:
 High-level in `plans/migration-tool-plan.md`
 
-Next: smoke-test on real open-source suites — httpx2 (successor to httpx, active development).
+Next: convert and verify httpx2 (successor to httpx, active development), audited in
+`plans/httpx2-audit.md` and green under pytest at 1973 tests.
 
 ## docs
 High-level plan in `plans/docsite-plan.md`

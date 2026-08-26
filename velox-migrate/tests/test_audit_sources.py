@@ -38,6 +38,7 @@ def _write(directory: Path, name: str, source: str) -> Path:
 
 def test_a_literal_fixture_name_is_a_static_dependency() -> None:
     finding = _only("""
+@pytest.fixture
 def engine(request):
     return request.getfixturevalue("database")
 """)
@@ -50,6 +51,7 @@ def engine(request):
 
 def test_a_computed_fixture_name_is_a_different_row_from_a_literal_one() -> None:
     source = """
+@pytest.fixture
 def engine(request, name):
     return request.getfixturevalue(name)
 """
@@ -59,6 +61,7 @@ def engine(request, name):
 
 def test_a_finalizer_at_the_top_of_a_body_is_unconditional() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     request.addfinalizer(close)
 """
@@ -68,6 +71,7 @@ def engine(request):
 
 def test_a_finalizer_inside_a_block_names_the_block_it_is_under() -> None:
     finding = _only("""
+@pytest.fixture
 def engine(request):
     if wants_teardown:
         request.addfinalizer(close)
@@ -83,10 +87,12 @@ def test_a_finalizer_in_a_with_body_is_unconditional_and_one_in_a_try_body_is_no
     # swallow the failure that stopped it halfway and let the rest of the fixture run without the
     # finalizer that line would have registered.
     source = """
+@pytest.fixture
 def engine(request):
     with open("f") as handle:
         request.addfinalizer(handle.close)
 
+@pytest.fixture
 def session(request):
     try:
         request.addfinalizer(close)
@@ -99,6 +105,7 @@ def session(request):
 
 def test_a_finalizer_inside_a_match_case_is_conditional() -> None:
     finding = _only("""
+@pytest.fixture
 def engine(request, mode):
     match mode:
         case "eager":
@@ -113,6 +120,7 @@ def test_a_finalizer_in_a_nested_def_is_judged_by_that_def_s_own_body() -> None:
     # What matters is the branching in the function that registers the finalizer, not how deep in
     # the file that function itself sits.
     source = """
+@pytest.fixture
 def engine(request):
     if slow:
         def register():
@@ -124,6 +132,7 @@ def engine(request):
 
 def test_the_request_attributes_with_no_counterpart_are_reported() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     print(request.node)
     print(request.cls)
@@ -137,6 +146,7 @@ def test_an_attribute_of_request_with_no_row_of_its_own_is_still_reported() -> N
     # Whether `request` survives the rewrite is what decides if the parameter can go, so an
     # attribute nothing has a translation for has to be seen rather than passed over.
     finding = _only("""
+@pytest.fixture
 def engine(request):
     request.applymarker(slow)
 """)
@@ -147,6 +157,7 @@ def engine(request):
 
 def test_the_three_request_shapes_a_rewrite_answers_are_not_reported_as_survivals() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     request.addfinalizer(close)
     return request.getfixturevalue("database"), request.param
@@ -158,6 +169,7 @@ def engine(request):
 def test_reading_a_command_line_flag_is_reported_as_the_flag_and_nothing_else() -> None:
     # `request.config` is a row of its own, so the intermediate attribute must not double-report.
     source = """
+@pytest.fixture
 def engine(request):
     return request.config.getoption("--slow")
 """
@@ -167,6 +179,7 @@ def engine(request):
 
 def test_request_handed_on_rather_than_read_is_reported_as_held() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     configure(request)
     return {"request": request}
@@ -186,8 +199,65 @@ def test_a():
     assert _codes(source) == []
 
 
+def test_a_request_parameter_of_a_function_pytest_never_calls_is_not_the_fixture() -> None:
+    # An HTTP suite writes mock applications and auth flows that take a request of their own, and
+    # nothing but the name it is spelled with connects those to pytest's.
+    source = """
+class App:
+    def __call__(self, request):
+        return Response(200, headers=request.headers)
+
+def handler(request):
+    send(request)
+"""
+
+    assert _codes(source) == []
+
+
+def test_a_builtin_handed_to_a_helper_is_still_read_there() -> None:
+    # `request` is the only one of these names a suite also spells for an object of its own, so
+    # the rest are pytest's wherever they are declared: the helper is where the hazard is written.
+    source = """
+def _patch_env(monkeypatch):
+    monkeypatch.setenv("TZ", "UTC")
+
+def test_a(monkeypatch):
+    _patch_env(monkeypatch)
+"""
+
+    assert _codes(source) == ["VX401"]
+
+
+def test_a_test_and_a_test_method_take_the_request_pytest_injects() -> None:
+    source = """
+def test_engine(request):
+    return request.node
+
+class TestEngine:
+    def test_session(self, request):
+        return request.session
+"""
+
+    assert _codes(source) == ["VX015", "VX015"]
+
+
+def test_a_nested_def_of_its_own_request_shadows_the_fixture_above_it() -> None:
+    # The parameter is filled in by whatever calls the inner function, which is the fixture body
+    # rather than pytest, so the fixture's own `request` is not what is being read.
+    source = """
+@pytest.fixture
+def engine(request):
+    def callback(request):
+        return request.node
+    return callback
+"""
+
+    assert _codes(source) == []
+
+
 def test_reading_request_attribute_by_attribute_is_not_holding_it() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     return request.node.name
 """
@@ -914,6 +984,7 @@ def test_a():
 
 def test_one_finding_survives_per_code_line_and_function() -> None:
     source = """
+@pytest.fixture
 def engine(request):
     return (request.node, request.session)
 """
