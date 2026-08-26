@@ -13,6 +13,7 @@ what those wrote.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -50,7 +51,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 2
-    return args.run(args, passthrough)
+    try:
+        return args.run(args, passthrough)
+    except BrokenPipeError:
+        # Whoever was reading has gone: a pager quit part of the way down, or `head` had its
+        # lines. Every command does its writing before it prints, so there is nothing left to
+        # report and this is an ordinary exit rather than a traceback.
+        _swallow_stdout()
+        return 0
+
+
+def _swallow_stdout() -> None:
+    """Point stdout's file descriptor at the void, so the flush at shutdown cannot raise too."""
+    # A stdout that is not a real file -- a capture, a StringIO -- has no descriptor to redirect.
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -353,7 +368,15 @@ def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
     # way down the diff kills this process where it stands, and the tree they are left with is
     # the converted one either way rather than however far the writing had got.
     diff = result.edits.diff()
-    written = result.edits.apply(root) if args.write else ()
+    try:
+        written = result.edits.apply(root) if args.write else ()
+    except OSError as exc:
+        print(
+            f"velox-migrate: {exc}\nThe tree under {root} holds some of the conversion and not "
+            "the rest. Restore it before converting it again.",
+            file=sys.stderr,
+        )
+        return 1
 
     if not args.quiet:
         print(report.plan(result))

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from velox_migrate import cli, extractor, schema
+from velox_migrate.convert.edits import EditSet
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
 SUITE = CORPUS / "fixtures_showcase"
@@ -236,15 +237,31 @@ def test_converting_with_write_rewrites_the_tree_and_counts_the_files(
 def test_a_reader_who_quits_part_way_through_the_diff_still_gets_the_whole_conversion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Reading the plan through a pager and quitting it kills this process on its next write. The
-    # tree that is left behind has to be the converted one, not however much of it had been
-    # printed before the pipe closed.
+    # Reading the plan through a pager and quitting it fails this process's next write. The tree
+    # left behind has to be the converted one, not however much of it had been printed before the
+    # pipe closed, and the run is over rather than failed.
     read = _copy_of_showcase(tmp_path, "read")
     assert cli.main(["convert", "-d", str(DUMP), "-r", str(read), "--write"]) == 0
     interrupted = _copy_of_showcase(tmp_path, "interrupted")
     monkeypatch.setattr(sys, "stdout", _ClosedPipe())
 
-    with pytest.raises(BrokenPipeError):
-        cli.main(["convert", "-d", str(DUMP), "-r", str(interrupted), "--write"])
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(interrupted), "--write"])
 
+    assert code == 0
     assert _tree(interrupted) == _tree(read)
+
+
+def test_a_write_that_fails_part_way_names_the_tree_it_left_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    suite = _copy_of_showcase(tmp_path, "suite")
+
+    def refuse(self: EditSet, root: Path) -> tuple[str, ...]:
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(EditSet, "apply", refuse)
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 1
+    assert str(suite) in capsys.readouterr().err
