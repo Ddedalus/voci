@@ -71,4 +71,6 @@ uv pip install velox-test          # or: pip install velox-test
 - **[Guide](guide/index.md)** — install velox, write a first test, and work through fixtures,
   scopes, concurrency, marks and selection one concept at a time.
 - **[How-to](how-to/index.md)** — short recipes for specific tasks, once the guide is behind you.
+- **[Migrating](migrate/index.md)** — take an existing pytest suite through `velox-migrate`:
+  extract, audit, convert, verify.
 - **[Reference](reference/index.md)** — every public symbol, rendered from the source.
