@@ -31,12 +31,13 @@ PYPROJECT = "pyproject.toml"
 HEADER = "[tool.velox]"
 
 #: pytest setting -> `[tool.velox]` key, for the settings that mean the same thing on both sides:
-#: support-matrix rows VX301, VX302, VX303 and VX304.
+#: support-matrix rows VX301, VX302, VX303, VX304 and VX307.
 CARRIED: Mapping[str, str] = {
     "testpaths": "testpaths",
     "python_files": "test_file_patterns",
     "norecursedirs": "ignore",
     "timeout": "timeout",
+    "filterwarnings": "filterwarnings",
 }
 
 # `velox._config`'s own key order, which the table follows so two conversions read alike.
@@ -48,10 +49,11 @@ _ORDER = (
     "test_file_patterns",
     "ignore",
     "env",
+    "filterwarnings",
 )
 
 # The type each carried velox key takes, as `velox._config` validates it.
-_LISTS = frozenset({"testpaths", "test_file_patterns", "ignore"})
+_LISTS = frozenset({"testpaths", "test_file_patterns", "ignore", "filterwarnings"})
 
 # What a TOML basic string cannot hold literally. Any other control character means the value has
 # no rendering this writes, and it is dropped rather than mangled.

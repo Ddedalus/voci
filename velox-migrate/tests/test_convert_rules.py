@@ -421,7 +421,7 @@ def test_a_plugin_mark_on_one_case_refuses_the_whole_parametrize() -> None:
     source = """import pytest
 
 
-@pytest.mark.parametrize("value", [1, pytest.param(2, marks=pytest.mark.filterwarnings("error"))])
+@pytest.mark.parametrize("value", [1, pytest.param(2, marks=pytest.mark.freeze_time("2020-01-01"))])
 def test_x(value):
     assert value
 """
@@ -1076,6 +1076,101 @@ def test_x():
     assert "positive" in applied[0].message
 
 
+# --- VX108 filterwarnings ---------------------------------------------------------------------
+
+
+def test_a_filterwarnings_mark_becomes_velox_filterwarnings() -> None:
+    before = """import pytest
+
+
+@pytest.mark.filterwarnings("error::DeprecationWarning")
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+@velox.filterwarnings("error::DeprecationWarning")
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX108", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX108"]
+
+
+def test_every_filter_spec_crosses_in_the_order_it_was_written() -> None:
+    before = """import pytest
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning", "error:.*legacy:DeprecationWarning")
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+@velox.filterwarnings("ignore::UserWarning", "error:.*legacy:DeprecationWarning")
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX108", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX108"]
+
+
+def test_a_filterwarnings_stack_is_left_in_the_order_it_was_written() -> None:
+    """Both runners read a stack the same way -- the outermost decorator's filters win -- so
+    nothing is reordered."""
+    before = """import pytest
+
+
+@pytest.mark.filterwarnings("error")
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test_x():
+    pass
+"""
+    after = """import pytest
+
+
+@velox.filterwarnings("error")
+@velox.filterwarnings("ignore::UserWarning")
+def test_x():
+    pass
+"""
+    applied = _rewrite("VX108", before, after, _context("test_x"))
+
+    assert _codes(applied) == ["VX108", "VX108"]
+
+
+def test_a_filterwarnings_naming_no_spec_is_refused() -> None:
+    source = """import pytest
+
+
+@pytest.mark.filterwarnings
+def test_x():
+    pass
+"""
+    applied = _untouched("VX108", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX108"]
+
+
+def test_a_filterwarnings_unpacking_its_specs_is_refused() -> None:
+    source = """import pytest
+
+SPECS = ["error"]
+
+
+@pytest.mark.filterwarnings(*SPECS)
+def test_x():
+    pass
+"""
+    applied = _untouched("VX108", source, _context("test_x"))
+
+    assert _codes(applied) == ["VX108"]
+
+
 # --- VX115 pytestmark -------------------------------------------------------------------------
 
 
@@ -1174,7 +1269,7 @@ def test_x():
 def test_a_pytestmark_holding_one_mark_no_rule_writes_stays_whole() -> None:
     source = """import pytest
 
-pytestmark = [pytest.mark.slow, pytest.mark.filterwarnings("error")]
+pytestmark = [pytest.mark.slow, pytest.mark.tryfirst]
 
 
 def test_x():
@@ -1182,7 +1277,7 @@ def test_x():
 """
     applied = _untouched("VX115", source, _context("test_x"))
 
-    assert _codes(applied) == ["VX108"]
+    assert _codes(applied) == ["VX115"]
 
 
 def test_a_pytestmark_reaching_no_converted_test_stays_where_it_is() -> None:

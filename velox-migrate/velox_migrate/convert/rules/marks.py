@@ -45,9 +45,6 @@ _DROPPED = frozenset({"asyncio", "anyio"})
 # The velox mark a rewrite sets at most once per test — applying one twice raises at import.
 _SCALARS = frozenset({"skip", "xfail", "timeout"})
 
-# Marks another area of the matrix owns, keyed to the row that answers for them.
-_ELSEWHERE: dict[str, str] = {"filterwarnings": "VX108"}
-
 # The names pytest puts in scope when it evaluates a string condition, beyond the module's own.
 _CONDITION_NAMES = frozenset({"os", "sys", "platform"})
 
@@ -113,6 +110,8 @@ class _MarkPass(RuleTransformer):
             return self._xfail(mark, strict_default=strict_default)
         if mark.name == "timeout":
             return self._timeout(mark)
+        if mark.name == "filterwarnings":
+            return self._filterwarnings(mark)
         if mark.name in _DROPPED:
             return _Translated(
                 owner="VX110",
@@ -139,7 +138,7 @@ class _MarkPass(RuleTransformer):
         if mark.name in matrix.KNOWN_MARKS:
             return _refuses(
                 None,
-                _ELSEWHERE.get(mark.name, "VX115"),
+                "VX115",
                 f"`{render(mark.node)}` is pytest's own mark, and no rule here writes it.",
             )
         return self._tag(mark)
@@ -385,6 +384,24 @@ class _MarkPass(RuleTransformer):
             scalar="timeout",
             expression=expression,
             message=f"`{render(mark.node)}` becomes `{render(expression)}`.{note}",
+        )
+
+    def _filterwarnings(self, mark: _Mark) -> _Translated:
+        """`@pytest.mark.filterwarnings(*specs)`, whose specs velox reads the same way pytest
+        does -- so they cross verbatim, in the order they were written."""
+        call = mark.call
+        if call is None or starred(call) or keywords(call) or not positional(call):
+            return _refuses(
+                "VX108", "VX108", f"`{render(mark.node)}` is not `filterwarnings(*specs)`."
+            )
+        expression = called(
+            velox("filterwarnings"), [argument(given.value) for given in positional(call)], call
+        )
+        return _Translated(
+            owner="VX108",
+            code="VX108",
+            expression=expression,
+            message=f"`{render(mark.node)}` becomes `{render(expression)}`.",
         )
 
     def _tag(self, mark: _Mark) -> _Translated:
@@ -882,6 +899,17 @@ class _Timeout(_MarkPass):
         return self.rewrite(original_node, updated_node)
 
 
+class _FilterWarnings(_MarkPass):
+    """VX108: `@pytest.mark.filterwarnings`."""
+
+    CODE = "VX108"
+
+    def leave_Decorator(
+        self, original_node: cst.Decorator, updated_node: cst.Decorator
+    ) -> cst.Decorator:
+        return self.rewrite(original_node, updated_node)
+
+
 @dataclass(frozen=True, slots=True)
 class _Group:
     """One place a mark was written for a group of tests, rather than for one test.
@@ -1248,5 +1276,6 @@ RULES: tuple[TransformerRule, ...] = (
     rule(_CustomMark),
     rule(_AsyncMark),
     rule(_Timeout),
+    rule(_FilterWarnings),
     rule(_PytestMarks),
 )

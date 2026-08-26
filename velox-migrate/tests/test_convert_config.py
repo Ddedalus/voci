@@ -62,13 +62,11 @@ def wrote(ground_truth: GroundTruth, root: Path, **resolved: str | None) -> Grou
     return dataclasses.replace(ground_truth, ini=ini, inipath="pytest.ini")
 
 
-def test_a_suite_whose_settings_all_go_gets_the_table_anyway(hazards: GroundTruth) -> None:
-    # `[tool.velox]` is what makes this directory the rootdir, so it is written even empty.
+def test_only_the_settings_velox_has_a_key_for_are_carried(hazards: GroundTruth) -> None:
     translation = config.translate(hazards, root=CORPUS / HAZARDS)
 
-    assert translation.settings == {}
-    assert translation.carried == {}
-    assert translation.table == BARE
+    assert translation.settings == {"filterwarnings": '["ignore::DeprecationWarning"]'}
+    assert translation.carried == {"filterwarnings": "filterwarnings"}
     assert translation.conflict is None
 
 
@@ -77,7 +75,6 @@ def test_every_setting_the_suite_wrote_is_accounted_for(hazards: GroundTruth) ->
 
     assert translation.dropped == (
         "addopts",
-        "filterwarnings",
         "log_cli",
         "log_cli_level",
         "markers",
@@ -347,6 +344,14 @@ def test_a_sub_table_counts_as_a_configured_velox(hazards: GroundTruth, tmp_path
 
 def test_only_keys_velox_recognizes_are_ever_written(fixtures: GroundTruth, tmp_path: Path) -> None:
     # An unknown `[tool.velox]` key is a hard error at run time, so the carried set is closed.
-    known = {"testpaths", "concurrency", "timeout", "loop_watchdog", "test_file_patterns", "ignore"}
+    known = {
+        "testpaths",
+        "concurrency",
+        "timeout",
+        "loop_watchdog",
+        "test_file_patterns",
+        "ignore",
+        "filterwarnings",
+    }
 
     assert set(config.CARRIED.values()) <= known

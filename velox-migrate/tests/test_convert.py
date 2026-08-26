@@ -766,9 +766,9 @@ def test_a_single_parametrize_axis_carries_pytests_own_ids(version: str) -> None
 def test_configuration_is_translated_into_the_table_velox_reads(version: str) -> None:
     result = conversion_of(HAZARDS, version)
 
-    assert result.settings.settings == {}
+    assert result.settings.settings == {"filterwarnings": '["ignore::DeprecationWarning"]'}
     assert "xfail_strict" in result.settings.dropped
-    assert "filterwarnings" in result.settings.dropped
+    assert "addopts" in result.settings.dropped
 
 
 def test_the_deferred_codes_are_all_rows_the_matrix_says_convert() -> None:
