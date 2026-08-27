@@ -204,6 +204,7 @@ def fixture_def(argname: str, visibility: str) -> model.FixtureDef:
         kind="fixture",
         direct_param=False,
         argnames=(),
+        returns=None,
         func=model.FuncLocation(None, None, None, None, False),
     )
 

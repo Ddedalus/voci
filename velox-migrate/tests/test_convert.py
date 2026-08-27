@@ -596,6 +596,7 @@ def _fixture_def(argname: str, visibility: str) -> model.FixtureDef:
         kind="function",
         direct_param=False,
         argnames=(),
+        returns=None,
         func=model.FuncLocation(
             module=None, qualname=argname, file=f"{visibility}/conftest.py", lineno=1, wrapped=False
         ),

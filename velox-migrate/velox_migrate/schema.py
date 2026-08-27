@@ -14,7 +14,7 @@ from pathlib import Path
 # The dump shape this reader understands, matching `extractor.EXTRACTOR_VERSION`. A dump stamped
 # with anything else is refused: the two are versioned together so that a field can be given a
 # new meaning without any chance of an old dump being read under the new one.
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 
 # The pytest range the extractor supports, restated here so a dump carried in from elsewhere is
 # checked against it too.
@@ -52,6 +52,7 @@ _FIXTURE_DEF_KEYS = frozenset(
         "kind",
         "direct_param",
         "argnames",
+        "returns",
         "func",
     }
 )
