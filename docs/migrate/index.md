@@ -120,7 +120,7 @@ VX103  marker      1  @pytest.mark.skipif with a string condition
 VX301  mechanical  1  testpaths
 ...
 
-types: 6 of 14 fixtures have no return annotation, 11 injections lose their type — the report lists them worst first
+types: 6 of 14 fixtures have no return annotation, costing 11 injected parameters — the report lists them worst first
 
 wrote .velox-migrate/migration-report.md and .velox-migrate/findings.json
 ```

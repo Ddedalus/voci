@@ -44,14 +44,14 @@ def write(audit: Audit, path: str | Path) -> None:
 def _opening(audit: Audit) -> list[str]:
     suite = audit.suite
     read = (
-        f"This audit read {_plural(audit.summary.tests, 'test')} collected by pytest "
+        f"This audit read {plural(audit.summary.tests, 'test')} collected by pytest "
         f"{suite.pytest_version}, which is ground truth for the one environment the collection ran "
         f"in: a suite whose fixtures differ by platform or plugin version needs an audit per "
         f"environment."
     )
     if audit.unparsed:
         read += (
-            f" {_plural(len(audit.unparsed), 'source file')} could not be read, so every count "
+            f" {plural(len(audit.unparsed), 'source file')} could not be read, so every count "
             f"taken from a test body is a lower bound."
         )
     return [f"# Migrating {suite.rootpath} to velox", read]
@@ -89,13 +89,13 @@ def _verdict(audit: Audit) -> list[str]:
         blocks.append(" ".join(notes))
 
     wiring = [
-        f"- {_plural(totals.tests, 'test')} in {_plural(suite.test_files, 'file')}, "
+        f"- {plural(totals.tests, 'test')} in {plural(suite.test_files, 'file')}, "
         f"{suite.async_tests} of them `async def`",
-        f"- {_plural(suite.fixtures, 'fixture')} defined in the suite, plus "
+        f"- {plural(suite.fixtures, 'fixture')} defined in the suite, plus "
         f"{suite.plugin_fixtures} from pytest and installed plugins",
-        f"- {_plural(suite.conftests, 'conftest directory', 'conftest directories')}, "
-        f"{_plural(suite.overrides, 'override chain')} against a specialization budget of "
-        f"{audit.budget}, {_plural(suite.autouse_nodes, 'autouse declaration')}",
+        f"- {plural(suite.conftests, 'conftest directory', 'conftest directories')}, "
+        f"{plural(suite.overrides, 'override chain')} against a specialization budget of "
+        f"{audit.budget}, {plural(suite.autouse_nodes, 'autouse declaration')}",
     ]
     if suite.plugins:
         wiring.append(f"- Installed plugins: {', '.join(sorted(suite.plugins))}")
@@ -118,8 +118,8 @@ def _type_readiness(audit: Audit) -> list[str]:
         f"conversion carries across what the suite already states rather than inventing any. So a "
         f"factory written without a return annotation loses the type at every site it is injected "
         f"into: {len(readiness.fixtures)} of {readiness.total} fixtures defined here have no "
-        f"return annotation, and {_plural(readiness.injections, 'injected parameter')} lose their "
-        f"type with them.",
+        f"return annotation, and the type is lost at "
+        f"{plural(readiness.injections, 'injected parameter')}.",
         "This is work for the pytest suite, and it comes before converting anything: a return "
         "annotation is what a type checker reads today, and adding one changes no behaviour. Most "
         "injections first, so the top of the list retypes the most code.",
@@ -136,7 +136,7 @@ def _worklist(fixtures: Sequence[Unannotated]) -> str:
 
 
 def _cost(row: Unannotated) -> str:
-    return _plural(row.injections, "injection") if row.injections else "nothing injects it"
+    return plural(row.injections, "injection") if row.injections else "nothing injects it"
 
 
 def _decisions(audit: Audit) -> list[str]:
@@ -242,7 +242,7 @@ def _blind_spots(audit: Audit) -> list[str]:
         blocks.append("\n".join(f"- {_blind_spot(row)}" for row in audit.blind_spots))
     if audit.unparsed:
         blocks.append(
-            f"{_plural(len(audit.unparsed), 'source file')} could not be read. Every count taken "
+            f"{plural(len(audit.unparsed), 'source file')} could not be read. Every count taken "
             f"from a test body is a lower bound while that is true:"
         )
         blocks.append("\n".join(f"- {name}" for name in sorted(audit.unparsed)))
@@ -251,10 +251,10 @@ def _blind_spots(audit: Audit) -> list[str]:
 
 def _group(code: str, findings: Sequence[Finding], *, label_disposition: bool = False) -> list[str]:
     row = findings[0].construct
-    body = _plural(len(findings), "occurrence")
+    body = plural(len(findings), "occurrence")
     affected = {nodeid for finding in findings for nodeid in finding.tests}
     if affected:
-        body += f" affecting {_plural(len(affected), 'test')}"
+        body += f" affecting {plural(len(affected), 'test')}"
     if label_disposition:
         body += f", {row.disposition}"
     body += f". {row.note}"
@@ -324,5 +324,9 @@ def _percent(value: float) -> str:
     return f"{value:.1f}%"
 
 
-def _plural(count: int, noun: str, plural: str | None = None) -> str:
-    return f"{count} {noun}" if count == 1 else f"{count} {plural or noun + 's'}"
+def plural(count: int, noun: str, many: str | None = None) -> str:
+    """`count` and `noun`, the noun pluralized unless there is exactly one of it.
+
+    Shared with `report/terminal.py`, which counts the same things in one line.
+    """
+    return f"{count} {noun}" if count == 1 else f"{count} {many or noun + 's'}"

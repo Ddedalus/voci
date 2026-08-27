@@ -29,10 +29,12 @@ about what to do when there is none:
 | pyrefly | `Session` | `Session` |
 
 Both spellings run the same way, and the short one is a fine thing to write. Its cost is confined
-to mypy, where an unannotated injected parameter is `Any` and the test body stops being checked
-against the fixture's type: `db.no_such_method()` passes, and so does `wrong: str = db`. `--strict`
-reports the function as missing an annotation and still says nothing about the body. Writing the
-annotation gets the body checked under every checker, which is the reason to write it.
+to mypy, and it is larger than one parameter. An injected parameter with no annotation is `Any`,
+so `db.no_such_method()` and `wrong: str = db` both pass; and a test whose parameters are *all*
+injected the short way carries no annotation at all, which makes it an untyped function whose body
+mypy does not check in the first place. `--strict` reports the missing annotation and still says
+nothing about the body. Writing the annotation gets the body checked under every checker, which is
+the reason to write it.
 
 The case values a fixture's `params=` takes reach the body through a parameter named `param`, and
 nothing checks that the annotation on that parameter agrees with them: a body annotating

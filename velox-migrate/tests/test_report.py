@@ -271,7 +271,7 @@ def test_the_report_lists_the_fixtures_to_annotate_before_anything_is_converted(
 
     section = report.split("## Fixture return types")[1].split("\n## ")[0]
     assert "3 of 4 fixtures defined here have no return annotation" in section
-    assert "3 injected parameters lose their type" in section
+    assert "the type is lost at 3 injected parameters" in section
     assert "- tests/conftest.py:0 (fixture_0) — 2 injections" in section
     assert "- tests/conftest.py:2 (fixture_2) — nothing injects it" in section
 
@@ -293,7 +293,7 @@ def test_a_long_worklist_is_capped_with_a_remainder_line() -> None:
 def test_the_terminal_summary_quotes_the_worklist_in_one_line() -> None:
     summary = terminal(_audit(_findings(), readiness=_readiness(3, annotated=1)))
 
-    assert "types: 3 of 4 fixtures have no return annotation, 3 injections lose" in summary
+    assert "types: 3 of 4 fixtures have no return annotation, costing 3 injected" in summary
 
 
 def test_the_payload_carries_the_worklist_in_the_order_the_report_prints_it() -> None:

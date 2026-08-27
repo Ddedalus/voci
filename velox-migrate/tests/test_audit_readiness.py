@@ -211,7 +211,7 @@ def test_the_report_names_every_unannotated_fixture_and_what_it_costs(version: s
 
     section = text.split("## Fixture return types", 1)[1].split("\n## ", 1)[0]
     assert "8 of 8 fixtures defined here have no return annotation" in section
-    assert "16 injected parameters lose their type with them" in section
+    assert "the type is lost at 16 injected parameters" in section
     assert "- conftest.py:23 (engine) — 5 injections" in section
     assert "- conftest.py:33 (token) — 1 injection" in section
     assert "- conftest.py:38 (ledger) — nothing injects it" in section
@@ -225,7 +225,7 @@ def test_the_terminal_summary_quotes_the_worklist_it_wrote_to_the_report(version
     ]
 
     assert line == [
-        "types: 8 of 8 fixtures have no return annotation, 16 injections lose their type "
+        "types: 8 of 8 fixtures have no return annotation, costing 16 injected parameters "
         "— the report lists them worst first"
     ]
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from velox_migrate import matrix
 from velox_migrate.audit.findings import Audit
+from velox_migrate.report.markdown import plural
 
 TOP_CODES = 8
 _SUBJECT_WIDTH = 60
@@ -58,7 +59,7 @@ def _readiness(audit: Audit) -> list[str]:
         return []
     return [
         f"types: {len(readiness.fixtures)} of {readiness.total} fixtures have no return "
-        f"annotation, {readiness.injections} injections lose their type "
+        f"annotation, costing {plural(readiness.injections, 'injected parameter')} "
         f"— the report lists them worst first"
     ]
 
