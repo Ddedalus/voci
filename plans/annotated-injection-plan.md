@@ -1,5 +1,7 @@
 # `Annotated` injection
 
+Companion to `dependency-typing-plan.md`, which covers the type information this spelling carries.
+
 Support `db: Annotated[Session, Depends(db_fx)]` alongside today's `db: Session = Depends(db_fx)`,
 and make the annotated form the one velox teaches and generates.
 
@@ -12,6 +14,11 @@ a sentinel, and a parameter with no default can never follow an injected one. Fa
 three and moved its own docs to `Annotated`, which fixes them without a cast: the marker sits in
 metadata, where an arbitrary object belongs, the parameter keeps its real annotation, and an
 injected parameter has no default at all.
+
+The fourth reason is the one that matters most in practice, and it is measured in
+`dependency-typing-plan.md`: `db=Depends(db_fx)` leaves `db` unannotated, and under mypy that
+parameter is `Any` — the test body stops being checked against it, quietly. `Annotated` has no
+default to infer from, so the type is always written down.
 
 The last point is not only cosmetic. Today `wiring.py` reorders any converted signature that mixes
 injected names with parametrized ones, because a parameter without a default cannot follow one
@@ -134,11 +141,12 @@ accepts the annotated form with no `cast` at the call site.
 - `_rewrite`'s reordering branch becomes reachable only for the `request` → `param` rewrite, since
   nothing gains a default any more. Confirm and then delete what is dead; the module docstring's
   "two constraints" paragraph loses one of its constraints.
-- **Open decision — an unannotated source parameter.** Most pytest fixtures are unannotated, and
-  `db: Annotated[Any, Depends(db_fx)]` is noise where `db=Depends(db_fx)` was not. Recommendation:
-  a `--syntax {auto,annotated,default}` option defaulting to `auto` — annotated when the source
-  parameter carries an annotation to preserve, default position when there is nothing to wrap.
-  Needs sign-off; `annotated` unconditionally is the alternative.
+- **An unannotated source parameter gets `Annotated[Any, Depends(fx)]`.** No `--syntax` flag, no
+  fallback to default position. The point is that it does not paper over the missing type: under
+  the old spelling mypy silently gave that parameter `Any` anyway, and `Any` written down is the
+  same amount of type information said out loud. Where the type *is* recoverable from the
+  fixture's own return annotation, `dependency-typing-plan.md` recovers it; where it isn't, the
+  conversion report names the site.
 - `matrix.py`: re-derive which refusal rows survive. Candidates that should shrink or go are the
   ones about binding position and about a signature velox cannot reorder. `docs/migrate/matrix.md`
   is generated from it.
