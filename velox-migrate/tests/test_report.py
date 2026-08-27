@@ -13,7 +13,16 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from velox_migrate import matrix
-from velox_migrate.audit.findings import Audit, Finding, Site, Suite, ordered, summarize
+from velox_migrate.audit.findings import (
+    Audit,
+    Finding,
+    Site,
+    Suite,
+    TypeReadiness,
+    Unannotated,
+    ordered,
+    summarize,
+)
 from velox_migrate.report import (
     FINDINGS_VERSION,
     markdown,
@@ -50,6 +59,9 @@ CONFIG = "VX307"
 
 CODE_ROW = re.compile(r"^VX\d{3}\s")
 
+# A suite whose fixtures are all annotated, which is what most of these renderings assume.
+TYPED = TypeReadiness()
+
 
 def test_the_payload_carries_every_block_of_the_schema_it_names() -> None:
     data = payload(_mixed())
@@ -62,6 +74,7 @@ def test_the_payload_carries_every_block_of_the_schema_it_names() -> None:
         "scan",
         "budget",
         "matrix",
+        "type_readiness",
         "findings",
         "blind_spots",
     }
@@ -253,6 +266,58 @@ def test_a_long_site_list_is_capped_with_a_remainder_line() -> None:
     assert "- …and 5 more" in report
 
 
+def test_the_report_lists_the_fixtures_to_annotate_before_anything_is_converted() -> None:
+    report = markdown(_audit(_findings(), readiness=_readiness(3, annotated=1)))
+
+    section = report.split("## Fixture return types")[1].split("\n## ")[0]
+    assert "3 of 4 fixtures defined here have no return annotation" in section
+    assert "3 injected parameters lose their type" in section
+    assert "- tests/conftest.py:0 (fixture_0) — 2 injections" in section
+    assert "- tests/conftest.py:2 (fixture_2) — nothing injects it" in section
+
+
+def test_the_report_says_nothing_about_types_when_every_fixture_is_annotated() -> None:
+    report = markdown(_audit(_findings(), readiness=TypeReadiness(annotated=4)))
+
+    assert "## Fixture return types" not in report
+    assert "types:" not in terminal(_audit(_findings(), readiness=TypeReadiness(annotated=4)))
+
+
+def test_a_long_worklist_is_capped_with_a_remainder_line() -> None:
+    report = markdown(_audit(_findings(), readiness=_readiness(25)))
+
+    assert report.count("- tests/conftest.py:") == 20
+    assert "- …and 5 more" in report
+
+
+def test_the_terminal_summary_quotes_the_worklist_in_one_line() -> None:
+    summary = terminal(_audit(_findings(), readiness=_readiness(3, annotated=1)))
+
+    assert "types: 3 of 4 fixtures have no return annotation, 3 injections lose" in summary
+
+
+def test_the_payload_carries_the_worklist_in_the_order_the_report_prints_it() -> None:
+    block = payload(_audit(_findings(), readiness=_readiness(3, annotated=1)))["type_readiness"]
+
+    assert block == {
+        "fixtures": 4,
+        "annotated": 1,
+        "unannotated": 3,
+        "injections": 3,
+        "worklist": [
+            {
+                "fixture": f"fixture_{number}",
+                "module": "tests.conftest",
+                "file": "tests/conftest.py",
+                "line": number,
+                "function": f"fixture_{number}",
+                "injections": 2 - number,
+            }
+            for number in range(3)
+        ],
+    }
+
+
 def test_a_clean_suite_is_reported_as_clean_in_one_line() -> None:
     report = markdown(_audit([]))
 
@@ -435,7 +500,11 @@ def _finding(
 
 
 def _audit(
-    findings: Sequence[Finding], *, tests: int = 10, unparsed: tuple[str, ...] = ()
+    findings: Sequence[Finding],
+    *,
+    tests: int = 10,
+    unparsed: tuple[str, ...] = (),
+    readiness: TypeReadiness = TYPED,
 ) -> Audit:
     settled = ordered(findings)
     return Audit(
@@ -445,6 +514,23 @@ def _audit(
         scanned_files=5,
         unparsed=unparsed,
         budget=5,
+        type_readiness=readiness,
+    )
+
+
+def _readiness(count: int, *, annotated: int = 0) -> TypeReadiness:
+    """`count` unannotated fixtures, the first injected most and the last injected not at all."""
+    return TypeReadiness(
+        fixtures=tuple(
+            Unannotated(
+                argname=f"fixture_{number}",
+                module="tests.conftest",
+                site=Site(file="tests/conftest.py", line=number, function=f"fixture_{number}"),
+                injections=count - 1 - number,
+            )
+            for number in range(count)
+        ),
+        annotated=annotated,
     )
 
 

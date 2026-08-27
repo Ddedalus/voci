@@ -16,7 +16,7 @@ _NAMED_FILES = 3
 
 def terminal(audit: Audit) -> str:
     """The summary as plain text, with no trailing newline."""
-    groups = [_counts(audit), _codes(audit), _gaps(audit)]
+    groups = [_counts(audit), _codes(audit), _readiness(audit), _gaps(audit)]
     return "\n\n".join("\n".join(group) for group in groups if group)
 
 
@@ -50,6 +50,17 @@ def _codes(audit: Audit) -> list[str]:
     if len(by_code) > len(top):
         lines.append(f"…and {len(by_code) - len(top)} more constructs")
     return lines
+
+
+def _readiness(audit: Audit) -> list[str]:
+    readiness = audit.type_readiness
+    if not readiness.fixtures:
+        return []
+    return [
+        f"types: {len(readiness.fixtures)} of {readiness.total} fixtures have no return "
+        f"annotation, {readiness.injections} injections lose their type "
+        f"— the report lists them worst first"
+    ]
 
 
 def _gaps(audit: Audit) -> list[str]:

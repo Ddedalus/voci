@@ -1,10 +1,11 @@
 """`migration-report.md`: an audit as a document, read top to bottom and then forwarded.
 
 The verdict leads — how much of the suite converts untouched, and what share of it ends up running
-serially — then comes everything that needs a person: what will not convert, what converts with a
-caveat, what costs concurrency, and what the configuration and installed plugins imply. Last comes
-what the scan could not see, so the numbers are read with their blind spots in view. Each finding
-is filed once, and a section with nothing under it is left out.
+serially — then the fixture return types worth adding before converting at all, then everything
+that needs a person: what will not convert, what converts with a caveat, what costs concurrency,
+and what the configuration and installed plugins imply. Last comes what the scan could not see, so
+the numbers are read with their blind spots in view. Each finding is filed once, and a section
+with nothing under it is left out.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from velox_migrate.audit.findings import Audit, Finding, ordered
+from velox_migrate.audit.findings import Audit, Finding, Unannotated, ordered
 from velox_migrate.matrix import Area, Construct, Disposition
 
 # Enough sites to recognize a pattern; past this a reader is counting, not reading.
@@ -24,6 +25,7 @@ def markdown(audit: Audit) -> str:
     blocks = [
         *_opening(audit),
         *_verdict(audit),
+        *_type_readiness(audit),
         *_decisions(audit),
         *_caveats(audit),
         *_hazards(audit),
@@ -104,6 +106,37 @@ def _verdict(audit: Audit) -> list[str]:
             "Nothing in this suite needs a decision: every collected test converts as it stands."
         )
     return blocks
+
+
+def _type_readiness(audit: Audit) -> list[str]:
+    readiness = audit.type_readiness
+    if not readiness.fixtures:
+        return []
+    return [
+        "## Fixture return types",
+        f"An injected parameter's type comes from the fixture factory's return annotation, and "
+        f"conversion carries across what the suite already states rather than inventing any. So a "
+        f"factory written without a return annotation loses the type at every site it is injected "
+        f"into: {len(readiness.fixtures)} of {readiness.total} fixtures defined here have no "
+        f"return annotation, and {_plural(readiness.injections, 'injected parameter')} lose their "
+        f"type with them.",
+        "This is work for the pytest suite, and it comes before converting anything: a return "
+        "annotation is what a type checker reads today, and adding one changes no behaviour. Most "
+        "injections first, so the top of the list retypes the most code.",
+        _worklist(readiness.fixtures),
+    ]
+
+
+def _worklist(fixtures: Sequence[Unannotated]) -> str:
+    shown = fixtures[:SITE_CAP]
+    bullets = [f"- {row.site} — {_cost(row)}" for row in shown]
+    if len(fixtures) > len(shown):
+        bullets.append(f"- …and {len(fixtures) - len(shown)} more")
+    return "\n".join(bullets)
+
+
+def _cost(row: Unannotated) -> str:
+    return _plural(row.injections, "injection") if row.injections else "nothing injects it"
 
 
 def _decisions(audit: Audit) -> list[str]:
