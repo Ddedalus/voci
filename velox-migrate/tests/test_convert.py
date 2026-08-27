@@ -21,8 +21,9 @@ import pytest
 from _support import CORPUS, DUMPS, conversion_of, converted
 
 from velox_migrate import audit, convert, matrix, model
-from velox_migrate.convert import config, layout, markers, parametrize, plan, wiring
+from velox_migrate.convert import annotate, config, layout, markers, parametrize, plan, wiring
 from velox_migrate.convert.layout import Import
+from velox_migrate.report import conversion as conversion_report
 
 STANDALONE = "test_it.py"
 
@@ -584,7 +585,13 @@ def test_an_import_colliding_with_a_name_the_module_binds_is_aliased() -> None:
     ]
 
 
-def _fixture_def(argname: str, visibility: str) -> model.FixtureDef:
+def _fixture_def(
+    argname: str,
+    visibility: str,
+    *,
+    returns: str | None = None,
+    file: str | None = None,
+) -> model.FixtureDef:
     return model.FixtureDef(
         key=argname,
         argname=argname,
@@ -596,9 +603,13 @@ def _fixture_def(argname: str, visibility: str) -> model.FixtureDef:
         kind="function",
         direct_param=False,
         argnames=(),
-        returns=None,
+        returns=returns,
         func=model.FuncLocation(
-            module=None, qualname=argname, file=f"{visibility}/conftest.py", lineno=1, wrapped=False
+            module=None,
+            qualname=argname,
+            file=file if file is not None else f"{visibility}/conftest.py",
+            lineno=1,
+            wrapped=False,
         ),
     )
 
@@ -892,3 +903,327 @@ def test_a_norecursedirs_pattern_is_dropped_rather_than_carried_as_a_name() -> N
         "build",
         "node_modules",
     ]
+
+
+# --- the type an injected parameter is written with ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("returns", "expected"),
+    [
+        ("Session", "Session"),
+        ("Session | None", "Session | None"),
+        ("dict[str, Widget]", "dict[str, Widget]"),
+        ("Iterator[Session]", "Session"),
+        ("Generator[Session, None, None]", "Session"),
+        ("AsyncIterator[Session]", "Session"),
+        ("AsyncGenerator[Session, None]", "Session"),
+        ("Awaitable[Session]", "Session"),
+        ("Coroutine[Any, Any, Session]", "Session"),
+        ("typing.Iterator[Session]", "Session"),
+        ("collections.abc.AsyncGenerator[Session, None]", "Session"),
+        # Not one of the overloads: an `Iterable[X]` really is what the parameter receives, and a
+        # wrapper spelled out of somebody else's module is somebody else's class.
+        ("Iterable[Session]", "Iterable[Session]"),
+        ("mymod.Iterator[Session]", "mymod.Iterator[Session]"),
+        # Nothing to write: what a checker infers from these is what it infers from `Depends()`.
+        ("Any", None),
+        ("typing.Any", None),
+        ("Iterator", None),
+        (None, None),
+    ],
+)
+def test_the_inferred_type_mirrors_what_the_fixture_decorator_unwraps(
+    returns: str | None, expected: str | None
+) -> None:
+    assert annotate.infer(returns) == expected
+
+
+def test_an_async_factory_unwraps_the_coroutine_its_annotation_does_not_name() -> None:
+    # `async def f() -> Session` is a `Callable[..., Coroutine[Any, Any, Session]]`, which the
+    # `Awaitable[T]` overload unwraps once — so a coroutine returning an iterator keeps it, and
+    # only an async generator's annotation is the yielded type.
+    assert annotate.infer("Session", is_async=True) == "Session"
+    assert annotate.infer("Iterator[Session]", is_async=True) == "Iterator[Session]"
+    assert annotate.infer("AsyncIterator[Session]", is_async=True, generator=True) == "Session"
+
+
+def test_a_stringified_name_in_an_annotation_is_not_inferred_from() -> None:
+    # A forward reference names something this cannot attribute to a module, and `Literal`'s
+    # strings are values rather than names.
+    assert annotate.infer('Session | "Later"') is None
+    assert annotate.infer('Literal["a", "b"]') == "Literal['a', 'b']"
+
+
+def test_the_names_an_annotation_needs_are_its_free_roots() -> None:
+    assert annotate.free("dict[str, Widget] | None") == ("Widget",)
+    assert annotate.free("pkg.mod.Thing") == ("pkg",)
+
+
+def _annotation_of(
+    sources: dict[str, str], fixture: model.FixtureDef, consumer: str
+) -> tuple[annotate.Resolver, annotate.Typed | None]:
+    """What `consumer` writes for an injection of `fixture`, laid out as the converter would."""
+    container = layout.owning_container(fixture)
+    assert container is not None
+    placed = layout.plan(
+        {fixture.key: fixture},
+        symbols={(container, fixture.argname): fixture.argname},
+        consumers={consumer: [fixture.key]},
+        source_of=sources.get,
+    )
+    resolver = annotate.Resolver(sources, placed)
+    return resolver, resolver.of(fixture, consumer, site=f"{consumer}::test_x")
+
+
+_CONFTEST = """from support import Session
+
+
+class Client:
+    pass
+
+
+@pytest.fixture
+def session() -> Session:
+    return Session()
+"""
+
+_TEST_IT = "def test_x(session):\n    ...\n"
+
+
+def test_a_type_the_fixture_module_imported_is_imported_the_same_way_by_the_consumer() -> None:
+    # The annotation is written in the fixture's module, so where that module got the name is
+    # where the consuming module gets it: no re-export through the `fixtures.py` in between.
+    sources = {"conftest.py": _CONFTEST, "test_it.py": _TEST_IT}
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="Session", imports=(annotate.TypeImport("support", "Session"),)
+    )
+
+
+def test_a_type_the_fixture_module_writes_itself_comes_from_where_that_module_lands() -> None:
+    # A class written in a `conftest.py` travels with it to the `fixtures.py` the conversion moves
+    # the conftest onto, and that is the module the type is importable out of.
+    sources = {"conftest.py": _CONFTEST, "test_it.py": _TEST_IT}
+    fixture = _fixture_def("session", ".", returns="Client", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="Client", imports=(annotate.TypeImport("fixtures", "Client"),)
+    )
+
+
+def test_an_annotation_written_in_the_module_that_reads_it_needs_no_import() -> None:
+    sources = {"conftest.py": _CONFTEST}
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "fixtures.py")
+
+    assert typed == annotate.Typed(annotation="Session", imports=())
+
+
+def test_a_type_whose_name_the_consumer_already_binds_is_imported_under_an_alias() -> None:
+    # Importing `Session` into a module that already binds it would silently rebind the module's
+    # own name, which is the collision the fixture imports are aliased for too.
+    sources = {
+        "conftest.py": _CONFTEST,
+        "test_it.py": f"Session = object()\n\n\n{_TEST_IT}",
+    }
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="root_Session",
+        imports=(annotate.TypeImport("support", "Session", "root_Session"),),
+    )
+
+
+def test_a_type_the_consumer_already_imports_the_same_way_needs_no_second_import() -> None:
+    sources = {
+        "conftest.py": _CONFTEST,
+        "test_it.py": f"from support import Session\n\n\n{_TEST_IT}",
+    }
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(annotation="Session", imports=())
+
+
+def test_a_relative_import_in_the_fixture_module_is_spelled_absolutely_for_the_consumer() -> None:
+    # A relative import reaches inside a package, so the absolute path to what it names is one any
+    # module in the suite can use — which is how the conversion spells every import it writes.
+    conftest = "from .support import Session\n\n\ndef session() -> Session:\n    ...\n"
+    sources = {"api/conftest.py": conftest, "test_it.py": _TEST_IT}
+    fixture = _fixture_def("session", "api", returns="Session", file="api/conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="Session", imports=(annotate.TypeImport("api.support", "Session"),)
+    )
+
+
+def test_a_name_no_import_can_attribute_to_a_module_falls_back_and_is_reported() -> None:
+    # A name the fixture's module does not bind at its top level — imported inside the body, or
+    # built somewhere this cannot see — is one no import here could supply, and a fallback is a
+    # row rather than a guess.
+    sources = {
+        "conftest.py": "def session() -> Session:\n    from support import Session\n",
+        "test_it.py": _TEST_IT,
+    }
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    resolver, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed is None
+    assert [item.reason for item in resolver.degraded] == [
+        "`Session` is not attributable to an importable module"
+    ]
+
+
+def test_a_fixture_with_no_return_annotation_is_the_worklist_row_it_earns() -> None:
+    sources = {"conftest.py": "def session():\n    ...\n", "test_it.py": _TEST_IT}
+    fixture = _fixture_def("session", ".", file="conftest.py")
+
+    resolver, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed is None
+    assert resolver.degraded == (
+        annotate.Degraded(
+            fixture="session",
+            defined="conftest.py:1",
+            site="test_it.py::test_x",
+            reason="no return annotation",
+        ),
+    )
+
+
+def test_a_type_written_in_a_conftest_the_conversion_does_not_move_falls_back() -> None:
+    # Nothing can import a `conftest.py`, so a class written in one that stays put has no module a
+    # consumer could name it out of.
+    sources = {"conftest.py": _CONFTEST}
+    fixture = _fixture_def("session", ".", returns="Client", file="conftest.py")
+    resolver = annotate.Resolver(sources, layout.Layout(homes={}, moves={}, imports={}))
+
+    typed = resolver.of(fixture, "test_it.py", site="test_it.py::test_x")
+
+    assert typed is None
+    assert resolver.degraded[0].reason == "`Client` is not attributable to an importable module"
+
+
+def _typed_work(annotation: str | None) -> plan.FileWork:
+    """One test injecting a `Session`-typed fixture, as the plan hands it to the wiring swap."""
+    return plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x",
+                injections=(
+                    plan.Injection(
+                        "session",
+                        "session",
+                        "session",
+                        annotation=annotation,
+                        needs=(annotate.TypeImport("support", "Session"),),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_an_inferred_type_is_written_with_a_type_checking_import_and_the_future_import() -> None:
+    # The annotation is evaluated when the `def` is read, so a `TYPE_CHECKING`-only import is only
+    # safe under `from __future__ import annotations` — which is why the two are written together.
+    source = "def test_x(session):\n    assert session\n"
+
+    result = wiring.apply(cst.parse_module(source), _typed_work("Session"))
+
+    assert "from __future__ import annotations" in result.module.code
+    assert "if TYPE_CHECKING:\n    from support import Session\n" in result.module.code
+    assert "def test_x(session: Session = Depends(session)):" in result.module.code
+
+
+def test_a_parameter_the_source_already_annotated_keeps_its_own_type_and_needs_no_import() -> None:
+    source = "def test_x(session: Mine):\n    assert session\n"
+
+    result = wiring.apply(cst.parse_module(source), _typed_work("Session"))
+
+    assert "def test_x(session: Mine = Depends(session)):" in result.module.code
+    assert "TYPE_CHECKING" not in result.module.code
+
+
+def test_an_injection_with_no_type_is_written_exactly_as_it_was_before() -> None:
+    source = "def test_x(session):\n    assert session\n"
+
+    result = wiring.apply(cst.parse_module(source), _typed_work(None))
+
+    assert "def test_x(session=Depends(session)):" in result.module.code
+    assert "TYPE_CHECKING" not in result.module.code
+    assert "from __future__ import annotations" not in result.module.code
+
+
+def test_a_signature_the_rewrite_backs_out_of_leaves_no_type_checking_import_behind() -> None:
+    source = "def test_x(capsys, session):\n    assert capsys.readouterr()[0] and session\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x",
+                injections=(
+                    plan.Injection("capsys", "capture", "velox.capture"),
+                    *_typed_work("Session").tests[0].injections,
+                ),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert result.refused == (("test_x", "VX202"),)
+    assert result.module.code == source
+
+
+def test_every_injection_that_lost_its_type_is_named_in_the_conversion_report(version: str) -> None:
+    # No fixture in the corpus annotates its return, so the whole suite is the worklist — which is
+    # what the report is for: the fixtures to annotate, worst first, and the sites each one costs.
+    result = conversion_of(FIXTURES, version)
+
+    text = conversion_report.plan(result)
+
+    assert "degrade to Any: 5 fixture(s), 8 injection site(s)" in text
+    assert "  settings (conftest.py:21): no return annotation — 3 site(s)" in text
+    assert "    test_top.py::TestGroup.test_method" in text
+    assert {item.reason for item in result.plan.degraded} == {"no return annotation"}
+
+
+def test_two_injections_of_one_fixture_into_one_module_agree_about_the_import() -> None:
+    # The first injection claims `Session` in the consuming module; the second must read that as
+    # its own claim rather than as a collision to alias around.
+    sources = {"conftest.py": _CONFTEST, "test_it.py": _TEST_IT}
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+    container = layout.owning_container(fixture)
+    assert container is not None
+    placed = layout.plan(
+        {fixture.key: fixture},
+        symbols={(container, fixture.argname): fixture.argname},
+        consumers={"test_it.py": [fixture.key]},
+        source_of=sources.get,
+    )
+    resolver = annotate.Resolver(sources, placed)
+
+    first = resolver.of(fixture, "test_it.py", site="test_it.py::test_x")
+    second = resolver.of(fixture, "test_it.py", site="test_it.py::test_y")
+
+    assert first == second
+    assert second == annotate.Typed(
+        annotation="Session", imports=(annotate.TypeImport("support", "Session"),)
+    )

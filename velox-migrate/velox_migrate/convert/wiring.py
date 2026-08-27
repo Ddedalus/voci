@@ -15,7 +15,17 @@ signature whose parameters are all injected — the common case.
 
 A signature also grows and loses parameters here. A dependency a body asked for by name arrives
 as an injection with no parameter of its own and becomes one; a `request` whose every use the body
-rules rewrote arrives as an injection with no parameter left and stops being one.
+rules rewrote arrives as an injection with no parameter left and stops being one. And a parameter
+with no annotation of its own grows the one `convert/annotate.py` inferred from the fixture
+factory it is injected from — `db: Session = Depends(db_fx)` — because that annotation is the only
+thing that gives mypy the parameter's type, and because a parameter the source already annotated
+is one the author has already answered for.
+
+Writing a type is why this also writes `from __future__ import annotations`, into every module it
+annotates. A default-position annotation is an expression evaluated when the `def` is read, so a
+type named only by a `TYPE_CHECKING` import would be a `NameError` at import time; under the
+future import nothing in the module is evaluated, and velox never reads an annotation — it builds
+its injection plan from `__code__` and `__defaults__`, as `velox/_di/fixtures.py` says at the top.
 """
 
 from __future__ import annotations
@@ -30,6 +40,7 @@ from libcst.codemod.visitors import AddImportsVisitor, RemoveImportsVisitor
 
 from velox_migrate import model
 from velox_migrate.convert import parametrize
+from velox_migrate.convert.annotate import TypeImport, statements
 from velox_migrate.convert.plan import FileWork, FixtureWork, Injection, TestWork
 from velox_migrate.model import REQUEST
 
@@ -71,6 +82,9 @@ def apply(
     """
     command = _Wiring(CodemodContext(), work, needs, touched)
     rewritten = command.transform_module(module)
+    # After the codemod rather than inside it, so that the block lands below whatever imports
+    # `AddImportsVisitor` has just written at the top of the module.
+    rewritten = _type_checking(rewritten, command.typed)
     return Result(module=rewritten, refused=tuple(sorted(command.refused)))
 
 
@@ -110,6 +124,7 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._path: list[str] = []
         self._wrote = touched
         self._injected = False
+        self.typed: list[TypeImport] = []
         self.refused: set[tuple[str, str]] = set()
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -154,6 +169,11 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(self.context, "velox")
         if self._injected:
             AddImportsVisitor.add_needed_import(self.context, "velox", "Depends")
+        if self.typed:
+            # Every annotation this wrote is a string under the future import, which is what makes
+            # naming a type through a `TYPE_CHECKING`-only import safe in default position.
+            AddImportsVisitor.add_needed_import(self.context, "__future__", "annotations")
+            AddImportsVisitor.add_needed_import(self.context, "typing", "TYPE_CHECKING")
         for module in self._needs:
             AddImportsVisitor.add_needed_import(self.context, module)
         for wanted in self._work.imports:
@@ -198,15 +218,19 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._wrote = True
         self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
         added = [
-            _param(injection)
+            _param(injection, self.typed)
             for injection in injections
             if injection.asked and injection.was not in _declared(node.params)
         ]
         # A parameter after `*args` is keyword-only, so that is where a new one goes in a signature
         # that has one; every other signature grows it at the end, where a default belongs.
         keyword_only = node.params.star_arg is not cst.MaybeSentinel.DEFAULT
-        params, reordered = _rewrite(node.params.params, by_name, () if keyword_only else added)
-        kwonly, _ = _rewrite(node.params.kwonly_params, by_name, added if keyword_only else ())
+        params, reordered = _rewrite(
+            node.params.params, by_name, () if keyword_only else added, self.typed
+        )
+        kwonly, _ = _rewrite(
+            node.params.kwonly_params, by_name, added if keyword_only else (), self.typed
+        )
         if reordered or added:
             params = tuple(param.with_changes(comma=cst.MaybeSentinel.DEFAULT) for param in params)
         return node.with_changes(
@@ -218,6 +242,7 @@ def _rewrite(
     params: Sequence[cst.Param],
     by_name: Mapping[str, Injection],
     added: Sequence[cst.Param] = (),
+    typed: list[TypeImport] | None = None,
 ) -> tuple[tuple[cst.Param, ...], bool]:
     """`params` with each injected one given its `Depends()` default, and whether order moved.
 
@@ -231,7 +256,7 @@ def _rewrite(
     parameters a body asked for by name, which are injected and so go last either way.
     """
     kept = [param for param in params if not _is_dropped(param, by_name)]
-    rewritten = [_inject(param, by_name.get(param.name.value)) for param in kept]
+    rewritten = [_inject(param, by_name.get(param.name.value), typed) for param in kept]
     rewritten += list(added)
     defaulted = [param.default is not None for param in rewritten]
     if all(defaulted) or not any(defaulted) or defaulted == sorted(defaulted):
@@ -259,34 +284,61 @@ def _declared(params: cst.Parameters) -> frozenset[str]:
     return frozenset(named)
 
 
-def _param(injection: Injection) -> cst.Param:
+def _param(injection: Injection, typed: list[TypeImport] | None = None) -> cst.Param:
     """The parameter a dependency asked for by name becomes: injected, and written with a comma."""
+    annotation = _annotation(injection, typed)
     return cst.Param(
         name=cst.Name(injection.param),
+        annotation=annotation,
         default=cst.Call(
             func=cst.Name("Depends"),
             args=[cst.Arg(value=cst.parse_expression(injection.reference))],
         ),
-        equal=cst.AssignEqual(whitespace_before=_NO_SPACE, whitespace_after=_NO_SPACE),
+        equal=_equal(annotation),
         comma=cst.MaybeSentinel.DEFAULT,
     )
 
 
-def _inject(param: cst.Param, injection: Injection | None) -> cst.Param:
+def _inject(
+    param: cst.Param, injection: Injection | None, typed: list[TypeImport] | None = None
+) -> cst.Param:
     if injection is None:
         return param
     if injection.was == REQUEST:
         return param.with_changes(name=cst.Name(PARAM), annotation=None, default=None)
+    # An annotation the source already carries is left exactly as it was written: it is the
+    # author's answer to the same question, and overwriting it would be this pass deciding a type
+    # against someone who had already decided one.
+    annotation = param.annotation or _annotation(injection, typed)
     return param.with_changes(
         name=cst.Name(injection.param),
+        annotation=annotation,
         default=cst.Call(
             func=cst.Name("Depends"),
             args=[cst.Arg(value=cst.parse_expression(injection.reference))],
         ),
-        equal=cst.AssignEqual(whitespace_before=_NO_SPACE, whitespace_after=_NO_SPACE)
-        if param.annotation is None
-        else cst.MaybeSentinel.DEFAULT,
+        equal=_equal(annotation),
     )
+
+
+def _annotation(injection: Injection, typed: list[TypeImport] | None) -> cst.Annotation | None:
+    """The inferred type for this parameter, claiming the imports that make it spellable.
+
+    Claimed here rather than when the plan was made, so that a definition the rewrite backs out of
+    leaves no import behind it: nothing is queued until a parameter is actually written with it.
+    """
+    if injection.annotation is None:
+        return None
+    if typed is not None:
+        typed.extend(injection.needs)
+    return cst.Annotation(annotation=cst.parse_expression(injection.annotation))
+
+
+def _equal(annotation: cst.Annotation | None) -> cst.AssignEqual | cst.MaybeSentinel:
+    """`x=default` for a bare parameter, `x: T = default` for an annotated one, as PEP 8 has it."""
+    if annotation is not None:
+        return cst.MaybeSentinel.DEFAULT
+    return cst.AssignEqual(whitespace_before=_NO_SPACE, whitespace_after=_NO_SPACE)
 
 
 def _stranded(node: cst.FunctionDef, injections: Sequence[Injection]) -> str | None:
@@ -458,3 +510,72 @@ def _request_is_only_param(node: cst.FunctionDef) -> bool:
     visitor = _RequestUses()
     node.body.visit(visitor)
     return not visitor.other
+
+
+def _type_checking(module: cst.Module, wanted: Sequence[TypeImport]) -> cst.Module:
+    """`module` with an `if TYPE_CHECKING:` block holding the imports its annotations are named by.
+
+    Type-checking-only because these imports exist for the annotations and nothing else: the
+    module already imports, at run time, every fixture object it injects, and a type one of them
+    returns is not a name any line of the converted suite evaluates. Under the future import this
+    pass also writes, it never has to be.
+
+    The block goes under the module's imports, and into the one already there if the suite had
+    one — which is what makes converting a converted tree add nothing the second time.
+    """
+    if not wanted:
+        return module
+    body = list(module.body)
+    found = _block(body)
+    written = {_rendered(line) for line in body}
+    if found is not None:
+        written |= {_rendered(line) for line in found[2].body}
+    lines = [
+        line
+        for line in (cst.parse_statement(text) for text in statements(wanted))
+        if _rendered(line) not in written
+    ]
+    if not lines:
+        return module
+    if found is not None:
+        index, block, suite = found
+        body[index] = block.with_changes(body=suite.with_changes(body=[*suite.body, *lines]))
+        return module.with_changes(body=body)
+    guard = cst.If(
+        test=cst.Name("TYPE_CHECKING"),
+        body=cst.IndentedBlock(body=lines),
+        leading_lines=[cst.EmptyLine()],
+    )
+    body.insert(_after_imports(body), guard)
+    return module.with_changes(body=body)
+
+
+def _block(body: Sequence[cst.BaseStatement]) -> tuple[int, cst.If, cst.IndentedBlock] | None:
+    """The `if TYPE_CHECKING:` the module already writes at its top level, and where it is."""
+    for index, statement in enumerate(body):
+        if not isinstance(statement, cst.If) or not isinstance(statement.body, cst.IndentedBlock):
+            continue
+        match statement.test:
+            case cst.Name(value="TYPE_CHECKING") | cst.Attribute(attr=cst.Name("TYPE_CHECKING")):
+                return index, statement, statement.body
+            case _:
+                continue
+    return None
+
+
+def _after_imports(body: Sequence[cst.BaseStatement]) -> int:
+    """The first index past the module's opening run of imports, which is where the block goes."""
+    last = 0
+    for index, statement in enumerate(body):
+        if not isinstance(statement, cst.SimpleStatementLine):
+            continue
+        if all(isinstance(part, cst.Import | cst.ImportFrom) for part in statement.body):
+            last = index + 1
+        elif last:
+            break
+    return last
+
+
+def _rendered(statement: cst.CSTNode) -> str:
+    """One statement as the text it writes, for comparing it against one already in the module."""
+    return cst.Module(body=[]).code_for_node(statement).strip()

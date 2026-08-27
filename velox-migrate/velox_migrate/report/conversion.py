@@ -24,6 +24,7 @@ def plan(conversion: Conversion) -> str:
         _declared(conversion),
         _translated(conversion),
         _refused(conversion),
+        _untyped(conversion),
         _settings(conversion),
         _gaps(conversion),
     ]
@@ -121,6 +122,34 @@ def _refused(conversion: Conversion) -> list[str]:
         lines += [
             f"  {path} ({symbol}): {code}" for path, symbol, code in conversion.refused[:_NAMED]
         ]
+    return lines
+
+
+def _untyped(conversion: Conversion) -> list[str]:
+    """The fixtures whose injections degrade to `Any`, worst first — the type-readiness worklist.
+
+    The same list the audit offers before a conversion, measured against what the conversion
+    actually wrote: a fixture with no usable return annotation gives every parameter injected from
+    it no annotation either, and mypy reads each of those as `Any` and checks nothing in the body
+    against it. Ordered by how many sites that costs, because that is the order the annotating is
+    worth doing in.
+    """
+    degraded = conversion.plan.degraded
+    if not degraded:
+        return []
+    by_fixture: dict[tuple[str, str, str], list[str]] = {}
+    for item in degraded:
+        by_fixture.setdefault((item.fixture, item.defined, item.reason), []).append(item.site)
+    ordered = sorted(by_fixture.items(), key=lambda entry: (-len(entry[1]), entry[0]))
+    sites = sum(len(found) for found in by_fixture.values())
+    lines = [f"degrade to Any: {len(by_fixture)} fixture(s), {sites} injection site(s)"]
+    for (fixture, defined, reason), found in ordered[:_NAMED]:
+        lines.append(f"  {fixture} ({defined}): {reason} — {len(found)} site(s)")
+        lines += [f"    {site}" for site in sorted(found)[:_NAMED]]
+        if len(found) > _NAMED:
+            lines.append(f"    …and {len(found) - _NAMED} more")
+    if len(by_fixture) > _NAMED:
+        lines.append(f"  …and {len(by_fixture) - _NAMED} more")
     return lines
 
 
