@@ -21,8 +21,13 @@ Probe: a `Session`-typed fixture, injected three ways, with two deliberate error
 | `db: Session = Depends(db_fx)` | both caught | both caught | both caught |
 | `db: Annotated[Session, Depends(db_fx)]` | both caught | both caught | both caught |
 
-(mypy was run against a self-contained reproduction of the pattern: mypy 2.3.1 could not parse
-velox's own sources, which is worth a separate look.)
+(The note that mypy 2.3.1 could not parse velox's own sources is closed: `uvx mypy` picks an
+interpreter older than 3.12, which cannot read the PEP 695 `type` statement in
+`velox/_assertions/approx.py`. `uvx --python 3.13 mypy@2.3.1 --python-executable .venv/bin/python`
+reads velox end to end and reproduces the table against the real sources. The short form is worse
+there than the table alone shows: a test whose parameters are *all* injected the short way carries
+no annotation at all, so mypy treats it as an untyped function and does not check the body at all,
+rather than checking it against one `Any`.)
 
 So the failure is quiet and checker-dependent: a mypy user who writes the short form loses body
 type-checking for that parameter and is told nothing. This is the same reason FastAPI pushes
@@ -100,6 +105,38 @@ Two mechanics this needs:
 Anything falling back to `Any` gets a row in the conversion report, naming the fixture and the
 sites that lost their type — the same worklist as Part 2, now measured against the converted
 suite.
+
+## What landed
+
+All three parts, against `EXTRACTOR_VERSION` 2, which carries each fixture's return annotation as
+source text on `model.FixtureDef.returns`.
+
+Part 1 found the built-in typing surface broken rather than merely imprecise: `builtin_fixture`
+was declared `-> Fixture[Any]`, erasing the precise types the built-ins already carried, and the
+checkers then disagreed about which of the two declarations won — pyrefly typed all seven `Any`,
+while pyright and mypy rejected `Depends(velox.tmpdir)` outright. It takes and returns
+`Fixture[T]` now. Separately, velox shipped no `py.typed`, so none of this reached a mypy user at
+all; it does now.
+
+The two answers Part 1 asked for: the iterator-valued fixture cannot be distinguished from a
+generator one, so the reference documents `-> Iterable[X]` as the workaround; and
+`params: Sequence[P]` → `param: P` *is* expressible through a callback protocol, but the protocol
+constrains the whole signature and false-positives on any parameter without a default — which is
+exactly what the annotated spelling produces — so `params=` stays untyped and the reference says
+so.
+
+Part 3 deviates on one point. Where nothing is recoverable it writes **no annotation**, not `Any`.
+The `Any` above is premised on the annotated spelling, in which a parameter has no default for a
+checker to infer from; in default position there is one, and pyright and pyrefly both infer from
+`Depends(fx)` on their own, so `Any` would destroy that inference and buy mypy nothing. The site
+still gets its conversion-report row. Under `Annotated` the premise returns and `Any` becomes
+right again, which is why `convert/annotate.py` records the reasoning rather than the rule.
+
+Part 3 also has to write `from __future__ import annotations` into every module it annotates,
+which the plan does not anticipate: a `TYPE_CHECKING`-only import is safe in the annotated form
+because velox parses rather than evaluates, but a *default-position* annotation is an expression
+evaluated when the `def` is read. Under the future import nothing in the module is evaluated, and
+velox reads no annotation either way.
 
 ## Changes to `annotated-injection-plan.md`
 

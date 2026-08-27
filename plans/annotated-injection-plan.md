@@ -147,6 +147,17 @@ accepts the annotated form with no `cast` at the call site.
   same amount of type information said out loud. Where the type *is* recoverable from the
   fixture's own return annotation, `dependency-typing-plan.md` recovers it; where it isn't, the
   conversion report names the site.
+- **The recovery itself has already landed**, in `convert/annotate.py`, writing into default
+  position: `db: Session = Depends(db_fx)`. `infer` (the rule table over the annotation's source
+  text) and `Resolver` (importability, aliasing, the degraded worklist) are both independent of
+  the spelling; this phase changes only the emission in `wiring.py`. Two things do change with it.
+  The not-recoverable case, which today writes *no* annotation because a default is there for
+  pyright and pyrefly to infer from, becomes `Any` once the default is gone — the plan's letter,
+  restored on the premise that makes it true. And the `from __future__ import annotations` that
+  the default-position form must write, because such an annotation is evaluated when the `def` is
+  read, stops being load-bearing for the `TYPE_CHECKING` imports, since the parse-don't-evaluate
+  policy covers them; whether to keep writing it anyway is a decision this phase should make
+  rather than inherit.
 - `matrix.py`: re-derive which refusal rows survive. Candidates that should shrink or go are the
   ones about binding position and about a signature velox cannot reorder. `docs/migrate/matrix.md`
   is generated from it.
@@ -168,8 +179,9 @@ under `examples/` (~130 sites, largely mechanical) · a ROADMAP note while this 
 
 Phase 1 alone is shippable and is the only phase with design risk. Phase 2 depends on it. Phase 3
 depends on Phase 2 only for `docs/migrate/`. Suggested order: spike the 3.14 annotation-format
-question, then Phase 1 behind its own tests, then Phase 2 with the `--syntax` decision settled,
-then the docs sweep.
+question, then Phase 1 behind its own tests, then Phase 2, then the docs sweep. The `--syntax`
+question is settled — always `Annotated` — and everything in `dependency-typing-plan.md` has
+landed, so Phase 2 inherits a working type inference and has only to re-spell what it emits.
 
 Per the `dev-workflow` skill this is worktree work: `git worktree add ../velox-wt-annotated -b
 annotated-injection`, `just sync`, `just check`, `/code-review` before merge.
