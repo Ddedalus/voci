@@ -358,26 +358,24 @@ def test_info() -> TestInfo:
 # shape of it.
 from velox._builtins import capture as _capture  # noqa: E402
 
-tmp_path = builtin_fixture(tmp_path.func, provider=_capture.tmp_path_provider, scope="function")
-tmp_path_factory = builtin_fixture(
-    tmp_path_factory.func, provider=_capture.tmp_path_factory_provider, scope="session"
-)
-capture = builtin_fixture(capture.func, provider=_capture.capture_provider, scope="function")
-log_records = builtin_fixture(
-    log_records.func, provider=_capture.log_records_provider, scope="function"
-)
-test_info = builtin_fixture(test_info.func, provider=_capture.test_info_provider, scope="function")
+tmp_path = builtin_fixture(tmp_path, provider=_capture.tmp_path_provider)
+tmp_path_factory = builtin_fixture(tmp_path_factory, provider=_capture.tmp_path_factory_provider)
+capture = builtin_fixture(capture, provider=_capture.capture_provider)
+log_records = builtin_fixture(log_records, provider=_capture.log_records_provider)
+test_info = builtin_fixture(test_info, provider=_capture.test_info_provider)
 
 
 # `tmpdir`/`tmpdir_factory` are declared only now, `Depends()`-ing on the just-rebound `tmp_path`/
 # `tmp_path_factory` rather than allocating a directory of their own: a test asking for both gets
 # the same directory either way, and `tmpdir_factory.mktemp(...)` shares `tmp_path_factory`'s own
 # numbering instead of starting a second counter over the same `basetemp`.
+@fixture()
 def tmpdir(tmp_path: Path = Depends(tmp_path)) -> LegacyPath:
     """This test's `tmp_path`, wrapped as a `LegacyPath`."""
     raise NotImplementedError(_RUNTIME)
 
 
+@fixture(scope="session")
 def tmpdir_factory(
     tmp_path_factory: TmpPathFactory = Depends(tmp_path_factory),
 ) -> LegacyTmpPathFactory:
@@ -385,10 +383,5 @@ def tmpdir_factory(
     raise NotImplementedError(_RUNTIME)
 
 
-tmpdir = builtin_fixture(tmpdir, provider=_capture.tmpdir_provider, scope="function", name="tmpdir")
-tmpdir_factory = builtin_fixture(
-    tmpdir_factory,
-    provider=_capture.tmpdir_factory_provider,
-    scope="session",
-    name="tmpdir_factory",
-)
+tmpdir = builtin_fixture(tmpdir, provider=_capture.tmpdir_provider)
+tmpdir_factory = builtin_fixture(tmpdir_factory, provider=_capture.tmpdir_factory_provider)

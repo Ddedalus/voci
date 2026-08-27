@@ -478,20 +478,15 @@ def fixture(
     return cast(FixtureDecorator, decorate)
 
 
-def builtin_fixture(
-    func: Callable[..., Any],
-    *,
-    provider: BuiltinProvider,
-    scope: Scope = "function",
-    name: str | None = None,
-) -> Fixture[Any]:
-    """Construct a `Fixture` whose value the velox runtime supplies directly, instead of by
-    calling `func`. `func` is kept for its `__name__`, signature and return annotation, which
-    display and typecheck call sites against; `_di._construct` checks `.provider` first, so
-    `func`'s own body never runs. Not exposed through `fixture()`; only `_builtins/fixtures.py`
-    calls this.
+def builtin_fixture[T](declared: Fixture[T], /, *, provider: BuiltinProvider) -> Fixture[T]:
+    """Rebuild `declared` as a fixture whose value the velox runtime supplies directly, instead of
+    by calling its function.
+
+    Scope, name and value type all come from `declared`, which stays the one place each built-in
+    is declared; `_di._construct` checks `.provider` first, so the function's body never runs. Not
+    exposed through `fixture()`; only `_builtins/fixtures.py` calls this.
     """
-    return Fixture(func, scope=scope, name=name, provider=provider)
+    return Fixture(declared.func, scope=declared.scope, name=declared.name, provider=provider)
 
 
 class DIError(Exception):
