@@ -7,7 +7,10 @@ resolution comes only from the dump, and hazards come only from the sources.
 
 Every classification is a support-matrix row, so an audit is a census keyed by code rather than a
 prose opinion, and the numbers a reader acts on — what converts untouched, what needs a decision,
-what fraction of the suite ends up running serially — are totals over those codes.
+what fraction of the suite ends up running serially — are totals over those codes. Type readiness
+is the one thing an audit reports that is not a row: it is a property of the suite's own
+signatures rather than an occurrence of a pytest construct, so it hangs off `Audit` beside the
+findings.
 """
 
 from __future__ import annotations
@@ -16,13 +19,15 @@ import ast
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
-from velox_migrate.audit import config, marks, wiring
+from velox_migrate.audit import config, marks, readiness, wiring
 from velox_migrate.audit.findings import (
     Audit,
     Finding,
     Site,
     Suite,
     Summary,
+    TypeReadiness,
+    Unannotated,
     ordered,
     summarize,
 )
@@ -37,6 +42,8 @@ __all__ = [
     "Site",
     "Suite",
     "Summary",
+    "TypeReadiness",
+    "Unannotated",
     "run",
     "sources_of",
 ]
@@ -85,6 +92,7 @@ def run(ground_truth: GroundTruth, *, root: Path, budget: int = DEFAULT_BUDGET) 
         scanned_files=scan.files,
         unparsed=tuple(sorted({*scan.unparsed, *missing})),
         budget=budget,
+        type_readiness=readiness.assess(ground_truth),
     )
 
 

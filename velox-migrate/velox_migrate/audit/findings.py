@@ -153,6 +153,50 @@ class Summary:
 
 
 @dataclass(frozen=True, slots=True)
+class Unannotated:
+    """One fixture factory written without a return annotation.
+
+    `injections` counts the parameters that receive it — one per test function and one per fixture
+    factory that requests it, however many cases a test was parametrized into.
+    """
+
+    argname: str
+    module: str | None
+    site: Site
+    injections: int
+
+    @property
+    def sort_key(self) -> tuple[int, tuple[str, int, str], str]:
+        return (-self.injections, self.site.sort_key, self.argname)
+
+
+@dataclass(frozen=True, slots=True)
+class TypeReadiness:
+    """What the suite's fixtures state about their own types, and what conversion can carry.
+
+    This is not a support-matrix code, and adding one would say something untrue: a missing return
+    annotation is no pytest construct, occurs nowhere in particular, and blocks nothing. The
+    fixture converts, and every parameter it is injected into loses its type. It is an axis
+    beside the census rather than a row in it, which is why it hangs off the audit on its own.
+
+    `fixtures` is ordered by the cost of leaving each one as it is, so it reads as a worklist.
+    """
+
+    fixtures: tuple[Unannotated, ...] = ()
+    annotated: int = 0
+
+    @property
+    def total(self) -> int:
+        """Every fixture the suite wrote, annotated or not."""
+        return self.annotated + len(self.fixtures)
+
+    @property
+    def injections(self) -> int:
+        """The parameters that lose their type while nothing here is annotated."""
+        return sum(row.injections for row in self.fixtures)
+
+
+@dataclass(frozen=True, slots=True)
 class Suite:
     """The shape of the suite the audit read, as the dump reports it."""
 
@@ -184,6 +228,7 @@ class Audit:
     scanned_files: int
     unparsed: tuple[str, ...]
     budget: int
+    type_readiness: TypeReadiness = TypeReadiness()
 
     def of_disposition(self, disposition: Disposition) -> tuple[Finding, ...]:
         return tuple(f for f in self.findings if f.disposition is disposition)

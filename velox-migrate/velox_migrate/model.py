@@ -78,6 +78,11 @@ class FixtureDef:
     `visibility` is the nodeid of the directory, module or class the fixture was defined in, and
     empty for a fixture a plugin registered globally; a fixture is visible to a test exactly when
     it prefixes that test's nodeid. `params` and `ids` are `repr`ed values.
+
+    `returns` is the source text of the factory's return annotation, or `None` when it has none.
+    It is text and not an object because it is the one thing a dump cannot carry live, and
+    because everything downstream unwraps it by inspection rather than by evaluating it. The
+    module it is written in is `func.module`, which is what makes a name in it importable.
     """
 
     key: str
@@ -90,6 +95,7 @@ class FixtureDef:
     kind: str
     direct_param: bool
     argnames: tuple[str, ...]
+    returns: str | None
     func: FuncLocation
 
     @property
@@ -368,6 +374,7 @@ def _fixture_def(key: str, entry: Mapping) -> FixtureDef:
         kind=entry["kind"],
         direct_param=bool(entry["direct_param"]),
         argnames=tuple(entry["argnames"]),
+        returns=entry["returns"],
         func=FuncLocation(
             module=func.get("module"),
             qualname=func.get("qualname"),

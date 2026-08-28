@@ -12,18 +12,20 @@ and nothing else can be installed.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import os
 import platform
 import re
 import sys
+import textwrap
 
 import pytest
 
 # Bumped whenever the dump's shape changes. The loader refuses anything it does not equal, so a
 # dump and the codegen reading it can never silently disagree about what a field means.
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 
 # Below 8.4 there is no `FixtureDef._autouse`, so autouse-ness would have to be inferred from the
 # visibility map alone; from 10 the deprecated `FixtureDef.baseid` is gone. Both are shimmable,
@@ -224,6 +226,7 @@ class _DefTable:
             "kind": type(fd).__name__,
             "direct_param": _is_direct_param(fd),
             "argnames": list(getattr(fd, "argnames", ())),
+            "returns": _return_annotation(_get_real_func(fd.func)),
             "func": func,
         }
 
@@ -241,6 +244,35 @@ class _DefTable:
             "lineno": code.co_firstlineno if code is not None else None,
             "wrapped": real is not func,
         }
+
+
+def _return_annotation(func):
+    """The source text of `func`'s return annotation, or `None` when it has none.
+
+    Read from the source rather than from `__annotations__`, because the text is the only form
+    that means the same thing under every annotation regime: a module with `from __future__
+    import annotations` already holds strings, one without holds objects whose `repr` is not
+    source, and from 3.14 the attribute is lazy and evaluating it raises for a `TYPE_CHECKING`-only
+    name. The consumer unwraps the text and never evaluates it either.
+    """
+    try:
+        source = textwrap.dedent(inspect.getsource(func))
+        node = ast.parse(source).body[0]
+    except (OSError, TypeError, SyntaxError, IndentationError, IndexError):
+        # No source to read: a fixture built by `exec`, or a callable that is not a function.
+        return _annotation_fallback(func)
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.returns is None:
+        return None
+    return ast.unparse(node.returns)
+
+
+def _annotation_fallback(func):
+    """`func`'s return annotation when its source is unreadable, and only if it is already text."""
+    try:
+        found = getattr(func, "__annotations__", {}).get("return")
+    except Exception:  # pragma: no cover - a lazy annotation that raises on evaluation
+        return None
+    return found if isinstance(found, str) else None
 
 
 def _raw_visibility(fd):

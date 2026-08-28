@@ -120,6 +120,8 @@ VX103  marker      1  @pytest.mark.skipif with a string condition
 VX301  mechanical  1  testpaths
 ...
 
+types: 6 of 14 fixtures have no return annotation, costing 11 injected parameters — the report lists them worst first
+
 wrote .velox-migrate/migration-report.md and .velox-migrate/findings.json
 ```
 
@@ -138,14 +140,42 @@ pytest construct, what becomes of it, and what to do where the answer is "nothin
 label report sections and the markers left in converted source, so a number in the summary, a
 paragraph in the report and a marker in a file are one thing seen three ways.
 
-`migration-report.md` is written to be read and forwarded: the verdict, then a section per
-construct that needs a decision with its file-and-line list, then what converts with a caveat, the
-concurrency hazards, what the conversion rewires, the configuration and plugins, and last what the
-audit cannot see. `findings.json` carries the same content for tooling.
+`migration-report.md` is written to be read and forwarded: the verdict, then the fixture return
+types worth adding first, then a section per construct that needs a decision with its
+file-and-line list, then what converts with a caveat, the concurrency hazards, what the conversion
+rewires, the configuration and plugins, and last what the audit cannot see. `findings.json`
+carries the same content for tooling.
 
 Two things collection cannot see, and the audit names rather than counts: what a fixture decides
 at run time, such as `request.getfixturevalue(...)`, and anything behind application code — test
 order dependence, teardown timing, shared state.
+
+## Annotate before converting
+
+The conversion preserves whatever type information the suite already states, and fabricates none.
+An injected parameter's type comes from the fixture factory's return annotation, so a fixture
+written without one is injected into a parameter with nothing to type it: mypy reads such a
+parameter as `Any` and checks nothing done with it. The conversion report names every site that
+lands that way.
+
+That makes the last step before `convert` a pytest one. Annotate the fixtures, run your type
+checker, and keep pytest green while you do it, since a return annotation changes no behaviour:
+
+```python
+@pytest.fixture
+def db_session() -> Session:
+    return Session(engine)
+```
+
+The audit's *fixture return types* section is the worklist. Every fixture whose factory has no
+return annotation, with its file and line, ordered by how many injections lose their type with it,
+so the top of the list is worth the most:
+
+```
+- conftest.py:23 (engine) — 5 injections
+- conftest.py:28 (client) — 3 injections
+- conftest.py:18 (settings) — 2 injections
+```
 
 ## Convert
 

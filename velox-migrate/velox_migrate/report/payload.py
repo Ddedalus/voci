@@ -14,10 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from velox_migrate import matrix
-from velox_migrate.audit.findings import SEVERITY, Audit, Finding, Suite, Summary, ordered
+from velox_migrate.audit.findings import (
+    SEVERITY,
+    Audit,
+    Finding,
+    Suite,
+    Summary,
+    TypeReadiness,
+    ordered,
+)
 from velox_migrate.matrix import Construct
 
-FINDINGS_VERSION = 1
+FINDINGS_VERSION = 2
 
 
 def payload(audit: Audit) -> dict[str, Any]:
@@ -31,6 +39,7 @@ def payload(audit: Audit) -> dict[str, Any]:
         "scan": {"files": audit.scanned_files, "unparsed": sorted(audit.unparsed)},
         "budget": audit.budget,
         "matrix": {code: _construct(matrix.construct(code)) for code in codes},
+        "type_readiness": _type_readiness(audit.type_readiness),
         "findings": [_finding(finding) for finding in findings],
         "blind_spots": [_blind_spot(construct) for construct in audit.blind_spots],
     }
@@ -78,6 +87,26 @@ def _totals(summary: Summary) -> dict[str, Any]:
         "serialized_percent": summary.serialized_percent,
         "clean_percent": summary.clean_percent,
         "blocked_percent": summary.blocked_percent,
+    }
+
+
+def _type_readiness(readiness: TypeReadiness) -> dict[str, Any]:
+    return {
+        "fixtures": readiness.total,
+        "annotated": readiness.annotated,
+        "unannotated": len(readiness.fixtures),
+        "injections": readiness.injections,
+        "worklist": [
+            {
+                "fixture": row.argname,
+                "module": row.module,
+                "file": row.site.file,
+                "line": row.site.line,
+                "function": row.site.function,
+                "injections": row.injections,
+            }
+            for row in readiness.fixtures
+        ],
     }
 
 

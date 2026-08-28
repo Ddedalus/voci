@@ -1,5 +1,5 @@
 {
- "extractor_version": 1,
+ "extractor_version": 2,
  "pytest_version": "9.1.1",
  "environment": {
   "sys_platform": "linux",
@@ -150,6 +150,7 @@
    "argnames": [
     "request"
    ],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "backend",
@@ -170,6 +171,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Cache",
    "func": {
     "module": "_pytest.cacheprovider",
     "qualname": "cache",
@@ -190,6 +192,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[CaptureFixture[str]]",
    "func": {
     "module": "_pytest.capture",
     "qualname": "capfd",
@@ -210,6 +213,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[CaptureFixture[bytes]]",
    "func": {
     "module": "_pytest.capture",
     "qualname": "capfdbinary",
@@ -230,6 +234,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[LogCaptureFixture]",
    "func": {
     "module": "_pytest.logging",
     "qualname": "caplog",
@@ -250,6 +255,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[CaptureFixture[str]]",
    "func": {
     "module": "_pytest.capture",
     "qualname": "capsys",
@@ -270,6 +276,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[CaptureFixture[bytes]]",
    "func": {
     "module": "_pytest.capture",
     "qualname": "capsysbinary",
@@ -290,6 +297,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Generator[CaptureFixture[str]]",
    "func": {
     "module": "_pytest.capture",
     "qualname": "capteesys",
@@ -308,6 +316,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": "dict[str, Any]",
    "func": {
     "module": "_pytest.doctest",
     "qualname": "doctest_namespace",
@@ -328,6 +337,7 @@
    "argnames": [
     "request"
    ],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "dyn",
@@ -348,6 +358,7 @@
    "argnames": [
     "settings"
    ],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "engine",
@@ -366,6 +377,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "hidden",
@@ -384,6 +396,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "integ_autouse",
@@ -402,6 +415,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": "Generator[MonkeyPatch]",
    "func": {
     "module": "_pytest.monkeypatch",
     "qualname": "monkeypatch",
@@ -420,6 +434,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "helpers",
     "qualname": "opaque.<locals>.inner",
@@ -440,6 +455,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Config",
    "func": {
     "module": "_pytest.fixtures",
     "qualname": "pytestconfig",
@@ -460,6 +476,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Callable[[str, object], None]",
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_property",
@@ -480,6 +497,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Callable[[str, object], None]",
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_testsuite_property",
@@ -500,6 +518,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Callable[[str, object], None]",
    "func": {
     "module": "_pytest.junitxml",
     "qualname": "record_xml_attribute",
@@ -518,6 +537,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": "Generator[WarningsRecorder]",
    "func": {
     "module": "_pytest.recwarn",
     "qualname": "recwarn",
@@ -536,6 +556,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "root_autouse",
@@ -554,6 +575,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "settings",
@@ -574,6 +596,7 @@
    "argnames": [
     "settings"
    ],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "settings",
@@ -594,6 +617,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Subtests",
    "func": {
     "module": "_pytest.subtests",
     "qualname": "subtests",
@@ -615,6 +639,7 @@
     "request",
     "tmp_path_factory"
    ],
+   "returns": "Generator[Path]",
    "func": {
     "module": "_pytest.tmpdir",
     "qualname": "tmp_path",
@@ -635,6 +660,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "TempPathFactory",
    "func": {
     "module": "_pytest.tmpdir",
     "qualname": "tmp_path_factory",
@@ -655,6 +681,7 @@
    "argnames": [
     "tmp_path"
    ],
+   "returns": "LEGACY_PATH",
    "func": {
     "module": "_pytest.legacypath",
     "qualname": "LegacyTmpdirPlugin.tmpdir",
@@ -675,6 +702,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "TempdirFactory",
    "func": {
     "module": "_pytest.legacypath",
     "qualname": "LegacyTmpdirPlugin.tmpdir_factory",
@@ -693,6 +721,7 @@
    "kind": "FixtureDef",
    "direct_param": false,
    "argnames": [],
+   "returns": null,
    "func": {
     "module": "conftest",
     "qualname": "wrapped_fix",
@@ -713,6 +742,7 @@
    "argnames": [
     "request"
    ],
+   "returns": "Any",
    "func": {
     "module": "_pytest.python",
     "qualname": "get_direct_param_fixture_func",

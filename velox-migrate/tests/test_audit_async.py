@@ -32,6 +32,7 @@ _BACKEND_DEF: dict[str, Any] = {
     "kind": "FixtureDef",
     "direct_param": False,
     "argnames": ["request"],
+    "returns": None,
     "func": {
         "module": "anyio.pytest_plugin",
         "qualname": "anyio_backend",
@@ -54,6 +55,7 @@ _PINNED_DEF: dict[str, Any] = {
     "kind": "FixtureDef",
     "direct_param": False,
     "argnames": [],
+    "returns": None,
     "func": {
         "module": "conftest",
         "qualname": "anyio_backend",

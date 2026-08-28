@@ -22,6 +22,7 @@ from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
 from velox_migrate.convert import declarations, layout, parametrize, specialize
+from velox_migrate.convert.annotate import Degraded, Resolver, TypeImport
 from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
 from velox_migrate.convert.parametrize import Carried, Decision
@@ -78,12 +79,20 @@ class Injection:
     and is empty for the one injection that is a removal: a `request` every use of which the
     rewrite has taken away. `asked` marks the injection a body asked for by name rather than
     through a parameter, which is the one the signature grows a parameter for.
+
+    `annotation` is the type the parameter is written with, inferred from the fixture factory's
+    return annotation, and `None` where nothing could be inferred — the conversion then writes the
+    parameter with no annotation at all and the report says which fixture cost it. `needs` are the
+    `TYPE_CHECKING` imports that annotation is spellable through, travelling with it so that a
+    signature the rewrite backs out of takes its imports back out with it.
     """
 
     was: str
     param: str
     reference: str
     asked: bool = False
+    annotation: str | None = None
+    needs: tuple[TypeImport, ...] = ()
 
     @property
     def renamed(self) -> bool:
@@ -204,6 +213,10 @@ class Plan:
     `packages` are the `__init__.py` files a declaration needs in place to be read at all, empty
     ones included: velox walks up from a test file and stops at the first directory that is not a
     package, so a gap in the chain is a declaration that silently reaches nothing.
+
+    `degraded` is every injection that got no type because the fixture behind it has no return
+    annotation worth inferring from — the type-readiness worklist the audit hands a user before
+    they convert, measured again against what the conversion actually wrote.
     """
 
     layout: Layout
@@ -215,6 +228,7 @@ class Plan:
     declarations: tuple[Declaration, ...] = ()
     packages: tuple[str, ...] = ()
     specialized: Specialization = specialize.NONE
+    degraded: tuple[Degraded, ...] = ()
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -318,6 +332,10 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         placed=special.homes,
     )
 
+    # Built against the layout that is going to be written, since where a fixture module ends up
+    # is what decides whether a type written in it can be named anywhere else.
+    typed = Resolver(sources, plan_layout)
+
     return Plan(
         layout=plan_layout,
         work=_work(
@@ -335,6 +353,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
             bodies=bodies,
             solo=_solo(audit, items),
             decided=cases,
+            typed=typed,
         ),
         blocked_tests=blocked_tests,
         blocked_fixtures=frozenset(blocked_fixtures),
@@ -343,6 +362,7 @@ def build(audit: Audit, ground_truth: GroundTruth, *, root: Path) -> Plan:
         declarations=placed,
         packages=declarations.packages(ground_truth, placed, blocked=blocked_tests),
         specialized=special,
+        degraded=typed.degraded,
     )
 
 
@@ -1031,6 +1051,7 @@ def _work(
     bodies: Mapping[tuple[str, str], Body],
     solo: Mapping[str, frozenset[str]],
     decided: Decision,
+    typed: Resolver,
 ) -> dict[str, FileWork]:
     fixtures_by_file: dict[str, list[FixtureWork]] = {}
     for key, fixture in sorted(converting.items()):
@@ -1056,6 +1077,7 @@ def _work(
                     special,
                     bodies=bodies,
                     carried=decided.carried,
+                    typed=typed,
                 ),
                 parametrized=fixture.is_parametrized or key in decided.carried,
                 carried=decided.carried.get(key),
@@ -1076,6 +1098,7 @@ def _work(
             node=copy.node,
             bodies=bodies,
             carried=decided.carried,
+            typed=typed,
         )
         # A copy is the original's source under another name, so a case list the original carries
         # is the copy's too: every test the copy serves reached the original's cases before.
@@ -1119,6 +1142,8 @@ def _work(
                     special,
                     bodies,
                     node=_node_of(path, qualname),
+                    typed=typed,
+                    site=f"{path}::{qualname}",
                 ),
             )
         )
@@ -1262,6 +1287,7 @@ def _injections(
     node: str | None = None,
     bodies: Mapping[tuple[str, str], Body] = {},
     carried: Mapping[str, Carried] = {},
+    typed: Resolver | None = None,
 ) -> tuple[Injection, ...]:
     """What each parameter of the fixture `key`'s factory becomes, seen from `node`."""
     fixture = ground_truth.fixture_defs[key]
@@ -1281,8 +1307,15 @@ def _injections(
         special,
         asked=_by_name(fixture.argnames, names),
         node=node if node is not None else fixture.visibility,
+        typed=typed,
+        site=_site_of(fixture),
     )
     return _without_request(found, fixture.argnames, body, parametrized=parametrized)
+
+
+def _site_of(fixture: FixtureDef) -> str:
+    """A fixture factory named the way the conversion report sites what it lost."""
+    return f"{fixture.func.file or '?'}::{fixture.func.qualname or fixture.argname}"
 
 
 def _test_injections(
@@ -1294,6 +1327,8 @@ def _test_injections(
     special: Specialization,
     bodies: Mapping[tuple[str, str], Body] = {},
     node: str | None = None,
+    typed: Resolver | None = None,
+    site: str = "",
 ) -> tuple[Injection, ...]:
     body = _body_of_item(bodies, item)
     resolved: dict[str, FixtureDef | None] = {name: item.resolve(name) for name in item.argnames}
@@ -1308,6 +1343,8 @@ def _test_injections(
         special,
         asked=_by_name(item.argnames, names),
         node=node,
+        typed=typed,
+        site=site,
     )
     return _without_request(found, item.argnames, body, parametrized=False)
 
@@ -1364,6 +1401,8 @@ def _from_names(
     special: Specialization,
     asked: frozenset[str] = frozenset(),
     node: str | None = None,
+    typed: Resolver | None = None,
+    site: str = "",
 ) -> tuple[Injection, ...]:
     found: list[Injection] = []
     for name in names:
@@ -1385,10 +1424,25 @@ def _from_names(
                 continue
             imported = plan_layout.importing(consumer, key)
             reference = imported.bound if imported is not None else home.symbol
-            found.append(Injection(was=name, param=name, reference=reference, asked=name in asked))
+            # The type is the original factory's, whichever copy of it this consumer gets: a
+            # specialization re-binds a fixture's dependencies and never its return annotation.
+            wanted = typed.of(fixture, consumer, site=site) if typed is not None else None
+            found.append(
+                Injection(
+                    was=name,
+                    param=name,
+                    reference=reference,
+                    asked=name in asked,
+                    annotation=wanted.annotation if wanted is not None else None,
+                    needs=wanted.imports if wanted is not None else (),
+                )
+            )
             continue
         builtin = BUILTINS.get(fixture.argname)
         if builtin is not None:
+            # velox's own builtins are annotated where they are declared, and nothing in the
+            # suite's sources says what `tmp_path` returns — so there is no inference to do here
+            # and nothing lost by not doing it.
             param, reference = builtin
             found.append(Injection(was=name, param=param, reference=reference, asked=name in asked))
     return tuple(found)

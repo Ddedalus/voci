@@ -230,6 +230,38 @@ def test_a_fixture_named_by_usefixtures_twice_is_recorded_once(tmp_path: Path) -
     assert item["usefixtures"] == ["db"]
 
 
+def test_a_fixtures_return_annotation_is_recorded_as_the_text_it_was_written_as(
+    tmp_path: Path,
+) -> None:
+    # The text, not the object: under `from __future__ import annotations` there is no object to
+    # read, and the consumer unwraps `Iterator[X]` by inspection anyway.
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "conftest.py").write_text(
+        "from __future__ import annotations\n\n"
+        "from collections.abc import Iterator\n\n"
+        "import pytest\n\n\n"
+        "@pytest.fixture\ndef db() -> Iterator[Session]:\n    yield 1\n\n\n"
+        "@pytest.fixture\ndef plain() -> int:\n    return 1\n\n\n"
+        "@pytest.fixture\ndef bare():\n    return 1\n\n\n"
+        "@pytest.fixture\nasync def spun() -> Session:\n    return 1\n",
+        encoding="utf-8",
+    )
+    (suite / "test_it.py").write_text(
+        "def test_ok(db, plain, bare, spun): pass\n", encoding="utf-8"
+    )
+
+    _run_plugin(suite, tmp_path)
+
+    defs = schema.load(tmp_path / "dump.json")["fixture_defs"].values()
+    recorded = {entry["argname"]: entry["returns"] for entry in defs}
+
+    assert recorded["db"] == "Iterator[Session]"
+    assert recorded["plain"] == "int"
+    assert recorded["bare"] is None
+    assert recorded["spun"] == "Session"
+
+
 def test_a_run_that_never_reached_the_suite_is_refused(tmp_path: Path) -> None:
     # pytest reports a mistyped path after collection has already "finished", so a dump taken at
     # that point looks like a clean reading of a suite with no tests in it.

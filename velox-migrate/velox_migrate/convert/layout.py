@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -268,16 +268,26 @@ def _imports(
     return imports
 
 
-def _alias(home: Home, taken: set[str]) -> str:
+def _alias(home: Home, taken: Collection[str]) -> str:
     """A name for `home`'s symbol that `taken` leaves free, keyed by where the fixture lives.
 
     Two directories may each bind `client`, and pytest kept them apart by directory, so the
     directory is what the alias reintroduces.
     """
-    parent = PurePosixPath(home.module).parent.name or "root"
-    candidate = f"{parent}_{home.symbol}"
-    suffix = 2
-    while candidate in taken:
-        candidate = f"{parent}_{home.symbol}_{suffix}"
+    return alias_for(
+        home.symbol, hint=PurePosixPath(home.module).parent.name or "root", taken=taken
+    )
+
+
+def alias_for(symbol: str, *, hint: str, taken: Collection[str]) -> str:
+    """A spelling of `symbol` that `taken` leaves free, carrying `hint` to say which one it is.
+
+    Shared with the imports an annotation needs, which collide with a consuming module's own names
+    for exactly the reason a fixture import does and are disambiguated the same way.
+    """
+    candidate = f"{hint}_{symbol}" if hint else symbol
+    name, suffix = candidate, 2
+    while name in taken:
+        name = f"{candidate}_{suffix}"
         suffix += 1
-    return candidate
+    return name
