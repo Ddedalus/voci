@@ -482,11 +482,19 @@ def builtin_fixture[T](declared: Fixture[T], /, *, provider: BuiltinProvider) ->
     """Rebuild `declared` as a fixture whose value the velox runtime supplies directly, instead of
     by calling its function.
 
-    Scope, name and value type all come from `declared`, which stays the one place each built-in
-    is declared; `_di._construct` checks `.provider` first, so the function's body never runs. Not
-    exposed through `fixture()`; only `_builtins/fixtures.py` calls this.
+    Scope, exclusivity, name and value type all come from `declared`, which stays the one place
+    each built-in is declared; `_di._construct` checks `.provider` first, so the function's body
+    never runs. `params`/`ids` are not carried, because the value comes from the provider and
+    there is nothing for a case to vary. Not exposed through `fixture()`; only
+    `_builtins/fixtures.py` calls this.
     """
-    return Fixture(declared.func, scope=declared.scope, name=declared.name, provider=provider)
+    return Fixture(
+        declared.func,
+        scope=declared.scope,
+        exclusive=declared.exclusive,
+        name=declared.name,
+        provider=provider,
+    )
 
 
 class DIError(Exception):

@@ -1055,6 +1055,71 @@ def test_a_type_the_consumer_already_imports_the_same_way_needs_no_second_import
     assert typed == annotate.Typed(annotation="Session", imports=())
 
 
+def test_a_plain_import_the_consumer_already_binds_is_aliased_as_a_plain_import() -> None:
+    # `import db` binds a module, so a collision has to be resolved with `import db as root_db`.
+    # `from db import db as root_db` reads as the same rename and names something that is not there.
+    conftest = "import db\n\n\ndef session() -> db.Session:\n    ...\n"
+    sources = {"conftest.py": conftest, "test_it.py": f"db = object()\n\n\n{_TEST_IT}"}
+    fixture = _fixture_def("session", ".", returns="db.Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="root_db.Session", imports=(annotate.TypeImport("db", None, "root_db"),)
+    )
+
+
+def test_a_name_the_consumer_binds_only_under_type_checking_is_taken_all_the_same() -> None:
+    # A name a suite uses only in annotations is written inside `if TYPE_CHECKING:`, which is
+    # exactly where this pass writes too -- so missing it would rebind the module's own `Session`.
+    sources = {
+        "conftest.py": _CONFTEST,
+        "test_it.py": f"if TYPE_CHECKING:\n    from other import Session\n\n\n{_TEST_IT}",
+    }
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="root_Session",
+        imports=(annotate.TypeImport("support", "Session", "root_Session"),),
+    )
+
+
+def test_the_import_the_consumer_already_writes_under_type_checking_is_not_written_twice() -> None:
+    sources = {
+        "conftest.py": _CONFTEST,
+        "test_it.py": (
+            f"if TYPE_CHECKING:\n    from support import Other, Session\n\n\n{_TEST_IT}"
+        ),
+    }
+    fixture = _fixture_def("session", ".", returns="Session", file="conftest.py")
+
+    _, typed = _annotation_of(sources, fixture, "test_it.py")
+
+    assert typed == annotate.Typed(annotation="Session", imports=())
+
+
+def test_an_aliased_typing_import_is_read_as_the_module_the_fixture_module_made_it() -> None:
+    # `t.Iterator[Session]` is a shape to unwrap only if `t` is `typing`, and only the fixture's
+    # own imports say so. Left unresolved it writes `t.Iterator[Session]` for a parameter every
+    # checker reads as a `Session`, and `t.Any` for one this must leave alone entirely.
+    imports = annotate.bindings("import typing as t\nimport collections.abc as ca\n")
+
+    assert annotate.infer("t.Iterator[Session]", imports=imports) == "Session"
+    assert annotate.infer("ca.AsyncIterator[Session]", imports=imports) == "Session"
+    assert annotate.infer("t.Any", imports=imports) is None
+    # Somebody else's `t` is not typing's, and `mymod.Generator` is their class.
+    assert annotate.infer("t.Iterator[Session]") == "t.Iterator[Session]"
+    assert annotate.infer("mymod.Generator[Session]") == "mymod.Generator[Session]"
+
+
+def test_an_unaliased_dotted_typing_import_is_read_through_the_head_it_binds() -> None:
+    imports = annotate.bindings("import collections.abc\n")
+
+    assert annotate.infer("collections.abc.Iterator[Session]", imports=imports) == "Session"
+
+
 def test_a_relative_import_in_the_fixture_module_is_spelled_absolutely_for_the_consumer() -> None:
     # A relative import reaches inside a package, so the absolute path to what it names is one any
     # module in the suite can use — which is how the conversion spells every import it writes.

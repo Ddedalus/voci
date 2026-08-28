@@ -126,8 +126,18 @@ class _Spelling:
     item: TypeImport | None
 
 
-def infer(returns: str | None, *, is_async: bool = False, generator: bool = False) -> str | None:
+def infer(
+    returns: str | None,
+    *,
+    is_async: bool = False,
+    generator: bool = False,
+    imports: Mapping[str, TypeImport | None] | None = None,
+) -> str | None:
     """The type an injected parameter gets from a factory annotated `-> returns`, or `None`.
+
+    `imports` is what the factory's own module binds, which is how a qualified spelling is read:
+    `import typing as t` makes `t.Iterator[X]` one of the shapes to unwrap, and without the map
+    there is no way to tell it from somebody else's `t`.
 
     Mirrors `FixtureDecorator`'s overload order — async iterator, iterator, awaitable, plain — on
     the callable's *return type*, which for a coroutine function is the `Coroutine[..., returns]`
@@ -150,8 +160,8 @@ def infer(returns: str | None, *, is_async: bool = False, generator: bool = Fals
     # A coroutine function's return type is `Coroutine[Any, Any, returns]`, which the
     # `Awaitable[T]` overload unwraps to `returns` — once, so `async def f() -> Iterator[X]` is an
     # `Iterator[X]` and not an `X`.
-    unwrapped = node if is_async and not generator else _unwrap(node)
-    if _owner(unwrapped) in _OPAQUE or _forward_reference(unwrapped):
+    unwrapped = node if is_async and not generator else _unwrap(node, imports)
+    if _owner(unwrapped, imports) in _OPAQUE or _forward_reference(unwrapped, imports):
         return None
     return ast.unparse(unwrapped)
 
@@ -261,6 +271,7 @@ class Resolver:
             fixture.returns,
             is_async=isinstance(node, ast.AsyncFunctionDef),
             generator=_yields(node),
+            imports=self._table(source),
         )
         if annotation is None:
             return None, f"nothing to infer from `-> {fixture.returns}`"
@@ -318,17 +329,24 @@ class Resolver:
         hint = PurePosixPath(source).parent.name or "root"
         alias = layout.alias_for(name, hint=hint, taken=taken)
         taken.add(alias)
+        # `symbol` stays as it was: `None` is a plain `import mod`, and aliasing it has to write
+        # `import mod as alias`, not a `from mod import mod` that names nothing.
         return _Spelling(
             bound=alias,
-            item=TypeImport(module=origin.module, symbol=origin.symbol or name, alias=alias),
+            item=TypeImport(module=origin.module, symbol=origin.symbol, alias=alias),
         )
 
     def _claimed(self, consumer: str) -> set[str]:
         """Every name `consumer` binds by the time these annotations are written."""
         claimed = self._taken.get(consumer)
         if claimed is None:
-            text = self._sources.get(self._origin.get(consumer, consumer))
+            source = self._origin.get(consumer, consumer)
+            text = self._sources.get(source)
             claimed = set(layout.module_level_names(text) if text is not None else ())
+            # `module_level_names` stops at the module's own statements, and a name a suite uses
+            # only in annotations is exactly the one written inside `if TYPE_CHECKING:`. Missing
+            # those would rebind one of them, silently, to something else.
+            claimed |= set(self._table(source))
             claimed |= {item.bound for item in self._layout.imports_for(consumer)}
             self._taken[consumer] = claimed
         return claimed
@@ -467,11 +485,11 @@ def _yields(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def _unwrap(node: ast.expr) -> ast.expr:
+def _unwrap(node: ast.expr, imports: Mapping[str, TypeImport | None] | None = None) -> ast.expr:
     """`node` with the one layer `FixtureDecorator` unwraps taken off, if it is one of them."""
     match node:
         case ast.Subscript(value=value, slice=index):
-            owner = _owner(value)
+            owner = _owner(value, imports)
             args = list(index.elts) if isinstance(index, ast.Tuple) else [index]
             if owner is None or not args:
                 return node
@@ -487,18 +505,40 @@ def _unwrap(node: ast.expr) -> ast.expr:
             return node
 
 
-def _owner(value: ast.expr) -> str | None:
+def _owner(value: ast.expr, imports: Mapping[str, TypeImport | None] | None = None) -> str | None:
     """The name `value` spells, bare or qualified by a module annotations are written out of."""
     match value:
         case ast.Name(id=name):
             return name
         case ast.Attribute(attr=name):
-            return name if ast.unparse(value).rpartition(".")[0] in _TYPING else None
+            prefix = ast.unparse(value).rpartition(".")[0]
+            return name if _qualifier(prefix, imports) in _TYPING else None
         case _:
             return None
 
 
-def _forward_reference(node: ast.expr) -> bool:
+def _qualifier(prefix: str, imports: Mapping[str, TypeImport | None] | None) -> str:
+    """The module `prefix` names where the annotation was written, `prefix` itself if unknown.
+
+    `import typing as t` and `import collections.abc as ca` are the two spellings this exists for:
+    the name in front of the dot is the module's own, and only the module's imports say which one
+    it is. A name that is not a plain `import` is left as written, since it is not a module.
+    """
+    head, _, rest = prefix.partition(".")
+    item = (imports or {}).get(head)
+    if item is None:
+        return prefix
+    if item.symbol is not None:
+        base = f"{item.module}.{item.symbol}" if item.module else item.symbol
+    else:
+        # Unaliased `import a.b` binds `a`, so the name in front of the dot is the head package.
+        base = item.module if item.alias else item.module.partition(".")[0]
+    return f"{base}.{rest}" if rest else base
+
+
+def _forward_reference(
+    node: ast.expr, imports: Mapping[str, TypeImport | None] | None = None
+) -> bool:
     """Whether `node` holds a stringified name, which is a name this cannot attribute.
 
     `Literal["a"]`'s strings are values rather than names, and are the one string an annotation
@@ -507,11 +547,11 @@ def _forward_reference(node: ast.expr) -> bool:
     match node:
         case ast.Constant(value=str()):
             return True
-        case ast.Subscript(value=value) if _owner(value) == "Literal":
-            return _forward_reference(value)
+        case ast.Subscript(value=value) if _owner(value, imports) == "Literal":
+            return _forward_reference(value, imports)
         case _:
             children = (c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr))
-            return any(_forward_reference(child) for child in children)
+            return any(_forward_reference(child, imports) for child in children)
 
 
 def _rebind(annotation: str, name: str, replacement: str) -> str:
