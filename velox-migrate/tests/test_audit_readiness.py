@@ -1,10 +1,11 @@
 """Tests for the audit's type-readiness pass: which fixtures state a return type, and what each
 one that does not costs.
 
-Run against the checked-in dumps, whose corpus suites are written without annotations, so the
-worklist under test is the one a user of an unannotated suite would be handed. Where an annotated
-fixture is needed, the dump's own definition is annotated in place rather than a second corpus
-suite being kept for one field.
+Run against the checked-in dumps, whose corpus suites are written without annotations — except
+`typed_showcase` — so the worklist under test is the one a user of an unannotated suite would be
+handed. Where a single annotated fixture is needed the dump's own definition is annotated in
+place, which is cheaper than reaching for another suite; `typed_showcase` is for the cases that
+need a real annotated suite read end to end.
 """
 
 from __future__ import annotations
@@ -94,6 +95,41 @@ def test_a_fixture_whose_factory_carries_a_return_annotation_is_left_off_the_wor
     assert [entry.argname for entry in annotated.fixtures].count("engine") == 0
     assert annotated.annotated == 1
     assert annotated.total == readiness_of(OVERRIDES, version).total
+
+
+def test_an_annotation_is_read_against_the_imports_of_the_module_it_was_written_in(
+    version: str, tmp_path: Path
+) -> None:
+    # `-> t.Any` is `Any` only if `t` is `typing`, which only the fixture's own module says. Read
+    # without it, this counted as annotated here while the conversion degraded it -- so a user was
+    # told to annotate one set of fixtures and then lost another.
+    root = tmp_path / "suite"
+    root.mkdir()
+    (root / "conftest.py").write_text(
+        "import typing as t\n\n\ndef engine() -> t.Any:\n    ...\n", encoding="utf-8"
+    )
+    ground_truth = annotating(ground_truth_of(OVERRIDES, version), "engine", returns="t.Any")
+
+    readiness = audit.run(ground_truth, root=root).type_readiness
+
+    assert [entry.argname for entry in readiness.fixtures].count("engine") == 1
+
+
+@pytest.mark.parametrize("returns", ["Any", "typing.Any", "Iterator", "Generator"])
+def test_an_annotation_that_states_no_type_is_on_the_worklist_like_no_annotation(
+    version: str, returns: str
+) -> None:
+    # `-> Any` is exactly as much information as no annotation and exactly as much work to fix,
+    # so the worklist and the conversion report have to agree that it is nothing. The question is
+    # `inference.infer`'s, asked once, rather than a second opinion about what counts.
+    annotated = audit_of(
+        OVERRIDES,
+        version,
+        annotating(ground_truth_of(OVERRIDES, version), "engine", returns=returns),
+    ).type_readiness
+
+    assert [entry.argname for entry in annotated.fixtures].count("engine") == 1
+    assert annotated.annotated == 0
 
 
 def test_annotating_a_fixture_removes_only_the_injections_that_fixture_carried(
@@ -210,7 +246,7 @@ def test_the_report_names_every_unannotated_fixture_and_what_it_costs(version: s
     text = report.markdown(result)
 
     section = text.split("## Fixture return types", 1)[1].split("\n## ", 1)[0]
-    assert "8 of 8 fixtures defined here have no return annotation" in section
+    assert "8 of 8 fixtures defined here state none" in section
     assert "the type is lost at 16 injected parameters" in section
     assert "- conftest.py:23 (engine) — 5 injections" in section
     assert "- conftest.py:33 (token) — 1 injection" in section
@@ -225,7 +261,7 @@ def test_the_terminal_summary_quotes_the_worklist_it_wrote_to_the_report(version
     ]
 
     assert line == [
-        "types: 8 of 8 fixtures have no return annotation, costing 16 injected parameters "
+        "types: 8 of 8 fixtures state no return type, costing 16 injected parameters "
         "— the report lists them worst first"
     ]
 

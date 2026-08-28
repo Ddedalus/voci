@@ -58,8 +58,8 @@ def _readiness(audit: Audit) -> list[str]:
     if not readiness.fixtures:
         return []
     return [
-        f"types: {len(readiness.fixtures)} of {readiness.total} fixtures have no return "
-        f"annotation, costing {plural(readiness.injections, 'injected parameter')} "
+        f"types: {len(readiness.fixtures)} of {readiness.total} fixtures state no return "
+        f"type, costing {plural(readiness.injections, 'injected parameter')} "
         f"— the report lists them worst first"
     ]
 

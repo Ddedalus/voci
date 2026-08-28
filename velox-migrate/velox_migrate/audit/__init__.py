@@ -92,7 +92,7 @@ def run(ground_truth: GroundTruth, *, root: Path, budget: int = DEFAULT_BUDGET) 
         scanned_files=scan.files,
         unparsed=tuple(sorted({*scan.unparsed, *missing})),
         budget=budget,
-        type_readiness=readiness.assess(ground_truth),
+        type_readiness=readiness.assess(ground_truth, root=root),
     )
 
 

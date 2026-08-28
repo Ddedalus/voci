@@ -35,6 +35,7 @@ FIXTURES = "fixtures_showcase"
 HAZARDS = "hazards_showcase"
 OVERRIDES = "overrides_showcase"
 PARAMETRIZE = "parametrize_showcase"
+TYPED = "typed_showcase"
 
 
 def ids_under(runner: list[str], tree: Path) -> list[str]:
@@ -1112,6 +1113,231 @@ def test_an_aliased_typing_import_is_read_as_the_module_the_fixture_module_made_
     # Somebody else's `t` is not typing's, and `mymod.Generator` is their class.
     assert annotate.infer("t.Iterator[Session]") == "t.Iterator[Session]"
     assert annotate.infer("mymod.Generator[Session]") == "mymod.Generator[Session]"
+
+
+def test_the_typed_suite_converts_with_nothing_refused(version: str) -> None:
+    result = conversion_of(TYPED, version)
+
+    assert result.plan.blocked_tests == frozenset()
+    assert result.plan.blocked_fixtures == frozenset()
+    assert result.refused == ()
+
+
+def test_the_converted_typed_suite_passes_under_velox(version: str, tmp_path: Path) -> None:
+    # The bar for this suite specifically: every type it writes is named through an import that
+    # exists only for a type checker, so an annotation velox evaluated would not import at all.
+    tree = tmp_path / TYPED
+    converted(TYPED, version, tree)
+
+    completed = subprocess.run(
+        [*VELOX, "--serial", str(tree)], capture_output=True, text=True, check=False, cwd=tree
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_every_recoverable_shape_in_the_typed_suite_is_written_as_a_type(
+    version: str, tmp_path: Path
+) -> None:
+    """One assertion per rule in `inference.infer`, read off a real conversion of a real suite.
+
+    The rest of the corpus states no return types at all, so this is the only place the recovery
+    half of the inference is exercised end to end rather than against a hand-built `FixtureDef`.
+    """
+    tree = tmp_path / TYPED
+    converted(TYPED, version, tree)
+
+    top = (tree / "test_top.py").read_text(encoding="utf-8")
+    store = (tree / "store" / "test_store.py").read_text(encoding="utf-8")
+
+    # `-> X`, and the consumer binds `Session` itself, so the import it is named through is aliased.
+    assert "def test_session_states_its_type(session: root_Session = Depends(session)):" in top
+    assert "from support import Session as root_Session" in top
+    # `-> Iterator[X]` is unwrapped, exactly as `@velox.fixture()`'s own overloads unwrap it.
+    assert "def test_widget_states_what_it_yields(widget: Widget = Depends(widget)):" in top
+    # `-> t.Mapping[...]` is not one of the shapes to unwrap, and `t` is `typing` only because the
+    # fixture's own module says so.
+    assert "catalogue: t.Mapping[str, Widget] = Depends(catalogue)" in top
+    assert "import typing as t" in top
+    # `-> t.AsyncIterator[X]` on an `async def` that yields.
+    assert "channel: list[str] = Depends(channel)" in top
+    # A built-in's type comes from velox, since the suite's own sources say nothing about it.
+    assert "tmp_path: Path = Depends(velox.tmp_path)" in top
+    assert "capture: velox.Capture = Depends(velox.capture)" in top
+    # A type named only under `TYPE_CHECKING` where it was written, and one written in a
+    # `conftest.py`, which is importable only from the `fixtures.py` that conftest becomes.
+    assert (
+        "def test_report_names_a_type_checking_only_type(report: Report = Depends(report)):"
+        in store
+    )
+    assert "from store.records import Report" in store
+    assert "from store.fixtures import Ledger" in store
+
+
+def test_what_the_typed_suite_cannot_recover_is_written_bare_and_reported(
+    version: str, tmp_path: Path
+) -> None:
+    tree = tmp_path / TYPED
+    result = converted(TYPED, version, tree)
+
+    top = (tree / "test_top.py").read_text(encoding="utf-8")
+
+    assert "def test_nothing_to_recover(untyped=Depends(untyped), opaque=Depends(opaque)):" in top
+
+    degraded = {(row.fixture, row.reason) for row in result.plan.degraded}
+
+    assert degraded == {
+        ("untyped", "no return annotation"),
+        ("opaque", "nothing to infer from `-> Any`"),
+    }
+
+
+def test_the_prefactor_worklist_names_the_fixtures_the_conversion_then_degrades(
+    version: str,
+) -> None:
+    # The audit's worklist is what a user works through *before* converting, and the conversion
+    # report is the same loss measured after. They read the same annotations through the same
+    # `inference.infer`, so a suite cannot be told to annotate one set and then lose another.
+    ground_truth = model.load(DUMPS / f"{TYPED}-pytest-{version}.json")
+    audited = audit.run(ground_truth, root=CORPUS / TYPED)
+    result = conversion_of(TYPED, version)
+
+    assert {entry.argname for entry in audited.type_readiness.fixtures} == {
+        row.fixture for row in result.plan.degraded
+    }
+
+
+def test_a_written_builtin_type_matches_what_velox_declares() -> None:
+    """Every `BUILTIN_TYPES` row names the object velox's own fixture is declared to return.
+
+    The table is written down because velox is not a dependency of this tool and the suite's
+    sources say nothing about what `tmp_path` returns. This is what keeps it from drifting: it
+    resolves both spellings to objects and compares those, so a rename or a retype in velox fails
+    here rather than in somebody's converted suite.
+    """
+    # The one place this package reads velox, and a test rather than the tool: `velox-migrate`
+    # converts a suite *for* velox and must keep working without it installed.
+    import inspect
+
+    import velox
+    from velox._builtins import fixtures as declarations
+
+    written_in = {"velox": velox, "Path": Path}
+    declared_in = vars(declarations)
+    spellings = annotate.bindings(inspect.getsource(declarations))
+
+    for argname, (_, reference) in plan.BUILTINS.items():
+        declared = getattr(velox, reference.removeprefix("velox.")).func.__annotations__["return"]
+        unwrapped = annotate.infer(declared, imports=spellings)
+        written, _ = annotate.BUILTIN_TYPES[argname]
+
+        assert unwrapped is not None, f"{reference} declares nothing to write"
+        assert eval(written, written_in) is eval(unwrapped, declared_in), argname
+
+
+def test_every_builtin_with_a_velox_counterpart_has_a_type_to_write() -> None:
+    assert set(annotate.BUILTIN_TYPES) == set(plan.BUILTINS)
+
+
+def _builtin_work(*injections: plan.Injection) -> plan.FileWork:
+    return plan.FileWork(
+        path="test_it.py",
+        target="test_it.py",
+        tests=(plan.TestWork(qualname="test_x", injections=injections),),
+    )
+
+
+_CAPSYS = plan.Injection(
+    was="capsys",
+    param="capture",
+    reference="velox.capture",
+    annotation="velox.Capture",
+    retypes=True,
+)
+_TMP_PATH = plan.Injection(
+    was="tmp_path",
+    param="tmp_path",
+    reference="velox.tmp_path",
+    annotation="Path",
+    needs=(annotate.TypeImport("pathlib", "Path"),),
+)
+
+
+def test_a_builtin_is_written_with_velox_s_type_and_not_the_one_pytest_gave_it() -> None:
+    # `capsys` becomes a `velox.Capture`, an object with different methods -- so unlike a fixture
+    # the suite wrote, the annotation the author put on it is no longer true and is replaced.
+    source = "def test_x(capsys: CaptureFixture[str], tmp_path):\n    ...\n"
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS, _TMP_PATH))
+
+    assert "capture: velox.Capture = Depends(velox.capture)" in result.module.code
+    assert "tmp_path: Path = Depends(velox.tmp_path)" in result.module.code
+    assert "CaptureFixture" not in result.module.code
+    assert "if TYPE_CHECKING:\n    from pathlib import Path\n" in result.module.code
+
+
+def test_the_import_a_replaced_annotation_was_named_through_goes_with_it() -> None:
+    # Nothing else in the file reads `CaptureFixture` once `capsys` stops being one, and an import
+    # left behind would keep the converted module importing pytest to satisfy no reader.
+    source = (
+        "from _pytest.capture import CaptureFixture\n\n\n"
+        "def test_x(capsys: CaptureFixture[str]):\n    ...\n"
+    )
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS))
+
+    assert "CaptureFixture" not in result.module.code
+    assert "_pytest" not in result.module.code
+
+
+def test_an_import_a_replaced_annotation_shared_with_another_reader_stays() -> None:
+    source = (
+        "from _pytest.capture import CaptureFixture\n\n\n"
+        "def helper(other: CaptureFixture[str]) -> None: ...\n\n\n"
+        "def test_x(capsys: CaptureFixture[str]):\n    ...\n"
+    )
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS))
+
+    assert "from _pytest.capture import CaptureFixture" in result.module.code
+
+
+def test_a_builtin_velox_hands_back_unchanged_keeps_the_annotation_its_author_wrote() -> None:
+    # velox's `tmp_path` is the same `pathlib.Path` pytest's was, so the author already answered
+    # this question correctly and rewriting them would orphan their `import pathlib` for nothing.
+    source = "import pathlib\n\n\ndef test_x(tmp_path: pathlib.Path):\n    ...\n"
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_TMP_PATH))
+
+    assert "tmp_path: pathlib.Path = Depends(velox.tmp_path)" in result.module.code
+    assert "import pathlib" in result.module.code
+    assert "TYPE_CHECKING" not in result.module.code
+
+
+def test_only_the_builtins_velox_changes_the_object_of_replace_an_annotation() -> None:
+    assert {"tmp_path"} == annotate.SAME_AS_PYTEST
+    assert set(plan.BUILTINS) > annotate.SAME_AS_PYTEST
+
+
+def test_a_builtin_type_the_consumer_already_binds_is_imported_under_an_alias() -> None:
+    resolver = annotate.Resolver(
+        {"test_it.py": "Path = object()\n\n\ndef test_x(tmp_path):\n    ...\n"},
+        layout.Layout(homes={}, moves={}, imports={}),
+    )
+
+    typed = resolver.builtin("tmp_path", "test_it.py")
+
+    assert typed == annotate.Typed(
+        annotation="velox_Path", imports=(annotate.TypeImport("pathlib", "Path", "velox_Path"),)
+    )
+
+
+def test_a_builtin_velox_has_no_counterpart_for_is_no_worklist_row() -> None:
+    # There is no injection to lose a type at, so there is nothing for a user to go and annotate.
+    resolver = annotate.Resolver({}, layout.Layout(homes={}, moves={}, imports={}))
+
+    assert resolver.builtin("monkeypatch", "test_it.py") is None
+    assert resolver.degraded == ()
 
 
 def test_an_unaliased_dotted_typing_import_is_read_through_the_head_it_binds() -> None:

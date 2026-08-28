@@ -116,10 +116,10 @@ def _type_readiness(audit: Audit) -> list[str]:
         "## Fixture return types",
         f"An injected parameter's type comes from the fixture factory's return annotation, and "
         f"conversion carries across what the suite already states rather than inventing any. So a "
-        f"factory written without a return annotation loses the type at every site it is injected "
-        f"into: {len(readiness.fixtures)} of {readiness.total} fixtures defined here have no "
-        f"return annotation, and the type is lost at "
-        f"{plural(readiness.injections, 'injected parameter')}.",
+        f"factory that states no return type -- no annotation, or one such as `-> Any` that says "
+        f"nothing a checker can use -- loses the type at every site it is injected into: "
+        f"{len(readiness.fixtures)} of {readiness.total} fixtures defined here state none, and "
+        f"the type is lost at {plural(readiness.injections, 'injected parameter')}.",
         "This is work for the pytest suite, and it comes before converting anything: a return "
         "annotation is what a type checker reads today, and adding one changes no behaviour. Most "
         "injections first, so the top of the list retypes the most code.",
