@@ -138,6 +138,25 @@ because velox parses rather than evaluates, but a *default-position* annotation 
 evaluated when the `def` is read. Under the future import nothing in the module is evaluated, and
 velox reads no annotation either way.
 
+Three things the first pass left open, closed since:
+
+- **velox's own built-ins are typed too.** `tmp_path` becomes `tmp_path: Path`, `capsys` becomes
+  `capture: velox.Capture`. The types are a written-down table in `convert/annotate.py`, since the
+  suite's sources say nothing about them and velox is deliberately not a dependency of the tool;
+  a test pins every row against velox's own declaration so the two cannot drift. This is the one
+  place the conversion *replaces* an annotation the source wrote rather than filling in a missing
+  one, because every built-in but `tmp_path` is a different object in velox than it was in pytest.
+- **`corpus/typed_showcase/` exercises the recovery path.** Every other corpus suite is written
+  without a single return annotation, so the corpus proved only the fallback. This one covers each
+  unwrapping rule, a cross-module type, a `TYPE_CHECKING`-only one under `from __future__ import
+  annotations`, a collision the import has to be aliased for, and both shapes there is nothing to
+  recover from.
+- **The audit's worklist and the conversion's report name the same fixtures.** Both now ask
+  `inference.infer`, so a factory annotated `-> Any` is on the prefactor worklist — it is exactly
+  as much information as no annotation and exactly as much work to fix. That rule table moved out
+  of `convert/` to `velox_migrate/inference.py`, which is what lets the audit ask it without an
+  import cycle.
+
 ## Changes to `annotated-injection-plan.md`
 
 Its Phase 2 "open decision" about unannotated source parameters is settled: **no `--syntax` flag,

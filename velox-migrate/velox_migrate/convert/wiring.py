@@ -308,8 +308,10 @@ def _inject(
         return param.with_changes(name=cst.Name(PARAM), annotation=None, default=None)
     # An annotation the source already carries is left exactly as it was written: it is the
     # author's answer to the same question, and overwriting it would be this pass deciding a type
-    # against someone who had already decided one.
-    annotation = param.annotation or _annotation(injection, typed)
+    # against someone who had already decided one. A built-in is the exception -- `capsys` becomes
+    # a `velox.Capture`, so the `CaptureFixture[str]` the source wrote is no longer true of it.
+    ours = injection.retypes or param.annotation is None
+    annotation = _annotation(injection, typed) if ours else param.annotation
     return param.with_changes(
         name=cst.Name(injection.param),
         annotation=annotation,

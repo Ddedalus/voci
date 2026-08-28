@@ -84,7 +84,10 @@ class Injection:
     return annotation, and `None` where nothing could be inferred — the conversion then writes the
     parameter with no annotation at all and the report says which fixture cost it. `needs` are the
     `TYPE_CHECKING` imports that annotation is spellable through, travelling with it so that a
-    signature the rewrite backs out of takes its imports back out with it.
+    signature the rewrite backs out of takes its imports back out with it. `retypes` says the
+    annotation replaces one the source already wrote rather than filling in a missing one, which
+    is true only of a built-in: velox's counterpart is a different object, so pytest's annotation
+    for it is now wrong, where a fixture the suite wrote keeps whatever type its author gave it.
     """
 
     was: str
@@ -93,6 +96,7 @@ class Injection:
     asked: bool = False
     annotation: str | None = None
     needs: tuple[TypeImport, ...] = ()
+    retypes: bool = False
 
     @property
     def renamed(self) -> bool:
@@ -1440,11 +1444,23 @@ def _from_names(
             continue
         builtin = BUILTINS.get(fixture.argname)
         if builtin is not None:
-            # velox's own builtins are annotated where they are declared, and nothing in the
-            # suite's sources says what `tmp_path` returns — so there is no inference to do here
-            # and nothing lost by not doing it.
+            # Nothing in the suite's sources says what `tmp_path` returns, so the type comes from
+            # `annotate.BUILTIN_TYPES` rather than from inference — and it *replaces* whatever the
+            # source wrote, because every one of these but `tmp_path` is a different object in
+            # velox than it was in pytest, and pytest's annotation for it is now wrong.
             param, reference = builtin
-            found.append(Injection(was=name, param=param, reference=reference, asked=name in asked))
+            wanted = typed.builtin(fixture.argname, consumer) if typed is not None else None
+            found.append(
+                Injection(
+                    was=name,
+                    param=param,
+                    reference=reference,
+                    asked=name in asked,
+                    annotation=wanted.annotation if wanted is not None else None,
+                    needs=wanted.imports if wanted is not None else (),
+                    retypes=wanted is not None,
+                )
+            )
     return tuple(found)
 
 

@@ -120,7 +120,7 @@ VX103  marker      1  @pytest.mark.skipif with a string condition
 VX301  mechanical  1  testpaths
 ...
 
-types: 6 of 14 fixtures have no return annotation, costing 11 injected parameters — the report lists them worst first
+types: 6 of 14 fixtures state no return type, costing 11 injected parameters — the report lists them worst first
 
 wrote .velox-migrate/migration-report.md and .velox-migrate/findings.json
 ```
@@ -156,7 +156,9 @@ The conversion preserves whatever type information the suite already states, and
 An injected parameter's type comes from the fixture factory's return annotation, so a fixture
 written without one is injected into a parameter with nothing to type it: mypy reads such a
 parameter as `Any` and checks nothing done with it. The conversion report names every site that
-lands that way.
+lands that way. The exception is a fixture velox itself provides — `tmp_path`, `capsys` and the
+rest — whose type comes from velox's own declaration, since your suite never said what they
+return either way.
 
 That makes the last step before `convert` a pytest one. Annotate the fixtures, run your type
 checker, and keep pytest green while you do it, since a return annotation changes no behaviour:
@@ -167,9 +169,10 @@ def db_session() -> Session:
     return Session(engine)
 ```
 
-The audit's *fixture return types* section is the worklist. Every fixture whose factory has no
-return annotation, with its file and line, ordered by how many injections lose their type with it,
-so the top of the list is worth the most:
+The audit's *fixture return types* section is the worklist. Every fixture whose factory states no
+return type — no annotation, or one such as `-> Any` that says nothing a checker can use — with
+its file and line, ordered by how many injections lose their type with it, so the top of the list
+is worth the most:
 
 ```
 - conftest.py:23 (engine) — 5 injections
