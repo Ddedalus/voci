@@ -97,6 +97,24 @@ def test_a_fixture_whose_factory_carries_a_return_annotation_is_left_off_the_wor
     assert annotated.total == readiness_of(OVERRIDES, version).total
 
 
+def test_an_annotation_is_read_against_the_imports_of_the_module_it_was_written_in(
+    version: str, tmp_path: Path
+) -> None:
+    # `-> t.Any` is `Any` only if `t` is `typing`, which only the fixture's own module says. Read
+    # without it, this counted as annotated here while the conversion degraded it -- so a user was
+    # told to annotate one set of fixtures and then lost another.
+    root = tmp_path / "suite"
+    root.mkdir()
+    (root / "conftest.py").write_text(
+        "import typing as t\n\n\ndef engine() -> t.Any:\n    ...\n", encoding="utf-8"
+    )
+    ground_truth = annotating(ground_truth_of(OVERRIDES, version), "engine", returns="t.Any")
+
+    readiness = audit.run(ground_truth, root=root).type_readiness
+
+    assert [entry.argname for entry in readiness.fixtures].count("engine") == 1
+
+
 @pytest.mark.parametrize("returns", ["Any", "typing.Any", "Iterator", "Generator"])
 def test_an_annotation_that_states_no_type_is_on_the_worklist_like_no_annotation(
     version: str, returns: str

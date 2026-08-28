@@ -31,8 +31,8 @@ its injection plan from `__code__` and `__defaults__`, as `velox/_di/fixtures.py
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 
 import libcst as cst
 from libcst.codemod import CodemodContext, VisitorBasedCodemodCommand
@@ -42,6 +42,7 @@ from velox_migrate import model
 from velox_migrate.convert import parametrize
 from velox_migrate.convert.annotate import TypeImport, statements
 from velox_migrate.convert.plan import FileWork, FixtureWork, Injection, TestWork
+from velox_migrate.inference import bindings, free
 from velox_migrate.model import REQUEST
 
 # The case argument velox binds a parametrized fixture's value to; there is no `request`.
@@ -55,6 +56,20 @@ SET_LEVEL = "set_level"
 _STRANDED: Mapping[str, str] = {"capsys": "VX202"}
 
 _NO_SPACE = cst.SimpleWhitespace("")
+
+
+@dataclass(slots=True)
+class _Claims:
+    """What the signatures written so far need of the module around them.
+
+    `imports` are the ones a written annotation is spelled through, and `replaced` are the
+    annotations this pass overwrote, whose own imports may now have no reader left. Both are
+    filled as parameters are written rather than when the plan was made, so a definition the
+    rewrite backs out of neither adds an import nor takes one away.
+    """
+
+    imports: list[TypeImport] = field(default_factory=list)
+    replaced: list[cst.Annotation] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +99,7 @@ def apply(
     rewritten = command.transform_module(module)
     # After the codemod rather than inside it, so that the block lands below whatever imports
     # `AddImportsVisitor` has just written at the top of the module.
-    rewritten = _type_checking(rewritten, command.typed)
+    rewritten = _type_checking(rewritten, command.claims.imports)
     return Result(module=rewritten, refused=tuple(sorted(command.refused)))
 
 
@@ -124,7 +139,7 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._path: list[str] = []
         self._wrote = touched
         self._injected = False
-        self.typed: list[TypeImport] = []
+        self.claims = _Claims()
         self.refused: set[tuple[str, str]] = set()
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -169,7 +184,7 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(self.context, "velox")
         if self._injected:
             AddImportsVisitor.add_needed_import(self.context, "velox", "Depends")
-        if self.typed:
+        if self.claims.imports:
             # Every annotation this wrote is a string under the future import, which is what makes
             # naming a type through a `TYPE_CHECKING`-only import safe in default position.
             AddImportsVisitor.add_needed_import(self.context, "__future__", "annotations")
@@ -180,7 +195,26 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(
                 self.context, wanted.module, wanted.symbol, wanted.alias
             )
+        # An annotation this pass replaced took its import's last use with it -- `capsys` was the
+        # only thing in the file named `CaptureFixture`. Queued rather than cut: the visitor
+        # removes an import only if nothing else in the module still references it.
+        for item in self._orphaned(original_node):
+            RemoveImportsVisitor.remove_unused_import(
+                self.context, item.module, item.symbol, item.alias
+            )
         return updated_node
+
+    def _orphaned(self, original: cst.Module) -> Iterator[TypeImport]:
+        """The imports that supplied the annotations this pass replaced, as they were written."""
+        if not self.claims.replaced:
+            return
+        bound = bindings(original.code)
+        for annotation in self.claims.replaced:
+            text = original.code_for_node(annotation.annotation)
+            for name in free(text):
+                item = bound.get(name)
+                if item is not None:
+                    yield item
 
     def _fixture(
         self,
@@ -218,7 +252,7 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._wrote = True
         self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
         added = [
-            _param(injection, self.typed)
+            _param(injection, self.claims)
             for injection in injections
             if injection.asked and injection.was not in _declared(node.params)
         ]
@@ -226,10 +260,10 @@ class _Wiring(VisitorBasedCodemodCommand):
         # that has one; every other signature grows it at the end, where a default belongs.
         keyword_only = node.params.star_arg is not cst.MaybeSentinel.DEFAULT
         params, reordered = _rewrite(
-            node.params.params, by_name, () if keyword_only else added, self.typed
+            node.params.params, by_name, () if keyword_only else added, self.claims
         )
         kwonly, _ = _rewrite(
-            node.params.kwonly_params, by_name, added if keyword_only else (), self.typed
+            node.params.kwonly_params, by_name, added if keyword_only else (), self.claims
         )
         if reordered or added:
             params = tuple(param.with_changes(comma=cst.MaybeSentinel.DEFAULT) for param in params)
@@ -242,7 +276,7 @@ def _rewrite(
     params: Sequence[cst.Param],
     by_name: Mapping[str, Injection],
     added: Sequence[cst.Param] = (),
-    typed: list[TypeImport] | None = None,
+    claims: _Claims | None = None,
 ) -> tuple[tuple[cst.Param, ...], bool]:
     """`params` with each injected one given its `Depends()` default, and whether order moved.
 
@@ -256,7 +290,7 @@ def _rewrite(
     parameters a body asked for by name, which are injected and so go last either way.
     """
     kept = [param for param in params if not _is_dropped(param, by_name)]
-    rewritten = [_inject(param, by_name.get(param.name.value), typed) for param in kept]
+    rewritten = [_inject(param, by_name.get(param.name.value), claims) for param in kept]
     rewritten += list(added)
     defaulted = [param.default is not None for param in rewritten]
     if all(defaulted) or not any(defaulted) or defaulted == sorted(defaulted):
@@ -284,9 +318,9 @@ def _declared(params: cst.Parameters) -> frozenset[str]:
     return frozenset(named)
 
 
-def _param(injection: Injection, typed: list[TypeImport] | None = None) -> cst.Param:
+def _param(injection: Injection, claims: _Claims | None = None) -> cst.Param:
     """The parameter a dependency asked for by name becomes: injected, and written with a comma."""
-    annotation = _annotation(injection, typed)
+    annotation = _annotation(injection, claims)
     return cst.Param(
         name=cst.Name(injection.param),
         annotation=annotation,
@@ -300,7 +334,7 @@ def _param(injection: Injection, typed: list[TypeImport] | None = None) -> cst.P
 
 
 def _inject(
-    param: cst.Param, injection: Injection | None, typed: list[TypeImport] | None = None
+    param: cst.Param, injection: Injection | None, claims: _Claims | None = None
 ) -> cst.Param:
     if injection is None:
         return param
@@ -311,7 +345,9 @@ def _inject(
     # against someone who had already decided one. A built-in is the exception -- `capsys` becomes
     # a `velox.Capture`, so the `CaptureFixture[str]` the source wrote is no longer true of it.
     ours = injection.retypes or param.annotation is None
-    annotation = _annotation(injection, typed) if ours else param.annotation
+    if ours and param.annotation is not None and claims is not None:
+        claims.replaced.append(param.annotation)
+    annotation = _annotation(injection, claims) if ours else param.annotation
     return param.with_changes(
         name=cst.Name(injection.param),
         annotation=annotation,
@@ -323,7 +359,7 @@ def _inject(
     )
 
 
-def _annotation(injection: Injection, typed: list[TypeImport] | None) -> cst.Annotation | None:
+def _annotation(injection: Injection, claims: _Claims | None) -> cst.Annotation | None:
     """The inferred type for this parameter, claiming the imports that make it spellable.
 
     Claimed here rather than when the plan was made, so that a definition the rewrite backs out of
@@ -331,8 +367,8 @@ def _annotation(injection: Injection, typed: list[TypeImport] | None) -> cst.Ann
     """
     if injection.annotation is None:
         return None
-    if typed is not None:
-        typed.extend(injection.needs)
+    if claims is not None:
+        claims.imports.extend(injection.needs)
     return cst.Annotation(annotation=cst.parse_expression(injection.annotation))
 
 

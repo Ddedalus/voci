@@ -21,14 +21,21 @@ import annotations`, which binds that name in the package's own namespace: a sub
 
 from __future__ import annotations
 
-import ast
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from velox_migrate.convert import layout
 from velox_migrate.convert.layout import CONFTEST, Layout
-from velox_migrate.inference import TypeImport, bindings, free, infer, rebind
+from velox_migrate.inference import (
+    TypeImport,
+    bindings,
+    factory,
+    for_factory,
+    free,
+    infer,
+    rebind,
+)
 from velox_migrate.model import FixtureDef
 
 __all__ = [
@@ -122,6 +129,11 @@ BUILTIN_TYPES: Mapping[str, tuple[str, TypeImport | None]] = {
     "caplog": ("velox.LogRecords", None),
 }
 
+# The built-ins whose velox counterpart is the same object pytest's was, so an annotation the
+# author already wrote for one is still true of the other and is left exactly as written. Every
+# other row above replaces one, because `capsys` really does stop being a `CaptureFixture`.
+SAME_AS_PYTEST = frozenset({"tmp_path"})
+
 
 class Resolver:
     """Decides the annotation each injection is written with, and records what it could not.
@@ -195,15 +207,10 @@ class Resolver:
             # A decorator moved the factory to another module, so the names in its annotation are
             # bound in that module's namespace rather than in the one this can read.
             return None, "factory written in another module"
-        node = _factory(text, fixture.func.qualname)
+        node = factory(text, fixture.func.qualname)
         if node is None:
             return None, "factory not found in its own source"
-        annotation = infer(
-            fixture.returns,
-            is_async=isinstance(node, ast.AsyncFunctionDef),
-            generator=_yields(node),
-            imports=self._table(source),
-        )
+        annotation = for_factory(fixture.returns, node, text, source)
         if annotation is None:
             return None, f"nothing to infer from `-> {fixture.returns}`"
         wanted: list[TypeImport] = []
@@ -293,50 +300,6 @@ class Resolver:
             table = bindings(text, file) if text is not None else {}
             self._bindings[file] = table
         return table
-
-
-def _factory(source: str, qualname: str | None) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """The `def` `qualname` names in `source`, at the module level or inside one class.
-
-    What it is wanted for is one bit — whether the factory is a generator — which only the body
-    can say and which decides how an `async def`'s annotation unwraps.
-    """
-    if qualname is None or "<locals>" in qualname:
-        return None
-    parts = qualname.split(".")
-    try:
-        body: Sequence[ast.stmt] = ast.parse(source).body
-    except (SyntaxError, ValueError):
-        return None
-    for part in parts[:-1]:
-        holder = next((n for n in body if isinstance(n, ast.ClassDef) and n.name == part), None)
-        if holder is None:
-            return None
-        body = holder.body
-    return next(
-        (
-            n
-            for n in body
-            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == parts[-1]
-        ),
-        None,
-    )
-
-
-def _yields(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Whether this factory is a generator: a `yield` of its own, not one in a function inside it.
-
-    A nested `def` is a closure the factory returns or registers, and its yields are its own.
-    """
-    stack = list(ast.iter_child_nodes(node))
-    while stack:
-        child = stack.pop()
-        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-            continue
-        if isinstance(child, ast.Yield | ast.YieldFrom):
-            return True
-        stack.extend(ast.iter_child_nodes(child))
-    return False
 
 
 def _defined_at(fixture: FixtureDef) -> str:

@@ -1239,43 +1239,84 @@ def test_every_builtin_with_a_velox_counterpart_has_a_type_to_write() -> None:
     assert set(annotate.BUILTIN_TYPES) == set(plan.BUILTINS)
 
 
+def _builtin_work(*injections: plan.Injection) -> plan.FileWork:
+    return plan.FileWork(
+        path="test_it.py",
+        target="test_it.py",
+        tests=(plan.TestWork(qualname="test_x", injections=injections),),
+    )
+
+
+_CAPSYS = plan.Injection(
+    was="capsys",
+    param="capture",
+    reference="velox.capture",
+    annotation="velox.Capture",
+    retypes=True,
+)
+_TMP_PATH = plan.Injection(
+    was="tmp_path",
+    param="tmp_path",
+    reference="velox.tmp_path",
+    annotation="Path",
+    needs=(annotate.TypeImport("pathlib", "Path"),),
+)
+
+
 def test_a_builtin_is_written_with_velox_s_type_and_not_the_one_pytest_gave_it() -> None:
     # `capsys` becomes a `velox.Capture`, an object with different methods -- so unlike a fixture
     # the suite wrote, the annotation the author put on it is no longer true and is replaced.
     source = "def test_x(capsys: CaptureFixture[str], tmp_path):\n    ...\n"
-    work = plan.FileWork(
-        path="test_it.py",
-        target="test_it.py",
-        tests=(
-            plan.TestWork(
-                qualname="test_x",
-                injections=(
-                    plan.Injection(
-                        was="capsys",
-                        param="capture",
-                        reference="velox.capture",
-                        annotation="velox.Capture",
-                        retypes=True,
-                    ),
-                    plan.Injection(
-                        was="tmp_path",
-                        param="tmp_path",
-                        reference="velox.tmp_path",
-                        annotation="Path",
-                        needs=(annotate.TypeImport("pathlib", "Path"),),
-                        retypes=True,
-                    ),
-                ),
-            ),
-        ),
-    )
 
-    result = wiring.apply(cst.parse_module(source), work)
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS, _TMP_PATH))
 
     assert "capture: velox.Capture = Depends(velox.capture)" in result.module.code
     assert "tmp_path: Path = Depends(velox.tmp_path)" in result.module.code
     assert "CaptureFixture" not in result.module.code
     assert "if TYPE_CHECKING:\n    from pathlib import Path\n" in result.module.code
+
+
+def test_the_import_a_replaced_annotation_was_named_through_goes_with_it() -> None:
+    # Nothing else in the file reads `CaptureFixture` once `capsys` stops being one, and an import
+    # left behind would keep the converted module importing pytest to satisfy no reader.
+    source = (
+        "from _pytest.capture import CaptureFixture\n\n\n"
+        "def test_x(capsys: CaptureFixture[str]):\n    ...\n"
+    )
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS))
+
+    assert "CaptureFixture" not in result.module.code
+    assert "_pytest" not in result.module.code
+
+
+def test_an_import_a_replaced_annotation_shared_with_another_reader_stays() -> None:
+    source = (
+        "from _pytest.capture import CaptureFixture\n\n\n"
+        "def helper(other: CaptureFixture[str]) -> None: ...\n\n\n"
+        "def test_x(capsys: CaptureFixture[str]):\n    ...\n"
+    )
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS))
+
+    assert "from _pytest.capture import CaptureFixture" in result.module.code
+
+
+def test_a_builtin_velox_hands_back_unchanged_keeps_the_annotation_its_author_wrote() -> None:
+    # velox's `tmp_path` is the same `pathlib.Path` pytest's was, so the author already answered
+    # this question correctly and rewriting them would orphan their `import pathlib` for nothing.
+    source = "import pathlib\n\n\ndef test_x(tmp_path: pathlib.Path):\n    ...\n"
+
+    result = wiring.apply(cst.parse_module(source), _builtin_work(_TMP_PATH))
+
+    assert "tmp_path: pathlib.Path = Depends(velox.tmp_path)" in result.module.code
+    assert "import pathlib" in result.module.code
+    assert "TYPE_CHECKING" not in result.module.code
+
+
+def test_only_the_builtins_velox_changes_the_object_of_replace_an_annotation() -> None:
+    assert {"tmp_path"} == annotate.SAME_AS_PYTEST
+    assert set(plan.BUILTINS) > annotate.SAME_AS_PYTEST
 
 
 def test_a_builtin_type_the_consumer_already_binds_is_imported_under_an_alias() -> None:

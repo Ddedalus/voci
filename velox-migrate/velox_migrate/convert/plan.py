@@ -22,7 +22,7 @@ from velox_migrate import matrix
 from velox_migrate.audit import Audit, Finding, Site, sources_of
 from velox_migrate.audit import wiring as audit_wiring
 from velox_migrate.convert import declarations, layout, parametrize, specialize
-from velox_migrate.convert.annotate import Degraded, Resolver, TypeImport
+from velox_migrate.convert.annotate import SAME_AS_PYTEST, Degraded, Resolver, TypeImport
 from velox_migrate.convert.declarations import Declaration
 from velox_migrate.convert.layout import Import, Layout
 from velox_migrate.convert.parametrize import Carried, Decision
@@ -86,8 +86,9 @@ class Injection:
     `TYPE_CHECKING` imports that annotation is spellable through, travelling with it so that a
     signature the rewrite backs out of takes its imports back out with it. `retypes` says the
     annotation replaces one the source already wrote rather than filling in a missing one, which
-    is true only of a built-in: velox's counterpart is a different object, so pytest's annotation
-    for it is now wrong, where a fixture the suite wrote keeps whatever type its author gave it.
+    is true only of a built-in velox hands back as a different object — `capsys` stops being a
+    `CaptureFixture`, so pytest's annotation for it is now wrong. A fixture the suite wrote keeps
+    whatever type its author gave it, and so does `tmp_path`, which is a `Path` either way.
     """
 
     was: str
@@ -1445,9 +1446,9 @@ def _from_names(
         builtin = BUILTINS.get(fixture.argname)
         if builtin is not None:
             # Nothing in the suite's sources says what `tmp_path` returns, so the type comes from
-            # `annotate.BUILTIN_TYPES` rather than from inference — and it *replaces* whatever the
-            # source wrote, because every one of these but `tmp_path` is a different object in
-            # velox than it was in pytest, and pytest's annotation for it is now wrong.
+            # `annotate.BUILTIN_TYPES` rather than from inference — and for all but the ones velox
+            # hands back unchanged it *replaces* whatever the source wrote, since `capsys` really
+            # does stop being a `CaptureFixture` and pytest's annotation for it is now wrong.
             param, reference = builtin
             wanted = typed.builtin(fixture.argname, consumer) if typed is not None else None
             found.append(
@@ -1458,7 +1459,7 @@ def _from_names(
                     asked=name in asked,
                     annotation=wanted.annotation if wanted is not None else None,
                     needs=wanted.imports if wanted is not None else (),
-                    retypes=wanted is not None,
+                    retypes=wanted is not None and fixture.argname not in SAME_AS_PYTEST,
                 )
             )
     return tuple(found)

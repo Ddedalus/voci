@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import ast
 import builtins
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -286,3 +286,67 @@ def rebind(annotation: str, name: str, replacement: str) -> str:
         if isinstance(node, ast.Name) and node.id == name:
             node.id = replacement
     return ast.unparse(tree.body)
+
+
+def for_factory(
+    returns: str | None,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    source: str,
+    file: str = "",
+) -> str | None:
+    """`infer`, given every argument the factory's own definition and module supply.
+
+    The one entry point for asking a real fixture what its parameters are typed as, so that the
+    audit's worklist and the conversion's report cannot answer it differently — which they did
+    while one of them passed `imports` and the other did not.
+    """
+    return infer(
+        returns,
+        is_async=isinstance(node, ast.AsyncFunctionDef),
+        generator=yields(node),
+        imports=bindings(source, file),
+    )
+
+
+def factory(source: str, qualname: str | None) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The `def` `qualname` names in `source`, at the module level or inside one class.
+
+    What it is wanted for is one bit — whether the factory is a generator — which only the body
+    can say and which decides how an `async def`'s annotation unwraps.
+    """
+    if qualname is None or "<locals>" in qualname:
+        return None
+    parts = qualname.split(".")
+    try:
+        body: Sequence[ast.stmt] = ast.parse(source).body
+    except (SyntaxError, ValueError):
+        return None
+    for part in parts[:-1]:
+        holder = next((n for n in body if isinstance(n, ast.ClassDef) and n.name == part), None)
+        if holder is None:
+            return None
+        body = holder.body
+    return next(
+        (
+            n
+            for n in body
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == parts[-1]
+        ),
+        None,
+    )
+
+
+def yields(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether this factory is a generator: a `yield` of its own, not one in a function inside it.
+
+    A nested `def` is a closure the factory returns or registers, and its yields are its own.
+    """
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        if isinstance(child, ast.Yield | ast.YieldFrom):
+            return True
+        stack.extend(ast.iter_child_nodes(child))
+    return False
