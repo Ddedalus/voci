@@ -21,6 +21,7 @@ and Ctrl-C, both cancelling what is in flight · `--serial`, `--collect-only`, `
 `--durations` · assertion introspection with comparison
 diffs · stdout/stderr/logging capture and `tmp_path` · the event-loop watchdog and the failure a
 test earns for returning a value or dropping a coroutine un-awaited · the reporter · `--report-json`
+· coverage under `coverage run -m velox`, `@velox.isolated` subprocesses included
 · warning collection and the end-of-run summary, with filters from `[tool.velox] filterwarnings`,
 `-W` and `@velox.filterwarnings(...)`, the per-test ones honored under any concurrency
 · `[tool.velox]` config · `velox.fastapi` per-test dependency overrides.
@@ -37,8 +38,6 @@ Next: convert and verify httpx2 (successor to httpx, active development), audite
 High-level plan in `plans/docsite-plan.md`
 
 **Performance.** A persistent collection cache, `--lf`/`--ff`,
-
-**Coverage.** Ensuring we play nicely with coverage and can produce suitable reports.
 
 ## Code quality consolidation
 

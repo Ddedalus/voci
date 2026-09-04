@@ -610,6 +610,30 @@ never writes its result file, or is killed by a collateral cancellation from a s
 `KeyboardInterrupt`/`SystemExit`, is folded into an `error` result rather than left to leave that
 slot empty or the whole run hanging.
 
+## `_run/coverage.py` — coverage across the isolated boundary
+
+**A subprocess's data is merged into the parent's live measurement, not left on disk.** The
+alternative is coverage.py's usual answer for multiple processes: each writes its own
+`.coverage.<suffix>` file and the user runs `coverage combine` afterwards. velox declines it
+because the number of processes is an implementation detail of a *mark* — adding `@velox.isolated`
+to one test would change the command a project's CI has to run, and forgetting to would silently
+report that test's lines as unexecuted. `harvest` reads the child's data file the moment the child
+exits and updates the parent's `CoverageData` in place, so `coverage run -m velox` leaves exactly
+one data file however many isolated tests ran.
+
+**The child gets the parent's whole configuration, not a chosen subset of it.** `subprocess_env`
+serializes the live `CoverageConfig` and overrides only `data_file` (and `parallel`, which would
+otherwise suffix that path out from under `harvest`). Picking fields by hand invites two failures
+that both surface far from here: a `branch` setting that disagrees across the boundary produces
+arc data that cannot merge into line data at all, and a `source`/`omit` the child doesn't know
+about credits the report with files the project asked to leave out.
+
+**A measurement problem is a warning, never a test failure.** Coverage data that can't be read
+back, and a coverage.py too old to carry its configuration into a subprocess, both leave the test
+result they arrived with untouched and go to the warning summary instead. The test genuinely
+passed; only the accounting of it is missing, and a suite that fails because of how it was
+*measured* teaches everyone to stop measuring it.
+
 ## `_builtins/capture.py` — capture and routing
 
 **Output from an orphaned background task can vanish.** A task created with `create_task` and never

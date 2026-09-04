@@ -21,5 +21,10 @@ __pypackages__
 .pytest_cache
 .velox_cache
 
+# coverage.py's data file, written wherever a `coverage run` starts (`just checks coverage`
+# runs one inside examples/)
+.coverage
+.coverage.*
+
 # velox-migrate's work directory, written into the suite being migrated
 .velox-migrate
