@@ -212,13 +212,13 @@ def _annotated_injections(
     find; on 3.14 (PEP 649) they are computed lazily and *reading* them raises for any name that
     exists only under `TYPE_CHECKING`. The policy both force is **parse, don't evaluate**: velox
     reads the annotation's source text with `ast` and evaluates only the metadata elements that
-    are calls to velox's own `Depends`. The type half is never touched, which is what lets a
-    `TYPE_CHECKING`-only type be injected against, and lets a function collect whose *other*
-    parameters carry annotations that would not resolve at all.
+    are calls to velox's own `Depends`. The type half is never touched, so wherever the module
+    itself does not evaluate its annotations, a `TYPE_CHECKING`-only type can be injected against
+    and a function whose *other* parameters carry unresolvable annotations still collects.
 
-    Its sharp edge, documented in `docs/reference/fixtures.md`: a string annotation is evaluated
-    in module globals and cannot see local names, so the fixture named in `Depends(...)` has to
-    be reachable there. A fixture held in a closure variable works only in a module that does not
+    Its sharp edge, documented in `docs/reference/fixtures.md`: an annotation is evaluated in
+    module globals and cannot see local names, so the fixture named in `Depends(...)` has to be
+    reachable there. A fixture held in a closure variable works only in a module that does not
     stringify its annotations.
 
     Only names that are actual parameters count, so a `functools.wraps` wrapper — which copies
@@ -304,28 +304,43 @@ def _markers_in_source(
 ) -> list[Dependency[Any]]:
     """The `Dependency` markers in an annotation that arrived as source text.
 
-    Rejects on a substring before parsing, so an ordinary `x: int` in a stringifying module costs
-    one `in` and one regex match. What survives is parsed, never `eval`ed whole: a bare dotted
-    name is an alias and is resolved by dictionary lookup, and inside `Annotated[...]` only the
-    metadata elements are looked at — a `Name` resolved the same way, a `Call` compiled and
-    evaluated iff its callee is velox's own `Depends`.
+    A bare dotted name is an alias — `db: Db` for a module-level
+    `type Db = Annotated[Session, Depends(db_fx)]` — and is resolved by dictionary lookup, no
+    parse. Anything without a subscript has nowhere to hold metadata. What is left is parsed, and
+    only its metadata elements are looked at: a `Name` resolved the same way, a `Call` compiled
+    and evaluated iff its callee is velox's own `Depends`. The gate is the shape of the
+    annotation, not the spelling of the names in it, since both `Annotated` and `Depends` can
+    arrive under any name a user imported them as.
     """
-    if "Depends" not in text and "Annotated" not in text and not _DOTTED_NAME.fullmatch(text):
+    if _DOTTED_NAME.fullmatch(text):
+        return _markers_in_object(_lookup_parts(text.split("."), globalns))
+    if "[" not in text:
         return []
     try:
         node = ast.parse(text, mode="eval").body
     except SyntaxError:  # an annotation Python itself would reject; leave it to Python
         return []
+    return _markers_in_subscript(node, globalns, name=name, param=param)
 
-    if isinstance(node, ast.Name | ast.Attribute):
-        # `db: Db` for a module-level `type Db = Annotated[Session, Depends(db_fx)]`, which is a
-        # real object once resolved, so the object path is the whole alias story.
-        return _markers_in_object(_lookup(node, globalns))
+
+def _markers_in_subscript(
+    node: ast.expr, globalns: dict[str, Any], *, name: str, param: str
+) -> list[Dependency[Any]]:
+    """The markers in a parsed `Annotated[...]`, nested ones included.
+
+    `Annotated[Annotated[X, a], b]` carries both markers, because that is the single flattened
+    object `typing` builds from it — and what the object path therefore sees.
+    """
     if not isinstance(node, ast.Subscript) or not _is_annotated(node.value, globalns):
         return []
-    elements = node.slice.elts[1:] if isinstance(node.slice, ast.Tuple) else ()
-    markers = [_marker_of(element, globalns, name=name, param=param) for element in elements]
-    return [marker for marker in markers if marker is not None]
+    elements = node.slice.elts if isinstance(node.slice, ast.Tuple) else ()
+    if not elements:
+        return []
+    head, *metadata = elements
+    markers = [_marker_of(element, globalns, name=name, param=param) for element in metadata]
+    return _markers_in_subscript(head, globalns, name=name, param=param) + [
+        marker for marker in markers if marker is not None
+    ]
 
 
 def _marker_of(
@@ -343,11 +358,15 @@ def _marker_of(
         # One `Depends(...)` call node, off this module's own parse of the annotation.
         value = eval(compile(ast.Expression(body=element), "<velox annotation>", "eval"), globalns)
     except Exception as exc:
+        hint = (
+            " An annotation is evaluated in the module's globals and cannot see local names, so "
+            "the fixture it names has to be reachable there."
+            if isinstance(exc, NameError)
+            else ""
+        )
         raise DIError(
-            f"{name}({param!r}): the Depends(...) in this annotation could not be evaluated "
-            f"({type(exc).__name__}: {exc}). A stringified annotation is evaluated in the "
-            f"module's globals and cannot see local names, so the fixture it names has to be "
-            f"reachable there."
+            f"{name}({param!r}): the Depends(...) in this annotation raised "
+            f"{type(exc).__name__}: {exc}.{hint}"
         ) from exc
     return value if isinstance(value, Dependency) else None
 
@@ -366,9 +385,7 @@ def _is_annotated(node: ast.expr, globalns: dict[str, Any]) -> bool:
 def _lookup(node: ast.expr, globalns: dict[str, Any]) -> Any:
     """Resolve a dotted name against `globalns` by lookup and `getattr` — never `eval`.
 
-    `_UNRESOLVED` for anything that is not a dotted name, or whose head is not a global. A name
-    that resolves to nothing is not an error here: most annotations are types velox has no
-    interest in, and plenty of them do not resolve at run time at all.
+    `_UNRESOLVED` for anything that is not a dotted name, or whose head is not a global.
     """
     parts: list[str] = []
     while isinstance(node, ast.Attribute):
@@ -376,11 +393,25 @@ def _lookup(node: ast.expr, globalns: dict[str, Any]) -> Any:
         node = node.value
     if not isinstance(node, ast.Name):
         return _UNRESOLVED
-    found = globalns.get(node.id, _UNRESOLVED)
-    for part in reversed(parts):
+    return _lookup_parts([node.id, *reversed(parts)], globalns)
+
+
+def _lookup_parts(parts: Sequence[str], globalns: dict[str, Any]) -> Any:
+    """`parts` walked from `globalns`, or `_UNRESOLVED`.
+
+    A name that resolves to nothing is not an error: most annotations are types velox has no
+    interest in, and plenty of them do not resolve at run time at all. `getattr` is guarded for
+    the same reason it is called at all — a module's `__getattr__` runs arbitrary code, and a
+    lazy importer raising for an unrelated parameter's annotation must not fail the test.
+    """
+    found = globalns.get(parts[0], _UNRESOLVED)
+    for part in parts[1:]:
         if found is _UNRESOLVED:
             return _UNRESOLVED
-        found = getattr(found, part, _UNRESOLVED)
+        try:
+            found = getattr(found, part)
+        except Exception:
+            return _UNRESOLVED
     return found
 
 

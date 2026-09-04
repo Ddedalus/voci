@@ -42,11 +42,12 @@ async def test_balance(db: Db) -> None: ...
 
 velox parses the annotation rather than evaluating it, reading its source text with `ast` and
 evaluating only the `Depends(...)` calls it finds in metadata. The type half is never evaluated,
-so a type imported under `if TYPE_CHECKING:` is a fine thing to inject against, in a module with
-`from __future__ import annotations` or without. What velox does evaluate, it evaluates in the
-module's globals, which is where the fixture named in `Depends(...)` and any alias carrying a
-marker have to be reachable: a fixture held in a local variable is not, and velox says so at
-collection, naming the parameter.
+so in a module with `from __future__ import annotations` — where Python does not evaluate it
+either — a type imported under `if TYPE_CHECKING:` is a fine thing to inject against.
+
+What velox does evaluate, it evaluates in the module's globals, which is where the fixture named
+in `Depends(...)` and any alias carrying a marker have to be reachable: a fixture held in a local
+variable is not, and velox says so at collection, naming the parameter.
 
 ## Typing an injected parameter
 

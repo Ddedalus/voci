@@ -76,11 +76,12 @@ dictionary lookup in the module's globals, never `eval`, which is what lets an a
 (`type Db = Annotated[Session, Depends(db_fx)]`) carry a marker.
 
 The type half is never touched. That is deliberately more permissive than FastAPI, which requires
-every annotation on an injected callable to resolve at run time: velox injects against a type
-imported under `if TYPE_CHECKING:`, and collects a test whose other parameters are annotated with
-names that resolve to nothing at all. What it costs is that the *marker* still has to be
-evaluable, so the fixture it names has to live in the module's globals rather than in a local
-variable — a `DIError` at collection when it doesn't.
+every annotation on an injected callable to resolve at run time: wherever the module itself
+doesn't evaluate its annotations, velox injects against a type imported under `if TYPE_CHECKING:`
+and collects a test whose other parameters are annotated with names that resolve to nothing at
+all. What it costs is that the *marker* still has to be evaluable, so the fixture it names has to
+live in the module's globals rather than in a local variable — a `DIError` at collection when it
+doesn't.
 
 The line is drawn at name-based resolution, not at where a dependency is declared. A container —
 a test module, or a package `__init__.py` covering that directory and below — can declare fixtures

@@ -46,8 +46,17 @@ jobs:
       - run: uv run pyrefly check --progress-bar no velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
 
   test:
-    name: Test
+    # Both supported interpreters, because they disagree about annotations: 3.14 computes them
+    # lazily (PEP 649) and hands `velox._di.fixtures` source text where 3.13 hands it objects,
+    # so each version exercises a different half of the injection scan.
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
         with:

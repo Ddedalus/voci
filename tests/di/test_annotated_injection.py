@@ -286,8 +286,69 @@ def test_a_fixture_a_stringified_annotation_cannot_see_is_a_named_error() -> Non
         "    return probe\n"
     )
 
-    with pytest.raises(DIError, match="could not be evaluated"):
+    with pytest.raises(DIError, match="cannot see local names"):
         plan_of(module.build())
+
+
+def test_a_marker_naming_something_that_is_not_a_fixture_reports_what_it_raised() -> None:
+    """`Depends()` rejects a non-`Fixture` itself; the annotation path passes that on rather than
+    dressing it up as a name it could not see."""
+    module = _module(
+        _STRINGIFIED + "\n\ndef probe(db: Annotated[int, Depends(42)]) -> int:\n    return db\n"
+    )
+
+    with pytest.raises(DIError, match="raised TypeError") as excinfo:
+        plan_of(module.probe)
+    assert "local names" not in str(excinfo.value)
+
+
+def test_both_names_can_arrive_under_an_alias() -> None:
+    """`Annotated` and `Depends` are recognized by identity, not by spelling, so an import alias
+    on either is no obstacle."""
+    module = _module(
+        "from __future__ import annotations\n\n"
+        "from typing import Annotated as Ann\n\n"
+        "import velox\n"
+        "from velox import Depends as dep\n\n\n"
+        "@velox.fixture()\n"
+        "def db() -> int:\n"
+        "    return 1\n\n\n"
+        "def probe(value: Ann[int, dep(db)] = 5) -> int:\n"
+        "    return value\n"
+    )
+
+    assert plan_of(module.probe) == (
+        Injection(param="value", source=module.db, keyword_only=False),
+    )
+
+
+def test_a_nested_annotated_carries_both_markers() -> None:
+    """`typing` flattens `Annotated[Annotated[X, a], b]` into one object holding both, so the
+    source path has to see both too — and reject them for the same reason."""
+    module = _module(
+        _STRINGIFIED + "\n\n"
+        "def probe(db: Annotated[Annotated[int, Depends(db)], Depends(db)]) -> int:\n"
+        "    return db\n"
+    )
+
+    with pytest.raises(DIError, match="2 Depends"):
+        plan_of(module.probe)
+
+
+def test_a_module_getattr_that_raises_does_not_fail_collection() -> None:
+    """Resolving a dotted name runs whatever `__getattr__` the module it walks through defines.
+    An unrelated parameter's annotation is not this test's problem to raise for."""
+    module = _module(
+        _STRINGIFIED + "\n\n"
+        "class Lazy:\n"
+        "    def __getattr__(self, name: str) -> object:\n"
+        "        raise RuntimeError('resolved an annotation velox has no interest in')\n\n\n"
+        "lazy = Lazy()\n\n\n"
+        "def probe(other: lazy.Thing, db: Annotated[int, Depends(db)]) -> int:\n"
+        "    return db\n"
+    )
+
+    assert plan_of(module.probe) == (Injection(param="db", source=module.db, keyword_only=False),)
 
 
 def test_annotated_imported_only_for_type_checking_still_reads() -> None:

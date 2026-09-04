@@ -150,7 +150,7 @@ which is exactly what the parse-don't-evaluate policy is for. So: `STRING` on 3.
 `__annotations__` on 3.13, and on 3.14 the whole thing is skipped when `__annotate__ is None`,
 which is the cheap bail-out for a function with no annotations at all.
 
-Four things the plan did not anticipate:
+Five things the plan did not anticipate:
 
 - **A PEP 695 alias is a `TypeAliasType`, not an `Annotated`**, so both paths unwrap `__value__`
   before looking for metadata. Bounded rather than a `while`: `type A = A` hands back the alias
@@ -164,16 +164,27 @@ Four things the plan did not anticipate:
   Same for `Annotated` itself being imported only under `TYPE_CHECKING`: unresolvable, so the
   spelling is enough to recognize the subscript, and the marker inside it still has to resolve to
   velox's own `Depends` by identity before anything is evaluated.
+- **`typing` flattens `Annotated[Annotated[X, a], b]`** into one object carrying both markers, so
+  the source path recurses into a nested subscript to see what the object path is handed for free.
 - **On 3.14, a hand-mutated `__annotations__` dict is invisible**, since `STRING` recomputes from
   `__annotate__`. This only matters for the not-a-parameter diagnostic, which is reachable through
   `functools.wraps` on both versions — 3.13 copies `__annotations__`, 3.14 copies `__annotate__`.
   The wraps case that must *not* raise is the `(*args, **kwargs)` wrapper, guarded by
   `CO_VARARGS | CO_VARKEYWORDS` rather than by the annotation itself.
 
-Collection cost: `plan_of` on a fully annotated five-parameter function goes from 2.71 µs to
-3.98 µs, once per fixture at decoration and once per test at collection. `tests/di/test_typing.py`
-pins that a checker sees `Session` at an annotated site and through an alias, and the whole suite
-is green under 3.13 and 3.14 alike.
+The pre-parse gate is the annotation's *shape*, not the plan's substring test on `Depends` and
+`Annotated`: both names arrive under whatever alias the user imported them as, and rejecting on
+spelling would have dropped `x: Ann[int, dep(db)]` silently. A whole annotation that is a dotted
+name is an alias and is resolved by lookup with no parse at all — which is most annotations —
+and one with no subscript in it has nowhere to hold metadata. The rest are parsed.
+
+Collection cost, per `plan_of` call — once per fixture at decoration, once per test at collection.
+On a five-parameter function whose annotations are objects: 2.71 µs before this change, 3.24 µs
+after. The same function in a module that stringifies its annotations, one parameter injected:
+20 µs, which is where the two `ast.parse` calls and the one `eval` land.
+
+`tests/di/test_typing.py` pins that a checker sees `Session` at an annotated site and through an
+alias. CI runs the suite under 3.13 and 3.14, since the two take different halves of this code.
 
 Phase 3's sweep is untouched: `docs/reference/fixtures.md` gains the section describing both
 spellings and the module-level rule, and `rationale.md` the parse-don't-evaluate policy, but
