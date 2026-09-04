@@ -830,6 +830,40 @@ def test_a_parameter_asked_for_by_name_goes_before_one_the_source_gave_a_default
     assert "def test_x(db: Annotated[Any, Depends(db)], flag=True):" in result.module.code
 
 
+def test_a_parameter_asked_for_by_name_goes_behind_a_star_where_nothing_else_is_valid() -> None:
+    # A defaulted positional-only parameter leaves a positional one without a default nowhere to
+    # go, at either end. velox binds by keyword, so the new parameter becomes keyword-only.
+    source = "def test_x(a=1, /, flag=2):\n    assert db\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x", injections=(plan.Injection("db", "db", "db", asked=True),)
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "def test_x(a=1, /, flag=2, *, db: Annotated[Any, Depends(db)]):" in result.module.code
+
+
+def test_a_keyword_only_parameter_is_injected_where_it_was_written() -> None:
+    # Keyword-only parameters bind by name whatever order they are written in, so one without a
+    # default following one that has it is a signature to leave alone.
+    source = "def test_x(*, flag=True, db):\n    assert db and flag\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(plan.TestWork(qualname="test_x", injections=(plan.Injection("db", "db", "db"),)),),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "def test_x(*, flag=True, db: Annotated[Any, Depends(db)]):" in result.module.code
+
+
 def test_a_test_needing_no_injection_does_not_import_depends(version: str, tmp_path: Path) -> None:
     tree = tmp_path / MECHANICAL
     converted(MECHANICAL, version, tree)

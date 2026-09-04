@@ -264,18 +264,27 @@ class _Wiring(VisitorBasedCodemodCommand):
             if injection.asked and injection.was not in _declared(node.params)
         ]
         # A parameter after `*args` is keyword-only, so that is where a new one goes in a signature
-        # that has one; every other signature grows it at the end, where a default belongs.
-        keyword_only = node.params.star_arg is not cst.MaybeSentinel.DEFAULT
-        params, reordered = _rewrite(
-            node.params.params, by_name, () if keyword_only else added, self.claims
+        # that has one. So is a signature whose positional-only half carries a default, where a
+        # positional parameter without one has nowhere valid to go — velox binds by keyword, so a
+        # `*` in front of the new parameter costs the signature nothing it had.
+        keyword_only = node.params.star_arg is not cst.MaybeSentinel.DEFAULT or any(
+            param.default is not None for param in node.params.posonly_params
         )
-        kwonly, _ = _rewrite(
+        params, reordered = _ordered(
+            _rewrite(node.params.params, by_name, () if keyword_only else added, self.claims)
+        )
+        kwonly = _rewrite(
             node.params.kwonly_params, by_name, added if keyword_only else (), self.claims
         )
-        if reordered or added:
+        if reordered or (added and not keyword_only):
             params = tuple(param.with_changes(comma=cst.MaybeSentinel.DEFAULT) for param in params)
+        star = node.params.star_arg
+        if added and keyword_only:
+            kwonly = tuple(param.with_changes(comma=cst.MaybeSentinel.DEFAULT) for param in kwonly)
+            if star is cst.MaybeSentinel.DEFAULT:
+                star = cst.ParamStar()
         return node.with_changes(
-            params=node.params.with_changes(params=params, kwonly_params=kwonly)
+            params=node.params.with_changes(params=params, star_arg=star, kwonly_params=kwonly)
         )
 
 
@@ -284,26 +293,31 @@ def _rewrite(
     by_name: Mapping[str, Injection],
     added: Sequence[cst.Param] = (),
     claims: _Claims | None = None,
-) -> tuple[tuple[cst.Param, ...], bool]:
-    """`params` with each injected one given its `Depends()` default, and whether order moved.
+) -> tuple[cst.Param, ...]:
+    """`params`, each injected one rewritten as its injection, with `added` written on the end.
 
-    A parameter without a default cannot follow one that has it, so a signature that mixes
-    injected names with parametrized ones is split: the ones without a default keep their relative
-    order and come first. Every other signature keeps the whitespace it was written with.
-
-    What decides the split is whether the rewritten parameter ends up with a default, not whether
-    it was injected: a `params=` fixture's `request` becomes the bare `param` velox binds its case
-    to, so it belongs with the plain parameters however late it was written. `added` are the
-    parameters a body asked for by name, which are injected and so go last either way.
+    An injection the rewrite takes away rather than binds — a `request` with no use left — drops
+    out here, and `added` are the parameters a body asked for by name, which the signature never
+    declared.
     """
     kept = [param for param in params if not _is_dropped(param, by_name)]
     rewritten = [_inject(param, by_name.get(param.name.value), claims) for param in kept]
-    rewritten += list(added)
-    defaulted = [param.default is not None for param in rewritten]
-    if all(defaulted) or not any(defaulted) or defaulted == sorted(defaulted):
-        return tuple(rewritten), False
-    plain = [param for param, has in zip(rewritten, defaulted, strict=True) if not has]
-    filled = [param for param, has in zip(rewritten, defaulted, strict=True) if has]
+    return tuple([*rewritten, *added])
+
+
+def _ordered(params: Sequence[cst.Param]) -> tuple[tuple[cst.Param, ...], bool]:
+    """`params` with the ones carrying no default first, and whether that moved any of them.
+
+    A positional parameter without a default cannot follow one that has it, and only a parameter
+    the source wrote carries a default here: an injection is metadata. So this moves exactly one
+    thing, a parameter a body asked for by name, ahead of the defaults it was appended after.
+    Every other signature keeps the order and the whitespace it was written with.
+    """
+    defaulted = [param.default is not None for param in params]
+    if defaulted == sorted(defaulted):
+        return tuple(params), False
+    plain = [param for param, has in zip(params, defaulted, strict=True) if not has]
+    filled = [param for param, has in zip(params, defaulted, strict=True) if has]
     return tuple([*plain, *filled]), True
 
 
