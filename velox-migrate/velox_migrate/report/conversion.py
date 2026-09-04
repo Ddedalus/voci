@@ -130,9 +130,9 @@ def _untyped(conversion: Conversion) -> list[str]:
 
     The same list the audit offers before a conversion, measured against what the conversion
     actually wrote: a fixture with no usable return annotation gives every parameter injected from
-    it no annotation either, and mypy reads each of those as `Any` and checks nothing in the body
-    against it. Ordered by how many sites that costs, because that is the order the annotating is
-    worth doing in.
+    it `Any`, and a checker reads each of those as `Any` and checks nothing in the body against
+    it. Ordered by how many sites that costs, because that is the order the annotating is worth
+    doing in.
     """
     degraded = conversion.plan.degraded
     if not degraded:

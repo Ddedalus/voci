@@ -37,8 +37,8 @@ def source(tree: Path, path: str) -> str:
 def test_the_chain_above_an_override_is_copied_beside_it(tree: Path) -> None:
     body = source(tree, "integration/fixtures.py")
 
-    assert "def engine_integration(settings=Depends(settings)):" in body
-    assert "def client_integration(engine=Depends(engine_integration)):" in body
+    assert "def engine_integration(settings: Annotated[Any, Depends(settings)]):" in body
+    assert "def client_integration(engine: Annotated[Any, Depends(engine_integration)]):" in body
 
 
 def test_the_copy_is_named_for_the_directory_that_overrides(tree: Path, version: str) -> None:
@@ -55,21 +55,21 @@ def test_the_original_chain_keeps_the_definition_it_was_written_above(tree: Path
     # originals are untouched — copying is what leaves them that way.
     body = source(tree, "fixtures.py")
 
-    assert "def engine(settings=Depends(settings)):" in body
+    assert "def engine(settings: Annotated[Any, Depends(settings)]):" in body
     assert "integration" not in body[body.index("import json") :]
 
 
 def test_a_test_under_the_override_names_the_copy(tree: Path) -> None:
     body = source(tree, "integration/test_integration.py")
 
-    assert "def test_engine(engine=Depends(engine_integration)):" in body
-    assert "def test_client(client=Depends(client_integration)):" in body
+    assert "def test_engine(engine: Annotated[Any, Depends(engine_integration)]):" in body
+    assert "def test_client(client: Annotated[Any, Depends(client_integration)]):" in body
 
 
 def test_a_test_outside_the_override_names_the_original(tree: Path) -> None:
     body = source(tree, "test_root.py")
 
-    assert "def test_engine(engine=Depends(engine)):" in body
+    assert "def test_engine(engine: Annotated[Any, Depends(engine)]):" in body
     assert "from fixtures import client, engine, token" in body
 
 
@@ -79,13 +79,13 @@ def test_a_test_below_the_overriding_directory_reads_the_same_copy(tree: Path) -
     body = source(tree, "integration/deep/test_deep.py")
 
     assert "from integration.fixtures import engine_integration" in body
-    assert "def test_deep_engine(engine=Depends(engine_integration)):" in body
+    assert "def test_deep_engine(engine: Annotated[Any, Depends(engine_integration)]):" in body
 
 
 def test_a_fixture_beside_the_override_names_the_copy(tree: Path) -> None:
     body = source(tree, "integration/fixtures.py")
 
-    assert "def report(client=Depends(client_integration)):" in body
+    assert "def report(client: Annotated[Any, Depends(client_integration)]):" in body
 
 
 def test_a_copy_is_written_below_everything_it_names(tree: Path) -> None:
@@ -120,7 +120,7 @@ def test_an_override_requesting_its_own_name_names_the_definition_it_overrides(t
     body = source(tree, "integration/fixtures.py")
 
     assert "from fixtures import LABEL, settings as root_settings" in body
-    assert "def settings(settings=Depends(root_settings)):" in body
+    assert "def settings(settings: Annotated[Any, Depends(root_settings)]):" in body
 
 
 def test_a_budget_the_chain_no_longer_fits_refuses_it_whole(version: str) -> None:

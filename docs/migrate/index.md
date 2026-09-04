@@ -29,7 +29,7 @@ you:
 
 | pytest | velox |
 | --- | --- |
-| `conftest.py` and name-based lookup | a module you import, and `Depends(fixture)` |
+| `conftest.py` and name-based lookup | a module you import, and `Annotated[T, Depends(fixture)]` |
 | fixture scopes: function, class, module, package, session | call, function, module, session — class widens to module, package to session |
 | `autouse=True`, `@pytest.mark.usefixtures` | one `velox.use(...)` on the module or package |
 | `@pytest.mark.parametrize`, `pytest.param` | `@velox.parametrize`, `velox.case`, with pytest's ids kept verbatim |
@@ -232,6 +232,7 @@ to this:
 ```python
 # api/fixtures.py
 import velox
+from typing import Annotated, Any
 from velox import Depends
 
 
@@ -241,7 +242,7 @@ def payload():
 
 
 @velox.fixture()
-def route(payload=Depends(payload)):
+def route(payload: Annotated[Any, Depends(payload)]):
     return f"/v1/{payload['kind']}s"
 ```
 

@@ -153,7 +153,7 @@ def test_a_fixture_asked_for_by_name_becomes_a_parameter_of_the_definition_that_
 
     body = (tree / "fixtures.py").read_text(encoding="utf-8")
 
-    assert "def engine(settings=Depends(settings)):" in body
+    assert "def engine(settings: Annotated[Any, Depends(settings)]):" in body
     assert 'request.getfixturevalue("settings")' not in body
 
 
@@ -165,7 +165,7 @@ def test_a_test_that_asked_for_a_fixture_by_name_loses_its_request_parameter(
 
     body = (tree / "test_bodies.py").read_text(encoding="utf-8")
 
-    assert "def test_getfixturevalue_by_name(settings=Depends(settings)):" in body
+    assert "def test_getfixturevalue_by_name(settings: Annotated[Any, Depends(settings)]):" in body
 
 
 def test_an_unconditional_finalizer_becomes_the_teardown_after_a_yield(
@@ -207,7 +207,7 @@ def test_a_patch_applied_as_a_decorator_keeps_it_and_is_marked_by_nothing(
 
     body = (tree / "test_bodies.py").read_text(encoding="utf-8")
 
-    signature = "def test_patch_decorator(getcwd, engine=Depends(engine)):"
+    signature = "def test_patch_decorator(getcwd, engine: Annotated[Any, Depends(engine)]):"
     decorated = f'@mock.patch("os.getcwd")\n{signature}'
 
     assert decorated in body
@@ -227,7 +227,7 @@ def test_a_specialized_copy_is_rewritten_the_way_the_fixture_it_copies_is(
 
     assert "from fixtures import finished, settings" in body
     assert "def report_sub(" in body
-    assert "settings=Depends(settings)" in body
+    assert "settings: Annotated[Any, Depends(settings)]" in body
     assert "request" not in body
 
 
@@ -338,8 +338,8 @@ def test_a_chain_specialized_for_a_class_is_wired_copy_to_copy(version: str) -> 
     # the copy below it rather than the definition it was written against.
     source = _target(conversion_of(CLASSES, version), "test_classes.py")
 
-    assert "def blog_overriding(user=Depends(overriding_user)):" in source
-    assert "def digest_overriding(blog=Depends(blog_overriding)):" in source
+    assert "def blog_overriding(user: Annotated[Any, Depends(overriding_user)]):" in source
+    assert "def digest_overriding(blog: Annotated[Any, Depends(blog_overriding)]):" in source
     assert source.index("def digest_overriding(") < source.index("class TestOverriding:")
 
 
@@ -399,7 +399,7 @@ def test_an_indirect_marks_values_become_the_fixtures_own_cases(
     assert '@velox.fixture(params=["mysql", "sqlite"], ids=["mysql", "sqlite"])' in fixtures
     assert "def backend(param):" in fixtures
     assert "indirect" not in tests
-    assert "def test_backend_through_engine(engine=Depends(engine)):" in tests
+    assert "def test_backend_through_engine(engine: Annotated[Any, Depends(engine)]):" in tests
 
 
 def test_a_hook_that_built_cases_leaves_them_written_on_each_test(
@@ -794,15 +794,74 @@ def test_the_deferred_codes_are_all_rows_the_matrix_says_convert() -> None:
 # --- what a rewrite backs out of ----------------------------------------------------------------
 
 
-def test_a_params_fixture_reordering_request_still_passes(version: str, tmp_path: Path) -> None:
-    # `request` becomes the bare `param` velox binds a case to, so it has no default and cannot
-    # stay after a fixture that does. Written the other way round this was a syntax error.
+def test_a_params_fixture_keeps_the_order_request_was_written_in(
+    version: str, tmp_path: Path
+) -> None:
+    # An injection is metadata, not a default, so `param` stays where `request` was written even
+    # though the fixture beside it is injected.
     tree = tmp_path / MECHANICAL
     converted(MECHANICAL, version, tree)
 
     body = (tree / "fixtures.py").read_text(encoding="utf-8")
 
-    assert "def retries(param, dsn=Depends(dsn)):" in body
+    assert "def retries(dsn: Annotated[Any, Depends(dsn)], param):" in body
+
+
+def test_a_parameter_asked_for_by_name_goes_before_one_the_source_gave_a_default() -> None:
+    # The only parameter a rewritten signature can hold a default for is one the source wrote,
+    # and a parameter without a default cannot follow it.
+    source = "def test_x(request, flag=True):\n    assert db and flag\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x",
+                injections=(
+                    plan.Injection("request", "", ""),
+                    plan.Injection("db", "db", "db", asked=True),
+                ),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "def test_x(db: Annotated[Any, Depends(db)], flag=True):" in result.module.code
+
+
+def test_a_parameter_asked_for_by_name_goes_behind_a_star_where_nothing_else_is_valid() -> None:
+    # A defaulted positional-only parameter leaves a positional one without a default nowhere to
+    # go, at either end. velox binds by keyword, so the new parameter becomes keyword-only.
+    source = "def test_x(a=1, /, flag=2):\n    assert db\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x", injections=(plan.Injection("db", "db", "db", asked=True),)
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "def test_x(a=1, /, flag=2, *, db: Annotated[Any, Depends(db)]):" in result.module.code
+
+
+def test_a_keyword_only_parameter_is_injected_where_it_was_written() -> None:
+    # Keyword-only parameters bind by name whatever order they are written in, so one without a
+    # default following one that has it is a signature to leave alone.
+    source = "def test_x(*, flag=True, db):\n    assert db and flag\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(plan.TestWork(qualname="test_x", injections=(plan.Injection("db", "db", "db"),)),),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "def test_x(*, flag=True, db: Annotated[Any, Depends(db)]):" in result.module.code
 
 
 def test_a_test_needing_no_injection_does_not_import_depends(version: str, tmp_path: Path) -> None:
@@ -1151,24 +1210,26 @@ def test_every_recoverable_shape_in_the_typed_suite_is_written_as_a_type(
     store = (tree / "store" / "test_store.py").read_text(encoding="utf-8")
 
     # `-> X`, and the consumer binds `Session` itself, so the import it is named through is aliased.
-    assert "def test_session_states_its_type(session: root_Session = Depends(session)):" in top
+    session_site = "session: Annotated[root_Session, Depends(session)]"
+    assert f"def test_session_states_its_type({session_site}):" in top
     assert "from support import Session as root_Session" in top
     # `-> Iterator[X]` is unwrapped, exactly as `@velox.fixture()`'s own overloads unwrap it.
-    assert "def test_widget_states_what_it_yields(widget: Widget = Depends(widget)):" in top
+    widget_site = "widget: Annotated[Widget, Depends(widget)]"
+    assert f"def test_widget_states_what_it_yields({widget_site}):" in top
     # `-> t.Mapping[...]` is not one of the shapes to unwrap, and `t` is `typing` only because the
     # fixture's own module says so.
-    assert "catalogue: t.Mapping[str, Widget] = Depends(catalogue)" in top
+    assert "catalogue: Annotated[t.Mapping[str, Widget], Depends(catalogue)]" in top
     assert "import typing as t" in top
     # `-> t.AsyncIterator[X]` on an `async def` that yields.
-    assert "channel: list[str] = Depends(channel)" in top
+    assert "channel: Annotated[list[str], Depends(channel)]" in top
     # A built-in's type comes from velox, since the suite's own sources say nothing about it.
-    assert "tmp_path: Path = Depends(velox.tmp_path)" in top
-    assert "capture: velox.Capture = Depends(velox.capture)" in top
+    assert "tmp_path: Annotated[Path, Depends(velox.tmp_path)]" in top
+    assert "capture: Annotated[velox.Capture, Depends(velox.capture)]" in top
     # A type named only under `TYPE_CHECKING` where it was written, and one written in a
     # `conftest.py`, which is importable only from the `fixtures.py` that conftest becomes.
     assert (
-        "def test_report_names_a_type_checking_only_type(report: Report = Depends(report)):"
-        in store
+        "def test_report_names_a_type_checking_only_type("
+        "report: Annotated[Report, Depends(report)]):" in store
     )
     assert "from store.records import Report" in store
     assert "from store.fixtures import Ledger" in store
@@ -1182,7 +1243,10 @@ def test_what_the_typed_suite_cannot_recover_is_written_bare_and_reported(
 
     top = (tree / "test_top.py").read_text(encoding="utf-8")
 
-    assert "def test_nothing_to_recover(untyped=Depends(untyped), opaque=Depends(opaque)):" in top
+    untyped = "untyped: Annotated[Any, Depends(untyped)]"
+    opaque = "opaque: Annotated[Any, Depends(opaque)]"
+
+    assert f"def test_nothing_to_recover({untyped}, {opaque}):" in top
 
     degraded = {(row.fixture, row.reason) for row in result.plan.degraded}
 
@@ -1270,8 +1334,8 @@ def test_a_builtin_is_written_with_velox_s_type_and_not_the_one_pytest_gave_it()
 
     result = wiring.apply(cst.parse_module(source), _builtin_work(_CAPSYS, _TMP_PATH))
 
-    assert "capture: velox.Capture = Depends(velox.capture)" in result.module.code
-    assert "tmp_path: Path = Depends(velox.tmp_path)" in result.module.code
+    assert "capture: Annotated[velox.Capture, Depends(velox.capture)]" in result.module.code
+    assert "tmp_path: Annotated[Path, Depends(velox.tmp_path)]" in result.module.code
     assert "CaptureFixture" not in result.module.code
     assert "if TYPE_CHECKING:\n    from pathlib import Path\n" in result.module.code
 
@@ -1309,7 +1373,7 @@ def test_a_builtin_velox_hands_back_unchanged_keeps_the_annotation_its_author_wr
 
     result = wiring.apply(cst.parse_module(source), _builtin_work(_TMP_PATH))
 
-    assert "tmp_path: pathlib.Path = Depends(velox.tmp_path)" in result.module.code
+    assert "tmp_path: Annotated[pathlib.Path, Depends(velox.tmp_path)]" in result.module.code
     assert "import pathlib" in result.module.code
     assert "TYPE_CHECKING" not in result.module.code
 
@@ -1439,7 +1503,7 @@ def test_an_inferred_type_is_written_with_a_type_checking_import_and_the_future_
 
     assert "from __future__ import annotations" in result.module.code
     assert "if TYPE_CHECKING:\n    from support import Session\n" in result.module.code
-    assert "def test_x(session: Session = Depends(session)):" in result.module.code
+    assert "def test_x(session: Annotated[Session, Depends(session)]):" in result.module.code
 
 
 def test_a_parameter_the_source_already_annotated_keeps_its_own_type_and_needs_no_import() -> None:
@@ -1447,7 +1511,7 @@ def test_a_parameter_the_source_already_annotated_keeps_its_own_type_and_needs_n
 
     result = wiring.apply(cst.parse_module(source), _typed_work("Session"))
 
-    assert "def test_x(session: Mine = Depends(session)):" in result.module.code
+    assert "def test_x(session: Annotated[Mine, Depends(session)]):" in result.module.code
     assert "TYPE_CHECKING" not in result.module.code
 
 
@@ -1456,7 +1520,7 @@ def test_an_injection_with_no_type_is_written_exactly_as_it_was_before() -> None
 
     result = wiring.apply(cst.parse_module(source), _typed_work(None))
 
-    assert "def test_x(session=Depends(session)):" in result.module.code
+    assert "def test_x(session: Annotated[Any, Depends(session)]):" in result.module.code
     assert "TYPE_CHECKING" not in result.module.code
     assert "from __future__ import annotations" not in result.module.code
 

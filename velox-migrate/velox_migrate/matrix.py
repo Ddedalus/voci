@@ -124,7 +124,7 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "@pytest.fixture",
         MECHANICAL,
         "A fixture becomes a module-level object, and every parameter that requested it by name "
-        "becomes a `Depends()` default naming the import.",
+        "is annotated `Annotated[T, Depends(...)]` naming the import.",
         target="@velox.fixture()",
     ),
     _row(

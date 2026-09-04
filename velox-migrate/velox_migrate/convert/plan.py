@@ -82,7 +82,7 @@ class Injection:
 
     `annotation` is the type the parameter is written with, inferred from the fixture factory's
     return annotation, and `None` where nothing could be inferred — the conversion then writes the
-    parameter with no annotation at all and the report says which fixture cost it. `needs` are the
+    parameter as `Any` and the report says which fixture cost it. `needs` are the
     `TYPE_CHECKING` imports that annotation is spellable through, travelling with it so that a
     signature the rewrite backs out of takes its imports back out with it. `retypes` says the
     annotation replaces one the source already wrote rather than filling in a missing one, which
