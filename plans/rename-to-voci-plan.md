@@ -133,12 +133,35 @@ Local-only (not in CI, but this rename touches what they check, so run them anyw
 `just migrate test`, so it's the fast first pass; the rest above is what makes the sweep verified
 rather than merely typechecked.
 
-### 5. Merge
+### 5. Manual smoke test: repeat the marshmallow migration
 
-Once everything in §4 is green: merge to `main`, delete the worktree per the workflow's cleanup
-steps. No review step — §4 is the gate.
+Everything in §4 is internal — this repo's own suite, its own corpus fixtures. marshmallow was the
+tool's first real end-to-end proof against a suite it wasn't built against
+(`plans/migration-findings.md`), and rerunning that same experiment is
+the one check that exercises the whole pipeline the way an actual user would: installed CLI entry
+points, `[tool.voci]` config, the converter's generated imports, against code this repo doesn't
+control. It's manual rather than folded into §4's list because judging the result means comparing
+outcome counts, not reading an exit code.
 
-### 6. GitHub
+- Copy `oss/marshmallow` (pinned submodule, read-only) out to a scratch dir — `convert --write`
+  rewrites its target in place.
+- In that scratch dir's own environment, install `-e <repo>` and `-e <repo>/voci-migrate` (the
+  renamed packages) alongside marshmallow's existing dependencies — its own `uv run pytest` won't
+  do this on its own, same obstacle the original run hit.
+- `voci-migrate convert --write` the copy, then run both `voci --serial` and `voci` over it.
+- Compare against the recorded baseline in `plans/migration-findings.md`: pytest 1188 passed;
+  `voci --serial` and `voci` both 1183 passed / 5 failed, the *same* five tests both serially and
+  concurrently; nothing refused; no `VOCI-TODO` markers written. Any deviation from those exact
+  numbers is a real regression the rename introduced, not a cosmetic miss — the internal suite
+  wouldn't necessarily catch a converter defect that only a suite of this shape triggers (that's
+  why marshmallow was picked as the smoke test in the first place).
+
+### 6. Merge
+
+Once §4 and §5 are both green: merge to `main`, delete the worktree per the workflow's cleanup
+steps. No review step — §4 and §5 are the gate.
+
+### 7. GitHub
 
 - `gh repo rename voci` from the `main` checkout (equivalent: repo Settings → rename). GitHub
   auto-redirects the old URL and existing clones' `origin` remotes keep working, so this is safe
@@ -151,7 +174,7 @@ steps. No review step — §4 is the gate.
 - That's the whole GitHub side. No CODEOWNERS, branch-protection rules, or webhook config in this
   repo references the name.
 
-### 7. PyPI
+### 8. PyPI
 
 Not a rename — `voci` is a brand-new PyPI project, since PyPI has no rename operation and the
 distribution name is changing (`velox-test` → `voci`, not `velox-test` → `voci-test`).
@@ -170,7 +193,7 @@ distribution name is changing (`velox-test` → `voci`, not `velox-test` → `vo
   doesn't support deleting or redirecting a project, so there's no cleanup action beyond deciding
   whether to yank any releases on it (only relevant if it was ever actually published to).
 
-### 8. Outside the repo (not part of the worktree's diff, do separately/manually)
+### 9. Outside the repo (not part of the worktree's diff, do separately/manually)
 
 - This checkout's own directory is named `velox` on disk (`/home/hubert/velox`) — cosmetic only,
   renaming it is optional and yours to do (`mv`, then point any shell aliases/IDE workspaces at
@@ -187,4 +210,5 @@ distribution name is changing (`velox-test` → `voci`, not `velox-test` → `vo
 ## References
 
 - `plans/CLAUDE.md` — plan-file conventions this file follows.
-- `.claude/skills/dev-workflow/SKILL.md` — worktree workflow used for §2–5.
+- `.claude/skills/dev-workflow/SKILL.md` — worktree workflow used for §2–6.
+- `plans/migration-findings.md` — the original marshmallow run §5 repeats, with its numbers.
