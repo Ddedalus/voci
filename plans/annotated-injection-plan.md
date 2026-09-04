@@ -282,6 +282,29 @@ docs/reference/index.md · docs/reference/builtins.md · docs/migrate/index.md �
 docs/migrate/matrix.md (generated) · `velox/__init__.py`'s module docstring · all three suites
 under `examples/` (~130 sites, largely mechanical) · a ROADMAP note while this is in flight.
 
+## What landed — Phase 3
+
+`Annotated` is now the form shown first everywhere the plan named: README.md, docs/index.md,
+docs/guide/index.md, docs/reference/fixtures.md, docs/reference/builtins.md. The fixtures
+reference gained the titled "The short form" subsection for default position, moving ruff's `B008`
+note there since metadata isn't a default and never trips it. `docs/reference/index.md`,
+`docs/migrate/index.md`, `docs/migrate/matrix.md` and `velox/__init__.py`'s module docstring
+needed nothing: Phase 2 had already updated the first two, and the docstring never showed either
+spelling to begin with.
+
+All three `examples/` suites converted mechanically — 141 injection sites across 12 test/fixture
+files, done with a one-off libcst pass (`Param.default` a `Depends(...)` call → wrapped into
+`Annotated[...]`, default dropped) rather than by hand, then `ruff check --fix` and `ruff format`
+for import sorting and line wrapping. Each suite's own `pyproject.toml` lost its
+`extend-immutable-calls = ["velox.Depends"]` bugbear entry — no test takes a `Depends(...)`
+default any more, so nothing trips `B008` — except 01-fastapi-crud, which keeps the entry for
+`fastapi.Depends` alone: `app/main.py` is the application under test, not a velox suite, and its
+routes still take FastAPI's own `Depends()` as a default, the idiom that file is demonstrating.
+All three suites' tests and lint/format checks pass unchanged after the rewrite.
+
+`app/main.py` was deliberately left alone for the same reason — nothing in this plan touches
+FastAPI's own injection syntax, only velox's.
+
 ## Sequencing
 
 Phase 1 has landed, spike included, so the design risk is spent. Phase 3 depends on Phase 2 only

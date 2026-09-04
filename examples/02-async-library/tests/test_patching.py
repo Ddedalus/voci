@@ -13,10 +13,8 @@ it.
 from __future__ import annotations
 
 import os
+from typing import Annotated
 from unittest import mock
-
-import velox
-from velox import Depends
 
 from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
@@ -24,21 +22,24 @@ from relay.settings import Settings
 from relay.transport import FakeTransport, Response, Transport
 from tests.fixtures import flaky_relay, flaky_transport, relay, transport
 
+import velox
+from velox import Depends
+
 # ========================================================================================
 # Tier (a) — dependency injection. Fully concurrent. What the docs teach first.
 # ========================================================================================
 
 
 async def test_transport_substituted_by_di(
-    r: Relay = Depends(flaky_relay),
-    t: FakeTransport = Depends(flaky_transport),
+    r: Annotated[Relay, Depends(flaky_relay)],
+    t: Annotated[FakeTransport, Depends(flaky_transport)],
 ) -> None:
     """No patching at all. Runs alongside every other test in the suite."""
     await r.deliver("https://hooks.test/v1", b"x")
     assert len(t.sent) == 3
 
 
-async def test_transport_substituted_by_a_mock_object(r: Relay = Depends(relay)) -> None:
+async def test_transport_substituted_by_a_mock_object(r: Annotated[Relay, Depends(relay)]) -> None:
     """A `MagicMock` is a *value*, not a global write. It is completely fine here.
 
     `create_autospec` against the `Transport` protocol gives call assertions and a signature check,
@@ -90,8 +91,8 @@ async def test_settings_substituted_by_di() -> None:
 @mock.patch("relay.client.random.uniform", return_value=1.0)
 async def test_jitter_is_deterministic(
     uniform: mock.MagicMock,
-    r: Relay = Depends(flaky_relay),
-    t: FakeTransport = Depends(flaky_transport),
+    r: Annotated[Relay, Depends(flaky_relay)],
+    t: Annotated[FakeTransport, Depends(flaky_transport)],
 ) -> None:
     """The mock parameter comes first, exactly as under pytest — `mock.patch` injects positionally.
 
@@ -126,8 +127,8 @@ async def test_settings_from_the_real_environment() -> None:
 # reach a module every other running test reads.
 @velox.solo
 async def test_context_manager_patching_must_be_marked(
-    r: Relay = Depends(relay),
-    t: FakeTransport = Depends(transport),
+    r: Annotated[Relay, Depends(relay)],
+    t: Annotated[FakeTransport, Depends(transport)],
 ) -> None:
     t.responses = [Response(503), Response(200)]
 

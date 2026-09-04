@@ -6,17 +6,19 @@ The baseline shape of a velox test: an `async def`, dependencies as parameter de
 
 from __future__ import annotations
 
-import velox
+from typing import Annotated
+
+from app.models import User
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from velox import Depends
-
-from app.models import User
 from tests.fixtures import alice, api_client, session
 
+import velox
+from velox import Depends
 
-async def test_health(client: AsyncClient = Depends(api_client)) -> None:
+
+async def test_health(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -27,7 +29,7 @@ async def test_health(client: AsyncClient = Depends(api_client)) -> None:
     ["bob@example.com", "carol+tag@example.com", "dave@sub.example.com"],
     ids=["bob", "tag-in-local-part", "subdomain"],
 )
-async def test_create_user(email: str, client: AsyncClient = Depends(api_client)) -> None:
+async def test_create_user(email: str, client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     response = await client.post("/users", json={"email": email})
 
     assert response.status_code == 201
@@ -36,8 +38,8 @@ async def test_create_user(email: str, client: AsyncClient = Depends(api_client)
 
 
 async def test_create_user_rejects_duplicate_email(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     """Two fixtures, one shared session.
 
@@ -51,14 +53,14 @@ async def test_create_user_rejects_duplicate_email(
     assert response.json()["detail"] == "email already registered"
 
 
-async def test_get_missing_user_is_404(client: AsyncClient = Depends(api_client)) -> None:
+async def test_get_missing_user_is_404(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     response = await client.get("/users/999999")
     assert response.status_code == 404
 
 
 async def test_create_user_writes_a_row(
-    client: AsyncClient = Depends(api_client),
-    db: AsyncSession = Depends(session),
+    client: Annotated[AsyncClient, Depends(api_client)],
+    db: Annotated[AsyncSession, Depends(session)],
 ) -> None:
     """Drop below HTTP when the assertion is about persistence, not about the API."""
     await client.post("/users", json={"email": "erin@example.com"})
@@ -71,7 +73,7 @@ async def test_create_user_writes_a_row(
 
 @velox.tag("slow")
 @velox.timeout(30)
-async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
+async def test_bulk_signup(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     for i in range(200):
         response = await client.post("/users", json={"email": f"user{i}@example.com"})
         assert response.status_code == 201
@@ -81,7 +83,7 @@ async def test_bulk_signup(client: AsyncClient = Depends(api_client)) -> None:
 
 
 @velox.skip("pagination is not implemented yet (GET /users has no route -- 405, not 200)")
-async def test_list_users_is_paginated(client: AsyncClient = Depends(api_client)) -> None:
+async def test_list_users_is_paginated(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     response = await client.get("/users?limit=10")
     assert response.status_code == 200
 
@@ -90,15 +92,17 @@ REQUEST_ID_MIDDLEWARE_ENABLED = False
 
 
 @velox.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
-async def test_response_carries_request_id(client: AsyncClient = Depends(api_client)) -> None:
+async def test_response_carries_request_id(
+    client: Annotated[AsyncClient, Depends(api_client)],
+) -> None:
     """`skipif` conditions are evaluated once per test at collection, before any test runs."""
     response = await client.get("/health")
     assert "x-request-id" in response.headers
 
 
 async def test_deactivate(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     response = await client.delete(f"/users/{user.id}")
     assert response.status_code == 204
@@ -108,8 +112,8 @@ async def test_deactivate(
 
 
 async def test_deactivate_is_idempotent(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     assert (await client.delete(f"/users/{user.id}")).status_code == 204
     assert (await client.delete(f"/users/{user.id}")).status_code == 204

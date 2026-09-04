@@ -8,25 +8,26 @@ exclusion is the cheapest concurrency you will ever buy.
 from __future__ import annotations
 
 import asyncio
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from ledger.service import LedgerService
 from tests.fixtures import account, ledger
 
+import velox
+from velox import Depends
+
 
 async def test_append_returns_an_id(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     entry_id = await svc.append(acct, 1000)
     assert entry_id > 0
 
 
 async def test_balance_sums_entries(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     await svc.append(acct, 1000)
     await svc.append(acct, -250)
@@ -36,7 +37,7 @@ async def test_balance_sums_entries(
 
 
 async def test_balance_of_unknown_account_is_zero(
-    svc: LedgerService = Depends(ledger),
+    svc: Annotated[LedgerService, Depends(ledger)],
 ) -> None:
     assert await svc.balance("acct::nobody") == 0
 
@@ -53,36 +54,36 @@ async def _assert_balance_arithmetic(
 # Each case is its own test, and each still gets its own `account`: `velox.test_info.id` includes
 # the function's own qualname, so distinct functions can't collide even though all four run at once.
 async def test_balance_arithmetic_single_deposit(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     await _assert_balance_arithmetic([1], 1, svc, acct)
 
 
 async def test_balance_arithmetic_multiple_deposits(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     await _assert_balance_arithmetic([1, 2, 3], 6, svc, acct)
 
 
 async def test_balance_arithmetic_deposit_and_withdrawal_cancel_out(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     await _assert_balance_arithmetic([-5, 5], 0, svc, acct)
 
 
 async def test_balance_arithmetic_no_entries(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     await _assert_balance_arithmetic([], 0, svc, acct)
 
 
 async def test_entries_are_ordered(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     for amount in (10, 20, 30):
         await svc.append(acct, amount)
@@ -91,8 +92,8 @@ async def test_entries_are_ordered(
 
 
 async def test_transfer_moves_money(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     source, target = f"{acct}::a", f"{acct}::b"
     await svc.append(source, 500)
@@ -104,8 +105,8 @@ async def test_transfer_moves_money(
 
 
 async def test_transfer_is_permitted_to_overdraw_by_default(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     """`strict_transfers` is off. The test that turns it on is in `test_safety.py`, and it is solo
     — because it changes the answer this test depends on.
@@ -119,8 +120,8 @@ async def test_transfer_is_permitted_to_overdraw_by_default(
 
 @velox.timeout(20)
 async def test_many_concurrent_appends(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     """The test itself is concurrent, inside a test that is one of 32 running concurrently.
 

@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from relay.cache import FakeClock, TTLCache
 from tests.fixtures import cache, clock
 
+import velox
+from velox import Depends
+
 
 async def test_hit_before_expiry(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     c.put("a", b"1")
     t.advance(29.0)
@@ -28,8 +29,8 @@ async def test_hit_before_expiry(
 
 
 async def test_miss_after_expiry(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     c.put("a", b"1")
     t.advance(31.0)
@@ -48,29 +49,29 @@ async def _assert_expiry_at(
 
 # Each boundary is its own test, sharing `_assert_expiry_at` above.
 async def test_expiry_boundary_fresh(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     await _assert_expiry_at(0.0, b"1", c, t)
 
 
 async def test_expiry_boundary_just_in_time(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     await _assert_expiry_at(29.999, b"1", c, t)
 
 
 async def test_expiry_boundary_exactly_ttl(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     await _assert_expiry_at(30.0, None, c, t)
 
 
 async def test_expiry_boundary_just_late(
-    c: TTLCache = Depends(cache),
-    t: FakeClock = Depends(clock),
+    c: Annotated[TTLCache, Depends(cache)],
+    t: Annotated[FakeClock, Depends(clock)],
 ) -> None:
     await _assert_expiry_at(30.001, None, c, t)
 
@@ -84,23 +85,27 @@ async def _assert_ttl_respected(key: str, ttl: float, t: FakeClock) -> None:
 
 
 # The four combinations of key and ttl are spelled out by hand.
-async def test_ttl_is_respected_for_key_a_short_ttl(t: FakeClock = Depends(clock)) -> None:
+async def test_ttl_is_respected_for_key_a_short_ttl(
+    t: Annotated[FakeClock, Depends(clock)],
+) -> None:
     await _assert_ttl_respected("a", 1.0, t)
 
 
-async def test_ttl_is_respected_for_key_b_short_ttl(t: FakeClock = Depends(clock)) -> None:
+async def test_ttl_is_respected_for_key_b_short_ttl(
+    t: Annotated[FakeClock, Depends(clock)],
+) -> None:
     await _assert_ttl_respected("b", 1.0, t)
 
 
-async def test_ttl_is_respected_for_key_a_long_ttl(t: FakeClock = Depends(clock)) -> None:
+async def test_ttl_is_respected_for_key_a_long_ttl(t: Annotated[FakeClock, Depends(clock)]) -> None:
     await _assert_ttl_respected("a", 60.0, t)
 
 
-async def test_ttl_is_respected_for_key_b_long_ttl(t: FakeClock = Depends(clock)) -> None:
+async def test_ttl_is_respected_for_key_b_long_ttl(t: Annotated[FakeClock, Depends(clock)]) -> None:
     await _assert_ttl_respected("b", 60.0, t)
 
 
-async def test_hit_rate(c: TTLCache = Depends(cache)) -> None:
+async def test_hit_rate(c: Annotated[TTLCache, Depends(cache)]) -> None:
     c.put("a", b"1")
     c.get("a")
     c.get("a")
@@ -110,8 +115,8 @@ async def test_hit_rate(c: TTLCache = Depends(cache)) -> None:
 
 
 async def test_stats_can_be_dumped(
-    c: TTLCache = Depends(cache),
-    tmp: Path = Depends(velox.tmp_path),
+    c: Annotated[TTLCache, Depends(cache)],
+    tmp: Annotated[Path, Depends(velox.tmp_path)],
 ) -> None:
     """`tmp_path` is `basetemp/<sanitized-test-id>` — unique by construction, no scan-and-retry."""
     c.put("a", b"1")
@@ -124,7 +129,7 @@ async def test_stats_can_be_dumped(
 
 
 @velox.skip("cache does not evict on size yet (unbounded growth, not an AssertionError)")
-async def test_evicts_when_full(c: TTLCache = Depends(cache)) -> None:
+async def test_evicts_when_full(c: Annotated[TTLCache, Depends(cache)]) -> None:
     for i in range(10_000):
         c.put(f"k{i}", b"v")
 

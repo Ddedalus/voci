@@ -24,9 +24,6 @@ tests/
 uv venv && uv pip install -e ../..
 ```
 
-`pyproject.toml` sets `extend-immutable-calls = ["velox.Depends"]` under
-`[tool.ruff.lint.flake8-bugbear]`, without which ruff's B008 fires on every `Depends(...)` default.
-
 ## Commands
 
 ```bash

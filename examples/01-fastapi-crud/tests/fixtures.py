@@ -13,21 +13,22 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-
-import velox
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from velox import Depends
-from velox import fastapi as velox_fastapi
+from typing import Annotated
 
 from app.db import get_session
 from app.main import app
 from app.models import User
 from app.settings import Settings
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+import velox
 
 # Engine construction and the transaction-per-test dance live next door, in `tests/database.py`:
 # that part is SQLAlchemy's business rather than velox's.
 from tests import database
+from velox import Depends
+from velox import fastapi as velox_fastapi
 
 # --------------------------------------------------------------------------------------
 # Database
@@ -36,7 +37,7 @@ from tests import database
 
 @velox.fixture(scope="session")
 async def engine(
-    tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory),
+    tmp: Annotated[velox.TmpPathFactory, Depends(velox.tmp_path_factory)],
 ) -> AsyncIterator[AsyncEngine]:
     """One engine for the entire run, shared by every concurrent test.
 
@@ -48,7 +49,7 @@ async def engine(
 
 
 @velox.fixture()
-async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
+async def session(engine: Annotated[AsyncEngine, Depends(engine)]) -> AsyncIterator[AsyncSession]:
     """A real session inside a transaction that is always rolled back.
 
     Every test sees the real schema and none of its neighbours' writes, which is what makes
@@ -70,8 +71,8 @@ def settings() -> Settings:
 
 @velox.fixture()
 async def api_client(
-    session: AsyncSession = Depends(session),
-    settings: Settings = Depends(settings),
+    session: Annotated[AsyncSession, Depends(session)],
+    settings: Annotated[Settings, Depends(settings)],
 ) -> AsyncIterator[AsyncClient]:
     """An HTTP client speaking to `app`, the module-level singleton from `app/main.py`.
 
@@ -100,7 +101,7 @@ async def api_client(
 
 
 @velox.fixture()
-async def alice(session: AsyncSession = Depends(session)) -> User:
+async def alice(session: Annotated[AsyncSession, Depends(session)]) -> User:
     """A user who exists, for tests that need one to.
 
     A plain function rather than a generator, because the rollback in `session` is the teardown.

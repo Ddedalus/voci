@@ -56,7 +56,7 @@ tests/
 ```
 
 A fixture is a function decorated with `@velox.fixture()`. A test — or another fixture — asks for
-one by putting `Depends(that_function)` in a parameter default:
+one by naming `Depends(that_function)` in a parameter's `Annotated[...]` metadata:
 
 ```python
 # tests/fixtures.py
@@ -69,22 +69,20 @@ def settings() -> Settings:
 
 
 # tests/test_delivery.py
+from typing import Annotated
+
 from velox import Depends
 
 from tests.fixtures import settings
 
 
-async def test_endpoint_is_versioned(config: Settings = Depends(settings)) -> None:
+async def test_endpoint_is_versioned(config: Annotated[Settings, Depends(settings)]) -> None:
     assert config.endpoint.endswith("/v1")
 ```
 
 Because the fixture arrives as an imported name rather than a string, "go to definition" lands on
 it, renames are safe, and a misspelling is an `ImportError` at collection time.
 
-One configuration note before you write much: ruff's `B008` flags a call in a parameter default,
-which is exactly the injection syntax above. Whitelist it once, in `pyproject.toml`:
-
-```toml
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends"]
-```
+`Depends(that_function)` also works in a parameter's default — `config: Settings =
+Depends(settings)` — which is shorter to write. [Fixtures](../reference/fixtures.md#where-the-injection-is-declared)
+covers what that form costs you, and why `Annotated` is the one this guide teaches.

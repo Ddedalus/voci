@@ -18,9 +18,7 @@ import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import ModuleType
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from ledger import flags
 from ledger.migrations import LATEST, migrate
@@ -28,18 +26,21 @@ from ledger.receiver import WEBHOOK_PORT, Receiver
 from ledger.service import LedgerService
 from ledger.store import Store
 
+import velox
+from velox import Depends
+
 # --------------------------------------------------------------------------------------
 # The concurrent path: no tokens at all
 # --------------------------------------------------------------------------------------
 
 
 @velox.fixture(scope="session")
-def app_db(tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory)) -> Path:
+def app_db(tmp: Annotated[velox.TmpPathFactory, Depends(velox.tmp_path_factory)]) -> Path:
     return tmp.mktemp("app-db") / "ledger.sqlite"
 
 
 @velox.fixture(scope="session")
-async def migrated_store(path: Path = Depends(app_db)) -> AsyncIterator[Store]:
+async def migrated_store(path: Annotated[Path, Depends(app_db)]) -> AsyncIterator[Store]:
     """Built once for the whole run, under a single-flight guard.
 
     Thirty-two tests demanding this at the same instant produce exactly one migration: the first
@@ -76,7 +77,7 @@ async def migrated_store(path: Path = Depends(app_db)) -> AsyncIterator[Store]:
 
 
 @velox.fixture()
-def account(info: velox.TestInfo = Depends(velox.test_info)) -> str:
+def account(info: Annotated[velox.TestInfo, Depends(velox.test_info)]) -> str:
     """A per-test account namespace derived from the test id.
 
     This is the fixture that does the real work in this example. Isolating tests by *data* rather
@@ -87,7 +88,7 @@ def account(info: velox.TestInfo = Depends(velox.test_info)) -> str:
 
 
 @velox.fixture()
-async def ledger(store: Store = Depends(migrated_store)) -> LedgerService:
+async def ledger(store: Annotated[Store, Depends(migrated_store)]) -> LedgerService:
     return LedgerService(store)
 
 
@@ -98,7 +99,7 @@ async def ledger(store: Store = Depends(migrated_store)) -> LedgerService:
 
 @velox.fixture(exclusive=True)
 async def migration_db(
-    tmp: Path = Depends(velox.tmp_path),
+    tmp: Annotated[Path, Depends(velox.tmp_path)],
 ) -> AsyncIterator[sqlite3.Connection]:
     """A database the migration tests are allowed to destroy.
 

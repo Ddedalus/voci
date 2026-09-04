@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from types import ModuleType
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from ledger.service import LedgerService
 from tests.fixtures import account, feature_flags, ledger
+
+import velox
+from velox import Depends
 
 # --------------------------------------------------------------------------------------
 # @velox.solo — for state with no per-task view
@@ -22,9 +23,9 @@ from tests.fixtures import account, feature_flags, ledger
     "depends on strict_transfers staying off"
 )
 async def test_strict_transfers_rejects_overdraft(
-    flags: ModuleType = Depends(feature_flags),
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    flags: Annotated[ModuleType, Depends(feature_flags)],
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     """Nothing is mocked here — the reason for `@velox.solo` is a module-level dict read at call
     time, and no mocking library would change that.
@@ -42,7 +43,7 @@ async def test_strict_transfers_rejects_overdraft(
 
 @velox.solo
 async def test_audit_flag_is_restored_afterwards(
-    flags: ModuleType = Depends(feature_flags),
+    flags: Annotated[ModuleType, Depends(feature_flags)],
 ) -> None:
     """`feature_flags` snapshots and restores, so the mutation is reversible.
 
@@ -60,8 +61,8 @@ async def test_audit_flag_is_restored_afterwards(
 
 
 async def test_blocking_call_stalls_the_loop(
-    svc: LedgerService = Depends(ledger),
-    acct: str = Depends(account),
+    svc: Annotated[LedgerService, Depends(ledger)],
+    acct: Annotated[str, Depends(account)],
 ) -> None:
     """`balance_blocking` is a plain synchronous method that, called directly from a coroutine,
     runs on the event loop thread: every other in-flight test is frozen for as long as sqlite is

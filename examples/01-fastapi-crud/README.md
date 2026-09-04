@@ -24,9 +24,9 @@ uv sync
 
 The database is SQLite, so there is no server to start; `tests/database.py::url_for` is where a
 suite that has one would point at Postgres. `pyproject.toml` sets
-`extend-immutable-calls = ["velox.Depends"]`
-under `[tool.ruff.lint.flake8-bugbear]`, without which ruff's B008 fires on every `Depends(...)`
-default.
+`extend-immutable-calls = ["fastapi.Depends"]` under `[tool.ruff.lint.flake8-bugbear]`, without
+which ruff's B008 fires on every route in `app/main.py` — the test suite injects via
+`Annotated[...]` metadata, which isn't a default and never trips B008.
 
 ## Commands
 

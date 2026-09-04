@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from relay.client import DeliveryFailed, Relay, backoff_schedule
 from relay.transport import FakeTransport, Response
@@ -18,10 +16,13 @@ from tests.fixtures import (
     transport,
 )
 
+import velox
+from velox import Depends
+
 
 async def test_successful_delivery(
-    r: Relay = Depends(relay),
-    t: FakeTransport = Depends(transport),
+    r: Annotated[Relay, Depends(relay)],
+    t: Annotated[FakeTransport, Depends(transport)],
 ) -> None:
     response = await r.deliver("https://hooks.test/v1", b'{"event": "ping"}')
 
@@ -30,8 +31,8 @@ async def test_successful_delivery(
 
 
 async def test_retries_until_success(
-    r: Relay = Depends(flaky_relay),
-    t: FakeTransport = Depends(flaky_transport),
+    r: Annotated[Relay, Depends(flaky_relay)],
+    t: Annotated[FakeTransport, Depends(flaky_transport)],
 ) -> None:
     """`flaky_relay` (`tests/fixtures.py`) swaps the transport for this test only.
 
@@ -47,8 +48,8 @@ async def test_retries_until_success(
 
 
 async def test_gives_up_after_configured_retries(
-    r: Relay = Depends(dead_relay),
-    t: FakeTransport = Depends(dead_transport),
+    r: Annotated[Relay, Depends(dead_relay)],
+    t: Annotated[FakeTransport, Depends(dead_transport)],
 ) -> None:
     with velox.raises(DeliveryFailed, match="failed after 3 attempts"):
         await r.deliver("https://hooks.test/v1", b"doomed")
@@ -67,44 +68,44 @@ async def _assert_not_retried(status: int, r: Relay, t: FakeTransport) -> None:
 
 # Each status is its own test, sharing `_assert_not_retried` above.
 async def test_200_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(200, r, t)
 
 
 async def test_201_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(201, r, t)
 
 
 async def test_204_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(204, r, t)
 
 
 async def test_400_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(400, r, t)
 
 
 async def test_404_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(404, r, t)
 
 
 async def test_422_is_never_retried(
-    r: Relay = Depends(relay), t: FakeTransport = Depends(transport)
+    r: Annotated[Relay, Depends(relay)], t: Annotated[FakeTransport, Depends(transport)]
 ) -> None:
     await _assert_not_retried(422, r, t)
 
 
 async def test_retries_are_logged(
-    r: Relay = Depends(flaky_relay),
-    logs: velox.LogRecords = Depends(velox.log_records),
+    r: Annotated[Relay, Depends(flaky_relay)],
+    logs: Annotated[velox.LogRecords, Depends(velox.log_records)],
 ) -> None:
     """Log records are captured per test via a ContextVar, not by swapping a global handler.
 
@@ -124,8 +125,8 @@ async def test_retries_are_logged(
 
 @velox.timeout(5)
 async def test_concurrent_delivery_does_not_serialise(
-    r: Relay = Depends(relay),
-    t: FakeTransport = Depends(transport),
+    r: Annotated[Relay, Depends(relay)],
+    t: Annotated[FakeTransport, Depends(transport)],
 ) -> None:
     """Sixteen deliveries with 50ms of latency each finish in well under their serial cost.
 

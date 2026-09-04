@@ -30,6 +30,7 @@ target-version = "py313"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.flake8-bugbear]
-# `Depends(...)` in a parameter default is the injection syntax, for velox as for FastAPI, and
-# B008 fires on every test without this.
-extend-immutable-calls = ["velox.Depends", "fastapi.Depends"]
+# `Depends(...)` in a parameter default is FastAPI's injection syntax, used by `app/`, and B008
+# fires on every route without this. The test suite injects via `Annotated[...]` metadata instead,
+# which isn't a default and never trips B008.
+extend-immutable-calls = ["fastapi.Depends"]

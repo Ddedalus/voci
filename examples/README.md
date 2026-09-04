@@ -29,11 +29,6 @@ uv venv && uv pip install -e ../..
 velox
 ```
 
-Every example's `pyproject.toml` sets
-
-```toml
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends"]
-```
-
-Without it, ruff's B008 fires on every test that takes a `Depends(...)` default.
+Each test injects via `Annotated[T, Depends(fixture)]` metadata, not a default, so none of these
+suites need ruff's `B008` bugbear exemption for `velox.Depends` — only 01's FastAPI application
+code, which still takes `fastapi.Depends()` as a default the way FastAPI itself does.

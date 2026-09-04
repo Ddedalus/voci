@@ -16,6 +16,3 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends"]

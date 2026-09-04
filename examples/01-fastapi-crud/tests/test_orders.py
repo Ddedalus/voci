@@ -5,23 +5,24 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
-
-import velox
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-from velox import Depends
-from velox import fastapi as velox_fastapi
+from typing import Annotated
 
 from app.db import get_session
 from app.main import app
 from app.models import User
 from app.settings import Settings
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from tests.fixtures import PaymentSandbox, alice, api_client, payment_sandbox, session
+
+import velox
+from velox import Depends
+from velox import fastapi as velox_fastapi
 
 
 async def test_create_order(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     response = await client.post(f"/users/{user.id}/orders", json={"total_cents": 1250})
 
@@ -35,29 +36,29 @@ async def _assert_order_rejected(client: AsyncClient, user: User, total_cents: i
 
 
 async def test_create_order_rejects_zero_total(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     await _assert_order_rejected(client, user, 0)
 
 
 async def test_create_order_rejects_negative_total(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     await _assert_order_rejected(client, user, -1)
 
 
 async def test_create_order_rejects_very_negative_total(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     await _assert_order_rejected(client, user, -9999)
 
 
 async def test_list_orders_filters_by_minimum(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     for total in (500, 1500, 2500):
         await client.post(f"/users/{user.id}/orders", json={"total_cents": total})
@@ -79,8 +80,8 @@ def premium_settings() -> Settings:
 
 @velox.fixture()
 async def premium_client(
-    session: AsyncSession = Depends(session),
-    settings: Settings = Depends(premium_settings),
+    session: Annotated[AsyncSession, Depends(session)],
+    settings: Annotated[Settings, Depends(premium_settings)],
 ) -> AsyncIterator[AsyncClient]:
     """`api_client`, rebuilt with `premium_settings` in place of the default.
 
@@ -97,7 +98,7 @@ async def premium_client(
 
 
 async def test_premium_signup_grants_credit(
-    client: AsyncClient = Depends(premium_client),
+    client: Annotated[AsyncClient, Depends(premium_client)],
 ) -> None:
     response = await client.post("/users", json={"email": "frank@example.com"})
 
@@ -106,8 +107,8 @@ async def test_premium_signup_grants_credit(
 
 
 async def test_order_limit_is_enforced(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(premium_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(premium_client)],
 ) -> None:
     """The same `premium_client` fixture, reused. Fixtures are values."""
     url = f"/users/{user.id}/orders"
@@ -135,8 +136,8 @@ def test_settings_reject_a_non_numeric_bonus() -> None:
 
 
 async def test_order_totals_convert_to_currency(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 1999})
     orders = (await client.get(f"/users/{user.id}/orders")).json()
@@ -145,9 +146,9 @@ async def test_order_totals_convert_to_currency(
 
 
 async def test_duplicate_email_is_logged(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
-    logs: velox.LogRecords = Depends(velox.log_records),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
+    logs: Annotated[velox.LogRecords, Depends(velox.log_records)],
 ) -> None:
     """Log records captured for this test alone.
 
@@ -162,10 +163,10 @@ async def test_duplicate_email_is_logged(
 
 
 async def test_export_orders_to_disk(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
-    tmp: Path = Depends(velox.tmp_path),
-    info: velox.TestInfo = Depends(velox.test_info),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
+    tmp: Annotated[Path, Depends(velox.tmp_path)],
+    info: Annotated[velox.TestInfo, Depends(velox.test_info)],
 ) -> None:
     """`tmp_path` is unique by construction: `basetemp/<sanitized-test-id>`.
 
@@ -188,9 +189,9 @@ async def test_export_orders_to_disk(
 
 
 async def test_order_charges_the_sandbox(
-    user: User = Depends(alice),
-    client: AsyncClient = Depends(api_client),
-    sandbox: PaymentSandbox = Depends(payment_sandbox),
+    user: Annotated[User, Depends(alice)],
+    client: Annotated[AsyncClient, Depends(api_client)],
+    sandbox: Annotated[PaymentSandbox, Depends(payment_sandbox)],
 ) -> None:
     """A test that inherits the `payments-sandbox` token from the fixture.
 
@@ -206,7 +207,7 @@ async def test_order_charges_the_sandbox(
 
 
 async def test_refund_releases_the_sandbox(
-    sandbox: PaymentSandbox = Depends(payment_sandbox),
+    sandbox: Annotated[PaymentSandbox, Depends(payment_sandbox)],
 ) -> None:
     await sandbox.charge(100)
     await sandbox.charge(200)

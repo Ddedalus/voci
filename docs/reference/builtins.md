@@ -1,6 +1,6 @@
 # Built-in fixtures
 
-velox ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `Depends(velox.tmp_path)`.
+velox ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `tmp: Annotated[Path, Depends(velox.tmp_path)]`.
 
 ## Temporary directories
 

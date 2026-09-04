@@ -14,6 +14,8 @@ rewriter, so `assert a == b` still prints a real diff.
 
 ```python
 # tests/fixtures.py
+from typing import Annotated
+
 import velox
 from velox import Depends
 
@@ -26,7 +28,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 
 @velox.fixture()
-async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
+async def session(engine: Annotated[AsyncEngine, Depends(engine)]) -> AsyncIterator[AsyncSession]:
     """A transaction per test, always rolled back — so tests share one engine safely."""
     async with engine.connect() as conn:
         transaction = await conn.begin()
@@ -35,12 +37,14 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
 
 
 # tests/test_users.py
+from typing import Annotated
+
 from velox import Depends
 
 from tests.fixtures import session
 
 
-async def test_create_user(db: AsyncSession = Depends(session)) -> None:
+async def test_create_user(db: Annotated[AsyncSession, Depends(session)]) -> None:
     db.add(User(email="alice@example.com"))
     await db.flush()
 

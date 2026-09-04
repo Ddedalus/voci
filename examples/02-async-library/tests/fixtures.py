@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-
-import velox
-from velox import Depends
+from typing import Annotated
 
 from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
 from relay.settings import Settings
 from relay.transport import FakeTransport, Response
+
+import velox
+from velox import Depends
 
 
 @velox.fixture()
@@ -42,8 +43,8 @@ def dead_transport() -> FakeTransport:
 
 @velox.fixture()
 def relay(
-    transport: FakeTransport = Depends(transport),
-    settings: Settings = Depends(settings),
+    transport: Annotated[FakeTransport, Depends(transport)],
+    settings: Annotated[Settings, Depends(settings)],
 ) -> Relay:
     """A relay with a very small delay so retry tests stay fast.
 
@@ -55,8 +56,8 @@ def relay(
 
 @velox.fixture()
 def flaky_relay(
-    transport: FakeTransport = Depends(flaky_transport),
-    settings: Settings = Depends(settings),
+    transport: Annotated[FakeTransport, Depends(flaky_transport)],
+    settings: Annotated[Settings, Depends(settings)],
 ) -> Relay:
     """`relay`, rebuilt with `flaky_transport` in place of `transport`.
 
@@ -67,8 +68,8 @@ def flaky_relay(
 
 @velox.fixture()
 def dead_relay(
-    transport: FakeTransport = Depends(dead_transport),
-    settings: Settings = Depends(settings),
+    transport: Annotated[FakeTransport, Depends(dead_transport)],
+    settings: Annotated[Settings, Depends(settings)],
 ) -> Relay:
     """`relay`, rebuilt with `dead_transport` in place of `transport`. See `flaky_relay`."""
     return Relay(transport, retries=settings.retries, base_delay=0.001)
@@ -81,8 +82,8 @@ def clock() -> FakeClock:
 
 @velox.fixture()
 def cache(
-    clock: FakeClock = Depends(clock),
-    settings: Settings = Depends(settings),
+    clock: Annotated[FakeClock, Depends(clock)],
+    settings: Annotated[Settings, Depends(settings)],
 ) -> TTLCache:
     return TTLCache(ttl=settings.cache_ttl, clock=clock)
 

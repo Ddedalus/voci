@@ -1,7 +1,7 @@
 # Fixtures
 
 A fixture is a function decorated with `@velox.fixture()`.
-A test or another fixture can request an instance of such fixture by naming `Depends(that_function)` on a parameter — in its default, or in its `Annotated[...]` metadata.
+A test or another fixture can request an instance of such fixture by naming `Depends(that_function)` on a parameter — in its `Annotated[...]` metadata, or in its default.
 
 The fixture `scope` decides how widely one instance is shared, from a fresh instance per `Depends` up to one for the whole suite.
 
@@ -17,16 +17,14 @@ You can auto-use fixtures via `velox.use`, similar to how a dependency can be de
 
 ## Where the injection is declared
 
-A parameter declares its injection in its default or in its `Annotated[...]` metadata:
+A parameter declares its injection in its `Annotated[...]` metadata, which is the form velox
+teaches and generates:
 
 ```python
 async def test_balance(db: Annotated[Session, Depends(db_fx)]) -> None: ...
-
-
-async def test_balance(db: Session = Depends(db_fx)) -> None: ...
 ```
 
-The two run identically. Declaring one parameter both ways is an error, naming the parameter, even
+Declaring one parameter both ways — metadata and default — is an error, naming the parameter, even
 when both name the same fixture.
 
 In metadata the parameter takes no default, so an injected parameter can precede a parameter that
@@ -48,6 +46,26 @@ either — a type imported under `if TYPE_CHECKING:` is a fine thing to inject a
 What velox does evaluate, it evaluates in the module's globals, which is where the fixture named
 in `Depends(...)` and any alias carrying a marker have to be reachable: a fixture held in a local
 variable is not, and velox says so at collection, naming the parameter.
+
+### The short form
+
+A parameter can declare the same injection in its default instead:
+
+```python
+async def test_balance(db: Session = Depends(db_fx)) -> None: ...
+```
+
+The two run identically, and this one is shorter to write. Its cost is in what a type checker does
+with it when the annotation is dropped along with the default — see
+[Typing an injected parameter](#typing-an-injected-parameter) below — and in ruff's `B008`, which
+flags a call in a parameter default and has to be told this one is fine:
+
+```toml
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["velox.Depends"]
+```
+
+`Annotated` metadata is not a default, so it never trips `B008` and needs no such entry.
 
 ## Typing an injected parameter
 
