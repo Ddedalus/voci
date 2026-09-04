@@ -214,13 +214,23 @@ def test_a_subscripted_alias_carries_the_marker() -> None:
 
 
 def test_an_alias_wrapped_in_annotated_carries_it() -> None:
-    """`Annotated[AlphaDep, ...]` flattens into one object holding both the alias's marker and
-    the outer metadata, so the marker survives being annotated a second time."""
+    """A marker survives being annotated a second time. `typing` flattens the assignment form
+    into one object at construction and leaves the `type` statement and the subscripted alias
+    nested, so the type half is walked rather than trusted to arrive flat."""
 
-    def probe(db: Annotated[AlphaDep, "documentation"]) -> int:
+    def assigned(db: Annotated[AlphaDep, "documentation"]) -> int:
         return db
 
-    assert plan_of(probe) == (Injection(param="db", source=alpha, keyword_only=False),)
+    def statement(db: Annotated[Alpha, "documentation"]) -> int:
+        return db
+
+    def subscripted(db: Annotated[AlphaRepo[int], "documentation"]) -> int:
+        return db
+
+    expected = (Injection(param="db", source=alpha, keyword_only=False),)
+    assert plan_of(assigned) == expected
+    assert plan_of(statement) == expected
+    assert plan_of(subscripted) == expected
 
 
 def test_an_alias_imported_from_another_module_carries_it(deps_module: ModuleType) -> None:

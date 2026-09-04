@@ -282,15 +282,18 @@ def _annotations_of(func: Callable[..., Any]) -> Mapping[str, Any]:
     return getattr(func, "__annotations__", None) or {}
 
 
-def _markers_in_object(annotation: object) -> list[Dependency[Any]]:
+def _markers_in_object(annotation: object, depth: int = 0) -> list[Dependency[Any]]:
     """The `Dependency` markers in an annotation that is already an object.
 
-    An alias is followed to its body first, a *subscripted* one included: `typing` leaves
-    `Repo[int]`, for a `type Repo[T] = Annotated[T, Depends(repo_fx)]`, as the alias applied to
-    its argument, so the metadata is reachable only by unwrapping it deliberately —
-    `get_type_hints` does not do it either. Substituting the parameter cannot change what the
-    metadata holds, so the markers are read off the alias body unsubstituted. Bounded rather than
-    a `while`: `type A = A` hands back the alias object itself, forever.
+    An alias is followed to its body, a *subscripted* one included: `typing` leaves `Repo[int]`,
+    for a `type Repo[T] = Annotated[T, Depends(repo_fx)]`, as the alias applied to its argument,
+    so the metadata is reachable only by unwrapping it deliberately — `get_type_hints` does not do
+    it either. Substituting the parameter cannot change what the metadata holds, so the markers
+    are read off the alias body unsubstituted.
+
+    The type half is followed too, since `Annotated[Db, "documentation"]` holds its marker there
+    whenever `Db` is an alias `typing` had nothing to flatten at construction. Both walks are
+    bounded rather than a `while`: `type A = A` hands back the alias object itself, forever.
     """
     for _ in range(_MAX_ALIAS_HOPS):
         try:
@@ -303,9 +306,13 @@ def _markers_in_object(annotation: object) -> list[Dependency[Any]]:
     try:
         if get_origin(annotation) is not Annotated:
             return []
-        return [m for m in get_args(annotation)[1:] if isinstance(m, Dependency)]
+        head, *metadata = get_args(annotation)
     except Exception:  # never let an exotic annotation object break collection
         return []
+    markers = [m for m in metadata if isinstance(m, Dependency)]
+    if depth >= _MAX_ALIAS_HOPS:
+        return markers
+    return _markers_in_object(head, depth + 1) + markers
 
 
 def _markers_in_source(

@@ -322,9 +322,11 @@ Two shapes did not work, and both are closed:
   the metadata is reachable only by following `__origin__.__value__` deliberately. Which settles
   it as never having been a parse-versus-evaluate question. Both paths now follow the alias,
   unsubstituted, since substituting a type parameter cannot change what the metadata holds.
-- **An alias in the type half of an `Annotated`** — `Annotated[DbDep, "documentation"]` — was
-  found only when the annotation was an object, because `typing` flattens the two into one on
-  construction. The source path resolves a name in that position now, so the two agree.
+- **An alias in the type half of an `Annotated`** — `Annotated[Db, "documentation"]` — was found
+  only where `typing` had flattened the two into one at construction, which it does for the
+  assignment form and not for a `type` statement or a subscripted alias. Both paths walk the type
+  half now: the source path resolves a name there, and the object path recurses into
+  `get_args(...)[0]` rather than trusting the annotation to arrive flat.
 
 **Evaluating the annotation instead was reconsidered here and rejected.** In a module that does
 not stringify its annotations, the object path *is* what evaluation yields — it reads the same
