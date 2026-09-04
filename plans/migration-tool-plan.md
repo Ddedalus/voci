@@ -45,19 +45,53 @@ tolerable for one conversion each; it is not tolerable for iterating on a codege
 to reconvert the same suite repeatedly while comparing against an untouched pytest baseline. Every
 task from here on assumes it exists.
 
-- [ ] **5. Decide the workspace's shape.** Candidates: `convert` grows a non-destructive `--out
-  DIR` mode that mirrors the suite into a fresh tree instead of rewriting in place, replacing the
-  ad hoc `cp -r` step; or velox-migrate grows a `workspace` subcommand that materializes
-  `.velox-migrate/pytest/` (pristine) and `.velox-migrate/velox/` (regenerated from the pristine
-  copy on every `convert` run) and points `extract`/`audit`/`convert`/`verify` at them by default.
-  Decide against the friction actually hit so far rather than in the abstract — `verify` already
-  takes two tree arguments, so the workspace may be mostly a matter of managing those two paths
-  rather than new machinery. *Exit:* a decision recorded here, no code.
+**Decided:** one plain copied directory, not a git worktree — a worktree drags in a second venv and
+a second typecheck setup, exactly the "external setup" tax nobody migrating a suite signed up for.
+The directory carries the suite through two lifetimes: pytest owns it up to the moment `convert
+--write` runs, velox owns it after. Side-by-side comparison and repeat conversion both come from a
+tool-managed backup taken at that ownership boundary, not from keeping two live trees in sync by
+hand.
 
-- [ ] **6. Build it, and adopt it.** Whichever shape task 5 picked. `verify` should default its
-  `--before`/`--after` from the workspace instead of requiring both on every call; `just migrate`
-  gets a recipe if one doesn't already fit. *Exit:* the marshmallow and `classes_showcase` corpus
-  runs go through the new workflow instead of a manual copy, and the README's "copy the suite out
+**Content lives in `source`, never in `dest`.** `dest` is a pure, disposable derivative of
+`source`'s current tip — cheap to regenerate wholesale, never worth reconciling. That only holds if
+nothing that changes the suite's meaning is ever applied to `dest` alone: prefactors (below) land on
+`source` as ordinary commits, verified green under the suite's own pytest, *before* `scaffold` is
+ever run. The one thing `dest` is allowed to carry that `source` doesn't is a relocation
+fixup — a hardcoded path or anything else that only broke because the suite now lives somewhere
+else. Anything found while poking at `dest` that isn't that goes back into `source` and `dest` gets
+re-scaffolded, never patched in place. This is what keeps the reset/reconvert loop in task 6 sound:
+there is exactly one tree suite content can change in, so there is nothing for two copies to
+disagree about.
+
+A re-scaffold has to happen every time a prefactor lands on `source` — that's the whole point of
+routing prefactors there — so a relocation fixup a human re-does by hand on every `scaffold` call is
+not a one-time cost, it is redone once per prefactor. Rather than build a patch-capture-and-apply
+mechanism, this reuses `source`'s own git, which already has to be there for prefactors to land as
+ordinary commits. Relocation fixups are commits on a small branch, `velox-migrate/relocation`;
+`scaffold` rebases that branch onto `source`'s current tip and materializes the rebased tree into
+`dest` as a plain export (`git archive`/`checkout-index`, not a worktree — `dest` stays a plain
+directory as already decided, git is only the merge engine here). A prefactor commit that touches
+the same lines as a relocation fixup surfaces as an ordinary rebase conflict, resolved once with
+git's own tooling, not a bespoke "patch failed to apply" path.
+
+- [ ] **5. `scaffold`, the relocation branch, and the baseline snapshot.** `velox-migrate scaffold
+  <source> [dest]` rebases `velox-migrate/relocation` onto `source`'s tip (creating the branch
+  empty, off the tip, the first time) and exports the result into `dest` — handles suites that live
+  in a read-only submodule, same as marshmallow needed by hand (migration-findings.md). The user
+  runs pytest there and fixes what's still broken by committing directly to the relocation branch
+  (`dest` tracks it) until it's green. `convert --write` snapshots `dest` into
+  `.velox-migrate/baseline/` (a plain copy) and records pytest outcomes before it overwrites
+  anything, closing today's footgun where a forgotten `--record` loses the baseline for good.
+  *Exit:* landing a second prefactor on `source` and re-running `scaffold` reproduces a green `dest`
+  with no hand-editing when the branches don't conflict, and a real conflict when they do. Running
+  `--write` twice in a row without touching `dest` in between still leaves a usable baseline both
+  times.
+
+- [ ] **6. `convert --reset`, and adoption.** Restores `dest` from `.velox-migrate/baseline/`, so
+  reconverting after a codegen tweak is `--reset` then `convert --write` again — no re-copy, no
+  re-fixing paths, since the baseline already has them. `verify` reads the recorded baseline instead
+  of requiring a hand-kept `--before` tree. *Exit:* the marshmallow and `classes_showcase` corpus
+  runs go through `scaffold`/`--reset` instead of a manual copy, and the README's "copy the suite out
   of `oss/` first" instruction is replaced by it.
 
 ### Prefactor tier: unwinding autouse global-state fixtures
@@ -67,6 +101,12 @@ httpx2 is 88% serial on one autouse `clean_environ`; migration-findings.md alrea
 Three real suites hitting the identical pattern is what makes this a tier to build rather than a
 one-off unwind, per the three-tier sketch below (prefactor codemod → prefactor skill →
 postfactor). None of `prefactor/` exists yet.
+
+Both the codemod and the skill run against `source` — the suite's real repository, on its own
+branch, verified by its own pytest — never against a `scaffold`ed `dest`. That is what the
+coexistence workspace section above means by content living in exactly one tree: a prefactor is a
+suite improvement the user keeps, so it has to land somewhere `scaffold` will pick up automatically
+the next time it runs, not somewhere `--reset` can silently discard.
 
 - [ ] **7. Name the shape and the fix menu from the three real cases.** Lay httpx2's, flask's, and
   rich's sites side by side and decide, per site, which answer it takes — `[tool.velox] env` for
@@ -92,26 +132,32 @@ postfactor). None of `prefactor/` exists yet.
 
 ### Coverage comparison in `verify`
 
-§11 Q7 punted this to a documented recipe. Formalizing it now: velox's isolated-subprocess coverage
-merging (`velox/_run/coverage.py`) already gives the velox side of the primitive both runners need,
-and it's the confidence signal `verify`'s outcome diff alone doesn't give — two suites can agree on
-every outcome while covering different lines.
+§11 Q7 punted this to a documented recipe. Formalizing it now, scoped to *production* code only —
+migration never touches application sources, only the test tree, so unlike test-file coverage,
+production line numbers survive the rewrite exactly and there is no coordinate-mapping problem to
+solve. Test-file coverage is out of scope on purpose: it would just be re-measuring the rewrite.
+velox's isolated-subprocess coverage merging (`velox/_run/coverage.py`) already gives the velox side
+of the primitive both runners need, and it's the confidence signal `verify`'s outcome diff alone
+doesn't give — two suites can agree on every outcome while exercising different lines of the code
+under test.
 
-- [ ] **10. Decide the comparison's shape.** Line numbers do not survive the LibCST rewrite 1:1
-  (lifted class fixtures, moved fixture modules, rewritten bodies), so "same lines covered" has to
-  be coordinate-independent — e.g. per-source-file coverage percentage, or a mapping back through
-  `convert/edits.py`'s own edit log rather than a second position-tracking mechanism built for this.
-  *Exit:* a design note here, no code.
+- [ ] **10. Decide the comparison's shape.** Same production-source lines covered, before and
+  after — pytest's coverage run scoped to the application package(s), same for velox's, compared
+  file by file. Decide how the scope is named (a `--source` passthrough, config read from the
+  suite's own `pyproject.toml`, or inferred from what the test tree imports) and what "diverged"
+  means: a line the pytest run covered and the velox run didn't, or vice versa. *Exit:* a design
+  note here, no code.
 
 - [ ] **11. Wire coverage into both runner invocations.** `run_pytest`/`run_velox` in
-  `verify/runners.py` gain a coverage-enabled mode, each writing its own data file into the
-  workspace. *Exit:* two coverage data files land in `.velox-migrate/` after `verify --coverage`.
+  `verify/runners.py` gain a coverage-enabled mode, each writing its own data file, scoped to
+  production sources, into the workspace. *Exit:* two coverage data files land in
+  `.velox-migrate/` after `verify --coverage`.
 
-- [ ] **12. Diff and report.** Compare the two files per task 10's design, add a coverage section to
-  `verify-report.md`/`verify.json`, decide whether a divergence fails `verify`'s exit status or is
-  informational only. *Exit:* run against `classes_showcase` (marshmallow's corpus form, the
-  suite with the cleanest baseline) and confirm the numbers agree modulo the five known outcome
-  divergences.
+- [ ] **12. Diff and report.** Compare the two files' per-file production-code coverage, add a
+  coverage section to `verify-report.md`/`verify.json`, decide whether a divergence fails `verify`'s
+  exit status or is informational only. *Exit:* run against `classes_showcase` (marshmallow's corpus
+  form, the suite with the cleanest baseline) and confirm the numbers agree modulo the five known
+  outcome divergences.
 
 ### Resuming Phase 4 proper
 
@@ -148,7 +194,8 @@ every outcome while covering different lines.
 | §11 Q3: specialization budget | Per-override fan-out budget; over budget → loud refusal + pointer to the unwind-override prefactor skill |
 | §11 Q5: propose DI seams? | Report the opportunity (audit) and assist the refactor (skill); `convert` never does it |
 | §11 Q6: is `--concurrency 1` green a tool-enforced gate? | A subcommand (`verify`), strongly recommended in the workflow, not a hard gate — it requires both runners runnable in one env, which is not always true |
-| §11 Q7: coverage verification | Formalized as a `verify` feature (tasks 10–12), superseding the earlier documented-recipe answer |
+| §11 Q7: coverage verification | Formalized as a `verify` feature scoped to production code only (tasks 10–12), superseding the earlier documented-recipe answer |
+| Coexistence workspace shape | One plain copied directory, not a git worktree; ownership passes from pytest to velox at `convert --write`, backed by a tool-managed snapshot rather than two live trees (tasks 5–6) |
 | Codegen platform | LibCST, alone, for audit, rewrite, and move |
 
 # Planned scope
