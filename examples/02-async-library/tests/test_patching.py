@@ -16,14 +16,14 @@ import os
 from typing import Annotated
 from unittest import mock
 
+import velox
+from velox import Depends
+
 from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
 from relay.settings import Settings
 from relay.transport import FakeTransport, Response, Transport
 from tests.fixtures import flaky_relay, flaky_transport, relay, transport
-
-import velox
-from velox import Depends
 
 # ========================================================================================
 # Tier (a) — dependency injection. Fully concurrent. What the docs teach first.

@@ -11,11 +11,11 @@ import json
 from pathlib import Path
 from typing import Annotated
 
-from relay.cache import FakeClock, TTLCache
-from tests.fixtures import cache, clock
-
 import velox
 from velox import Depends
+
+from relay.cache import FakeClock, TTLCache
+from tests.fixtures import cache, clock
 
 
 async def test_hit_before_expiry(

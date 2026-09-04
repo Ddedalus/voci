@@ -8,7 +8,8 @@ property of its source that no test can set after the fact.
 """
 
 import functools
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Iterator
 from types import ModuleType
 from typing import Annotated
 
@@ -36,6 +37,16 @@ def beta() -> int:
 type Alpha = Annotated[int, Depends(alpha)]
 type AlphaHandle = Alpha
 
+#: FastAPI teaches the reusable injection as a plain assignment rather than a `type` statement --
+#: `CommonsDep = Annotated[dict, Depends(common_parameters)]` -- so that spelling is pinned
+#: alongside the PEP 695 one. It is an ordinary module global, which is exactly what makes it
+#: reachable from a stringified annotation.
+AlphaDep = Annotated[int, Depends(alpha)]
+
+#: A subscripted alias is the one shape `typing` does not flatten for velox: `get_type_hints`
+#: hands back `AlphaRepo[int]` itself, so the metadata is reached by unwrapping the alias.
+type AlphaRepo[T] = Annotated[T, Depends(alpha)]
+
 
 def _module(source: str, name: str = "velox_annotated_probe") -> ModuleType:
     """`source` compiled and executed as a real module, so its functions get a real
@@ -44,6 +55,39 @@ def _module(source: str, name: str = "velox_annotated_probe") -> ModuleType:
     module.__dict__["__file__"] = f"<{name}>"
     exec(compile(source, f"<{name}>", "exec"), module.__dict__)
     return module
+
+
+_DEPS = """
+from typing import Annotated
+
+import velox
+from velox import Depends
+
+
+@velox.fixture()
+def db() -> int:
+    return 1
+
+
+DbDep = Annotated[int, Depends(db)]
+
+type DbRepo[T] = Annotated[T, Depends(db)]
+"""
+
+
+@pytest.fixture
+def deps_module() -> Iterator[ModuleType]:
+    """`_DEPS` under a real importable name.
+
+    An alias declared in another file is the shape FastAPI's own docs lead to, and it is only
+    reachable from a consumer's annotation if the module holding it can be imported by name.
+    """
+    module = _module(_DEPS, name="velox_annotated_deps")
+    sys.modules[module.__name__] = module
+    try:
+        yield module
+    finally:
+        del sys.modules[module.__name__]
 
 
 _STRINGIFIED = """
@@ -64,6 +108,10 @@ def db() -> int:
 
 
 type Db = Annotated[int, Depends(db)]
+
+DbDep = Annotated[int, Depends(db)]
+
+type DbRepo[T] = Annotated[T, Depends(db)]
 
 MARKER = Depends(db)
 """
@@ -142,6 +190,59 @@ def test_an_alias_of_an_alias_carries_it_too() -> None:
         return db
 
     assert plan_of(probe) == (Injection(param="db", source=alpha, keyword_only=False),)
+
+
+def test_an_assigned_alias_carries_the_marker() -> None:
+    """`AlphaDep = Annotated[...]`, FastAPI's own spelling: a module global, not a `type`
+    statement, and the annotation is the same flattened object either way."""
+
+    def probe(db: AlphaDep) -> int:
+        return db
+
+    assert plan_of(probe) == (Injection(param="db", source=alpha, keyword_only=False),)
+
+
+def test_a_subscripted_alias_carries_the_marker() -> None:
+    """`typing` leaves `AlphaRepo[int]` as the alias applied to its argument rather than
+    substituting into it, so the metadata is only found by following the alias deliberately.
+    Substitution could not change what that metadata holds."""
+
+    def probe(db: AlphaRepo[int]) -> int:
+        return db
+
+    assert plan_of(probe) == (Injection(param="db", source=alpha, keyword_only=False),)
+
+
+def test_an_alias_wrapped_in_annotated_carries_it() -> None:
+    """A marker survives being annotated a second time. `typing` flattens the assignment form
+    into one object at construction and leaves the `type` statement and the subscripted alias
+    nested, so the type half is walked rather than trusted to arrive flat."""
+
+    def assigned(db: Annotated[AlphaDep, "documentation"]) -> int:
+        return db
+
+    def statement(db: Annotated[Alpha, "documentation"]) -> int:
+        return db
+
+    def subscripted(db: Annotated[AlphaRepo[int], "documentation"]) -> int:
+        return db
+
+    expected = (Injection(param="db", source=alpha, keyword_only=False),)
+    assert plan_of(assigned) == expected
+    assert plan_of(statement) == expected
+    assert plan_of(subscripted) == expected
+
+
+def test_an_alias_imported_from_another_module_carries_it(deps_module: ModuleType) -> None:
+    """Where the reusable alias actually lives in a suite: its own module, imported."""
+    module = _module(
+        "from velox_annotated_deps import DbDep\n\n\ndef probe(db: DbDep) -> int:\n    return db\n",
+        name="velox_annotated_consumer",
+    )
+
+    assert plan_of(module.probe) == (
+        Injection(param="db", source=deps_module.db, keyword_only=False),
+    )
 
 
 def test_a_self_referential_alias_terminates() -> None:
@@ -231,6 +332,67 @@ def test_a_stringified_alias_still_injects() -> None:
     module = _module(_STRINGIFIED + "\n\ndef probe(db: Db) -> int:\n    return db\n")
 
     assert plan_of(module.probe) == (Injection(param="db", source=module.db, keyword_only=False),)
+
+
+def test_a_stringified_assigned_alias_still_injects() -> None:
+    """The FastAPI spelling from a module whose annotations are text: `DbDep` is a dotted name,
+    so it is resolved by dictionary lookup with no parse at all."""
+    module = _module(_STRINGIFIED + "\n\ndef probe(db: DbDep) -> int:\n    return db\n")
+
+    assert plan_of(module.probe) == (Injection(param="db", source=module.db, keyword_only=False),)
+
+
+def test_a_stringified_subscripted_alias_still_injects() -> None:
+    module = _module(_STRINGIFIED + "\n\ndef probe(db: DbRepo[int]) -> int:\n    return db\n")
+
+    assert plan_of(module.probe) == (Injection(param="db", source=module.db, keyword_only=False),)
+
+
+def test_a_stringified_alias_wrapped_in_annotated_still_injects() -> None:
+    """The source path reads an alias in the type half the same way the object path gets it for
+    free from `typing`'s flattening."""
+    module = _module(
+        _STRINGIFIED + '\n\ndef probe(db: Annotated[Db, "documentation"]) -> int:\n    return db\n'
+    )
+
+    assert plan_of(module.probe) == (Injection(param="db", source=module.db, keyword_only=False),)
+
+
+def test_a_stringified_alias_imported_from_another_module_still_injects(
+    deps_module: ModuleType,
+) -> None:
+    """Both ways a consumer can name it: bound by `from ... import`, and reached through the
+    module object. Neither is evaluated -- both are walked by lookup and `getattr`."""
+    module = _module(
+        "from __future__ import annotations\n\n"
+        "import velox_annotated_deps\n"
+        "from velox_annotated_deps import DbDep\n\n\n"
+        "def bound(db: DbDep) -> int:\n    return db\n\n\n"
+        "def dotted(db: velox_annotated_deps.DbDep) -> int:\n    return db\n",
+        name="velox_annotated_consumer",
+    )
+
+    expected = (Injection(param="db", source=deps_module.db, keyword_only=False),)
+    assert plan_of(module.bound) == expected
+    assert plan_of(module.dotted) == expected
+
+
+def test_an_alias_imported_only_for_type_checking_is_not_found() -> None:
+    """The limit of parse-don't-evaluate, and of any other approach: an alias a stringifying
+    module never imports at run time cannot be resolved by anyone -- `get_type_hints` raises on
+    it rather than finding the marker. velox does not inject, and the parameter is then reported
+    as one nothing can supply, which is the loud half of the sharp edge."""
+    module = _module(
+        "from __future__ import annotations\n\n"
+        "from typing import TYPE_CHECKING\n\n"
+        "if TYPE_CHECKING:\n"
+        "    from velox_annotated_deps import DbDep\n\n\n"
+        "def probe(db: DbDep) -> int:\n    return db\n"
+    )
+
+    assert plan_of(module.probe) == ()
+    with pytest.raises(DIError, match="have no default and are not injected"):
+        _check_missing_injections(module.probe, ())
 
 
 def test_a_marker_held_in_a_module_level_name_is_resolved_by_lookup() -> None:

@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated
 
+import velox
+from velox import Depends
+
 from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
 from relay.settings import Settings
 from relay.transport import FakeTransport, Response
-
-import velox
-from velox import Depends
 
 
 @velox.fixture()

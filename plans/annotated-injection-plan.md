@@ -305,6 +305,39 @@ All three suites' tests and lint/format checks pass unchanged after the rewrite.
 `app/main.py` was deliberately left alone for the same reason — nothing in this plan touches
 FastAPI's own injection syntax, only velox's.
 
+## Follow-up — alias shapes
+
+FastAPI teaches the reusable injection as a plain assignment, `CommonsDep = Annotated[dict,
+Depends(common_parameters)]`, not as the `type` statement Phase 1 wrote its tests against. That
+shape already worked, in both paths and across modules: an assignment is an ordinary module
+global, so the whole-annotation dotted-name lookup resolves it exactly as it resolves a
+`TypeAliasType`, whether the consumer binds it with `from deps import DbDep` or reaches it as
+`deps.DbDep`. It is pinned now rather than left to coincidence.
+
+Two shapes did not work, and both are closed:
+
+- **A subscripted generic alias** — `type Repo[T] = Annotated[T, Depends(repo_fx)]`, used as
+  `Repo[Account]` — was found by neither path. `typing` does not substitute into an alias for
+  either of them: `get_type_hints(..., include_extras=True)` hands back `Repo[int]` itself, so
+  the metadata is reachable only by following `__origin__.__value__` deliberately. Which settles
+  it as never having been a parse-versus-evaluate question. Both paths now follow the alias,
+  unsubstituted, since substituting a type parameter cannot change what the metadata holds.
+- **An alias in the type half of an `Annotated`** — `Annotated[Db, "documentation"]` — was found
+  only where `typing` had flattened the two into one at construction, which it does for the
+  assignment form and not for a `type` statement or a subscripted alias. Both paths walk the type
+  half now: the source path resolves a name there, and the object path recurses into
+  `get_args(...)[0]` rather than trusting the annotation to arrive flat.
+
+**Evaluating the annotation instead was reconsidered here and rejected.** In a module that does
+not stringify its annotations, the object path *is* what evaluation yields — it reads the same
+object `get_type_hints` would build — so the switch buys nothing that the source path was not
+already given for free, and costs the `TYPE_CHECKING`-only type that Phase 1's spike measured.
+
+What remains out of reach is an alias a stringifying module imports only under `TYPE_CHECKING`:
+the name does not exist at run time, and no approach can resolve it. The parameter is reported at
+collection as one nothing can supply, which is the loud half of the sharp edge the reference
+already documents for a fixture held in a local variable.
+
 ## Sequencing
 
 Phase 1 has landed, spike included, so the design risk is spent. Phase 3 depends on Phase 2 only

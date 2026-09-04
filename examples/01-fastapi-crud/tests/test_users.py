@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from app.models import User
+import velox
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.fixtures import alice, api_client, session
-
-import velox
 from velox import Depends
+
+from app.models import User
+from tests.fixtures import alice, api_client, session
 
 
 async def test_health(client: Annotated[AsyncClient, Depends(api_client)]) -> None:

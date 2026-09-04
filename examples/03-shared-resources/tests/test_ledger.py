@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from ledger.service import LedgerService
-from tests.fixtures import account, ledger
-
 import velox
 from velox import Depends
+
+from ledger.service import LedgerService
+from tests.fixtures import account, ledger
 
 
 async def test_append_returns_an_id(

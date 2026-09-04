@@ -29,14 +29,24 @@ when both name the same fixture.
 
 In metadata the parameter takes no default, so an injected parameter can precede a parameter that
 has none — one supplied by `@velox.parametrize`, say — and calling the test by hand takes an
-ordinary `Session` rather than a sentinel. An alias carries a marker as well as a signature does:
+ordinary `Session` rather than a sentinel.
+
+An alias carries a marker as well as a signature does, written as a `type` statement or as a plain
+assignment, and it can live in whichever module the suite keeps its fixtures in:
 
 ```python
-type Db = Annotated[Session, Depends(db_fx)]
+# deps.py
+Db = Annotated[Session, Depends(db_fx)]
+
+# test_balance.py
+from deps import Db
 
 
 async def test_balance(db: Db) -> None: ...
 ```
+
+A generic alias carries one too: `type Repo[T] = Annotated[T, Depends(repo_fx)]`, named on a
+parameter as `Repo[Account]`, injects `repo_fx`.
 
 velox parses the annotation rather than evaluating it, reading its source text with `ast` and
 evaluating only the `Depends(...)` calls it finds in metadata. The type half is never evaluated,
@@ -45,7 +55,9 @@ either — a type imported under `if TYPE_CHECKING:` is a fine thing to inject a
 
 What velox does evaluate, it evaluates in the module's globals, which is where the fixture named
 in `Depends(...)` and any alias carrying a marker have to be reachable: a fixture held in a local
-variable is not, and velox says so at collection, naming the parameter.
+variable is not, and velox says so at collection, naming the parameter. An alias imported only
+under `if TYPE_CHECKING:` is out of reach for the same reason, and the parameter naming it is
+reported as one nothing can supply.
 
 ### The short form
 
