@@ -1,39 +1,10 @@
 # Phase 4 Exit Suite Selection: pytest→velox OSS Corpus
 
-Companion to [migration-tool-plan.md](migration-tool-plan.md) § 4, defining the real-world test suites for Phase 4's end-to-end migration verification, prefactor codemods, and postfactor skills.
-
-## Context
-
-Phase 4 closes with "one real OSS suite migrated end-to-end through the full ladder, written up." The suite must be:
-- Large enough to exercise the full pipeline and uncover edge cases
-- Clean enough to convert without excessive refusals
-- Representative of real pytest patterns (conftest graphs, parametrization, hazards)
-- Popular enough that the write-up carries weight
-
-The extraction and audit stages are deterministic; the conversion and prefactor/postfactor phases are where real decisions live. A good exit suite has **rungs in the ladder** — places where `extract → audit` finds refusing constructs, and prefactor or postfactor skills have honest work to do.
+Companion to [migration-tool-plan.md](migration-tool-plan.md) § 4, defining the real-world test suites for Phase 4's end-to-end migration verification.
 
 ## Evaluation Methodology
 
 Scanned ten popular OSS projects across the velox-migrate matrix's refusal/serialization rows:
-
-| Construct | Code | Disposition | Impact |
-|-----------|------|-------------|--------|
-| `request.getfixturevalue(computed)` | VX012 | refused | breaks signature rewrite |
-| `request.addfinalizer(...)` | VX014 | refused | finalizer placement |
-| `request.getfixturevalue` of ambiguous name | VX028 | refused | resolution ambiguity |
-| `indirect` parametrization incompatible with `params=` | VX029 | refused | case list collision |
-| `pytest.raises(E, func, *args)` | VX210 | unsupported | must rewrite to `with` form |
-| `capfd`, `capsysbinary`, `capfdbinary` | VX203 | unsupported | capsys is the velox equivalent |
-| `caplog.text`, `.record_tuples`, `.clear()`, `.handler` | VX206 | unsupported | API mismatch |
-| `tmpdir`, `tmpdir_factory` | VX208 | unsupported | `tmp_path` is the only builtin |
-| `pytest.warns`, `recwarn`, `deprecated_call` | VX216 | unsupported, serializing | warns requires solo execution |
-| `@pytest.mark.filterwarnings` | VX108 | mechanical | `@velox.filterwarnings(...)`, same specs |
-| conftest hooks (`pytest_configure`, `pytest_collection_modifyitems`, …) | VX022 | unsupported | cannot hook into velox collection |
-| monkeypatch | VX401 | hazard, serializing | process-global state mutates under concurrency |
-| `os.environ` writes | VX402 | hazard, serializing | idem |
-| `sys.modules` surgery | VX405 | hazard, serializing | idem |
-
----
 
 ## The Candidates
 
@@ -41,27 +12,14 @@ Scanned ten popular OSS projects across the velox-migrate matrix's refusal/seria
 
 | Metric | Value |
 |--------|-------|
-| Test count | 1188 measured (652 was a count of test functions, not of collected cases) |
+| Test count | 1188 measured |
 | Fixture graph | 19 fixtures / 1 conftest |
 | Plugin dependencies | **none** |
 | Estimated refusals | **none** |
 | Monkeypatch uses | 0 |
 | Hazardous constructs | 0 |
 
-**Strengths:**
-- Zero disqualifying constructs; entire audit should be "mechanical" or "marker".
-- Simple conftest with a real fixture graph: `blog(user)`, `serialized_user(user)`.
-- No pytest hooks, no unittest.TestCase, no xunit setup, no installed plugin fixtures.
-- Only ini setting is `norecursedirs` (VX303, mechanical).
-
-**Why not pick it alone:**
-- Single conftest means Phase 3's override specialization machinery never fires — too clean to be representative.
-- No hazards means the concurrency estimate is simply "run everything in parallel" — valid but not interesting to write up.
-- Missing the ladder: no refusals to prefactor, no postfactor skills to apply.
-
-**Role:** Smoke test for the extractor and audit stages. If marshmallow's audit comes back non-mechanical, the tool has a bug.
-
-**Outcome (migrated):** the audit did come back mechanical and the conversion was still broken — 16 class-scoped fixtures the matrix had no row for. 1183 of 1188 tests pass under velox; see [marshmallow-migration.md](marshmallow-migration.md).
+**Outcome:** [marshmallow-migration.md](marshmallow-migration.md).
 
 ---
 
@@ -183,67 +141,3 @@ like marshmallow, it never fires the specialization machinery.
 
 ### uvicorn
 **Blockers:** pytest-mock (VX219, serializing); 12 `pytest.param(marks=)` sites (VX102); tests that bind real network ports (VX413, hazard). The network binding is the killer — under concurrent execution the tests interfere with each other, making any run result unreliable.
-
----
-
-## Recommended Execution Order
-
-### Phase 4 Staging
-
-1. **marshmallow (smoke test)**
-   - Extract, audit. Expect all mechanical/marker.
-   - If audit shows unexpected refusals, stop and fix the tool.
-   - If clean, proceed to verify stage (once implemented).
-
-   Done — see [marshmallow-migration.md](marshmallow-migration.md). The audit was clean and the
-   conversion was not.
-
-2. **httpx2 (exit suite + write-up)** — flask held this slot until httpx2 was scoped; the numbers
-   above are why it changed hands. Audit done, see [httpx2-audit.md](httpx2-audit.md).
-   - Prefactor (pin `anyio_backend` to asyncio), convert, verify, concurrency triage.
-   - Document the arc: naive conversion = 88% serialized on one autouse `clean_environ` →
-     unwinding it recovers concurrency.
-   - Write up what stays under pytest and why.
-   - Measure throughput before/after; report in the write-up.
-
-3. **flask or rich (optional secondary)**
-   - If httpx2 alone suffices for Phase 4, skip.
-   - flask is the one candidate with override chains and 19 `pytest.raises` call-form sites, so it
-     is what to reach for if the prefactor tier needs a codemod to justify existing.
-
-### Future Extensions (Phase 5+)
-
-- **starlette:** After a tmpdir→tmp_path prefactor codemod is built.
-- **jinja:** If indirect parametrization and params= rewrites need deeper exercise.
-
----
-
-## Setup
-
-Cloned suites are available at:
-```
-/tmp/claude-1000/-home-hubert-velox/b95a1df2-cd69-4010-8bcc-ade717835878/scratchpad/oss/
-```
-
-for local inspection. Re-clone into your own directory for persistence:
-```bash
-for r in flask rich marshmallow; do
-  git clone https://github.com/pallets/$r.git
-done
-```
-
-(Note: flask and jinja are under `pallets/`, marshmallow under `marshmallow-code/`, rich under `Textualize/`.)
-
----
-
-## Verification Checklist
-
-- [ ] marshmallow audit is all mechanical/marker
-- [ ] flask audit identifies all expected VX210 sites
-- [ ] flask autouse monkeypatch is flagged as VX401 serializing
-- [ ] flask VX14/17 refusals (purge_module) are present and sited correctly
-- [ ] Prefactor runs pytest→pytest rules on flask while test suite is green
-- [ ] Conversion produces runnable velox code
-- [ ] `velox --serial` passes (baseline single-threaded run)
-- [ ] `velox` with default concurrency passes (post-prefactor)
-- [ ] Write-up includes: audit findings, prefactor rewrites applied, before/after concurrency, refusals and their causes

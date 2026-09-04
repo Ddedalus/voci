@@ -11,32 +11,9 @@ Ordered by risk retired per unit of work; each phase has a checkable exit.
   specialization within budget, `request` elimination, and `mock.patch` handling all convert across seven
   corpus suites with nothing refused (over-budget chains refuse with correct fan-out); `plan.DEFERRED` is
   empty.
-- **Phase 4 — verify + prefactor codemods + skills.** The outcome-comparison gate, the
-  pytest→pytest rules, then the skills in the order their findings appear in real audits.
-  *Exit: one real OSS suite migrated end-to-end through the full ladder, written up.* Target
-  suites: marshmallow (smoke — expected zero refusals) and httpx2, pydantic's fork of httpx
-  (exit suite). Selection methodology and upstream-httpx numbers are in
-  [oss-refactors-plan.md](oss-refactors-plan.md), where httpx2's row is now measured rather than
-  inherited from httpx — see [httpx2-audit.md](httpx2-audit.md). Sequenced as:
-
-  - [x] **0. Scope httpx2** (spike, no code). Viable, and four times the size the inherited httpx
-    numbers said. It does still run on trio, in a way neither question anticipated: anyio's own
-    `anyio_backend` fixture is parametrized over both backends, so 294 of 1991 cases are the trio
-    half of an async matrix the suite never writes. The fixture graph is simpler than flask's, with
-    no overrides. The spike was not free of code after all — it found four audit defects, all of
-    them a name read without asking who wrote it, and the numbers below are the ones after the fix.
-    See [httpx2-audit.md](httpx2-audit.md).
-  - [x] **1. `verify` subcommand.**
-  - [x] **2. marshmallow: convert + verify + corpus-ify.**
-  - [x] **3. httpx2: audit findings write-up.**
-  - [abandoned] **4. First prefactor codemod(s).** `prefactor/` still does not exist, and step 3's findings do
-    not clearly call for it: httpx2's one prefactor is a suite-level `anyio_backend` fixture
-    returning `"asyncio"`, which is a fixture to write rather than a rule to run.
-  - **5. httpx2: convert + verify.** 
-  - **6. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
-    index, hand-apply `@velox.solo`/`@velox.isolated` at whatever sites fail. 
-  - **7. Write-up.** The exit deliverable: both suites, audit findings, verify results, and
-    httpx2's before/after concurrency.
+- **Phase 4 — apply against real test suites**
+See [httpx2-audit.md](httpx2-audit.md) and [oss-refactors-plan.md](oss-refactors-plan.md)
+- **Phase 6 - skills and prefactors** - to be scoped
 
 
 ## Decisions summary
