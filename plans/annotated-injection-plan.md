@@ -244,7 +244,11 @@ Three things the plan had backwards or did not anticipate:
   happen now that nothing gains a default, and the corpus's `retries` keeps the order it was
   written in. What survives is the reverse: a parameter a body asked for by name is appended to
   the signature and, if the source gave some earlier parameter a default, must move ahead of it.
-  So `_rewrite`'s split stays, with a unit test pinning the shape the corpus no longer produces.
+  So the split stays, as `_ordered`, with unit tests pinning the shapes the corpus does not
+  produce. Two of those the split had no answer for: a defaulted positional-only parameter leaves
+  a positional one without a default nowhere valid to go at either end, so the new parameter goes
+  behind a `*` — velox binds by keyword, so that costs the signature nothing — and keyword-only
+  parameters bind by name in whatever order they are written, so the split never applies to them.
 - **Converting a converted tree wrapped its own annotation a second time.** The rewrite is driven
   by the pytest dump, so it re-injects a parameter that is already injected; `_bare` takes an
   `Annotated[T, Depends(...)]` back down to `T` before wrapping, which is what makes the second
