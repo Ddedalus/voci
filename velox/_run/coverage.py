@@ -60,9 +60,9 @@ def subprocess_env(data_file: Path, *, note: Callable[[str], None]) -> dict[str,
     config = cov.config.copy()
     # A copy of the parent's whole configuration, differing only in where it writes: settings that
     # disagree across the boundary make the child's data unmergeable or wrongly scoped
-    # (plans/rationale.md). Parallel mode because the subprocess is not necessarily the only one
-    # measuring under this environment -- it may spawn processes of its own, and two of them
-    # sharing one data file would race their saves against each other. `harvest` reads back
+    # (plans/rationale/coverage.md). Parallel mode because the subprocess is not necessarily the
+    # only one measuring under this environment -- it may spawn processes of its own, and two of
+    # them sharing one data file would race their saves against each other. `harvest` reads back
     # whatever set of suffixed files that leaves.
     config.data_file = str(data_file)
     config.parallel = True

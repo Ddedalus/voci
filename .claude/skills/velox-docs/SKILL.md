@@ -1,6 +1,6 @@
 ---
 name: velox-docs
-description: Documentation style rules for velox — where each kind of information belongs (README, ROADMAP, plans/rationale.md, docstrings, comments) and how to write a docstring. Use when writing or editing README.md, ROADMAP.md, docs/*.md, module/class/function docstrings, or inline comments in velox/.
+description: Documentation style rules - where each kind of information belongs and how to write - from inline comments to user-facing docs.
 ---
 
 # velox documentation
@@ -13,7 +13,7 @@ Docs are a product surface, not a build log. Readers neither know nor care about
 |---|---|---|
 | `README.md` | What velox is, install, first test, links out | 2 paragraphs + 2 snippets |
 | `ROADMAP.md` | Unbuilt behaviour. **Only place it's described.** | short bullets |
-| `plans/rationale.md` | WHY, keyed to files — decisions a maintainer would else reverse | top decisions only |
+| `plans/rationale/` | WHY, keyed to files — decisions a maintainer would else reverse | top decisions only, one file per module |
 | `docs/*.md` | Feature guides, usage patterns | — |
 | `examples/*/README.md` | What it shows, how to run it | ~40 lines |
 | Module docstring | WHAT it is, its place in the pipeline | ≤10 lines |
@@ -24,7 +24,8 @@ Docs are a product surface, not a build log. Readers neither know nor care about
 ## Rules
 
 - **Never cite `spec/`, `docs/M1-PLAN.md`, or milestone names** (M0/M1/M2, "slice", "session")
-  outside those files. Load-bearing spec content → restate the *conclusion* in `plans/rationale.md`.
+  outside those files. Load-bearing spec content → restate the *conclusion* in `plans/rationale/`
+  (the file for the module it concerns, or `global.md`).
 - **No counterfactuals**: describe what's there, not what it doesn't do, might do later, or was
   rejected. Unbuilt → `ROADMAP.md`, once. Exception: a public API that silently no-ops today must
   say so in one clause pointing at `ROADMAP.md` — don't expand this into a status report.
@@ -33,7 +34,7 @@ Docs are a product surface, not a build log. Readers neither know nor care about
 - **Don't argue with pytest** beyond one neutral README comparison; name upstream behaviour only
   to explain a real constraint on *this* code.
 - **Comments explain why, not what.** Delete ones restating the line below; move >3-line reasoning
-  to `plans/rationale.md` with a pointer.
+  to the module's file in `plans/rationale/` with a pointer.
 - **Prose, not slide decks** — no bold-heading walls, ASCII diagrams, bulleted inventories.
 - **A docstring states what the thing is, nothing else** — not what it doesn't do, what other code
   does, why it was built that way, or its status. If true of any file, delete it.

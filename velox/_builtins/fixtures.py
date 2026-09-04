@@ -354,8 +354,7 @@ def test_info() -> TestInfo:
 # Imported here, at the bottom of the module, not at the top: `capture.py` imports the classes
 # above from this module, creating a genuine import cycle. It resolves cleanly because every name
 # `capture.py` needs is already defined by the time control reaches this line — see
-# plans/rationale.md ("_builtins/fixtures.py / _builtins/capture.py import cycle") for the full
-# shape of it.
+# plans/rationale/builtins-fixtures.md ("import cycle is deliberate") for the full shape of it.
 from velox._builtins import capture as _capture  # noqa: E402
 
 tmp_path = builtin_fixture(tmp_path, provider=_capture.tmp_path_provider)

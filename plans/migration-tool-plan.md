@@ -35,32 +35,98 @@ Exit: httpx2 migrated end to end and written up.
   *Exit:* audit a suite from outside the corpus and outside the ten already scanned; the surprises
   in it land in the unclassified list rather than in the clean count.
 
-- [ ] **5. Unwind the autouse global-state fixture.** The single thing standing between a correct
-  conversion and a suite that is worth converting: httpx2 is 88% serial on `clean_environ`, flask
-  and rich are the same shape, and none of it is a codegen problem. Decide, with httpx2's sites in
-  front of you, which of the answers this takes — `[tool.velox] env` for what every test set
-  identically, a DI seam, `@velox.solo` for the residue — and whether it lands as a deterministic
-  codemod, a skill, or a documented recipe. `prefactor/` does not exist and should not be built
-  speculatively; build the tier only if this rule needs it.
+### Coexistence workspace
+
+Blocks every task below that touches a real suite. `convert --write` rewrites the tree it is given
+in place — the pytest suite is gone the moment it runs — so both real runs so far have needed a
+suite copied out by hand first (marshmallow, see migration-findings.md), and `verify` takes
+`--before`/`--after` as two tree arguments the user is responsible for keeping in sync. That was
+tolerable for one conversion each; it is not tolerable for iterating on a codegen rule, which needs
+to reconvert the same suite repeatedly while comparing against an untouched pytest baseline. Every
+task from here on assumes it exists.
+
+- [ ] **5. Decide the workspace's shape.** Candidates: `convert` grows a non-destructive `--out
+  DIR` mode that mirrors the suite into a fresh tree instead of rewriting in place, replacing the
+  ad hoc `cp -r` step; or velox-migrate grows a `workspace` subcommand that materializes
+  `.velox-migrate/pytest/` (pristine) and `.velox-migrate/velox/` (regenerated from the pristine
+  copy on every `convert` run) and points `extract`/`audit`/`convert`/`verify` at them by default.
+  Decide against the friction actually hit so far rather than in the abstract — `verify` already
+  takes two tree arguments, so the workspace may be mostly a matter of managing those two paths
+  rather than new machinery. *Exit:* a decision recorded here, no code.
+
+- [ ] **6. Build it, and adopt it.** Whichever shape task 5 picked. `verify` should default its
+  `--before`/`--after` from the workspace instead of requiring both on every call; `just migrate`
+  gets a recipe if one doesn't already fit. *Exit:* the marshmallow and `classes_showcase` corpus
+  runs go through the new workflow instead of a manual copy, and the README's "copy the suite out
+  of `oss/` first" instruction is replaced by it.
+
+### Prefactor tier: unwinding autouse global-state fixtures
+
+httpx2 is 88% serial on one autouse `clean_environ`; migration-findings.md already has flask
+(`_standard_os_environ`, 77 monkeypatch sites) and rich (`reset_color_envvars`) at the same shape.
+Three real suites hitting the identical pattern is what makes this a tier to build rather than a
+one-off unwind, per the three-tier sketch below (prefactor codemod → prefactor skill →
+postfactor). None of `prefactor/` exists yet.
+
+- [ ] **7. Name the shape and the fix menu from the three real cases.** Lay httpx2's, flask's, and
+  rich's sites side by side and decide, per site, which answer it takes — `[tool.velox] env` for
+  what every test sets identically, a DI seam for what varies, `@velox.solo` for the residue that
+  is neither. *Exit:* a table (in migration-findings.md, or a new prefactor-findings file it links)
+  mapping every site across the three suites to one of the three answers, so task 8 has a spec
+  instead of a hypothesis.
+
+- [ ] **8. Build the deterministic slice as a prefactor codemod.** Whatever fraction of task 7's
+  table is mechanical — e.g. `monkeypatch.setenv("X", "literal")` inside an autouse fixture
+  becoming a suite-wide `[tool.velox] env` entry — as a pytest→pytest rewrite in `prefactor/`,
+  verified by the suite staying green under pytest before conversion. *Exit:* run against rich (the
+  volume check, smallest of the three) and remeasure its serial share.
+
+- [ ] **9. Build the skill for the judgment slice.** Whatever task 7 decided needs a DI seam or
+  per-site judgment, as the first prefactor skill, driven by `findings.json`. *Exit:* httpx2's
+  `clean_environ` unwound end to end; its projected serial share, re-measured after tasks 8 and 9,
+  is small enough that the before/after concurrency number is worth publishing — this is what was
+  task 5's exit before the unwind grew into its own tier.
 
   httpx2's other prefactor is settled and needs no machinery: a suite-level `anyio_backend`
   returning `"asyncio"`, written by hand, pins the backend matrix and drops the `[trio]` half.
 
-  *Exit:* httpx2's projected serial share, re-measured after the unwind, is small enough that the
-  before/after concurrency number is worth publishing.
+### Coverage comparison in `verify`
 
-- [ ] **6. httpx2: convert + verify.** Re-run the audit first — the recorded counts predate
+§11 Q7 punted this to a documented recipe. Formalizing it now: velox's isolated-subprocess coverage
+merging (`velox/_run/coverage.py`) already gives the velox side of the primitive both runners need,
+and it's the confidence signal `verify`'s outcome diff alone doesn't give — two suites can agree on
+every outcome while covering different lines.
+
+- [ ] **10. Decide the comparison's shape.** Line numbers do not survive the LibCST rewrite 1:1
+  (lifted class fixtures, moved fixture modules, rewritten bodies), so "same lines covered" has to
+  be coordinate-independent — e.g. per-source-file coverage percentage, or a mapping back through
+  `convert/edits.py`'s own edit log rather than a second position-tracking mechanism built for this.
+  *Exit:* a design note here, no code.
+
+- [ ] **11. Wire coverage into both runner invocations.** `run_pytest`/`run_velox` in
+  `verify/runners.py` gain a coverage-enabled mode, each writing its own data file into the
+  workspace. *Exit:* two coverage data files land in `.velox-migrate/` after `verify --coverage`.
+
+- [ ] **12. Diff and report.** Compare the two files per task 10's design, add a coverage section to
+  `verify-report.md`/`verify.json`, decide whether a divergence fails `verify`'s exit status or is
+  informational only. *Exit:* run against `classes_showcase` (marshmallow's corpus form, the
+  suite with the cleanest baseline) and confirm the numbers agree modulo the five known outcome
+  divergences.
+
+### Resuming Phase 4 proper
+
+- [ ] **13. httpx2: convert + verify.** Re-run the audit first — the recorded counts predate
   `@velox.filterwarnings` and `[tool.velox] filterwarnings`. First conversion of a non-synthetic,
   non-corpus suite, so expect codegen bugs the corpus never exercised: real conftest layout, real
   plugin config, a vendored monorepo tree. Get it green under `velox --serial`, comparing against a
-  `verify --record` baseline taken before `convert --write`.
+  `verify --record` baseline and, per task 12, a coverage comparison.
 
-- [ ] **7. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
+- [ ] **14. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
   index, hand-apply `@velox.solo`/`@velox.isolated` where tests fail. Automate only a pattern that
   repeats often enough to pay for a skill.
 
-- [ ] **8. Write-up.** Both suites, audit findings, verify results, and httpx2's before/after
-  concurrency. This is what the phase is for.
+- [ ] **15. Write-up.** Both suites, audit findings, verify results, httpx2's before/after
+  concurrency, and the coverage comparison. This is what the phase is for.
 
 ## Not blocking Phase 4
 
@@ -68,9 +134,6 @@ Exit: httpx2 migrated end to end and written up.
   Phase 3 specialization machinery — the most novel part of the tool, with no prior art behind it —
   has never run against a suite it was not written for. Find one and audit it before trusting the
   budget refusals.
-
-- [ ] **Phase 6 — skills and prefactors.** The AI tiers, still unscoped. Scope it from what tasks 5
-  and 7 actually needed rather than from the three-tier sketch below.
 
 ## Decisions summary
 
@@ -85,7 +148,7 @@ Exit: httpx2 migrated end to end and written up.
 | §11 Q3: specialization budget | Per-override fan-out budget; over budget → loud refusal + pointer to the unwind-override prefactor skill |
 | §11 Q5: propose DI seams? | Report the opportunity (audit) and assist the refactor (skill); `convert` never does it |
 | §11 Q6: is `--concurrency 1` green a tool-enforced gate? | A subcommand (`verify`), strongly recommended in the workflow, not a hard gate — it requires both runners runnable in one env, which is not always true |
-| §11 Q7: coverage verification | Documented recipe, not a v1 tool feature |
+| §11 Q7: coverage verification | Formalized as a `verify` feature (tasks 10–12), superseding the earlier documented-recipe answer |
 | Codegen platform | LibCST, alone, for audit, rewrite, and move |
 
 # Planned scope
@@ -108,7 +171,8 @@ verification oracle for each change. `convert` is reserved for the one rewrite t
 pytest-land: the wiring swap. After conversion there is no oracle until `verify`, which is exactly
 why `convert` must be deterministic, mechanical, and boring.
 
-That gives three tiers, none of them built:
+That gives three tiers. The first two are getting a concrete case rather than a speculative build —
+tasks 7–9 above scope them from httpx2/flask/rich's shared autouse-global-state shape:
 
 1. **Prefactor codemods** (deterministic, in `prefactor/`, run under pytest): `tmpdir` →
    `tmp_path`, legacy `pytest.raises(E, fn, args)` call form → context manager, unconditional
