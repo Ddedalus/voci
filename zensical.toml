@@ -13,7 +13,13 @@ strict = true
 nav = [
   { "Home" = "index.md" },
   { "Guide" = ["guide/index.md"] },
-  { "How-to" = ["how-to/index.md"] },
+  { "How-to" = [
+      "how-to/index.md",
+      "how-to/sharing-a-database-engine.md",
+      "how-to/testing-a-fastapi-app.md",
+      "how-to/tuning-concurrency.md",
+      "how-to/debugging-a-flaky-test.md",
+  ] },
   { "Migrating" = ["migrate/index.md", "migrate/matrix.md"] },
   { "Reference" = [
       "reference/index.md",
