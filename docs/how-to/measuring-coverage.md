@@ -42,8 +42,8 @@ async def test_install_rebinds_the_signal_handler() -> None:
     assert signal.getsignal(signal.SIGHUP) is not signal.SIG_DFL
 ```
 
-Carrying a configuration into a subprocess needs coverage.py 7.10 or newer. Below that, velox
-warns once per isolated test that its lines are missing from the report.
+Carrying a configuration into a subprocess needs coverage.py 7.10 or newer. Below that, velox says
+so on stderr, once per isolated test whose lines are missing from the report.
 
 ## In CI
 

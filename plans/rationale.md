@@ -622,17 +622,22 @@ exits and updates the parent's `CoverageData` in place, so `coverage run -m velo
 one data file however many isolated tests ran.
 
 **The child gets the parent's whole configuration, not a chosen subset of it.** `subprocess_env`
-serializes the live `CoverageConfig` and overrides only `data_file` (and `parallel`, which would
-otherwise suffix that path out from under `harvest`). Picking fields by hand invites two failures
-that both surface far from here: a `branch` setting that disagrees across the boundary produces
-arc data that cannot merge into line data at all, and a `source`/`omit` the child doesn't know
-about credits the report with files the project asked to leave out.
+serializes the live `CoverageConfig` and overrides only where it writes. Picking fields by hand
+invites two failures that both surface far from here: a `branch` setting that disagrees across the
+boundary produces arc data that cannot merge into line data at all, and a `source`/`omit` the
+child doesn't know about credits the report with files the project asked to leave out. What it
+does override is `parallel`, forced *on*: the subprocess is not necessarily the only process
+measuring under that environment — it inherits into anything the test itself spawns — and one
+data file shared between them is two `atexit` saves racing. `harvest` reads back every file whose
+name starts with the one it handed out, which is what parallel mode's per-process suffixes leave.
 
-**A measurement problem is a warning, never a test failure.** Coverage data that can't be read
-back, and a coverage.py too old to carry its configuration into a subprocess, both leave the test
-result they arrived with untouched and go to the warning summary instead. The test genuinely
-passed; only the accounting of it is missing, and a suite that fails because of how it was
-*measured* teaches everyone to stop measuring it.
+**A measurement problem is a note, never a test failure and never a warning.** Coverage data that
+can't be read back, and a coverage.py too old to carry its configuration into a subprocess, go to
+`run_suite`'s `note` — the same channel the loop watchdog uses. `warnings.warn` would have been
+the obvious choice and is the wrong one: velox's own warning shim honours the user's
+`filterwarnings`, so a project running with `["error"]` would have velox's diagnostic raised
+inside `run_isolated`, out through the dispatch TaskGroup, and take the whole run down over a
+measurement detail. The test genuinely passed; only the accounting of it is missing.
 
 ## `_builtins/capture.py` — capture and routing
 

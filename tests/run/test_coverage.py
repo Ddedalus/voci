@@ -39,30 +39,42 @@ def _child_config(env: dict[str, str]) -> coverage.Coverage:
     return coverage.Coverage(config_file=_DATA_PREFIX + env["COVERAGE_PROCESS_CONFIG"])
 
 
+def _write_data(path: Path, lines: dict[str, list[int]]) -> None:
+    """A coverage data file at `path`, as a subprocess's own `atexit` save would leave it."""
+    data = coverage.CoverageData(basename=str(path))
+    data.add_lines(lines)
+    data.write()
+
+
+def _unexpected(text: str) -> None:
+    """`note` for the paths that have nothing to report: a measurement problem in one of these
+    is the test's own failure."""
+    raise AssertionError(f"unexpected note: {text}")
+
+
 def test_subprocess_env_is_none_when_nothing_is_measuring(tmp_path: Path) -> None:
     """The common case, and the one that has to cost nothing: this suite does not run under
     `coverage run`, so there is no measurement to extend and the subprocess inherits the
     parent's environment untouched."""
-    assert _coverage.subprocess_env(tmp_path / "child.coverage") is None
+    assert _coverage.subprocess_env(tmp_path / "child.coverage", note=_unexpected) is None
 
 
 def test_subprocess_env_points_the_subprocess_at_its_own_data_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`harvest` reads that exact path back afterwards, so `parallel` has to come off with it:
-    left on, coverage.py appends a per-process suffix and the file the parent goes looking for
-    is never written."""
+    """Its own, and in parallel mode: an isolated test that spawns processes of its own has
+    several of them measuring under this one environment, and a single data file between them
+    would have their saves overwriting each other."""
     parent = _parent(tmp_path)
-    parent.config.parallel = True
     monkeypatch.setattr(_coverage, "_active", lambda: parent)
     child_data = tmp_path / "child.coverage"
 
-    env = _coverage.subprocess_env(child_data)
+    env = _coverage.subprocess_env(child_data, note=_unexpected)
 
     assert env is not None
     config = _child_config(env).config
     assert config.data_file == str(child_data)
-    assert config.parallel is False
+    assert config.parallel is True
 
 
 def test_subprocess_env_carries_the_parents_settings_across(
@@ -74,7 +86,7 @@ def test_subprocess_env_carries_the_parents_settings_across(
     parent = _parent(tmp_path, branch=True, source=[str(tmp_path / "src")], omit=["*/vendor/*"])
     monkeypatch.setattr(_coverage, "_active", lambda: parent)
 
-    env = _coverage.subprocess_env(tmp_path / "child.coverage")
+    env = _coverage.subprocess_env(tmp_path / "child.coverage", note=_unexpected)
 
     assert env is not None
     config = _child_config(env).config
@@ -91,17 +103,17 @@ def test_subprocess_env_leaves_the_parents_own_config_alone(
     parent = _parent(tmp_path)
     monkeypatch.setattr(_coverage, "_active", lambda: parent)
 
-    _coverage.subprocess_env(tmp_path / "child.coverage")
+    _coverage.subprocess_env(tmp_path / "child.coverage", note=_unexpected)
 
     assert parent.config.data_file == str(tmp_path / "parent")
 
 
-def test_subprocess_env_warns_when_the_config_cannot_be_carried(
+def test_subprocess_env_reports_a_coverage_that_cannot_carry_its_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """coverage.py older than 7.10 has no `serialize`. Measurement of the parent process is
-    unaffected, so this is a warning rather than a failure -- but a silent one would leave a
-    report claiming isolated tests executed nothing."""
+    """coverage.py older than 7.10 has no `serialize`. The parent process is measured either way,
+    so this is a note rather than a failure -- but a silent one would leave a report claiming
+    isolated tests executed nothing."""
 
     class _OldConfig:
         def copy(self) -> _OldConfig:
@@ -111,9 +123,10 @@ def test_subprocess_env_warns_when_the_config_cannot_be_carried(
         config = _OldConfig()
 
     monkeypatch.setattr(_coverage, "_active", lambda: _OldCoverage())
+    notes: list[str] = []
 
-    with pytest.warns(RuntimeWarning, match="7.10 or newer"):
-        assert _coverage.subprocess_env(tmp_path / "child.coverage") is None
+    assert _coverage.subprocess_env(tmp_path / "child.coverage", note=notes.append) is None
+    assert "7.10 or newer" in "".join(notes)
 
 
 def test_start_in_subprocess_starts_nothing_without_the_environment() -> None:
@@ -131,17 +144,36 @@ def test_harvest_merges_a_subprocess_data_file_into_the_live_parent(
     file the parent is still writing, with no `coverage combine` step in between."""
     measured = str(tmp_path / "module.py")
     child_file = tmp_path / "child.coverage"
-    child = coverage.CoverageData(basename=str(child_file))
-    child.add_lines({measured: [3, 4]})
-    child.write()
+    _write_data(child_file, {measured: [3, 4]})
 
     parent = _parent(tmp_path)
     parent.get_data().add_lines({measured: [1]})
     monkeypatch.setattr(_coverage, "_active", lambda: parent)
 
-    _coverage.harvest(child_file)
+    _coverage.harvest(child_file, note=_unexpected)
 
     assert parent.get_data().lines(measured) == [1, 3, 4]
+
+
+def test_harvest_merges_every_process_that_measured_under_one_data_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parallel mode means the names on disk are the one `subprocess_env` was given plus a
+    per-process suffix, and an isolated test that spawns its own processes leaves several. All
+    of them are that test's coverage."""
+    measured = str(tmp_path / "module.py")
+    child_file = tmp_path / "child.coverage"
+    _write_data(Path(f"{child_file}.host.101.xxx"), {measured: [3]})
+    _write_data(Path(f"{child_file}.host.102.yyy"), {measured: [4]})
+    # A sibling test's data, in the same scratch directory, which this harvest must leave alone.
+    _write_data(tmp_path / "other.coverage.host.103.zzz", {measured: [9]})
+
+    parent = _parent(tmp_path)
+    monkeypatch.setattr(_coverage, "_active", lambda: parent)
+
+    _coverage.harvest(child_file, note=_unexpected)
+
+    assert parent.get_data().lines(measured) == [3, 4]
 
 
 def test_harvest_ignores_a_data_file_that_was_never_written(
@@ -151,29 +183,31 @@ def test_harvest_ignores_a_data_file_that_was_never_written(
     Whatever went wrong is already the test's own reported failure."""
     monkeypatch.setattr(_coverage, "_active", lambda: _parent(tmp_path))
 
-    _coverage.harvest(tmp_path / "never-written.coverage")
+    _coverage.harvest(tmp_path / "never-written.coverage", note=_unexpected)
 
 
 def test_harvest_does_nothing_when_nothing_is_measuring(tmp_path: Path) -> None:
     child_file = tmp_path / "child.coverage"
-    child = coverage.CoverageData(basename=str(child_file))
-    child.add_lines({str(tmp_path / "module.py"): [1]})
-    child.write()
+    _write_data(child_file, {str(tmp_path / "module.py"): [1]})
 
-    _coverage.harvest(child_file)
+    _coverage.harvest(child_file, note=_unexpected)
 
 
-def test_harvest_warns_rather_than_failing_the_test_on_unreadable_data(
+def test_harvest_reports_unreadable_data_rather_than_failing_the_test(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A data file that exists but can't be read says nothing about the test that just passed
-    inside that subprocess, so it must not turn that test's result into an error."""
+    inside that subprocess, so it must not turn that test's result into an error. `note` is the
+    channel for it: raising here, or warning under `filterwarnings = ["error"]`, would escape
+    into `run_suite`'s dispatch and take the run down."""
     child_file = tmp_path / "child.coverage"
     child_file.write_bytes(b"not a coverage database")
     monkeypatch.setattr(_coverage, "_active", lambda: _parent(tmp_path))
+    notes: list[str] = []
 
-    with pytest.warns(RuntimeWarning, match="could not merge coverage data"):
-        _coverage.harvest(child_file)
+    _coverage.harvest(child_file, note=notes.append)
+
+    assert "could not merge coverage data" in "".join(notes)
 
 
 def test_coverage_run_measures_lines_only_an_isolated_test_reaches(project: Project) -> None:

@@ -25,7 +25,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -102,6 +102,7 @@ async def run_isolated(
     timeout: float | None,
     basetemp_root: Path,
     scratch_dir: Path,
+    note: Callable[[str], None],
     loop_watchdog: float | None = None,
     teardown_grace: float | None = None,
     filterwarnings: Sequence[str] = (),
@@ -119,7 +120,8 @@ async def run_isolated(
     way it would for an in-process test. Nothing here imposes a second, redundant timeout.
     `loop_watchdog`, `teardown_grace` and `filterwarnings` travel the same way, so the subprocess
     runs its one test under the settings the parent run was given rather than the built-in
-    defaults.
+    defaults. `note` is `run_suite`'s own: a line for the user while the run is still going,
+    which coverage measurement is the only thing here to produce.
     """
     start = time.monotonic()
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -154,7 +156,7 @@ async def run_isolated(
     # Only set when this run is itself under coverage.py, and `None` -- inherit the parent's
     # environment untouched -- whenever it isn't. See `coverage.py` for both halves.
     coverage_data = scratch_dir / f"{stem}.coverage"
-    coverage_env = _coverage.subprocess_env(coverage_data)
+    coverage_env = _coverage.subprocess_env(coverage_data, note=note)
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -185,7 +187,7 @@ async def run_isolated(
 
     # After `communicate()` only: the subprocess writes its coverage data on the way out, so
     # there is nothing to merge until it has exited, and a killed one never wrote any.
-    _coverage.harvest(coverage_data)
+    _coverage.harvest(coverage_data, note=note)
 
     if proc.returncode == 0 and result_path.is_file():
         try:
