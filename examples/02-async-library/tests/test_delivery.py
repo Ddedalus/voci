@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
+import velox
+from velox import Depends
+
 from relay.client import DeliveryFailed, Relay, backoff_schedule
 from relay.transport import FakeTransport, Response
 from tests.fixtures import (
@@ -15,9 +18,6 @@ from tests.fixtures import (
     relay,
     transport,
 )
-
-import velox
-from velox import Depends
 
 
 async def test_successful_delivery(

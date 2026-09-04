@@ -283,12 +283,21 @@ def _annotations_of(func: Callable[..., Any]) -> Mapping[str, Any]:
 
 
 def _markers_in_object(annotation: object) -> list[Dependency[Any]]:
-    """The `Dependency` markers in an annotation that is already an object."""
+    """The `Dependency` markers in an annotation that is already an object.
+
+    An alias is followed to its body first, a *subscripted* one included: `typing` leaves
+    `Repo[int]`, for a `type Repo[T] = Annotated[T, Depends(repo_fx)]`, as the alias applied to
+    its argument, so the metadata is reachable only by unwrapping it deliberately —
+    `get_type_hints` does not do it either. Substituting the parameter cannot change what the
+    metadata holds, so the markers are read off the alias body unsubstituted. Bounded rather than
+    a `while`: `type A = A` hands back the alias object itself, forever.
+    """
     for _ in range(_MAX_ALIAS_HOPS):
-        if not isinstance(annotation, TypeAliasType):
-            break
         try:
-            annotation = annotation.__value__
+            alias = annotation if isinstance(annotation, TypeAliasType) else get_origin(annotation)
+            if not isinstance(alias, TypeAliasType):
+                break
+            annotation = alias.__value__
         except Exception:  # a PEP 695 alias is lazy, and its body may not resolve at run time
             return []
     try:
@@ -320,25 +329,34 @@ def _markers_in_source(
         node = ast.parse(text, mode="eval").body
     except SyntaxError:  # an annotation Python itself would reject; leave it to Python
         return []
-    return _markers_in_subscript(node, globalns, name=name, param=param)
+    return _markers_in_node(node, globalns, name=name, param=param)
 
 
-def _markers_in_subscript(
+def _markers_in_node(
     node: ast.expr, globalns: dict[str, Any], *, name: str, param: str
 ) -> list[Dependency[Any]]:
-    """The markers in a parsed `Annotated[...]`, nested ones included.
+    """The markers in one parsed annotation node: an `Annotated[...]`, or an alias of one.
 
     `Annotated[Annotated[X, a], b]` carries both markers, because that is the single flattened
-    object `typing` builds from it — and what the object path therefore sees.
+    object `typing` builds from it — and what the object path therefore sees. A name in any
+    position an annotation can hold one is resolved by lookup and handed to the object path, so
+    an alias reads the same whether or not the module stringifies its annotations: as the whole
+    annotation (`db: Db`), as the target of a subscript (`db: Repo[int]`), or as the type half of
+    an `Annotated` wrapping it (`db: Annotated[Db, "documentation"]`).
     """
-    if not isinstance(node, ast.Subscript) or not _is_annotated(node.value, globalns):
+    if isinstance(node, ast.Name | ast.Attribute):
+        return _markers_in_object(_lookup(node, globalns))
+    if not isinstance(node, ast.Subscript):
         return []
+    if not _is_annotated(node.value, globalns):
+        # Not an `Annotated[...]`, but `Repo[int]` may still name an alias that is one.
+        return _markers_in_object(_lookup(node.value, globalns))
     elements = node.slice.elts if isinstance(node.slice, ast.Tuple) else ()
     if not elements:
         return []
     head, *metadata = elements
     markers = [_marker_of(element, globalns, name=name, param=param) for element in metadata]
-    return _markers_in_subscript(head, globalns, name=name, param=param) + [
+    return _markers_in_node(head, globalns, name=name, param=param) + [
         marker for marker in markers if marker is not None
     ]
 

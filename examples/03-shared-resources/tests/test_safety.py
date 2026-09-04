@@ -6,11 +6,11 @@ import asyncio
 from types import ModuleType
 from typing import Annotated
 
-from ledger.service import LedgerService
-from tests.fixtures import account, feature_flags, ledger
-
 import velox
 from velox import Depends
+
+from ledger.service import LedgerService
+from tests.fixtures import account, feature_flags, ledger
 
 # --------------------------------------------------------------------------------------
 # @velox.solo — for state with no per-task view

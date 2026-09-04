@@ -11,13 +11,13 @@ import asyncio
 import sqlite3
 from typing import Annotated
 
+import velox
+from velox import Depends
+
 from ledger.migrations import LATEST, migrate
 from ledger.receiver import WEBHOOK_PORT, Receiver, send
 from ledger.service import LedgerService
 from tests.fixtures import account, ledger, migration_db, receiver
-
-import velox
-from velox import Depends
 
 
 # Covers all four scenarios in sequence, so the budget covers their combined socket round-trips

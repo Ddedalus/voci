@@ -15,20 +15,20 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated
 
+import velox
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from velox import Depends
+from velox import fastapi as velox_fastapi
+
 from app.db import get_session
 from app.main import app
 from app.models import User
 from app.settings import Settings
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-
-import velox
 
 # Engine construction and the transaction-per-test dance live next door, in `tests/database.py`:
 # that part is SQLAlchemy's business rather than velox's.
 from tests import database
-from velox import Depends
-from velox import fastapi as velox_fastapi
 
 # --------------------------------------------------------------------------------------
 # Database

@@ -20,14 +20,14 @@ from pathlib import Path
 from types import ModuleType
 from typing import Annotated
 
+import velox
+from velox import Depends
+
 from ledger import flags
 from ledger.migrations import LATEST, migrate
 from ledger.receiver import WEBHOOK_PORT, Receiver
 from ledger.service import LedgerService
 from ledger.store import Store
-
-import velox
-from velox import Depends
 
 # --------------------------------------------------------------------------------------
 # The concurrent path: no tokens at all

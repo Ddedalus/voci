@@ -7,17 +7,17 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
+import velox
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from velox import Depends
+from velox import fastapi as velox_fastapi
+
 from app.db import get_session
 from app.main import app
 from app.models import User
 from app.settings import Settings
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 from tests.fixtures import PaymentSandbox, alice, api_client, payment_sandbox, session
-
-import velox
-from velox import Depends
-from velox import fastapi as velox_fastapi
 
 
 async def test_create_order(

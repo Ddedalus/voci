@@ -10,11 +10,11 @@ import asyncio
 import sqlite3
 from typing import Annotated
 
-from ledger.migrations import LATEST, current_version, migrate
-from tests.fixtures import migration_db
-
 import velox
 from velox import Depends
+
+from ledger.migrations import LATEST, current_version, migrate
+from tests.fixtures import migration_db
 
 
 async def test_migrates_to_latest(
