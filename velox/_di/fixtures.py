@@ -1,13 +1,16 @@
 """Fixture objects, the `Depends` sentinel, and the static injection/resolution plans.
 
 This module owns the objects the rest of velox is built on: `Fixture`, what `@velox.fixture()`
-returns, the sentinel `Depends()` leaves in `__defaults__`, and `ResolutionPlan`, the flattened,
+returns, the sentinel `Depends()` leaves on a parameter, and `ResolutionPlan`, the flattened,
 statically-validated, topologically-sorted construction order for one test function's whole
 transitive fixture graph.
 
-Both are built once, at decoration/collection time, by scanning `__defaults__`/`__kwdefaults__` —
-never `inspect.signature`, never `get_type_hints`. Annotations are for the reader and the type
-checker only; they are never load-bearing.
+Both are built once, at decoration/collection time, by walking `__code__.co_varnames` against
+`__defaults__`/`__kwdefaults__` and the annotations — never `inspect.signature`, never
+`get_type_hints`. Annotations are load-bearing for exactly one thing: a `Depends(...)` marker in
+`Annotated[...]` metadata, which `_annotated_injections` finds by *parsing* the annotation and
+evaluating only that marker. The type half is never evaluated, so it stays what it always was —
+for the reader and the type checker.
 
 `ResolutionPlan` is a flat list, not a tree: `_di.py` executes it as a straight loop with no graph
 walking at run time. Building it *is* the graph walk, done once per test function and memoized so
@@ -26,14 +29,31 @@ test's own arguments.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import enum
 import inspect
 import itertools
+import re
+import sys
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Protocol, cast, final, get_args, get_origin, overload
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    Protocol,
+    TypeAliasType,
+    cast,
+    final,
+    get_args,
+    get_origin,
+    overload,
+)
+
+if sys.version_info >= (3, 14):
+    import annotationlib
 
 __all__ = [
     "BuiltinContext",
@@ -72,6 +92,19 @@ type Scope = Literal["call", "function", "module", "session"]
 type Exclusive = bool | str
 """`True` for a private token, or a shared string token naming the contended resource."""
 
+_UNRESOLVED = object()
+"""`_lookup`'s "no such name", distinct from a name that legitimately resolves to `None`."""
+
+_MAX_ALIAS_HOPS = 8
+"""How far `_markers_in_object` follows `type X = Y` before giving up.
+
+Bounded rather than a `while`, because a PEP 695 alias body is evaluated lazily and a
+self-referential one (`type A = A`) hands back the alias object itself, forever.
+"""
+
+_DOTTED_NAME = re.compile(r"[^\W\d]\w*(?:\.[^\W\d]\w*)*", re.UNICODE)
+"""A whole annotation that is just a name, dotted or not — the shape an alias arrives in."""
+
 
 @final
 @dataclass(frozen=True, slots=True)
@@ -92,11 +125,13 @@ class Dependency[T]:
 
 
 def Depends[T](dependency: Fixture[T], /) -> T:
-    """Declare an injected parameter: `param: Type = Depends(some_fixture)`.
+    """Declare an injected parameter: `param: Annotated[Type, Depends(fx)]`, or `param: Type =
+    Depends(fx)`.
 
     Takes the `Fixture` object itself, not a name or a bare callable. Typed as returning `T` so
-    the parameter's own annotation is checked normally, though at run time it returns a
-    sentinel. Raises `TypeError` immediately if `dependency` isn't a `Fixture`.
+    the parameter's own annotation is checked normally in default position, though at run time it
+    returns a sentinel; in metadata the declared return type is irrelevant. Raises `TypeError`
+    immediately if `dependency` isn't a `Fixture`.
     """
     if not isinstance(dependency, Fixture):
         raise TypeError(
@@ -107,79 +142,282 @@ def Depends[T](dependency: Fixture[T], /) -> T:
 
 
 def plan_of(func: Callable[..., Any]) -> tuple[Injection, ...]:
-    """Read the injection plan off a callable's defaults.
+    """Read the injection plan off a callable's parameters.
 
-    A parameter is injected iff its default is a `Depends(...)` sentinel. Any other default is an
-    ordinary Python default and is left alone — that is what keeps `@parametrize` and plain
-    closures working.
+    A parameter is injected iff it declares a `Depends(...)`: as its default
+    (`db: Session = Depends(db_fx)`), or as a marker in its annotation's metadata
+    (`db: Annotated[Session, Depends(db_fx)]`). Any other default is an ordinary Python default
+    and is left alone — that is what keeps `@parametrize` and plain closures working.
+
+    One walk over the signature in declaration order, so the two spellings interleave freely. The
+    order it produces is the order the earlier `__defaults__`-then-`__kwdefaults__` pair of loops
+    produced, so no `PlanStep` ordering or cache key moves for a suite that adopts neither.
     """
     code = getattr(func, "__code__", None)
     if code is None:
         return ()
 
-    _reject_annotated_depends(func)
+    params = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+    name = getattr(func, "__name__", repr(func))
+    annotated = _annotated_injections(func, params, name)
+    defaults = func.__defaults__ or ()
+    kwdefaults = func.__kwdefaults__ or {}
+    first_defaulted = code.co_argcount - len(defaults)
 
     injections: list[Injection] = []
+    for index, param in enumerate(params):
+        keyword_only = index >= code.co_argcount
+        if keyword_only:
+            default = kwdefaults.get(param)
+        elif index >= first_defaulted:
+            default = defaults[index - first_defaulted]
+        else:
+            default = None
 
-    positional = code.co_varnames[: code.co_argcount]
-    defaults = func.__defaults__ or ()
-    offset = len(positional) - len(defaults)
-    # `_di` binds every injection by keyword (`**kwargs`, never positionally), so a
-    # `Depends(...)` default on a positional-only parameter (before `/`) could never actually be
-    # supplied at construction time. Rejected here, at decoration time, rather than left to fail
-    # later as an opaque `TypeError` naming no fixture.
-    posonly_count = code.co_posonlyargcount
-    for index, (param, default) in enumerate(
-        zip(positional[offset:], defaults, strict=True), start=offset
-    ):
-        if (injection := _injection(param, default, keyword_only=False)) is not None:
-            if index < posonly_count:
-                name = getattr(func, "__name__", repr(func))
-                raise DIError(
-                    f"{name}({param!r}): Depends(...) on a positional-only parameter (before "
-                    f"'/') is not supported -- velox binds every injection by keyword, and a "
-                    f"positional-only parameter can never accept one. Move {param!r} after the "
-                    f"'/', or stop injecting it."
-                )
-            injections.append(injection)
+        from_default = default.fixture if isinstance(default, Dependency) else None
+        from_annotation = annotated.get(param)
+        if from_default is not None and from_annotation is not None:
+            raise DIError(
+                f"{name}({param!r}): Depends(...) declared twice, once as the default and once "
+                f"in Annotated[...] metadata. Pick one spelling -- velox merges nothing, even "
+                f"when both name the same fixture."
+            )
+        source = from_default if from_default is not None else from_annotation
+        if source is None:
+            continue
 
-    for param, default in (func.__kwdefaults__ or {}).items():
-        if (injection := _injection(param, default, keyword_only=True)) is not None:
-            injections.append(injection)
+        # `_di` binds every injection by keyword (`**kwargs`, never positionally), so a
+        # `Depends(...)` on a positional-only parameter (before `/`) could never actually be
+        # supplied at construction time. Rejected here, at decoration time, rather than left to
+        # fail later as an opaque `TypeError` naming no fixture. True of either spelling.
+        if index < code.co_posonlyargcount:
+            raise DIError(
+                f"{name}({param!r}): Depends(...) on a positional-only parameter (before "
+                f"'/') is not supported -- velox binds every injection by keyword, and a "
+                f"positional-only parameter can never accept one. Move {param!r} after the "
+                f"'/', or stop injecting it."
+            )
+        injections.append(Injection(param=param, source=source, keyword_only=keyword_only))
 
     return tuple(injections)
 
 
-def _reject_annotated_depends(func: Callable[..., Any]) -> None:
-    """Catch `Depends(...)` written inside `Annotated[...]` metadata instead of default position.
+def _annotated_injections(
+    func: Callable[..., Any], params: tuple[str, ...], name: str
+) -> Mapping[str, Fixture[Any]]:
+    """The `Depends(...)` markers in `func`'s `Annotated[...]` metadata, as `{param: fixture}`.
 
-    `plan_of` only reads `__defaults__`/`__kwdefaults__`, so `Depends()` inside
-    `Annotated[...]` (the FastAPI spelling, e.g. `db: Annotated[Session, Depends(db_fx)]`) is
-    silently ignored there; this raises `TypeError` for it instead. Best effort: a string
-    annotation or other exotic form is left alone rather than risking a false positive.
+    Annotations are not reliably objects. Under `from __future__ import annotations` (PEP 563)
+    every one is a string, so the `Depends(...)` in it was never called and there is nothing to
+    find; on 3.14 (PEP 649) they are computed lazily and *reading* them raises for any name that
+    exists only under `TYPE_CHECKING`. The policy both force is **parse, don't evaluate**: velox
+    reads the annotation's source text with `ast` and evaluates only the metadata elements that
+    are calls to velox's own `Depends`. The type half is never touched, so wherever the module
+    itself does not evaluate its annotations, a `TYPE_CHECKING`-only type can be injected against
+    and a function whose *other* parameters carry unresolvable annotations still collects.
+
+    Its sharp edge, documented in `docs/reference/fixtures.md`: an annotation is evaluated in
+    module globals and cannot see local names, so the fixture named in `Depends(...)` has to be
+    reachable there. A fixture held in a closure variable works only in a module that does not
+    stringify its annotations.
+
+    Only names that are actual parameters count, so a `functools.wraps` wrapper — which copies
+    `__annotations__` but presents `(*args, **kwargs)` — reads as no injections, keeping the
+    existing sharp edge (a signature-replacing decorator hides injections) rather than trading it
+    for a new false positive.
     """
-    annotations = getattr(func, "__annotations__", None)
+    annotations = _annotations_of(func)
     if not annotations:
-        return
+        return {}
+
+    globalns = getattr(func, "__globals__", None)
+    if globalns is None:
+        return {}
+    absorbs = bool(func.__code__.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS))
+
+    found: dict[str, Fixture[Any]] = {}
     for param, annotation in annotations.items():
-        try:
-            if get_origin(annotation) is not Annotated:
-                continue
-            stray = any(isinstance(m, Dependency) for m in get_args(annotation)[1:])
-        except Exception:  # diagnostics only; never let an odd annotation raise
+        if param == "return" or (param not in params and absorbs):
             continue
-        if stray:
-            name = getattr(func, "__name__", repr(func))
-            raise TypeError(
-                f"{name}({param!r}): Depends(...) found inside Annotated[...] metadata, which "
-                f"velox never reads. Use default position instead: `{param}: ... = Depends(...)`."
+        markers = (
+            _markers_in_source(annotation, globalns, name=name, param=param)
+            if isinstance(annotation, str)
+            else _markers_in_object(annotation)
+        )
+        if not markers:
+            continue
+        if len(markers) > 1:
+            raise DIError(
+                f"{name}({param!r}): {len(markers)} Depends(...) markers in one Annotated[...] "
+                f"-- a parameter is injected from exactly one fixture."
             )
+        if param not in params:
+            raise DIError(
+                f"{name}({param!r}): Depends(...) in the annotation of {param!r}, which is not a "
+                f"parameter of this function -- nothing would ever be injected for it."
+            )
+        found[param] = markers[0].fixture
+    return found
 
 
-def _injection(param: str, default: object, *, keyword_only: bool) -> Injection | None:
-    if not isinstance(default, Dependency):
+def _annotations_of(func: Callable[..., Any]) -> Mapping[str, Any]:
+    """`func`'s annotations, evaluating none of them.
+
+    On 3.14+ `func.__annotations__` *computes* them and raises for a name that exists only under
+    `TYPE_CHECKING`, so ask `annotationlib` for source text instead: every entry arrives as a
+    string, whether or not the module stringifies its annotations, and nothing is executed. A
+    function with no annotations at all has `__annotate__ is None`, the cheap bail-out that keeps
+    this free for a suite that annotates nothing.
+
+    On 3.13 `__annotations__` is whatever the module already produced — objects, or strings under
+    PEP 563 — and reading it never raises.
+    """
+    if sys.version_info >= (3, 14):
+        if getattr(func, "__annotate__", None) is None:
+            return {}
+        try:
+            return annotationlib.get_annotations(func, format=annotationlib.Format.STRING)
+        except Exception:  # a hand-written `__annotate__`; not velox's to repair
+            return {}
+    return getattr(func, "__annotations__", None) or {}
+
+
+def _markers_in_object(annotation: object) -> list[Dependency[Any]]:
+    """The `Dependency` markers in an annotation that is already an object."""
+    for _ in range(_MAX_ALIAS_HOPS):
+        if not isinstance(annotation, TypeAliasType):
+            break
+        try:
+            annotation = annotation.__value__
+        except Exception:  # a PEP 695 alias is lazy, and its body may not resolve at run time
+            return []
+    try:
+        if get_origin(annotation) is not Annotated:
+            return []
+        return [m for m in get_args(annotation)[1:] if isinstance(m, Dependency)]
+    except Exception:  # never let an exotic annotation object break collection
+        return []
+
+
+def _markers_in_source(
+    text: str, globalns: dict[str, Any], *, name: str, param: str
+) -> list[Dependency[Any]]:
+    """The `Dependency` markers in an annotation that arrived as source text.
+
+    A bare dotted name is an alias — `db: Db` for a module-level
+    `type Db = Annotated[Session, Depends(db_fx)]` — and is resolved by dictionary lookup, no
+    parse. Anything without a subscript has nowhere to hold metadata. What is left is parsed, and
+    only its metadata elements are looked at: a `Name` resolved the same way, a `Call` compiled
+    and evaluated iff its callee is velox's own `Depends`. The gate is the shape of the
+    annotation, not the spelling of the names in it, since both `Annotated` and `Depends` can
+    arrive under any name a user imported them as.
+    """
+    if _DOTTED_NAME.fullmatch(text):
+        return _markers_in_object(_lookup_parts(text.split("."), globalns))
+    if "[" not in text:
+        return []
+    try:
+        node = ast.parse(text, mode="eval").body
+    except SyntaxError:  # an annotation Python itself would reject; leave it to Python
+        return []
+    return _markers_in_subscript(node, globalns, name=name, param=param)
+
+
+def _markers_in_subscript(
+    node: ast.expr, globalns: dict[str, Any], *, name: str, param: str
+) -> list[Dependency[Any]]:
+    """The markers in a parsed `Annotated[...]`, nested ones included.
+
+    `Annotated[Annotated[X, a], b]` carries both markers, because that is the single flattened
+    object `typing` builds from it — and what the object path therefore sees.
+    """
+    if not isinstance(node, ast.Subscript) or not _is_annotated(node.value, globalns):
+        return []
+    elements = node.slice.elts if isinstance(node.slice, ast.Tuple) else ()
+    if not elements:
+        return []
+    head, *metadata = elements
+    markers = [_marker_of(element, globalns, name=name, param=param) for element in metadata]
+    return _markers_in_subscript(head, globalns, name=name, param=param) + [
+        marker for marker in markers if marker is not None
+    ]
+
+
+def _marker_of(
+    element: ast.expr, globalns: dict[str, Any], *, name: str, param: str
+) -> Dependency[Any] | None:
+    """One `Annotated[...]` metadata element, as a `Dependency` if that is what it denotes."""
+    if isinstance(element, ast.Name | ast.Attribute):
+        found = _lookup(element, globalns)
+        return found if isinstance(found, Dependency) else None
+    # Anything that is not a call to velox's own `Depends` is left entirely alone: metadata holds
+    # arbitrary objects, and velox must not execute arbitrary annotation code to look at them.
+    if not isinstance(element, ast.Call) or _lookup(element.func, globalns) is not Depends:
         return None
-    return Injection(param=param, source=default.fixture, keyword_only=keyword_only)
+    try:
+        # One `Depends(...)` call node, off this module's own parse of the annotation.
+        value = eval(compile(ast.Expression(body=element), "<velox annotation>", "eval"), globalns)
+    except Exception as exc:
+        hint = (
+            " An annotation is evaluated in the module's globals and cannot see local names, so "
+            "the fixture it names has to be reachable there."
+            if isinstance(exc, NameError)
+            else ""
+        )
+        raise DIError(
+            f"{name}({param!r}): the Depends(...) in this annotation raised "
+            f"{type(exc).__name__}: {exc}.{hint}"
+        ) from exc
+    return value if isinstance(value, Dependency) else None
+
+
+def _is_annotated(node: ast.expr, globalns: dict[str, Any]) -> bool:
+    """Whether a subscript's target is `typing.Annotated`, however it is spelled."""
+    found = _lookup(node, globalns)
+    if found is not _UNRESOLVED:
+        return found is Annotated
+    # Unresolvable, which a stringifying module may legitimately produce by importing `Annotated`
+    # itself only under `TYPE_CHECKING`. Fall back to the spelling: nothing is evaluated on the
+    # strength of it, since a marker still has to resolve to velox's own `Depends` by identity.
+    return isinstance(node, ast.Name | ast.Attribute) and _tail_name(node) == "Annotated"
+
+
+def _lookup(node: ast.expr, globalns: dict[str, Any]) -> Any:
+    """Resolve a dotted name against `globalns` by lookup and `getattr` — never `eval`.
+
+    `_UNRESOLVED` for anything that is not a dotted name, or whose head is not a global.
+    """
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return _UNRESOLVED
+    return _lookup_parts([node.id, *reversed(parts)], globalns)
+
+
+def _lookup_parts(parts: Sequence[str], globalns: dict[str, Any]) -> Any:
+    """`parts` walked from `globalns`, or `_UNRESOLVED`.
+
+    A name that resolves to nothing is not an error: most annotations are types velox has no
+    interest in, and plenty of them do not resolve at run time at all. `getattr` is guarded for
+    the same reason it is called at all — a module's `__getattr__` runs arbitrary code, and a
+    lazy importer raising for an unrelated parameter's annotation must not fail the test.
+    """
+    found = globalns.get(parts[0], _UNRESOLVED)
+    for part in parts[1:]:
+        if found is _UNRESOLVED:
+            return _UNRESOLVED
+        try:
+            found = getattr(found, part)
+        except Exception:
+            return _UNRESOLVED
+    return found
+
+
+def _tail_name(node: ast.Name | ast.Attribute) -> str:
+    """The last component of a dotted name: `Annotated`, `typing.Annotated`, `t.Annotated`."""
+    return node.attr if isinstance(node, ast.Attribute) else node.id
 
 
 @final

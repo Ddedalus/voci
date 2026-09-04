@@ -52,6 +52,42 @@ def test_main_all_passing_exits_zero(project: Project) -> None:
     assert main([str(project.root)]) == 0
 
 
+def test_main_runs_a_suite_wired_with_annotated_injections(project: Project) -> None:
+    """The annotated spelling, end to end and in the hardest module velox has to read one in:
+    annotations stringified by `from __future__ import annotations`, a type that exists only
+    under `TYPE_CHECKING`, an alias, a fixture declaring its own dependency the same way, and
+    `@velox.parametrize` supplying a parameter that now *follows* an injected one with no
+    default — the signature shape the default-position form could never produce.
+    """
+    project.write(
+        "test_sample.py",
+        "from __future__ import annotations\n\n"
+        "from typing import TYPE_CHECKING, Annotated\n\n"
+        "import velox\n"
+        "from velox import Depends\n\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal\n\n"
+        "@velox.fixture()\n"
+        "def base() -> int:\n"
+        "    return 2\n\n"
+        "@velox.fixture()\n"
+        "def doubled(value: Annotated[int, Depends(base)]) -> int:\n"
+        "    return value * 2\n\n"
+        "type Doubled = Annotated[int, Depends(doubled)]\n\n"
+        "async def test_annotated(value: Doubled) -> None:\n"
+        "    assert value == 4\n\n"
+        "async def test_unresolvable_type(value: Annotated[Decimal, Depends(doubled)]) -> None:\n"
+        "    assert value == 4\n\n"
+        "@velox.parametrize('expected', [4])\n"
+        "async def test_before_a_parametrized_argument(\n"
+        "    value: Annotated[int, Depends(doubled)], expected: int\n"
+        ") -> None:\n"
+        "    assert value == expected\n",
+    )
+
+    assert main([str(project.root)]) == 0
+
+
 def test_main_empty_directory_exits_five(tmp_path: Path) -> None:
     assert main([str(tmp_path)]) == 5
 
