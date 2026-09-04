@@ -15,9 +15,20 @@ typecheck *args:
     uv run pyrefly check --progress-bar no "$@"
     uv run pyrefly check --progress-bar no "$@" velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
 
-# Run the test suite (e.g. `just checks test -k cli`)
+# Run the test suite under the default interpreter (e.g. `just checks test -k cli`)
 test *args:
     uv run pytest "$@"
+
+# Run both suites under every supported interpreter (e.g. `just checks test-all -k annotated`).
+# Mirrors CI's test matrix; `just checks test` and `just check` cover the default one only.
+test-all *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for version in $(just py versions); do
+        echo "== Python $version =="
+        just py run "$version" pytest "$@"
+        just py run "$version" pytest velox-migrate/tests -n auto "$@"
+    done
 
 # Run lint, format-check, typecheck and tests together (quiet on success)
 all:
