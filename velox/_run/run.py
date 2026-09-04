@@ -1037,6 +1037,7 @@ def run_suite(
                         timeout=test_timeout,
                         basetemp_root=capture_setup.basetemp_root,
                         scratch_dir=capture_setup.basetemp_root / ".velox-isolated",
+                        note=note,
                         loop_watchdog=loop_watchdog,
                         teardown_grace=teardown_grace,
                         # The session's filters only: the subprocess re-collects the test

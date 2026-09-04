@@ -7,6 +7,9 @@ fresh interpreter, runs it through this package's own `run_suite`, and writes th
 `TestResult` to `RESULT_PATH` as JSON (`isolated.result_to_json`'s shape). A target that can't be
 found on re-collection -- the file changed underfoot, most likely -- is reported as its own
 `error` result rather than left for the parent to time out waiting on.
+
+Under a `coverage run` the parent asks for this process to be measured too, through the
+environment; `coverage.py` next door explains how the two halves meet.
 """
 
 from __future__ import annotations
@@ -17,11 +20,17 @@ from pathlib import Path
 
 from velox._assertions import rewrite as _rewrite
 from velox._collection import collect as _collect
+from velox._run import coverage as _coverage
 from velox._run import run as _run
 from velox._run.isolated import result_to_json
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before the target module is imported below: a module already imported when measurement
+    # starts records none of the lines its body ran. A no-op unless the parent run is itself
+    # under coverage.py, and usually one even then -- see `coverage.start_in_subprocess`.
+    _coverage.start_in_subprocess()
+
     args = sys.argv[1:] if argv is None else argv
     config_path, result_path = args
 

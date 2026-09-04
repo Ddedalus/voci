@@ -10,9 +10,6 @@ None known.
 
 ## Features
 
-### Coverage
-Ensuring we play nicely with coverage and can produce suitable reports.
-
 ### Collection cache
 A persistent collection cache, `--lf`/`--ff`.
 

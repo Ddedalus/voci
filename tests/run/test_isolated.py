@@ -25,6 +25,12 @@ async def _passes() -> None:
     pass
 
 
+def _note(text: str) -> None:
+    """Stands in for `run_suite`'s own `note`. Nothing these tests exercise writes one: the only
+    caller is coverage measurement, which is inert in a process nothing is measuring."""
+    raise AssertionError(f"unexpected note: {text}")
+
+
 class _FakeProcess:
     """Stands in for `asyncio.subprocess.Process`: `communicate()` either returns canned
     stdout/stderr or raises whatever `communicate_error` was given, and `kill`/`wait` just
@@ -125,6 +131,7 @@ def test_run_isolated_reports_the_worker_written_result(
             timeout=None,
             basetemp_root=tmp_path / "basetemp",
             scratch_dir=tmp_path / "scratch",
+            note=_note,
         )
     )
 
@@ -148,6 +155,7 @@ def test_run_isolated_reports_error_on_nonzero_exit(
             timeout=None,
             basetemp_root=tmp_path / "basetemp",
             scratch_dir=tmp_path / "scratch",
+            note=_note,
         )
     )
 
@@ -178,6 +186,7 @@ def test_run_isolated_reports_error_when_no_result_file_appears(
             timeout=None,
             basetemp_root=tmp_path / "basetemp",
             scratch_dir=tmp_path / "scratch",
+            note=_note,
         )
     )
 
@@ -206,6 +215,7 @@ def test_run_isolated_kills_the_subprocess_and_reports_error_on_cancellation(
             timeout=None,
             basetemp_root=tmp_path / "basetemp",
             scratch_dir=tmp_path / "scratch",
+            note=_note,
         )
     )
 
@@ -233,6 +243,7 @@ def test_run_isolated_kills_the_subprocess_and_reraises_on_keyboard_interrupt(
                 timeout=None,
                 basetemp_root=tmp_path / "basetemp",
                 scratch_dir=tmp_path / "scratch",
+                note=_note,
             )
         )
 
@@ -260,6 +271,7 @@ def test_run_isolated_hands_the_subprocess_the_runs_own_safety_settings(
             timeout=2.0,
             basetemp_root=tmp_path / "basetemp",
             scratch_dir=tmp_path / "scratch",
+            note=_note,
             loop_watchdog=0,
             teardown_grace=1.5,
         )

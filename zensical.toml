@@ -19,6 +19,7 @@ nav = [
       "how-to/testing-a-fastapi-app.md",
       "how-to/tuning-concurrency.md",
       "how-to/debugging-a-flaky-test.md",
+      "how-to/measuring-coverage.md",
   ] },
   { "Migrating" = ["migrate/index.md", "migrate/matrix.md"] },
   { "Reference" = [

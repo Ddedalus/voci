@@ -79,6 +79,28 @@ jobs:
       - run: uv run pytest
       - run: uv run pytest velox-migrate/tests
 
+  coverage:
+    # A real suite measured the way a user's project measures one: `coverage run -m velox`, over
+    # an example that includes `@velox.isolated` tests, with no combine step in between.
+    name: Coverage (coverage run -m velox)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/02-async-library
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages
+        working-directory: .
+      # `--project` because the example is a project of its own, with no velox in its
+      # dependencies -- the environment to run it from is the repository's.
+      - run: uv run --project ../.. coverage run --source=relay -m velox
+      - run: uv run --project ../.. coverage report -m --fail-under=95
+
   corpus-check:
     name: Corpus check (velox-migrate)
     runs-on: ubuntu-latest

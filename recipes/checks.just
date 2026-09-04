@@ -19,6 +19,18 @@ typecheck *args:
 test *args:
     uv run pytest "$@"
 
+# Measure examples/02-async-library under coverage.py, as CI's coverage job does: a real suite,
+# `@velox.isolated` tests included, run the way a user's project would run one.
+coverage *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # `--project` because the example is a project of its own, with no velox in its dependencies
+    # -- the environment to run it from is this repo's.
+    root="$PWD"
+    cd examples/02-async-library
+    uv run --project "$root" coverage run --source=relay -m velox "$@"
+    uv run --project "$root" coverage report -m --fail-under=95
+
 # Run both suites under every supported interpreter (e.g. `just checks test-all -k annotated`).
 # Mirrors CI's test matrix; `just checks test` and `just check` cover the default one only.
 test-all *args:

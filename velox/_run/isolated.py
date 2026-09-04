@@ -7,6 +7,10 @@ subprocess, awaits it, and returns the JSON-shaped result dict the worker wrote 
 module level (only under `TYPE_CHECKING`, for annotations): `run.py` imports this module, and
 `TestResult`/`Outcome` live there, so a top-level import back would be circular.
 
+A run that is itself under coverage.py hands each subprocess the environment that puts it under
+the same measurement, and merges what it wrote back into the parent's data once it exits --
+`coverage.py` next door owns both halves and is inert when nothing is measuring.
+
 Each subprocess gets its own `tmp_path` root, nested under the parent run's own basetemp so it is
 swept by the same retention policy, never the parent's root directly -- `_capture.install`'s
 explicit-`basetemp` path unconditionally clears whatever already exists there, and the parent's
@@ -18,14 +22,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from velox._builtins.capture import sanitize_test_id
+from velox._run import coverage as _coverage
 
 if TYPE_CHECKING:
     from velox._assertions.rewrite import AssertMode
@@ -96,6 +102,7 @@ async def run_isolated(
     timeout: float | None,
     basetemp_root: Path,
     scratch_dir: Path,
+    note: Callable[[str], None],
     loop_watchdog: float | None = None,
     teardown_grace: float | None = None,
     filterwarnings: Sequence[str] = (),
@@ -113,7 +120,8 @@ async def run_isolated(
     way it would for an in-process test. Nothing here imposes a second, redundant timeout.
     `loop_watchdog`, `teardown_grace` and `filterwarnings` travel the same way, so the subprocess
     runs its one test under the settings the parent run was given rather than the built-in
-    defaults.
+    defaults. `note` is `run_suite`'s own: a line for the user while the run is still going,
+    which coverage measurement is the only thing here to produce.
     """
     start = time.monotonic()
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -145,6 +153,11 @@ async def run_isolated(
         )
     )
 
+    # Only set when this run is itself under coverage.py, and `None` -- inherit the parent's
+    # environment untouched -- whenever it isn't. See `coverage.py` for both halves.
+    coverage_data = scratch_dir / f"{stem}.coverage"
+    coverage_env = _coverage.subprocess_env(coverage_data, note=note)
+
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -153,6 +166,7 @@ async def run_isolated(
         str(result_path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=None if coverage_env is None else os.environ | coverage_env,
     )
     try:
         _stdout, stderr = await proc.communicate()
@@ -170,6 +184,10 @@ async def run_isolated(
         with contextlib.suppress(ProcessLookupError):
             await proc.wait()
         raise
+
+    # After `communicate()` only: the subprocess writes its coverage data on the way out, so
+    # there is nothing to merge until it has exited, and a killed one never wrote any.
+    _coverage.harvest(coverage_data, note=note)
 
     if proc.returncode == 0 and result_path.is_file():
         try:
