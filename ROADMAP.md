@@ -6,8 +6,8 @@ mentioned in [README.md](README.md) or [docs/](docs/), assume it's here.
 ## Working today
 
 Discovery and collection, including `class Test*` grouping and a diagnostic for test shapes that
-would otherwise collect as nothing · explicit dependency injection with
-`call`/`function`/`module`/`session`
+would otherwise collect as nothing · explicit dependency injection, declared in a parameter's
+default or in its `Annotated[...]` metadata, with `call`/`function`/`module`/`session`
 scopes, single-flight construction and inverted teardown · concurrent execution under a semaphore
 with per-test timeouts, overridable with `@velox.timeout(...)` · `exclusive=` on a fixture and
 `@velox.solo`, admission-controlled against everything else running · `@velox.isolated`'s

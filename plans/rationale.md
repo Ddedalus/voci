@@ -66,6 +66,22 @@ never by unwrapping `__wrapped__`. That keeps collection fast and predictable, a
 known sharp edge: a decorator that replaces a test's signature with `(*args, **kwargs)` hides its
 `Depends()` defaults from collection entirely.
 
+A `Depends()` in a parameter's `Annotated[...]` metadata is read too, which is the one thing an
+annotation is load-bearing for. Annotations are not reliably objects — `from __future__ import
+annotations` makes every one of them a string, and on 3.14 they are computed on demand and raise
+for a name that exists only under `TYPE_CHECKING` — so velox **parses rather than evaluates**
+(`_di/fixtures.py`): it reads the annotation's source text with `ast` and evaluates only the
+metadata elements that are calls to velox's own `Depends`. Names are otherwise resolved by
+dictionary lookup in the module's globals, never `eval`, which is what lets an alias
+(`type Db = Annotated[Session, Depends(db_fx)]`) carry a marker.
+
+The type half is never touched. That is deliberately more permissive than FastAPI, which requires
+every annotation on an injected callable to resolve at run time: velox injects against a type
+imported under `if TYPE_CHECKING:`, and collects a test whose other parameters are annotated with
+names that resolve to nothing at all. What it costs is that the *marker* still has to be
+evaluable, so the fixture it names has to live in the module's globals rather than in a local
+variable — a `DIError` at collection when it doesn't.
+
 The line is drawn at name-based resolution, not at where a dependency is declared. A container —
 a test module, or a package `__init__.py` covering that directory and below — can declare fixtures
 on behalf of every test inside it, with `velox.use(...)`:

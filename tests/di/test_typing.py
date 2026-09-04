@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import assert_type
+from typing import Annotated, assert_type
 
 from _support import run_async as run
 
@@ -78,6 +78,22 @@ assert_type(Depends(velox.log_records), LogRecords)
 assert_type(Depends(velox.test_info), velox.TestInfo)
 assert_type(Depends(velox.tmpdir), LegacyPath)
 assert_type(Depends(velox.tmpdir_factory), LegacyTmpPathFactory)
+
+
+# The annotated spelling. `Depends(...)` sits in metadata, where a checker asks nothing of its
+# declared return type, so the parameter is whatever its annotation says with no `cast` anywhere
+# -- and, unlike the default-position form, is annotated even when the author writes no type of
+# their own. Type-checking this file *is* the assertion: a checker that rejected the form would
+# fail here.
+def annotated_site(db: Annotated[Session, Depends(plain)]) -> None:
+    assert_type(db, Session)
+
+
+type Db = Annotated[Session, Depends(plain)]
+
+
+def aliased_site(db: Db) -> None:
+    assert_type(db, Session)
 
 
 def test_an_iterator_valued_fixture_hands_back_the_iterator() -> None:

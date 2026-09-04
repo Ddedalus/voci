@@ -27,22 +27,6 @@ def alpha() -> int:
     return 1
 
 
-def test_annotated_depends_is_rejected_at_decoration_time() -> None:
-    """`def t(db: Annotated[Session, Depends(fx)])` is the FastAPI spelling; velox only ever
-    reads `__defaults__`/`__kwdefaults__`, so it would silently inject nothing."""
-
-    def bad(db: int = 0) -> int:
-        return db
-
-    # Set directly rather than written in the def: this test module has `from __future__ import
-    # annotations`, which would stringify a literal `Annotated[...]` in the signature and defeat
-    # the very check under test.
-    bad.__annotations__["db"] = Annotated[int, Depends(alpha)]
-
-    with pytest.raises(TypeError, match="Annotated"):
-        velox.fixture()(bad)
-
-
 def test_ordinary_annotated_types_are_left_alone() -> None:
     @velox.fixture()
     def fine(db: Annotated[int, "not a dependency"] = Depends(alpha)) -> int:

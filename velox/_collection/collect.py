@@ -458,8 +458,9 @@ def collect(
                 ]
                 expansions = expand_cases(plan)
             except Exception:
-                # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, a plain
-                # `TypeError` for a stray `Depends(...)` inside `Annotated[...]` metadata;
+                # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, for an
+                # unusable `Depends(...)` — declared twice, twice in one `Annotated[...]`, or
+                # naming a fixture a stringified annotation cannot reach;
                 # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
                 # both claim, and a case's own condition raises whatever it raises. All are
                 # attributed to this test and collection continues, same as the `_skip_reason`

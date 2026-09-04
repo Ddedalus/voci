@@ -133,6 +133,52 @@ required parameter; interaction with `@velox.parametrize` `known_params`, with
 A `functools.wraps` wrapper must still read as no injections. Plus a typing check that pyrefly
 accepts the annotated form with no `cast` at the call site.
 
+## What landed — Phase 1
+
+The runtime reads both spellings. `plan_of` is one walk over
+`co_varnames[:co_argcount + co_kwonlyargcount]`, taking each parameter's injection from its
+default or from `_annotated_injections`; `_reject_annotated_depends` and its `TypeError` are gone.
+
+**The 3.14 spike settled on `STRING`**, as the plan guessed, and the measurements are worth
+keeping. In a module with `from __future__ import annotations`, every format — `VALUE`,
+`FORWARDREF`, `STRING` — hands back the raw source text, so nothing is ever evaluated there.
+Without the future import, `func.__annotations__` and `VALUE` raise `NameError` for a
+`TYPE_CHECKING`-only name (which is the regression to avoid), `FORWARDREF` returns real objects
+with a `ForwardRef` in place of the unresolvable half, and `STRING` returns source text.
+`FORWARDREF` would have kept the cheap object path, but it evaluates the type half to get there,
+which is exactly what the parse-don't-evaluate policy is for. So: `STRING` on 3.14+,
+`__annotations__` on 3.13, and on 3.14 the whole thing is skipped when `__annotate__ is None`,
+which is the cheap bail-out for a function with no annotations at all.
+
+Four things the plan did not anticipate:
+
+- **A PEP 695 alias is a `TypeAliasType`, not an `Annotated`**, so both paths unwrap `__value__`
+  before looking for metadata. Bounded rather than a `while`: `type A = A` hands back the alias
+  object itself, forever.
+- **An alias, and the fixture in `Depends(...)`, have to be module-level.** The plan documents
+  this for the fixture under PEP 563; on 3.14 every annotation is source text, so it is the rule
+  everywhere and the reference says so plainly. Where the marker is found but its call cannot be
+  evaluated, that is a `DIError` naming the parameter rather than a silently dropped injection.
+- **A marker held in a module-level name** — `MARKER = Depends(db)`, `Annotated[int, MARKER]` —
+  resolves by the same dictionary lookup the alias case uses, so it costs nothing extra to accept.
+  Same for `Annotated` itself being imported only under `TYPE_CHECKING`: unresolvable, so the
+  spelling is enough to recognize the subscript, and the marker inside it still has to resolve to
+  velox's own `Depends` by identity before anything is evaluated.
+- **On 3.14, a hand-mutated `__annotations__` dict is invisible**, since `STRING` recomputes from
+  `__annotate__`. This only matters for the not-a-parameter diagnostic, which is reachable through
+  `functools.wraps` on both versions — 3.13 copies `__annotations__`, 3.14 copies `__annotate__`.
+  The wraps case that must *not* raise is the `(*args, **kwargs)` wrapper, guarded by
+  `CO_VARARGS | CO_VARKEYWORDS` rather than by the annotation itself.
+
+Collection cost: `plan_of` on a fully annotated five-parameter function goes from 2.71 µs to
+3.98 µs, once per fixture at decoration and once per test at collection. `tests/di/test_typing.py`
+pins that a checker sees `Session` at an annotated site and through an alias, and the whole suite
+is green under 3.13 and 3.14 alike.
+
+Phase 3's sweep is untouched: `docs/reference/fixtures.md` gains the section describing both
+spellings and the module-level rule, and `rationale.md` the parse-don't-evaluate policy, but
+README, guide, and `examples/` still show the default position throughout.
+
 ## Phase 2 — codegen (`velox-migrate`)
 
 - `convert/wiring.py`: `_param`/`_inject` emit `cst.Annotation` wrapping the original annotation in
@@ -177,20 +223,18 @@ under `examples/` (~130 sites, largely mechanical) · a ROADMAP note while this 
 
 ## Sequencing
 
-Phase 1 alone is shippable and is the only phase with design risk. Phase 2 depends on it. Phase 3
-depends on Phase 2 only for `docs/migrate/`. Suggested order: spike the 3.14 annotation-format
-question, then Phase 1 behind its own tests, then Phase 2, then the docs sweep. The `--syntax`
-question is settled — always `Annotated` — and everything in `dependency-typing-plan.md` has
-landed, so Phase 2 inherits a working type inference and has only to re-spell what it emits.
+Phase 1 has landed, spike included, so the design risk is spent. Phase 3 depends on Phase 2 only
+for `docs/migrate/`. The `--syntax` question is settled — always `Annotated` — and everything in
+`dependency-typing-plan.md` has landed, so Phase 2 inherits a working type inference and has only
+to re-spell what it emits.
 
 Per the `dev-workflow` skill this is worktree work: `git worktree add ../velox-wt-annotated -b
 annotated-injection`, `just sync`, `just check`, `/code-review` before merge.
 
 ## Risks
 
-- The 3.14 annotation-format spike is the one unknown that can change the shape of
-  `_annotated_injections`. Do it first.
-- Collection cost must stay at zero for suites that don't use the form. The substring fast-reject
-  is what guarantees that; benchmark against `mod bench` if collection time moves.
 - Two spellings is two of everything to explain. The mitigation is that the second one is one
   section, not a parallel guide.
+
+The other two are spent: the 3.14 annotation-format question is answered above, and the collection
+cost is measured there rather than guessed at.

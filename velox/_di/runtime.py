@@ -270,9 +270,9 @@ async def setup(
             async def build(step: PlanStep = step) -> tuple[Any, Closer | None]:
                 # `step.args`' `keyword_only` element is unused here: everything binds by keyword,
                 # which only works because `_fixtures.plan_of` already rejects `Depends(...)` on a
-                # positional-only parameter at decoration time. `keyword_only` stays on
-                # `Injection`/`PlanStep` as a diagnostic field, not because construction branches
-                # on it.
+                # positional-only parameter at decoration time, in either spelling.
+                # `keyword_only` stays on `Injection`/`PlanStep` as a diagnostic field, not
+                # because construction branches on it.
                 kwargs = {name: values[source] for name, source, _ in step.args}
                 if step.fixture.params:
                     kwargs["param"] = step.param_value
