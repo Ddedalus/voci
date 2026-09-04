@@ -3,16 +3,12 @@
 `velox_migrate.inference` answers what the type *is*, from the factory's return annotation alone.
 This is the other half — whether the names in that answer can be spelled in the module the
 parameter is written in, and what import puts them there — plus the built-in table, whose types
-no suite states and inference therefore cannot reach. `convert/wiring.py` emits both halves. When
-`Depends` moves inside `Annotated[...]`, the emission changes and neither half does.
+no suite states and inference therefore cannot reach. `convert/wiring.py` emits both halves,
+inside the `Annotated[...]` that carries the injection.
 
-**Where the type is not recoverable this writes no annotation at all**, where
-`plans/dependency-typing-plan.md` says to write `Any`. The plan's `Any` is premised on the
-annotated spelling, in which a parameter has no default for a checker to infer from; in default
-position there is one, and pyright and pyrefly both infer `Session` from `Depends(db_fx)` on their
-own. `db: Any = Depends(db_fx)` would destroy that inference and buy mypy nothing, since mypy
-already reads the parameter as `Any` either way. So a fallback is silence in the source and a row
-in the conversion report — do not restore the plan's letter without moving to `Annotated` first.
+Where the type is not recoverable, the parameter is written `Any` and the fixture behind it gets a
+row in the conversion report. An injected parameter has no default for a checker to infer from, so
+`Any` written down is what the parameter means either way, said out loud.
 
 Named `annotate` rather than `annotations` because `convert/__init__.py` writes `from __future__
 import annotations`, which binds that name in the package's own namespace: a submodule called

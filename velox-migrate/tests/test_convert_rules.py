@@ -1595,10 +1595,10 @@ def test_a_local_called_capsys_is_not_the_fixture() -> None:
 
 
 def test_capsys_is_read_after_the_wiring_has_renamed_the_parameter() -> None:
-    before = """def test_x(capture=Depends(velox.capture)):
+    before = """def test_x(capture: Annotated[Any, Depends(velox.capture)]):
     assert capture.readouterr().out == ""
 """
-    after = """def test_x(capture=Depends(velox.capture)):
+    after = """def test_x(capture: Annotated[Any, Depends(velox.capture)]):
     assert capture.out == ""
 """
     _rewrite("VX201", before, after, _context("test_x"))

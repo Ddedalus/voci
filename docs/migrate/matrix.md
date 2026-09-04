@@ -18,7 +18,7 @@ Nobody has to read the diff for these. The conversion rewrites them and the audi
 
 | Code | pytest | velox | Notes |
 | --- | --- | --- | --- |
-| VX001 | `@pytest.fixture` | `@velox.fixture()` | A fixture becomes a module-level object, and every parameter that requested it by name becomes a `Depends()` default naming the import. |
+| VX001 | `@pytest.fixture` | `@velox.fixture()` | A fixture becomes a module-level object, and every parameter that requested it by name is annotated `Annotated[T, Depends(...)]` naming the import. |
 | VX002 | `@pytest.fixture(params=...)` | `@velox.fixture(params=...)` | The fixture keeps its cases, and `request.param` becomes the factory's own `param` argument. |
 | VX004 | conftest.py fixture | fixtures.py beside the conftest | Every fixture in a `conftest.py` moves to a `fixtures.py` beside it, and the tests that used it import it from there. |
 | VX005 | a fixture overriding one visible from further out | a specialized fixture chain | The override and every fixture between it and the tests that reach it are generated as a specialized chain named for the directory or class the override rules. |

@@ -222,6 +222,52 @@ README, guide, and `examples/` still show the default position throughout.
   Re-run the httpx2 conversion (`plans/httpx2-audit.md`) afterwards and diff the refusal counts —
   a drop there is the concrete win to report.
 
+## What landed — Phase 2
+
+`wiring.py` writes `Annotated[T, Depends(fx)]` and no default. `typing.Annotated` is imported at
+run time beside `velox.Depends`, and `typing.Any` where the type could not be recovered — the
+plan's letter, restored as it said, and `convert/annotate.py`'s docstring no longer argues against
+it. Refusals, node ids, and the report are untouched; the corpus suites still convert, run under
+velox, and re-convert to nothing.
+
+**The future import stays, and stays load-bearing.** The premise for dropping it was that
+parse-don't-evaluate covers a `TYPE_CHECKING`-only type, and it covers only what *velox* does with
+the annotation. On 3.13 the annotation is still an expression Python evaluates when the `def` is
+read, so a module naming a type it imports only under `TYPE_CHECKING` needs the future import as
+much in metadata position as in default position. It is written on the same condition as before:
+this pass claimed a `TYPE_CHECKING` import.
+
+Three things the plan had backwards or did not anticipate:
+
+- **The reordering branch is not dead; its trigger inverted.** The old one — a `params=` fixture's
+  `request` becoming the bare `param` after an injected parameter that had a default — cannot
+  happen now that nothing gains a default, and the corpus's `retries` keeps the order it was
+  written in. What survives is the reverse: a parameter a body asked for by name is appended to
+  the signature and, if the source gave some earlier parameter a default, must move ahead of it.
+  So `_rewrite`'s split stays, with a unit test pinning the shape the corpus no longer produces.
+- **Converting a converted tree wrapped its own annotation a second time.** The rewrite is driven
+  by the pytest dump, so it re-injects a parameter that is already injected; `_bare` takes an
+  `Annotated[T, Depends(...)]` back down to `T` before wrapping, which is what makes the second
+  conversion a no-op again.
+- **No matrix row refuses on binding position**, so none shrank — `VX001`'s description is the one
+  row this changes. Worth noting separately: `wiring.py` refuses a positional-only injected
+  parameter under `VX017`, which is a `request`-as-a-value row. That mislabel predates this work
+  and the annotated form does not change the refusal, but a user reading the report is told the
+  wrong thing.
+
+**httpx2 re-run** (`httpx2-audit.md`), converted with each spelling in turn: the refusal counts
+are identical — `VX324` 23, `VX216` 6, `VX030` 4, `VX112` 2, plus one `VX205` site — and both
+converted trees collect 1466 tests, 1 skipped, 109 collection errors under velox, the errors being
+the refused tests announcing themselves as designed. The hoped-for drop was never there to find,
+because refusal never depended on binding position. The win the suite does show is in the
+signatures: 57 injection sites, every one carrying a real type and none degraded to `Any`, and the
+one multi-line signature the old form mangled — `test_load_ssl_config_cert_and_encrypted_key`,
+whose parametrized `password` was hoisted ahead of two injected parameters that were then written
+flush against the left margin — now keeps its order and its indentation.
+
+`docs/migrate/index.md`'s before-and-after example and the generated `docs/migrate/matrix.md` show
+what the tool writes now. The rest of Phase 3's sweep is untouched.
+
 ## Phase 3 — docs and examples
 
 `Annotated` becomes the form shown everywhere; default position gets one titled section in the

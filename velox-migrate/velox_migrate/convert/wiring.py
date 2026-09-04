@@ -2,30 +2,27 @@
 
 This is the one rewrite that has no pytest-to-pytest equivalent, and the reason `convert` exists.
 A fixture stops being a function pytest looks up by name and becomes a module-level object; every
-parameter that requested it by name grows a `Depends()` default naming that object; and the import
+parameter that requested it by name is annotated `Annotated[T, Depends(object)]`; and the import
 statement carrying the object into scope is the wiring itself.
 
-Two constraints from how velox reads injection shape the output. It reads `__defaults__`, so a
-`Depends()` has to sit in default position — which means a parameter without a default can never
-follow one that has it, and a signature mixing injected and parametrized names is reordered. And
-it binds every argument by keyword, so the order it is reordered into is free.
-
-Signature whitespace is preserved wherever the original order already works, which is every
-signature whose parameters are all injected — the common case.
+velox reads an injection out of the parameter's annotation metadata, so nothing a signature grows
+carries a default and the order the source was written in stands. The one order that moves is a
+parameter a body asked for by name landing after one the source gave a default, since a parameter
+without a default cannot follow one that has it — and velox binds every argument by keyword, so
+the order it moves into is free. Every other signature keeps the whitespace it was written with.
 
 A signature also grows and loses parameters here. A dependency a body asked for by name arrives
 as an injection with no parameter of its own and becomes one; a `request` whose every use the body
-rules rewrote arrives as an injection with no parameter left and stops being one. And a parameter
-with no annotation of its own grows the one `convert/annotate.py` inferred from the fixture
-factory it is injected from — `db: Session = Depends(db_fx)` — because that annotation is the only
-thing that gives mypy the parameter's type, and because a parameter the source already annotated
-is one the author has already answered for.
+rules rewrote arrives as an injection with no parameter left and stops being one. The type inside
+the `Annotated[...]` is the one `convert/annotate.py` inferred from the fixture factory the
+parameter is injected from, or `Any` where nothing could be inferred — except where the source
+annotated the parameter itself, which is the author's answer to the same question.
 
 Writing a type is why this also writes `from __future__ import annotations`, into every module it
-annotates. A default-position annotation is an expression evaluated when the `def` is read, so a
-type named only by a `TYPE_CHECKING` import would be a `NameError` at import time; under the
-future import nothing in the module is evaluated, and velox never reads an annotation — it builds
-its injection plan from `__code__` and `__defaults__`, as `velox/_di/fixtures.py` says at the top.
+annotates. An annotation is otherwise an expression evaluated when the `def` is read, so a type
+named only by a `TYPE_CHECKING` import would be a `NameError` at import time. velox reads the
+annotation under either spelling by parsing its source text for the `Depends()` marker, evaluating
+that marker and nothing else, as `velox/_di/fixtures.py` says at the top.
 """
 
 from __future__ import annotations
@@ -48,6 +45,10 @@ from velox_migrate.model import REQUEST
 # The case argument velox binds a parametrized fixture's value to; there is no `request`.
 PARAM = "param"
 
+# The two `typing` names a written signature spells itself through.
+ANNOTATED = "Annotated"
+ANY = "Any"
+
 CAPLOG = "caplog"
 SET_LEVEL = "set_level"
 
@@ -62,14 +63,16 @@ _NO_SPACE = cst.SimpleWhitespace("")
 class _Claims:
     """What the signatures written so far need of the module around them.
 
-    `imports` are the ones a written annotation is spelled through, and `replaced` are the
-    annotations this pass overwrote, whose own imports may now have no reader left. Both are
-    filled as parameters are written rather than when the plan was made, so a definition the
-    rewrite backs out of neither adds an import nor takes one away.
+    `imports` are the ones a written annotation is spelled through, `replaced` are the annotations
+    this pass overwrote, whose own imports may now have no reader left, and `untyped` says one of
+    the written signatures reached for `Any`. All three are filled as parameters are written
+    rather than when the plan was made, so a definition the rewrite backs out of neither adds an
+    import nor takes one away.
     """
 
     imports: list[TypeImport] = field(default_factory=list)
     replaced: list[cst.Annotation] = field(default_factory=list)
+    untyped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,9 +187,13 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(self.context, "velox")
         if self._injected:
             AddImportsVisitor.add_needed_import(self.context, "velox", "Depends")
+            AddImportsVisitor.add_needed_import(self.context, "typing", ANNOTATED)
+        if self.claims.untyped:
+            AddImportsVisitor.add_needed_import(self.context, "typing", ANY)
         if self.claims.imports:
             # Every annotation this wrote is a string under the future import, which is what makes
-            # naming a type through a `TYPE_CHECKING`-only import safe in default position.
+            # naming a type through a `TYPE_CHECKING`-only import safe: an annotation is otherwise
+            # an expression evaluated when the `def` is read.
             AddImportsVisitor.add_needed_import(self.context, "__future__", "annotations")
             AddImportsVisitor.add_needed_import(self.context, "typing", "TYPE_CHECKING")
         for module in self._needs:
@@ -320,15 +327,9 @@ def _declared(params: cst.Parameters) -> frozenset[str]:
 
 def _param(injection: Injection, claims: _Claims | None = None) -> cst.Param:
     """The parameter a dependency asked for by name becomes: injected, and written with a comma."""
-    annotation = _annotation(injection, claims)
     return cst.Param(
         name=cst.Name(injection.param),
-        annotation=annotation,
-        default=cst.Call(
-            func=cst.Name("Depends"),
-            args=[cst.Arg(value=cst.parse_expression(injection.reference))],
-        ),
-        equal=_equal(annotation),
+        annotation=_annotated(injection, None, claims),
         comma=cst.MaybeSentinel.DEFAULT,
     )
 
@@ -340,43 +341,92 @@ def _inject(
         return param
     if injection.was == REQUEST:
         return param.with_changes(name=cst.Name(PARAM), annotation=None, default=None)
-    # An annotation the source already carries is left exactly as it was written: it is the
+    # An annotation the source already carries is the type half of what is written here: it is the
     # author's answer to the same question, and overwriting it would be this pass deciding a type
     # against someone who had already decided one. A built-in is the exception -- `capsys` becomes
     # a `velox.Capture`, so the `CaptureFixture[str]` the source wrote is no longer true of it.
     ours = injection.retypes or param.annotation is None
     if ours and param.annotation is not None and claims is not None:
         claims.replaced.append(param.annotation)
-    annotation = _annotation(injection, claims) if ours else param.annotation
+    carried = None if ours else param.annotation
     return param.with_changes(
         name=cst.Name(injection.param),
-        annotation=annotation,
-        default=cst.Call(
-            func=cst.Name("Depends"),
-            args=[cst.Arg(value=cst.parse_expression(injection.reference))],
-        ),
-        equal=_equal(annotation),
+        annotation=_annotated(injection, carried, claims),
+        default=None,
+        equal=cst.MaybeSentinel.DEFAULT,
     )
 
 
-def _annotation(injection: Injection, claims: _Claims | None) -> cst.Annotation | None:
+def _annotated(
+    injection: Injection, carried: cst.Annotation | None, claims: _Claims | None
+) -> cst.Annotation:
+    """`Annotated[T, Depends(fixture)]`, where `T` is `carried` or the type inferred for it."""
+    inner = _bare(carried) if carried is not None else _type(injection, claims)
+    marker = cst.Call(
+        func=cst.Name("Depends"),
+        args=[cst.Arg(value=cst.parse_expression(injection.reference))],
+    )
+    return cst.Annotation(
+        annotation=cst.Subscript(
+            value=cst.Name(ANNOTATED),
+            slice=[
+                cst.SubscriptElement(slice=cst.Index(value=inner)),
+                cst.SubscriptElement(slice=cst.Index(value=marker)),
+            ],
+        )
+    )
+
+
+def _bare(annotation: cst.Annotation) -> cst.BaseExpression:
+    """The type an annotation states, with an injection it already carries taken off the front.
+
+    An `Annotated[T, Depends(fx)]` is what this pass writes, so a tree it has already converted
+    reads back as one: the type is `T`, and rewriting it wraps that rather than the whole
+    annotation. Any other annotation is the type it states.
+    """
+    node = annotation.annotation
+    if not isinstance(node, cst.Subscript) or not _named(node.value, ANNOTATED):
+        return node
+    if len(node.slice) < 2 or not any(_is_marker(element) for element in node.slice[1:]):
+        return node
+    first = node.slice[0].slice
+    return first.value if isinstance(first, cst.Index) else node
+
+
+def _is_marker(element: cst.SubscriptElement) -> bool:
+    """Whether one `Annotated[...]` metadata element is a `Depends()` call."""
+    index = element.slice
+    if not isinstance(index, cst.Index) or not isinstance(index.value, cst.Call):
+        return False
+    return _named(index.value.func, "Depends")
+
+
+def _named(expression: cst.BaseExpression, name: str) -> bool:
+    """Whether an expression is `name`, however the module it was written in spells its owner."""
+    match expression:
+        case cst.Name(value=value):
+            return value == name
+        case cst.Attribute(attr=cst.Name(value=value)):
+            return value == name
+        case _:
+            return False
+
+
+def _type(injection: Injection, claims: _Claims | None) -> cst.BaseExpression:
     """The inferred type for this parameter, claiming the imports that make it spellable.
 
     Claimed here rather than when the plan was made, so that a definition the rewrite backs out of
     leaves no import behind it: nothing is queued until a parameter is actually written with it.
+    `Any` is what an injection nothing could be inferred for is written with, which is the type
+    such a parameter had anyway, said out loud.
     """
     if injection.annotation is None:
-        return None
+        if claims is not None:
+            claims.untyped = True
+        return cst.Name(ANY)
     if claims is not None:
         claims.imports.extend(injection.needs)
-    return cst.Annotation(annotation=cst.parse_expression(injection.annotation))
-
-
-def _equal(annotation: cst.Annotation | None) -> cst.AssignEqual | cst.MaybeSentinel:
-    """`x=default` for a bare parameter, `x: T = default` for an annotated one, as PEP 8 has it."""
-    if annotation is not None:
-        return cst.MaybeSentinel.DEFAULT
-    return cst.AssignEqual(whitespace_before=_NO_SPACE, whitespace_after=_NO_SPACE)
+    return cst.parse_expression(injection.annotation)
 
 
 def _stranded(node: cst.FunctionDef, injections: Sequence[Injection]) -> str | None:
