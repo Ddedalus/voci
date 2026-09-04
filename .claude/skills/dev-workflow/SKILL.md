@@ -1,12 +1,11 @@
 ---
 name: dev-workflow
-description: Session workflow rules for velox — how to choose between direct-commit, worktree, and branch workflows for a task, and the exact worktree setup/cleanup steps (sibling directory placement, sync, code review, merge). Load before starting a non-trivial task (feature, refactor, roadmap item, or "work in a branch") to decide how to structure the session.
+description: top-level agent must always load this to pick commit workflow
 ---
 
 # velox dev workflow
 
-This is a prototype repo not yet published. We're working alone locally: there is no human code
-review, just fast AI iteration. Pick the workflow below for the task at hand.
+We're working alone locally: there is no human code review, just fast AI iteration. Pick the workflow below for the task at hand.
 
 ## Direct commit workflow
 

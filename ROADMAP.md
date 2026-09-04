@@ -59,6 +59,12 @@ forever, holding that test's admission slot, with no way out but Ctrl-C. Boundin
 parent needs a decision on what the budget covers, since a legitimately slow import (a module
 pulling in a large dependency) must not read as a timed-out test.
 
+## trio support
+A `@velox.trio` mark running a trio test on its own `trio.run`, inside the existing worker-thread
+pool sync tests already use — not a backend-agnostic runner. Costed and decided in
+`plans/trio-support-plan.md`, 3–5 days; fixture injection and external cancellation (`--maxfail`,
+Ctrl-C) stay best-effort, same as a sync test today.
+
 **Reporting.** JUnit XML and GitHub annotations.
 
 
