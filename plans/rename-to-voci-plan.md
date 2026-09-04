@@ -20,12 +20,25 @@ word-bounded one: it has to reach into `velox_migrate`, `velox-migrate`, `.velox
 `VELOX_REWRITE_CACHE`, `velox.fixture` in one pass and produce `voci_migrate`, `voci-migrate`,
 `.voci_cache`, `VOCI_REWRITE_CACHE`, `voci.fixture` correctly.
 
-One named exception the mechanical rule gets wrong: **`velox-test` (the PyPI distribution name)
-becomes `voci`, not `voci-test`.** The `-test` suffix existed only to dodge the `velox` collision;
-`voci` doesn't have that collision, so the suffix drops. Everywhere else `velox-test` appears
-(root `pyproject.toml` `[project].name`, `README.md`'s install line, `examples/01-fastapi-crud`'s
-dependency + `[tool.uv.sources]`, `release.yml`'s PyPI environment URL) gets this by-hand fix
-after the sweep, not the substring rule.
+Two named exceptions the mechanical rule gets wrong, both applied by hand, not by the substring
+script:
+
+- **`velox-test` (the PyPI distribution name) becomes `voci`, not `voci-test`.** The `-test`
+  suffix existed only to dodge the `velox` collision; `voci` doesn't have that collision, so the
+  suffix drops. Everywhere `velox-test` appears (root `pyproject.toml` `[project].name`,
+  `README.md`'s install line, `examples/01-fastapi-crud`'s dependency + `[tool.uv.sources]`,
+  `release.yml`'s PyPI environment URL) gets this fix.
+- **The migration tool's `VX###` construct codes (105 of them, e.g. `VX214`) become `VC###`**
+  ("Voci Construct", same shape as today's unstated "Velox Construct"). These don't spell out
+  `velox`, so the substring rule never touches them — needs its own pass, a regex like
+  `\bVX(\d{3})\b` → `VC\1`, applied case-sensitively (never lowercase `vx`) across
+  `velox_migrate/matrix.py` (the 105 definitions), `velox_migrate/{audit,convert,report}/*.py`,
+  `velox-migrate/tests/*.py`, `docs/migrate/matrix.md`, `docs/migrate/index.md`,
+  `plans/migration-findings.md`, `plans/trio-support-plan.md`. Not present in
+  `velox-migrate/corpus/` (checked — no dump or showcase file bakes in a VX code), so no corpus
+  regeneration needed for this one. `VELOX-TODO[category]` (the marker converted source actually
+  carries) is a different string — plain `VELOX`, caught by the ordinary substring rule, becomes
+  `VOCI-TODO[category]` for free.
 
 Everything else is the mechanical rule applied consistently:
 
@@ -41,6 +54,7 @@ Everything else is the mechanical rule applied consistently:
 | `VELOX_REWRITER_REVISION`, `VELOX_CODEGEN_OPTIONS`, `VELOX_BLOCK`, `VELOX_REPORT_VERSION`, `_VELOX_DIR` (internal constants) | `VOCI_*` equivalents |
 | `velox-example-*` (example project names) | `voci-example-*` |
 | GitHub `Ddedalus/velox` | `Ddedalus/voci` |
+| `VX###` construct codes (§1 exception, own regex) | `VC###` |
 
 Not touched: `oss/*` (pinned third-party submodules — FastAPI, pytest, httpx, etc.; editing
 checked-out submodule content is out of scope and would dirty their pinned commits). `uv.lock`
@@ -60,6 +74,8 @@ Large mechanical refactor touching nearly every file → worktree workflow, not 
   `.venv*/`, `site/`, `.cache/`, `.ruff_cache/`, `.pytest_cache/`, `uv.lock` — a `git ls-files`
   walk with the three-case substitution is enough; ripgrep/sed works too if it preserves case.
 - Apply the `velox-test` → `voci` exception by hand at its four call sites (§1).
+- Apply the `VX###` → `VC###` regex pass (§1) — separately from the substring sweep, since it
+  doesn't spell `velox` and the sweep won't reach it.
 - Fix up path-shaped strings the substring rule won't reach on its own: `[tool.hatch.build.hooks.vcs] version-file`, `[tool.hatch.build.targets.wheel] packages`, `pyrefly` `project-includes`/`project-excludes`/`search-path`, `ruff` `extend-exclude`, `isort` `known-first-party`, `justfile`/`recipes/*.just` path references, CI workflow paths (`velox-migrate/velox_migrate` → `voci-migrate/voci_migrate` etc.) — these are directory paths, so `git mv` above already renamed the targets; this step is confirming every reference to those paths was swept too, since a path is textually just `velox...` and the substring rule should already have caught it. Spot-check rather than assume.
 - Root `CLAUDE.md`: update the `velox-docs` skill reference to `voci-docs`.
 
