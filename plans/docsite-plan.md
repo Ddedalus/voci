@@ -109,7 +109,8 @@ autodoc path. Generate it the way `velox/_assertions/_vendor/` is generated: a s
    `reference/cli.md` plus its generator script and `just docs check`.
 3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching
    `examples/` suite.
-4. **How-to** — the four recipe pages, each derived from a specific `examples/` file.
+4. ~~**How-to**~~ — **done.**: the four recipe pages, each derived from a specific `examples/`
+   file.
 5. **About** — `index.md`, `alternatives.md`. `rationale.md` is an internal document under
    `plans/`, so a public "why" page is written fresh rather than linked.
 6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up decision once the repo is public — out of scope here.
