@@ -5,6 +5,9 @@ set working-directory := '..'
 # computed lazily and reach `velox._di.fixtures` as source text, where 3.13 hands it objects), so
 # each version exercises a different half of the injection scan and of the `sys.version_info`
 # branches around it. `.python-version` picks the one everything runs under by default.
+#
+# CI can't read this list -- its workflow calls uv directly, without just -- so the `python-version`
+# matrices in `.github/workflows/ci.yml` spell out the same versions and have to be edited with it.
 supported := "3.13 3.14"
 
 # The supported interpreters, one per line (`just checks test-all` iterates over this)
