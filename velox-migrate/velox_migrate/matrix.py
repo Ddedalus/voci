@@ -422,6 +422,15 @@ CONSTRUCTS: tuple[Construct, ...] = (
         "out of the test module.",
         detected=False,
     ),
+    _row(
+        "VX036",
+        "a fixture requested by a positional-only parameter",
+        REFUSED,
+        "velox binds every argument by keyword, so a parameter written before the `/` can never "
+        "be given the object it names, and moving it out from behind the `/` would change what "
+        "the definition can be called with everywhere else.",
+        action="Write the parameter after the `/`, or take the `/` off the signature.",
+    ),
     # --- marks and parametrization -------------------------------------------------------------
     _row(
         "VX101",

@@ -849,6 +849,22 @@ def test_a_parameter_asked_for_by_name_goes_behind_a_star_where_nothing_else_is_
     assert "def test_x(a=1, /, flag=2, *, db: Annotated[Any, Depends(db)]):" in result.module.code
 
 
+def test_a_positional_only_parameter_refuses_the_definition_under_its_own_row() -> None:
+    # velox binds by keyword, so the parameter can never be given the fixture, and the signature
+    # is left alone. The row says that, rather than the one about `request` outliving setup.
+    source = "def test_x(db, /, flag=True):\n    assert db and flag\n"
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(plan.TestWork(qualname="test_x", injections=(plan.Injection("db", "db", "db"),)),),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert result.refused == (("test_x", "VX036"),)
+    assert result.module.code == source
+
+
 def test_a_keyword_only_parameter_is_injected_where_it_was_written() -> None:
     # Keyword-only parameters bind by name whatever order they are written in, so one without a
     # default following one that has it is a signature to leave alone.

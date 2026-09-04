@@ -254,7 +254,7 @@ class _Wiring(VisitorBasedCodemodCommand):
         if any(param.name.value in by_name for param in node.params.posonly_params):
             # velox binds every argument by keyword, so a positional-only parameter can never be
             # injected. Rewriting the signature would change what the test can be called with.
-            self.refused.add((name, "VX017"))
+            self.refused.add((name, "VX036"))
             return node
         self._wrote = True
         self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
