@@ -12,6 +12,9 @@ mod docs 'recipes/docs.just'
 # velox-migrate tests and corpus dumps
 mod migrate 'recipes/migrate.just'
 
+# Run against a non-default interpreter (velox supports 3.13 and 3.14)
+mod py 'recipes/py.just'
+
 # AST-based tools for splitting/moving top-level objects and rewiring their imports
 mod refactor 'recipes/refactor.just'
 
@@ -25,7 +28,7 @@ default: list
 list:
     @just --list
 
-# Install/sync the dev environment (both workspace members, editable)
+# Install/sync the dev env for the default interpreter (`just py sync X.Y` for the others)
 sync:
     uv sync --all-packages
 

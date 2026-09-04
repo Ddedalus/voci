@@ -32,8 +32,17 @@ jobs:
       - run: uv run ruff format --check .
 
   typecheck:
-    name: Typecheck (pyrefly)
+    # Both supported interpreters, for the same reason the test job runs both: pyrefly narrows
+    # `sys.version_info` branches to the version it is checking under, so a single interpreter
+    # leaves the other half of every such branch unchecked.
+    name: Typecheck (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +57,9 @@ jobs:
   test:
     # Both supported interpreters, because they disagree about annotations: 3.14 computes them
     # lazily (PEP 649) and hands `velox._di.fixtures` source text where 3.13 hands it objects,
-    # so each version exercises a different half of the injection scan.
+    # so each version exercises a different half of the injection scan. `recipes/py.just`'s
+    # `supported` is the same list for local runs, and has to be edited alongside both matrices
+    # here -- this workflow calls uv directly, so it can't read the list from just.
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
