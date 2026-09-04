@@ -95,24 +95,48 @@ Large mechanical refactor touching nearly every file → worktree workflow, not 
   keyed to the old dist/package names; rebuild rather than trust `uv sync` to patch them in place.
 - `uv lock` (or let the above `sync` do it) to regenerate `uv.lock` under the new names.
 
-### 4. Verify
+### 4. Verify — every check the repo has, not a code review
 
-- `just check` (default interpreter: lint, fmt-check, typecheck, test)
-- `just checks test-all` (both suites, both interpreters — this is a version-branch-adjacent
-  change in the sense that it touches every file `sys.version_info` branches live in, even though
-  it isn't one)
-- `just migrate test`, `just migrate corpus-check`
-- `just docs check` (site builds clean, generated pages match sources)
-- `just vendor check`
-- `git grep -i velox` over the worktree should come back empty except inside `oss/` and, if kept
-  around as a compatibility note, this plan file's own history
+This isn't a shape-of-the-code change a reviewer reasons about; it's a mechanical, total sweep,
+and the way it goes wrong is a missed spot — a stale import, a path that doesn't exist anymore, a
+dump whose test name didn't get updated. The repo's checks already catch exactly that class of
+error (collection failures, typecheck errors, a corpus dump that no longer matches). Trust them:
+run every one, mirroring CI job-for-job plus the local-only ones CI doesn't cover, rather than
+adding a review pass on top.
 
-### 5. Review and merge
+CI-mirroring (one bullet per `ci.yml` job):
 
-`/code-review high rename-voci` given the size — a mechanical sweep still has real ways to go
-wrong (a missed `velox-test` special-case, a docstring that quoted `velox` as prose about the old
-name rather than as an identifier, an env var some CI secret still expects under the old spelling).
-Address findings, merge to `main`, delete the worktree per the workflow's cleanup steps.
+- `just checks lint`, `just checks fmt-check` — lint job
+- `just checks typecheck` (default interpreter) **and** `just py run 3.13 pyrefly check` +
+  `just py run 3.13 pyrefly check --progress-bar no voci-migrate/voci_migrate voci-migrate/scripts voci-migrate/tests`
+  — typecheck job's 3.13/3.14 matrix; a rename this broad is worth checking under both even though
+  it isn't a `sys.version_info` change itself
+- `just checks test` (default interpreter) **and** `just py run 3.13 pytest` +
+  `just py run 3.13 pytest voci-migrate/tests -n auto` — test job's matrix; `just checks test-all`
+  does both legs, both interpreters, in one shot
+- `just checks coverage` — coverage job (`coverage run -m voci` over `examples/02-async-library`)
+- `just migrate corpus-check` — corpus-check job
+- `just vendor check` — vendor-check job
+- `uv build` **and** `uv build --package voci-migrate` — build job; the second distribution's dist
+  name changed too (`voci-migrate`) and CI's build job doesn't currently exercise it, so it needs
+  checking on its own here
+
+Local-only (not in CI, but this rename touches what they check, so run them anyway):
+
+- `just docs check` — site builds clean, `docs/reference/cli.md` and `docs/migrate/matrix.md`'s
+  generated blocks match the renamed `voci.cli`/`voci_migrate.matrix`
+- `git grep -i velox` over the worktree — should come back empty except inside `oss/` and, if kept
+  as a compatibility note, this plan file's own history
+- `git grep -i vx[0-9]` — should come back empty (the `VX###` → `VC###` pass, §1)
+
+`just check` alone already bundles lint + fmt-check + typecheck + default-interpreter test +
+`just migrate test`, so it's the fast first pass; the rest above is what makes the sweep verified
+rather than merely typechecked.
+
+### 5. Merge
+
+Once everything in §4 is green: merge to `main`, delete the worktree per the workflow's cleanup
+steps. No review step — §4 is the gate.
 
 ### 6. GitHub
 
