@@ -36,6 +36,7 @@ Nobody has to read the diff for these. The conversion rewrites them and the audi
 | VX104 | `@pytest.mark.skip`, `@pytest.mark.skipif(bool)` | `@velox.skip`, `@velox.skipif` | Same decorator, same reason. |
 | VX105 | @pytest.mark.xfail with a condition | `@velox.xfail(condition=...)` | The condition becomes `@velox.xfail`'s own `condition=`, which decides whether the failure is expected at all. |
 | VX107 | `xfail_strict` | strict= on each xfail | The ini setting is written into each generated `@velox.xfail` as `strict=`. |
+| VX108 | `@pytest.mark.filterwarnings` | `@velox.filterwarnings(...)` | Becomes `@velox.filterwarnings(...)`, which takes the same filter specs and governs the test that carries it alone, whatever else is running. |
 | VX109 | a custom mark | `@velox.tag(...)` | Becomes `@velox.tag(...)`, selectable with `-m`, and needs no registration. |
 | VX110 | @pytest.mark.asyncio, @pytest.mark.anyio, event_loop fixtures | deleted | velox runs `async def` tests itself, so the mark and the loop fixtures go away. A backend parametrization the mark carried goes with it, and with it that segment of the test's id. |
 | VX111 | `@pytest.mark.timeout` | `@velox.timeout(...)` | Becomes `@velox.timeout(...)`. |
@@ -57,6 +58,7 @@ Nobody has to read the diff for these. The conversion rewrites them and the audi
 | VX303 | `norecursedirs` | `ignore` | Becomes `ignore`. |
 | VX304 | pytest-timeout's timeout setting | `timeout` | Becomes the `timeout` key, which velox applies per test. |
 | VX306 | markers, asyncio_mode, and other settings with nothing to configure | dropped | velox tags need no registration and it runs async tests without being told to, so these settings have no counterpart to write. |
+| VX307 | `filterwarnings` | [tool.velox] filterwarnings | Carried to `[tool.velox]`'s own `filterwarnings`, which takes the same filter specs. |
 | VX320 | an installed plugin migration deletes | deleted | Its whole job is done by the runner, so the suite loses the dependency. |
 | VX321 | an installed plugin with a translation | — | What the suite uses it for has a velox spelling, reached through the rows for the fixtures and marks themselves. |
 
@@ -110,7 +112,6 @@ velox provides nothing that plays these parts, so a suite that leans on one has 
 | VX022 | conftest hook (pytest_configure, pytest_collection_modifyitems, ...) | Hooks are how a pytest plugin reaches into collection and reporting, and velox has no hook protocol. | Decide per hook: fixtures replace setup hooks, and reporting hooks have no counterpart. |
 | VX023 | `pytest_addoption` | velox's command line is fixed, so a suite cannot add a flag to it. | Read the setting from the environment or from `[tool.velox]`'s `env`. |
 | VX030 | a fixture an installed plugin provides | The fixture lives in a distribution, not in the suite, so there is no source to move and nothing registers it under velox. | Write the fixture into the suite, or drop the tests that need it. |
-| VX108 | `@pytest.mark.filterwarnings` | Warning filters are process-global, and velox runs tests concurrently in one process, so a per-test filter cannot be honoured. | Move the filter into the test body with `warnings.catch_warnings`, and mark the test `@velox.solo`. |
 | VX112 | a mark an installed plugin acts on | The behaviour was the plugin's, and velox records marks as tags without acting on them. | Replace the mark's effect with a fixture, or drop the tests that need it. |
 | VX203 | `capfd`, `capsysbinary`, `capfdbinary` | velox captures by replacing `sys.stdout` and `sys.stderr`, so writes to file descriptor 1 by a subprocess or a C extension are not captured, and there is no binary variant. | Redirect the subprocess to a file the test reads, or drop the assertion. |
 | VX211 | `pytest.raises(asyncio.CancelledError)` | Cancellation is how velox enforces timeouts, so `velox.raises` refuses to swallow it. | Assert on the cancellation's effect instead of catching it. |
@@ -120,7 +121,6 @@ velox provides nothing that plays these parts, so a suite that leans on one has 
 | VX221 | pytest.approx over a set or a generator expression | Neither has a position to compare by: a set is unordered, and a generator is spent after one read. A numpy array is left unconverted here too, since velox has no numpy dependency to compare it with. | Compare a sorted sequence instead of a set, or a list instead of a generator. |
 | VX222 | `caplog.handler`, `caplog.get_records(...)` | velox has no handler object behind `velox.log_records`, and no per-phase record split for `get_records` to read. | Assert on `records` or `messages` directly instead of `handler`; there is no phase-scoped equivalent for `get_records`. |
 | VX223 | pytest.xfail() as a statement | Unlike `pytest.skip()`/`pytest.fail()`, this has no runtime target to become: it marks the test as an expected failure and stops it right there, which `@velox.xfail(...)`'s condition -- decided once at collection, before the test has run at all -- can't reach. | Lift the condition into `@velox.xfail(condition=...)`, if it's known before the test runs; otherwise let the test fail and mark it `@velox.xfail` unconditionally. |
-| VX307 | `filterwarnings` | A suite-wide warning filter has no `[tool.velox]` key, and the warnings module is process-global. | Set the filter in a session fixture if it is global, or per test with `warnings.catch_warnings`. |
 | VX308 | log_cli, console_output_style, required_plugins and other reporting settings | These configure pytest's terminal and plugin machinery. | Drop them, or reach for the closest velox flag. |
 | VX309 | an ini setting a plugin registered | The setting exists because a plugin asked pytest for it, and unknown `[tool.velox]` keys are a hard error. | Drop it with the plugin, or move the value into the environment. |
 | VX323 | an installed plugin with no velox path | Nothing in velox provides what it does. | Keep those tests under pytest, or drop the plugin's use. |
