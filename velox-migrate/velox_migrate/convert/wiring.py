@@ -64,15 +64,19 @@ class _Claims:
     """What the signatures written so far need of the module around them.
 
     `imports` are the ones a written annotation is spelled through, `replaced` are the annotations
-    this pass overwrote, whose own imports may now have no reader left, and `untyped` says one of
-    the written signatures reached for `Any`. All three are filled as parameters are written
-    rather than when the plan was made, so a definition the rewrite backs out of neither adds an
-    import nor takes one away.
+    this pass overwrote, whose own imports may now have no reader left, `untyped` says one of the
+    written signatures reached for `Any`, and `annotated` says one of them was written with an
+    inferred type at all — including a type reused from an import the consumer already had under
+    its own `TYPE_CHECKING` block, which queues nothing into `imports` but still needs the future
+    import once it lands in a signature. All are filled as parameters are written rather than when
+    the plan was made, so a definition the rewrite backs out of neither adds an import nor takes
+    one away.
     """
 
     imports: list[TypeImport] = field(default_factory=list)
     replaced: list[cst.Annotation] = field(default_factory=list)
     untyped: bool = False
+    annotated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,10 +194,12 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(self.context, "typing", ANNOTATED)
         if self.claims.untyped:
             AddImportsVisitor.add_needed_import(self.context, "typing", ANY)
-        if self.claims.imports:
+        if self.claims.imports or self.claims.annotated:
             # Every annotation this wrote is a string under the future import, which is what makes
             # naming a type through a `TYPE_CHECKING`-only import safe: an annotation is otherwise
-            # an expression evaluated when the `def` is read.
+            # an expression evaluated when the `def` is read. That holds even for a type reused
+            # from an import the consumer already had under its own `TYPE_CHECKING` block:
+            # `claims.imports` alone would miss it, since reuse queues no new import to claim.
             AddImportsVisitor.add_needed_import(self.context, "__future__", "annotations")
             AddImportsVisitor.add_needed_import(self.context, "typing", "TYPE_CHECKING")
         for module in self._needs:
@@ -440,6 +446,7 @@ def _type(injection: Injection, claims: _Claims | None) -> cst.BaseExpression:
         return cst.Name(ANY)
     if claims is not None:
         claims.imports.extend(injection.needs)
+        claims.annotated = True
     return cst.parse_expression(injection.annotation)
 
 

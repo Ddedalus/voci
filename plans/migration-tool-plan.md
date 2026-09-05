@@ -169,7 +169,11 @@ under test.
 
 - [ ] **14. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
   index, hand-apply `@velox.solo`/`@velox.isolated` where tests fail. Automate only a pattern that
-  repeats often enough to pay for a skill.
+  repeats often enough to pay for a skill. A `concurrency-triage` skill for this, plus an
+  `unwind-override` skill for the over-budget chains the decisions table below points at, are
+  already written against this shape of `findings.json` — parked, unmerged, on `vx-migrate-skills`
+  (worktree `velox-wt-migrate-skills`) since this plan still had the old task numbering. Review
+  against the current matrix/findings fields (unchanged since, per a spot check) and merge.
 
 - [ ] **15. Write-up.** Both suites, audit findings, verify results, httpx2's before/after
   concurrency, and the coverage comparison. This is what the phase is for.
