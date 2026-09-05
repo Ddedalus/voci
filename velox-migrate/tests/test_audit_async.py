@@ -183,6 +183,56 @@ def test_the_usefixtures_mark_the_plugin_hangs_on_a_test_is_not_the_suites() -> 
     assert BACKEND_KEY not in named
 
 
+def test_a_usefixtures_mark_naming_another_plugins_fixture_is_still_the_suites() -> None:
+    # `plugin_wired` exists for `anyio_backend` specifically, hung on every test anyio marks. A
+    # suite that writes its own `usefixtures("worker_id")` for pytest-xdist's fixture is a real,
+    # suite-authored dependency, not the same kind of noise, even though both plugins carry the
+    # same VX320 disposition code.
+    dump = _dump()
+    dump["plugins"]["distinfo"].append(
+        {"plugin": "xdist.plugin", "dist": "pytest-xdist", "version": "3.8.0"}
+    )
+    dump["fixture_defs"]["worker_id"] = {
+        "argname": "worker_id",
+        "scope": "session",
+        "params": None,
+        "ids": None,
+        "autouse": False,
+        "visibility": "",
+        "kind": "FixtureDef",
+        "direct_param": False,
+        "argnames": [],
+        "returns": None,
+        "func": {
+            "module": "xdist.plugin",
+            "qualname": "worker_id",
+            "file": "${site_packages}/xdist/plugin.py",
+            "lineno": 1,
+            "wrapped": False,
+        },
+    }
+    item = dump["items"][0]
+    mark = {"name": "usefixtures", "args": ["'worker_id'"], "kwargs": {}}
+    item["own_markers"] = [*item["own_markers"], mark]
+    item["markers_with_origin"] = [
+        *item["markers_with_origin"],
+        {"from": item["nodeid"], **mark},
+    ]
+    item["usefixtures"] = [*item["usefixtures"], "worker_id"]
+    item["initialnames"] = ["worker_id", *item["initialnames"]]
+    item["names_closure"] = ["worker_id", *item["names_closure"]]
+    item["name2fixturedefs"]["worker_id"] = ["worker_id"]
+
+    result = _audit(dump)
+
+    named = {
+        finding.detail.get("fixture")
+        for code in ("VX009", "VX010")
+        for finding in _by_code(result, code)
+    }
+    assert "worker_id" in named
+
+
 def test_a_fixture_the_runner_replaces_is_not_reported_as_one_with_no_velox_path() -> None:
     # anyio's whole job is running the test, which velox does itself, so `anyio_backend` is not a
     # dependency anybody has to write into the suite.

@@ -125,6 +125,11 @@ class _Wiring(VisitorBasedCodemodCommand):
         self._wrote = touched
         self._injected = False
         self.typed: list[TypeImport] = []
+        # `self.typed` only grows for a symbol this pass has to import fresh: a name the consumer
+        # already binds under an existing `if TYPE_CHECKING:` is reused with nothing queued for it.
+        # That reuse still writes the name into a default-evaluated annotation, so the future import
+        # is owed regardless of whether `self.typed` ends up empty.
+        self._annotated = False
         self.refused: set[tuple[str, str]] = set()
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -169,9 +174,11 @@ class _Wiring(VisitorBasedCodemodCommand):
             AddImportsVisitor.add_needed_import(self.context, "velox")
         if self._injected:
             AddImportsVisitor.add_needed_import(self.context, "velox", "Depends")
-        if self.typed:
+        if self.typed or self._annotated:
             # Every annotation this wrote is a string under the future import, which is what makes
-            # naming a type through a `TYPE_CHECKING`-only import safe in default position.
+            # naming a type through a `TYPE_CHECKING`-only import safe in default position. That
+            # holds even for a name reused from an import the consumer already had: `self.typed`
+            # alone would miss it, since reuse queues no new import.
             AddImportsVisitor.add_needed_import(self.context, "__future__", "annotations")
             AddImportsVisitor.add_needed_import(self.context, "typing", "TYPE_CHECKING")
         for module in self._needs:
@@ -217,6 +224,17 @@ class _Wiring(VisitorBasedCodemodCommand):
             return node
         self._wrote = True
         self._injected = self._injected or any(injection.was != REQUEST for injection in injections)
+        # Only an injection this call will actually write a fresh annotation for: one whose own
+        # parameter carries no annotation of its own already. `_inject` keeps an existing one
+        # verbatim rather than overwriting it, so that case writes nothing new to owe an import for.
+        own = {
+            param.name.value: param.annotation
+            for param in (*node.params.params, *node.params.kwonly_params)
+        }
+        self._annotated = self._annotated or any(
+            injection.annotation is not None and own.get(injection.was) is None
+            for injection in injections
+        )
         added = [
             _param(injection, self.typed)
             for injection in injections

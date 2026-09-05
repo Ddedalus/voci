@@ -44,6 +44,9 @@ High-level plan in `plans/docsite-plan.md`
 
 Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
 
+velox-migrate: correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by
+review, in `plans/migrate-review-followups.md`.
+
 ## Later
 
 ## Starvation-aware scheduling
