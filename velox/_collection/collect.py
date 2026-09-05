@@ -527,7 +527,7 @@ def collect(
                 index += 1
 
     declaring_files.update(package_declarations)
-    errors.extend(_misplaced_declarations(declaring_files))
+    errors.extend(_misplaced_declarations(declaring_files, resolved_rootdir))
     return CollectionResult(
         records=records,
         errors=errors,
@@ -571,7 +571,9 @@ def _package_declarations(
     return tuple(declared)
 
 
-def _misplaced_declarations(declaring_files: set[Path]) -> list[CollectionError]:
+def _misplaced_declarations(
+    declaring_files: set[Path], resolved_rootdir: Path
+) -> list[CollectionError]:
     """`velox.use(...)` declarations on modules that are neither collected test files nor
     packages above one.
 
@@ -580,6 +582,10 @@ def _misplaced_declarations(declaring_files: set[Path]) -> list[CollectionError]
     a missing side effect. A module velox imported reaches this scan only when something else
     imported it under its real name too, hence the `declaring_files` exemption; velox's own
     imports drop theirs again.
+
+    The path is put through `display_path` like every other error's: one error type naming its
+    file absolutely, where the rest name theirs relative to `rootdir`, is a path the reporter
+    groups on its own and the run cache can never match against discovery.
     """
     misplaced: list[CollectionError] = []
     for name, module in list(sys.modules.items()):
@@ -591,7 +597,7 @@ def _misplaced_declarations(declaring_files: set[Path]) -> list[CollectionError]
             continue
         misplaced.append(
             CollectionError(
-                path=Path(file) if file else Path(name),
+                path=display_path(Path(file), resolved_rootdir) if file else Path(name),
                 message=(
                     f"{name}: velox.use(...) applies to the tests in the container that calls it, "
                     f"and this module is neither a test module velox collects nor a package "

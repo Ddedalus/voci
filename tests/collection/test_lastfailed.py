@@ -10,7 +10,7 @@ from _support import make_record
 
 from velox._cache import NOTHING_RECORDED, LastRun
 from velox._collection import lastfailed
-from velox._collection.collect import CollectionResult, Skipped
+from velox._collection.collect import CollectionError, CollectionResult, Skipped
 
 
 def _stub() -> None:
@@ -149,7 +149,7 @@ def test_select_keeps_a_skip_that_is_a_recorded_failure() -> None:
 def test_vanished_names_an_id_the_file_no_longer_holds() -> None:
     collected = _collected(("test_a.py", "test_new"))
     last_run = LastRun(failed=("test_a.py::test_old",))
-    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == {
+    assert lastfailed.vanished(last_run, collected, known_files={"test_a.py"}) == {
         "test_a.py::test_old"
     }
 
@@ -157,14 +157,14 @@ def test_vanished_names_an_id_the_file_no_longer_holds() -> None:
 def test_vanished_leaves_an_id_in_a_file_this_run_did_not_read() -> None:
     collected = _collected(("test_a.py", "test_x"))
     last_run = LastRun(failed=("test_b.py::test_y",))
-    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+    assert lastfailed.vanished(last_run, collected, known_files={"test_a.py"}) == set()
 
 
 def test_vanished_leaves_an_id_that_was_only_deselected() -> None:
     collected = _collected()
     collected.deselected.append("test_a.py::test_x")
     last_run = LastRun(failed=("test_a.py::test_x",))
-    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+    assert lastfailed.vanished(last_run, collected, known_files={"test_a.py"}) == set()
 
 
 def test_vanished_leaves_a_case_of_a_test_deselected_before_expansion() -> None:
@@ -174,7 +174,7 @@ def test_vanished_leaves_a_case_of_a_test_deselected_before_expansion() -> None:
     collected.deselected.append("test_a.py::test_x")
     collected.unexpanded.append("test_a.py::test_x")
     last_run = LastRun(failed=("test_a.py::test_x[one]",))
-    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+    assert lastfailed.vanished(last_run, collected, known_files={"test_a.py"}) == set()
 
 
 def test_vanished_names_a_case_of_a_test_that_is_now_skipped() -> None:
@@ -184,9 +184,75 @@ def test_vanished_names_a_case_of_a_test_that_is_now_skipped() -> None:
     collected.skipped.append(_skip("test_a.py", "test_x"))
     collected.unexpanded.append("test_a.py::test_x")
     last_run = LastRun(failed=("test_a.py::test_x[one]",))
-    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == {
+    assert lastfailed.vanished(last_run, collected, known_files={"test_a.py"}) == {
         "test_a.py::test_x[one]"
     }
+
+
+def test_vanished_names_an_id_whose_file_this_run_knows_is_gone() -> None:
+    """A deleted file is handed to `vanished` through `known_files` the same way an imported one
+    is: its test set is empty, so every id recorded under it is one nothing will run again."""
+    collected = _collected()
+    last_run = LastRun(failed=("test_gone.py::test_x",))
+    assert lastfailed.vanished(last_run, collected, known_files={"test_gone.py"}) == {
+        "test_gone.py::test_x"
+    }
+
+
+def test_missing_paths_names_a_recorded_file_that_no_longer_exists(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text("")
+    last_run = LastRun(failed=("test_a.py::test_x", "test_gone.py::test_y"))
+    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == {"test_gone.py"}
+
+
+def test_missing_paths_names_a_recorded_error_file_that_no_longer_exists(tmp_path: Path) -> None:
+    """`error_files` goes the same way as `failed`: a file deleted while it was still failing to
+    import has nothing left to import, and no later run would take it out."""
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == {"pkg/__init__.py"}
+
+
+def test_missing_paths_is_empty_when_every_recorded_file_is_still_there(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text("")
+    last_run = LastRun(failed=("test_a.py::test_x",), error_files=("test_a.py",))
+    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == set()
+
+
+def test_error_paths_keeps_an_error_on_a_file_collection_was_handed() -> None:
+    error = CollectionError(path=Path("test_a.py"), message="boom")
+    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == {"test_a.py"}
+
+
+def test_error_paths_keeps_an_error_on_a_package_above_an_attempted_file() -> None:
+    """Discovery never yields an `__init__.py` as a test file, so this is the one path outside
+    `attempted` a later run still answers for -- by collecting anything under it."""
+    error = CollectionError(path=Path("pkg/__init__.py"), message="boom")
+    assert lastfailed.error_paths([error], attempted={"pkg/test_a.py"}) == {"pkg/__init__.py"}
+
+
+def test_error_paths_drops_an_error_on_a_module_velox_never_collects() -> None:
+    """`_misplaced_declarations` reports a helper module under `rootdir` that discovery does not
+    hand back, so nothing would ever settle the entry."""
+    error = CollectionError(path=Path("helper.py"), message="boom")
+    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+
+
+def test_error_paths_drops_an_absolute_path(tmp_path: Path) -> None:
+    """A misplaced declaration outside `rootdir` is named absolutely -- machine-specific, and
+    never equal to a rootdir-relative discovery path."""
+    error = CollectionError(path=tmp_path / "helper.py", message="boom")
+    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+
+
+def test_error_paths_drops_a_dotted_module_name() -> None:
+    """A module with no `__file__` is named by its dotted name, which is not a path at all."""
+    error = CollectionError(path=Path("some.module"), message="boom")
+    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+
+
+def test_error_paths_drops_a_package_init_no_attempted_file_sits_under() -> None:
+    error = CollectionError(path=Path("other/__init__.py"), message="boom")
+    assert lastfailed.error_paths([error], attempted={"pkg/test_a.py"}) == set()
 
 
 def test_settled_paths_answers_for_a_package_whose_tree_was_collected() -> None:

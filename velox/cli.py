@@ -812,6 +812,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
         # flags already made, so `velox --lf -k users` means both.
+        #
+        # What collection itself found is kept for the cache write at the end: `select` moves
+        # the tests --lf wasn't asked for into `deselected`, and `vanished` reads a deselected
+        # unexpanded test as "this run never built its cases, so its recorded ones stand" --
+        # true of a -k/-m deselection, and false of --lf's own, whose skips it would otherwise
+        # strand in the cache for good.
+        found = collected
         if replay_last_failed:
             collected = _lastfailed.select(collected, last_run)
         elif replay_failed_first:
@@ -983,7 +990,10 @@ def main(argv: list[str] | None = None) -> int:
         # next --lf its ordering, and must not touch this one's output or exit code.
         resolved_rootdir = rootdir.resolve()
         attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}
-        errored = {str(error.path) for error in collected.errors}
+        errored = _lastfailed.error_paths(collected.errors, attempted=attempted)
+        # A recorded file that is no longer on disk is settled by that alone: discovery will
+        # never hand it to collection again, so this is the only run that can take it out.
+        gone = _lastfailed.missing_paths(last_run, rootdir=resolved_rootdir)
         # A CANCELLED test never got to say anything about the code under test, so it settles
         # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
         # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:
@@ -991,7 +1001,9 @@ def main(argv: list[str] | None = None) -> int:
         # there being no run left to settle it.
         settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
         settled_ids |= {s.id for s in collected.skipped}
-        settled_ids |= _lastfailed.vanished(last_run, collected, imported=attempted - errored)
+        settled_ids |= _lastfailed.vanished(
+            last_run, found, known_files=(attempted - errored) | gone
+        )
         _cache.save(
             rootdir,
             _cache.merge(
@@ -999,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
                 failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
                 errored=errored,
                 settled_ids=settled_ids,
-                settled_files=_lastfailed.settled_paths(last_run, attempted),
+                settled_files=_lastfailed.settled_paths(last_run, attempted) | gone,
             ),
         )
         return exit_status

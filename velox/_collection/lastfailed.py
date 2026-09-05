@@ -3,9 +3,13 @@
 `candidate_files` narrows discovery to the files that could hold one, which is what keeps `--lf`
 from importing a suite it has no intention of running any of. `select` and `reorder` then work
 over the collected records: the first deselects everything that isn't a recorded failure, the
-second keeps the whole suite and lifts the failures to the front of it. `settled_paths` and
-`vanished` answer the other direction -- which of the previous run's entries this one is entitled
-to overwrite (`velox._cache.merge`).
+second keeps the whole suite and lifts the failures to the front of it. `settled_paths`,
+`vanished` and `missing_paths` answer the other direction -- which of the previous run's entries
+this one is entitled to overwrite (`velox._cache.merge`) -- and `error_paths` says which of this
+run's own collection errors are in a form a later run could settle at all.
+
+Between them those four are what keeps the cache finite: an entry no run can name is an entry
+that never clears, and a `--lf` narrowing to it selects nothing and exits 5 for good.
 
 A file the previous run failed to *collect* contributed no ids to record, so every test in it
 counts as a recorded failure; where that file is a package `__init__.py`, so does every test in
@@ -14,14 +18,28 @@ the tree below it, none of which was collected either.
 
 from __future__ import annotations
 
-from collections.abc import Container, Iterable
+from collections.abc import Collection, Container, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from velox._cache import LastRun
-from velox._collection.collect import CollectionResult, TestRecord, display_path
+from velox._collection.collect import (
+    CollectionError,
+    CollectionResult,
+    TestRecord,
+    display_path,
+)
 
-__all__ = ["Recorded", "candidate_files", "reorder", "select", "settled_paths", "vanished"]
+__all__ = [
+    "Recorded",
+    "candidate_files",
+    "error_paths",
+    "missing_paths",
+    "reorder",
+    "select",
+    "settled_paths",
+    "vanished",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +120,43 @@ def reorder(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
     return replace(collected, records=_reindexed([*failed, *rest]))
 
 
+def missing_paths(last_run: LastRun, *, rootdir: Path) -> set[str]:
+    """The recorded paths with no file behind them any more.
+
+    A deleted or renamed *file* is never handed to collection again, so no import settles what
+    it recorded and `vanished` never hears about its ids: left alone, the entries outlive the
+    file for good, and once the rest of the suite goes green `--lf` narrows to nothing and exits
+    5 on every invocation after that. Read off the filesystem rather than off this run's
+    discovery, so a run over one directory still leaves the rest of the suite's failures
+    recorded rather than declaring the files it didn't look at gone.
+    """
+    return {path for path in Recorded.of(last_run).paths if not (rootdir / path).exists()}
+
+
+def error_paths(errors: Iterable[CollectionError], *, attempted: Collection[str]) -> set[str]:
+    """The paths of `errors` some later run would be in a position to settle.
+
+    Mirrors `settled_paths`, which is what clears these again: the only paths a run answers for
+    are the files discovery handed collection and the package `__init__.py` files importing
+    those required. An error on anything else is one no discovery will ever produce a path for,
+    so recording it leaves `error_files` holding a string nothing takes out again -- and a `--lf`
+    narrowing to a file it never finds, selecting nothing and exiting 5 from then on.
+
+    That is `_misplaced_declarations`: a `velox.use(...)` in a module velox never collects, named
+    by an absolute path when it lies outside `rootdir` (machine-specific besides) and by a bare
+    dotted module name when it has no `__file__` at all. Every run that imports the module finds
+    it again and reports it, which is what makes leaving it out of the cache safe.
+    """
+    recordable: set[str] = set()
+    for error in errors:
+        under_attempted = error.path.name == "__init__.py" and any(
+            error.path.parent in Path(candidate).parents for candidate in attempted
+        )
+        if str(error.path) in attempted or under_attempted:
+            recordable.add(str(error.path))
+    return recordable
+
+
 def settled_paths(last_run: LastRun, attempted: Iterable[str]) -> set[str]:
     """The rootdir-relative paths this run has an answer for.
 
@@ -121,14 +176,20 @@ def settled_paths(last_run: LastRun, attempted: Iterable[str]) -> set[str]:
 
 
 def vanished(
-    last_run: LastRun, collected: CollectionResult, *, imported: Container[str]
+    last_run: LastRun, collected: CollectionResult, *, known_files: Container[str]
 ) -> set[str]:
     """The recorded ids whose tests no longer exist.
 
-    An id under a file in `imported` -- one collection read without error, and so knows the whole
-    contents of -- that the file did not produce names a test that has been renamed, deleted or
-    moved. Nothing will ever run it, so nothing else would take it out of the cache, and a `--lf`
-    would go on narrowing to a file it then selects nothing from.
+    A file is `known` when this run establishes its entire test set: one collection imported
+    without error, or one `missing_paths` found is no longer on disk, whose test set is
+    therefore empty. A recorded id under such a file that the file did not produce names a test
+    that has been renamed, deleted or moved. Nothing will ever run it, so nothing else would
+    take it out of the cache, and a `--lf` would go on narrowing to a file it then selects
+    nothing from.
+
+    `collected` is what collection found, before `select` narrowed it: a deselection is read
+    below as "the run stopped short of building this test's cases", which is true of the `-m`
+    and `-k` ones and false of `--lf`'s own.
     """
     deselected = set(collected.deselected)
     existing = deselected | {record.id for record in collected.records}
@@ -140,7 +201,7 @@ def vanished(
     return {
         test_id
         for test_id in last_run.failed
-        if _path_of(test_id) in imported
+        if _path_of(test_id) in known_files
         and test_id not in existing
         and not any(test_id.startswith(f"{prefix}[") for prefix in prefixes)
     }

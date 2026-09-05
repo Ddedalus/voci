@@ -2142,6 +2142,93 @@ def test_last_failed_selecting_nothing_does_not_exit_zero(
     assert "1 skipped" not in capsys.readouterr().out
 
 
+def test_last_failed_settles_a_recorded_test_whose_file_was_deleted(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A deleted file is never handed to collection again, so no import can settle what it
+    recorded. Left in the cache the entry outlives the suite: every later --lf narrows to a file
+    that isn't there, selects nothing and exits 5."""
+    project.write("test_gone.py", "async def test_bad():\n    assert 1 == 2\n")
+    project.write_passing_test()
+    assert main([str(project.root)]) == 1
+    (project.root / "test_gone.py").unlink()
+    capsys.readouterr()
+
+    assert main([str(project.root)]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
+def test_a_run_over_one_directory_keeps_failures_recorded_elsewhere(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The counterpart to the deletion above: "gone" is read off the filesystem, not off what
+    this run happened to discover, so a narrower run must not declare the rest of the suite's
+    files vanished."""
+    project.write("one/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
+    project.write("two/test_b.py", "async def test_ok():\n    pass\n")
+    assert main([str(project.root)]) == 1
+    assert main([str(project.root / "two")]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 1
+    assert "one/test_a.py::test_bad" in capsys.readouterr().out.replace(os.sep, "/")
+
+
+def test_a_misplaced_declaration_is_not_recorded_as_an_error_file(project: Project) -> None:
+    """`velox.use(...)` in a module velox never collects is reported by every run that imports
+    it, and named by a path discovery does not produce -- an absolute one, or a bare module name.
+    Recording it would put a string in the cache no run could settle."""
+    project.write(
+        "misplaced_helper.py",
+        "import velox\n\n"
+        "@velox.fixture()\nasync def thing() -> int:\n    return 1\n\n"
+        "velox.use(thing)\n",
+    )
+    project.write("test_a.py", "import misplaced_helper\n\nasync def test_ok():\n    pass\n")
+
+    try:
+        assert main([str(project.root)]) == 1
+    finally:
+        # The scan reads sys.modules, and main() leaves what the suite imported behind: another
+        # test's run would find this one's helper there and report it against its own project.
+        sys.modules.pop("misplaced_helper", None)
+
+    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    assert recorded["error_files"] == []
+
+
+def test_last_failed_settles_the_cases_of_a_test_that_became_skipped(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A --lf run deselects the skip it wasn't asked for, and a deselected unexpanded test
+    normally means "this run never built its cases". It must not read that way here, or the
+    recorded `[case]` ids stay in the cache and every later --lf exits 5."""
+    project.write(
+        "test_a.py",
+        "import velox\n\n"
+        "@velox.parametrize('value', [1, 2])\n"
+        "async def test_role(value: int) -> None:\n    assert value == 0\n",
+    )
+    assert main([str(project.root)]) == 1
+    project.write(
+        "test_a.py",
+        "import velox\n\n"
+        "@velox.skip('later')\n"
+        "@velox.parametrize('value', [1, 2])\n"
+        "async def test_role(value: int) -> None:\n    assert value == 0\n",
+    )
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 5
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
 def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
     """The rewriter fills the same directory during collection, so a project whose only velox
     invocation is --collect-only must not pick up an untracked one."""

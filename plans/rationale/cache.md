@@ -35,6 +35,24 @@ that has been renamed or deleted, and nothing will ever run it again. Leaving it
 keep the cache permanently non-empty, so every later `--lf` narrows to that file and selects
 nothing from it — a wedge only deleting the cache directory recovers from.
 
+**Every entry the cache accepts is one some run can take back out.** That wedge is the failure
+mode the whole settling story exists to prevent, and absence-as-an-answer only reaches entries
+whose file this run *read*. Three kinds escape it, so each is closed where it arises:
+
+* A deleted or renamed **file** is never handed to collection again, so no import settles it.
+  Its entries are settled by the filesystem instead — read off `rootdir`, not off this run's
+  discovery, so running one directory still leaves the rest of the suite recorded rather than
+  declaring everything it did not look at gone.
+* A collection error on a path **discovery does not produce** is never settled either.
+  `_misplaced_declarations` reports a `velox.use(...)` in a module velox never collects, named
+  absolutely when it lies outside `rootdir` and by a bare dotted module name when it has no
+  `__file__`. Such an error is not recorded at all: the rule for what may go in mirrors the rule
+  for what comes out, and every run that imports the module finds it again anyway.
+* **`--lf`'s own deselections** are not `-k`'s. A deselected test that never reached expansion
+  keeps its recorded `[case]` ids, since the run never built them — true of `-k` and `-m`, and
+  false of `--lf`, which deselects a skip it knows the answer for. Settling therefore reads the
+  collection result as it was *found*, before `select` narrowed it.
+
 **`--lf` deselects skips as well as records.** A collection-time skip is counted as something the
 run collected, so leaving a skip-marked sibling in place would let a `--lf` that executed nothing
 exit `0` while the recorded failure is still red.
