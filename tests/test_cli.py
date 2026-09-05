@@ -2416,6 +2416,20 @@ def test_last_failed_says_when_no_recorded_failure_is_in_the_selection(
     assert "--lf: no recorded failure is in this run's selection" in capsys.readouterr().out
 
 
+def test_last_failed_explains_an_empty_selection_under_quiet(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """-q drops the header lines, not what the run found -- and with `0 tests` the only other
+    thing on screen, this is the whole of it."""
+    project.write("test_a.py", "async def test_bad():\n    assert 1 == 2\n")
+    assert main([str(project.root)]) == 1
+    project.write("test_a.py", "async def test_renamed():\n    pass\n")
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf", "-q"]) == 5
+    assert "--lf: no recorded failure is in this run's selection" in capsys.readouterr().out
+
+
 def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
     """The rewriter fills the same directory during collection, so a project whose only velox
     invocation is --collect-only must not pick up an untracked one."""

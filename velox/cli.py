@@ -831,8 +831,10 @@ def main(argv: list[str] | None = None) -> int:
             # a run pointed somewhere else, or a failing test renamed since. Checked on the
             # selection rather than on the candidate files, since a file can survive the
             # narrowing and still contribute nothing to it.
-            empty = not collected.records and not collected.skipped and not collected.errors
-            if empty and verbosity >= 0:
+            # At every verbosity, unlike the "nothing recorded" line above it: that one
+            # describes how the run was set up, which -q asks to do without, while this one
+            # is the whole of what the run found.
+            if not collected.records and not collected.skipped and not collected.errors:
                 print("--lf: no recorded failure is in this run's selection")
         elif replay_failed_first:
             collected = _lastfailed.reorder(collected, last_run)
@@ -1025,8 +1027,8 @@ def main(argv: list[str] | None = None) -> int:
         # A file that collected tests was read, whatever else in it went wrong: one malformed
         # test does not make the ids beside it unknowable, and treating the file as unread
         # would leave a renamed sibling recorded for good.
-        produced = {str(record.path) for record in collected.records}
-        produced |= {str(skip.path) for skip in collected.skipped}
+        produced = {str(record.path) for record in found.records}
+        produced |= {str(skip.path) for skip in found.skipped}
         # A CANCELLED test never got to say anything about the code under test, so it settles
         # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
         # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:
