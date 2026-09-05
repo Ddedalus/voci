@@ -53,7 +53,8 @@ class Config:
     "unset" should fall back to for each; built-in defaults live there, not here.
     """
 
-    #: Where `[tool.velox]` was found, or the common ancestor of the requested paths if it wasn't.
+    #: Where `[tool.velox]` was found, or the nearest project root above the requested paths --
+    #: a `pyproject.toml`, else a `.git` -- if it wasn't. See `resolve`.
     #: Callers resolve relative config paths (`testpaths`) against this, not `cwd()`.
     rootdir: Path
     #: The `pyproject.toml` that supplied this config, or `None` if none was found — surfaced so
@@ -91,18 +92,35 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
     `[tool.velox]` table (a package nested inside a bigger repo, say) is not a match; the walk
     continues past it.
 
+    Finding no table at all, the rootdir is the nearest ancestor that still *looks* like a project
+    root — one holding a `pyproject.toml`, else the `.git` the walk stopped at — and only the
+    search start when the walk found neither. The arguments must not decide it: rootdir fixes the
+    spelling of every test id, the `sys.path` entry, and which `.velox_cache` the run reads, so
+    letting `velox tests/unit` root itself at `tests/unit` gives that invocation a second cache in
+    a second id namespace. A `--lf` then reads an empty cache, which means "nothing recorded" —
+    indistinguishable from "your recorded failures are all outside this selection", the one state
+    `--lf` reports as a clean exit `0`. See `plans/rationale/cache.md`.
+
     `explicit_paths` is `cli.main`'s `args.paths`, already known to exist — empty when the user
     gave none, in which case the search starts at `cwd()`.
     """
     start = _search_start(explicit_paths)
     current = start
+    # The best rootdir seen so far for the no-table case. A `pyproject.toml` wins over the `.git`
+    # below it: in a monorepo the distribution is what `sys.path` and the ids should be read
+    # against, and rooting at the repo instead would break the suite's own imports.
+    fallback: Path | None = None
     while True:
         pyproject_path = current / "pyproject.toml"
         if pyproject_path.is_file():
             table = _read_tool_velox_table(pyproject_path)
             if table is not None:
                 return _parse(table, rootdir=current, source=pyproject_path)
+            if fallback is None:
+                fallback = current
         if (current / ".git").exists():
+            if fallback is None:
+                fallback = current
             break
         parent = current.parent
         if parent == current:
@@ -111,7 +129,9 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
             # `tmp_path`). Nothing left to search.
             break
         current = parent
-    return Config(rootdir=start)
+    # `start` only when the walk found neither marker: there is nothing better to point at, and
+    # the filesystem root would be an absurd rootdir to hand a suite.
+    return Config(rootdir=fallback if fallback is not None else start)
 
 
 def _search_start(explicit_paths: Sequence[Path]) -> Path:

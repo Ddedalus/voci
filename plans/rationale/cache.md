@@ -79,11 +79,36 @@ which reads as a suite that collected nothing rather than as the flag having not
 It says so instead. This is the one wedge left deliberately open: the entry is real, and only a
 run that reaches it can clear it.
 
-**Two velox runs sharing one rootdir can lose each other's failures.** `save` is atomic against a
-torn *read* — a pid-suffixed temporary file replaced into place — but not against a lost *update*:
-both runs load the same baseline and both write a whole payload, so the second to finish wins.
-Not locked, because the cost is a `--lf` that misses some failures the very next run re-finds,
-and every alternative puts a lock on the exit path of a run that has already reported its result.
+**Which `.velox_cache` a run reads is not the arguments' business.** rootdir fixes the spelling of
+every test id, the `sys.path` entry, and the cache directory, so a rootdir derived from the
+arguments gives `velox tests/unit` a second cache in a second id namespace. That is worse than
+two caches drifting apart: the second one starts *empty*, and an empty cache means "nothing
+recorded", which is exactly the state the paragraph above exists to distinguish from "your
+failures are all outside this selection". The loud exit `5` silently becomes a green exit `0`.
+`_config.resolve` therefore falls back to the nearest ancestor that looks like a project root — a
+`pyproject.toml`, else the `.git` the walk stops at — and only to the search start when there is
+neither. A `pyproject.toml` wins over the `.git` below it because in a monorepo the distribution
+is what `sys.path` and the ids must be read against.
+
+Rootdir is not the *selection*, though. Climbing to the project root would otherwise widen a bare
+`velox` run from inside `tests/unit` into the whole suite, so the built-in default tier
+(`cli._default_test_roots`) anchors at the current directory unless a `[tool.velox]` table fixed a
+rootdir deliberately — the two used to be the same directory and no longer are.
+
+**Two velox runs sharing one rootdir can still lose each other's failures, but only just.** `save`
+is atomic against a torn *read* — a pid-suffixed temporary file replaced into place — but not
+against a lost *update*: both runs write a whole payload, so the second to finish wins. What
+decides how much that costs is which baseline the loser merged into. Merging into the one loaded
+at startup leaves the window open for the entire length of the run, and the damage is not the
+harmless kind: a *scoped* run landing after a full one writes a cache that is non-empty and
+plausible with the full run's new failures missing from it, which no later `--lf` re-finds.
+`update` re-reads at the write instead. A run's findings don't depend on the baseline, so the
+freshest one on disk is strictly the better thing to merge into, and the other run's entries —
+not being in this run's `settled_*` — are carried forward by the rule that already survives a
+`--maxfail` stop. The window shrinks to the gap between that read and the `os.replace`. Still not
+locked, and now genuinely worth not locking: the residual cost is a `--lf` that misses a failure
+the next run re-finds, against a lock on the exit path of a run that has already reported its
+result.
 
 **Every filesystem failure is swallowed.** An unreadable, truncated, hand-edited or
 wrong-version cache reads as "nothing recorded", which makes both flags mean "the whole suite in

@@ -56,8 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         help="Files, directories, or test ids (path.py::test_name, path.py::TestGroup::test_name, "
         "path.py::test_name[case]) to run, each read relative to the current directory, or to "
-        "the rootdir if it names nothing there. Defaults to the configured testpaths, else the "
-        "rootdir.",
+        "the rootdir if it names nothing there. Defaults to the configured testpaths, else to "
+        "'tests' if there is one, else to the rootdir when [tool.velox] fixed it and the "
+        "current directory otherwise.",
     )
     parser.add_argument(
         "-k",
@@ -310,6 +311,12 @@ def _default_test_roots(rootdir: Path | None = None) -> list[Path]:
     last, built-in-default tier -- `main` tries `args.paths` and `config.testpaths`
     first and falls back to this only when neither is set. `rootdir` defaults to
     `cwd()` for callers that don't have one to hand.
+
+    `main` passes a rootdir only when `[tool.velox]` fixed one; without a table it passes
+    nothing and this tier anchors at the current directory instead. Those used to be the same
+    directory, and stopped being so once an unpinned rootdir started climbing to the project
+    root (`_config.resolve`): a bare `velox` run from inside `tests/unit` still means "the tests
+    here", not the whole suite the new rootdir can see.
     """
     # Path() (".") not Path.cwd() when no rootdir is given: this must stay relative so
     # existing callers see the same relative results, not ones Path.cwd() would turn
@@ -830,7 +837,10 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
                 )
                 return 4
     else:
-        roots = _default_test_roots(config.rootdir)
+        # config.rootdir only when a [tool.velox] table fixed it -- that table is a deliberate
+        # statement about where the suite lives, and the tier below resolves against cwd
+        # otherwise so that climbing to the project root doesn't widen a bare run's selection.
+        roots = _default_test_roots(config.rootdir if config.source is not None else None)
 
     # Loaded whether or not this run reads it back: the merge at the end of main needs what
     # the previous run recorded about tests this one never reaches.
@@ -1275,15 +1285,17 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
             found,
             known_files=_lastfailed.read_files(attempted, errored - produced) | gone,
         )
-        _cache.save(
+        # update, not save(merge(last_run, ...)): the baseline is re-read at the write so a
+        # concurrent run's failures aren't erased by this one's whole-payload write. `last_run`
+        # stays the startup baseline everywhere above -- `dead_paths` and `vanished` reason about
+        # what *this* run observed, and have no evidence to offer about an entry that appeared
+        # while it was running.
+        _cache.update(
             rootdir,
-            _cache.merge(
-                last_run,
-                failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
-                errored=errored,
-                settled_ids=settled_ids,
-                settled_files=answered | gone,
-            ),
+            failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
+            errored=errored,
+            settled_ids=settled_ids,
+            settled_files=answered | gone,
         )
         if not narrowed_by_selection:
             _save_collection_index(

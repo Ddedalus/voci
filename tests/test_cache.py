@@ -120,3 +120,45 @@ def test_merge_orders_its_output_so_the_file_is_stable() -> None:
     )
     assert merged.failed == ("test_a.py::test_x", "test_b.py::test_y")
     assert merged.error_files == ("a.py", "z.py")
+
+
+def test_update_merges_into_what_is_on_disk_not_a_stale_baseline(tmp_path: Path) -> None:
+    """Two runs sharing a rootdir must not erase each other's failures.
+
+    A full run finds `b.py::t2` and writes; a scoped run that started earlier -- and so holds a
+    baseline predating it -- finishes second with a whole payload of its own. Merging against the
+    baseline loaded at startup would drop `b.py::t2`, leaving a cache that is non-empty and
+    plausible with a real failure silently missing from it. Re-reading at the write keeps it:
+    `b.py` is not among the scoped run's settled files, so it is carried forward by the same rule
+    that already survives a `--maxfail` stop.
+    """
+    _cache.save(tmp_path, _cache.LastRun(failed=("a.py::t1",)))
+
+    # The full run: t1 now passes, t2 newly fails.
+    _cache.update(
+        tmp_path,
+        failed=["b.py::t2"],
+        errored=[],
+        settled_ids={"a.py::t1", "b.py::t2"},
+        settled_files={"a.py", "b.py"},
+    )
+    # The scoped run, `velox a.py`, landing second off the older baseline.
+    _cache.update(
+        tmp_path,
+        failed=["a.py::t1"],
+        errored=[],
+        settled_ids={"a.py::t1"},
+        settled_files={"a.py"},
+    )
+
+    assert _cache.load(tmp_path).failed == ("a.py::t1", "b.py::t2")
+
+
+def test_update_still_forgets_what_the_run_that_wrote_last_settled(tmp_path: Path) -> None:
+    """Carrying entries forward must not resurrect one the writing run has an answer for: a run
+    that collected `a.py` and saw `t1` pass is the freshest word on `t1`."""
+    _cache.save(tmp_path, _cache.LastRun(failed=("a.py::t1", "b.py::t2")))
+
+    _cache.update(tmp_path, failed=[], errored=[], settled_ids={"a.py::t1"}, settled_files={"a.py"})
+
+    assert _cache.load(tmp_path).failed == ("b.py::t2",)

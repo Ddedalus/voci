@@ -64,7 +64,8 @@ usage: velox [-h] [--version] [-k EXPR] [-m EXPR] [--lf] [--ff] [--watch]
 
 Files, directories, or test ids (path.py::test\_name, path.py::TestGroup::test\_name,
 path.py::test\_name\[case\]) to run, each read relative to the current directory, or to the rootdir
-if it names nothing there. Defaults to the configured testpaths, else the rootdir.
+if it names nothing there. Defaults to the configured testpaths, else to 'tests' if there is one,
+else to the rootdir when \[tool.velox\] fixed it and the current directory otherwise.
 
 ## Options
 

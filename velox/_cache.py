@@ -24,6 +24,7 @@ __all__ = [
     "load",
     "merge",
     "save",
+    "update",
 ]
 
 #: Shares the directory the assertion rewriter caches its pycs in (`rewrite.resolve_cache_dir`),
@@ -90,6 +91,43 @@ def save(rootdir: Path, last_run: LastRun) -> None:
     except OSError:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
+
+
+def update(
+    rootdir: Path,
+    *,
+    failed: Iterable[str],
+    errored: Iterable[str],
+    settled_ids: Container[str],
+    settled_files: Container[str],
+) -> None:
+    """Merge this run's findings into `rootdir`'s cache and write it back.
+
+    The baseline is re-read here rather than reusing the one loaded at startup. Two runs sharing
+    a rootdir both merge into a whole payload and the second to finish wins, so merging against a
+    baseline from before the run leaves the window for a lost update open for the entire length
+    of the run -- long enough that an editor running a scoped suite while a full run finishes in
+    a terminal drops the full run's new failures, silently and into a cache that still looks
+    plausible. A run's own findings don't depend on the baseline, so the freshest one on disk is
+    strictly the better thing to merge into: whatever the other run recorded is not in this run's
+    `settled_*` and so is carried forward, which is the same rule that already keeps a `--maxfail`
+    stop from erasing the rest of the suite.
+
+    This narrows the window to the gap between the read and the `os.replace` rather than closing
+    it, which is the trade the module means to make: a lock here would sit on the exit path of a
+    run that has already reported its result, to buy the last microseconds of a race whose cost
+    is a `--lf` that misses a failure the next run re-finds.
+    """
+    save(
+        rootdir,
+        merge(
+            load(rootdir),
+            failed=failed,
+            errored=errored,
+            settled_ids=settled_ids,
+            settled_files=settled_files,
+        ),
+    )
 
 
 def merge(
