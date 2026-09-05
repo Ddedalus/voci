@@ -16,6 +16,9 @@ A persistent collection cache, `--lf`/`--ff`.
 ### velox-migrate
 `plans/migration-tool-plan.md`
 
+Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by review, in
+`plans/migrate-review-followups.md`.
+
 ### docs
 `plans/docsite-plan.md`
 

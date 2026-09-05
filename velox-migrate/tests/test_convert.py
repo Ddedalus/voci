@@ -1531,6 +1531,37 @@ def test_a_parameter_the_source_already_annotated_keeps_its_own_type_and_needs_n
     assert "TYPE_CHECKING" not in result.module.code
 
 
+def test_a_type_reused_under_type_checking_still_gets_the_future_import() -> None:
+    # `Resolver` reuses a name the consumer already binds under its own `if TYPE_CHECKING:`, so
+    # `needs` comes back empty — but the annotation this pass writes still lands in default
+    # position, which is unsafe without the future import regardless of whether anything new needs
+    # importing for it.
+    source = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from support import Session\n"
+        "def test_x(session):\n"
+        "    assert session\n"
+    )
+    work = plan.FileWork(
+        path=STANDALONE,
+        target=STANDALONE,
+        tests=(
+            plan.TestWork(
+                qualname="test_x",
+                injections=(
+                    plan.Injection("session", "session", "session", annotation="Session", needs=()),
+                ),
+            ),
+        ),
+    )
+
+    result = wiring.apply(cst.parse_module(source), work)
+
+    assert "from __future__ import annotations" in result.module.code
+    assert "def test_x(session: Annotated[Session, Depends(session)]):" in result.module.code
+
+
 def test_an_injection_with_no_type_is_written_exactly_as_it_was_before() -> None:
     source = "def test_x(session):\n    assert session\n"
 

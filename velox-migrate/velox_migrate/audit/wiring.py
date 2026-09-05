@@ -113,8 +113,13 @@ def plugin_wired(ground_truth: GroundTruth) -> frozenset[str]:
     # backend defines an `anyio_backend` of its own, which wins the name without stopping anyio
     # from hanging the mark. What makes the mark the plugin's is that the plugin defines the name
     # at all, not which definition the override contest ended on.
+    #
+    # Narrowed to `anyio_backend` itself rather than every fixture a VX320-coded plugin happens to
+    # provide: several unrelated plugins share that disposition (pytest-xdist's `worker_id`, for
+    # one), and a suite's own `usefixtures` naming one of those is a real dependency, not noise
+    # anyio hung on the test.
     for fixture in ground_truth.fixture_defs.values():
-        if in_suite(fixture):
+        if in_suite(fixture) or fixture.argname != _BACKEND_FIXTURE:
             continue
         root = (fixture.func.module or "").split(".")[0]
         if root in ("_pytest", "pytest"):
