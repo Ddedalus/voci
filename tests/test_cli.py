@@ -124,6 +124,23 @@ def test_default_roots_fall_back_to_cwd_without_a_tests_dir(chdir_project: Proje
     assert _default_test_roots() == [Path()]
 
 
+def test_a_bare_run_in_a_subdirectory_does_not_widen_to_the_whole_suite(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rootdir climbs to the `pyproject.toml` so the run cache and the ids are stable, but the
+    *selection* must not climb with it: a bare `velox` inside `tests/unit` still means the tests
+    there. Only a `[tool.velox]` table -- a deliberate statement about where the suite lives --
+    anchors the built-in default tier at the rootdir instead.
+    """
+    project.write_pyproject("[project]\nname = 'demo'\n")
+    project.write("tests/unit/test_here.py", "async def test_here():\n    pass\n")
+    project.write("tests/other/test_elsewhere.py", "async def test_elsewhere():\n    fail_me\n")
+    monkeypatch.chdir(project.root / "tests" / "unit")
+
+    # The broken test next door would make this exit non-zero if the run had widened to it.
+    assert main([]) == 0
+
+
 def test_rewrite_cache_with_plain_mode_is_a_usage_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

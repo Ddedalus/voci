@@ -411,16 +411,18 @@ def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
     back as an argument from a directory that isn't the rootdir. The literal reading always
     wins, so an argument that already names something keeps meaning what it says.
 
-    The rootdir here is the one a `[tool.velox]` table fixes, found by `_config.resolve`'s own
-    upward search from the current directory and raising its `ConfigError` the same way. A run
-    with no such table has a rootdir derived from the arguments themselves, which would make one
-    argument's meaning depend on the others, so those runs are left alone. Searched at all only
-    when some argument names nothing from here, which is the uncommon case.
+    The rootdir here is whichever `pyproject.toml` fixes one, found by `_config.resolve`'s own
+    upward search from the current directory and raising its `ConfigError` the same way -- the
+    `[tool.velox]` table where there is one, and the plain `pyproject.toml` the fallback anchors
+    at otherwise. `config.anchored`, not `config.source`: what disqualifies a rootdir here is
+    being derived from the arguments, which would make one argument's meaning depend on the
+    others, and a rootdir read off a file on disk is not that whether or not the file claimed
+    velox. Searched at all only when some argument names nothing from here, the uncommon case.
     """
     if all(target.path.is_absolute() or target.path.exists() for target in targets):
         return targets
     config = _config.resolve([])
-    if config.source is None:
+    if not config.anchored:
         return targets
     rootdir = config.rootdir
     reread = []

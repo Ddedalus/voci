@@ -71,12 +71,10 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
 
     config = resolve([project])
 
-    # The git root, not the argument: the walk stops there, and that is the outermost thing it
-    # is allowed to call a project root.
-    assert config == Config(rootdir=repo)
+    assert config == Config(rootdir=project)
 
 
-def test_rootdir_without_config_is_the_git_root_not_the_argument(tmp_path: Path) -> None:
+def test_rootdir_without_a_table_is_the_pyproject_not_the_argument(tmp_path: Path) -> None:
     """An argument naming a subdirectory must not move the rootdir onto it.
 
     rootdir fixes the id spelling, the `sys.path` entry and which `.velox_cache` the run uses, so
@@ -84,25 +82,42 @@ def test_rootdir_without_config_is_the_git_root_not_the_argument(tmp_path: Path)
     cache in a private id namespace -- and a `--lf` reading it finds "nothing recorded" where the
     truth is "your failures are all outside this selection".
     """
-    (tmp_path / ".git").mkdir()
+    Project(tmp_path).write_pyproject("[project]\nname = 'demo'\n")
     unit = tmp_path / "tests" / "unit"
     unit.mkdir(parents=True)
 
     assert resolve([unit]).rootdir == tmp_path
     assert resolve([tmp_path]).rootdir == tmp_path
+    assert resolve([unit]).anchored
 
 
-def test_rootdir_without_config_prefers_a_pyproject_over_the_git_root(tmp_path: Path) -> None:
+def test_rootdir_without_a_table_takes_the_nearest_pyproject(tmp_path: Path) -> None:
     """In a monorepo the distribution is the rootdir, not the repository: `sys.path` gets the
     rootdir, so rooting a package's suite at the repo above it would stop the package's own
     imports from resolving."""
-    (tmp_path / ".git").mkdir()
+    Project(tmp_path).write_pyproject("[project]\nname = 'repo'\n")
     package = tmp_path / "pkgs" / "foo"
     tests = package / "tests"
     tests.mkdir(parents=True)
     Project(package).write_pyproject("[project]\nname = 'foo'\n")
 
     assert resolve([tests]).rootdir == package
+
+
+def test_a_git_root_alone_does_not_anchor_the_rootdir(tmp_path: Path) -> None:
+    """The `.git` bounds the search but is not a fallback: it says nothing about where a suite's
+    imports are rooted, and climbing to it would put `sys.path` somewhere a suite with a helper
+    module beside its tests stops importing -- or, for a dotfiles repo at `$HOME`, drop a
+    `.velox_cache` in the home directory for any scratch tree under it.
+    """
+    (tmp_path / ".git").mkdir()
+    unit = tmp_path / "tests" / "unit"
+    unit.mkdir(parents=True)
+
+    config = resolve([unit])
+
+    assert config == Config(rootdir=unit)
+    assert not config.anchored
 
 
 def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -> None:

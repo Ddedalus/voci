@@ -85,10 +85,18 @@ arguments gives `velox tests/unit` a second cache in a second id namespace. That
 two caches drifting apart: the second one starts *empty*, and an empty cache means "nothing
 recorded", which is exactly the state the paragraph above exists to distinguish from "your
 failures are all outside this selection". The loud exit `5` silently becomes a green exit `0`.
-`_config.resolve` therefore falls back to the nearest ancestor that looks like a project root — a
-`pyproject.toml`, else the `.git` the walk stops at — and only to the search start when there is
-neither. A `pyproject.toml` wins over the `.git` below it because in a monorepo the distribution
-is what `sys.path` and the ids must be read against.
+`_config.resolve` therefore falls back to the nearest `pyproject.toml`'s directory, and to the
+search start only when there is none. Nearest, not outermost: in a monorepo the distribution is
+what `sys.path` and the ids must be read against, and rooting at the repo above it would stop the
+suite's own imports from resolving. The `.git` the walk stops at is deliberately *not* a fallback,
+though it still bounds the search — it says nothing about where a suite's imports are rooted, and
+it is routinely somewhere a rootdir has no business being, a dotfiles repo at `$HOME` being the
+case that decided it.
+
+The cost of climbing at all is that `sys.path` climbs too: a suite whose tests import a helper
+module sitting beside them resolved that helper only because `velox tests/unit` used to root
+itself there. Anchoring to a `pyproject.toml` alone is what keeps that narrow — a tree with no
+`pyproject.toml` anywhere above it, which is what such a suite usually is, does not move.
 
 Rootdir is not the *selection*, though. Climbing to the project root would otherwise widen a bare
 `velox` run from inside `tests/unit` into the whole suite, so the built-in default tier
