@@ -21,7 +21,10 @@ had something to say about that file is the one that leaves it out. The cache th
 those paths separately from the failed ids, and every test in such a file counts as a recorded
 failure until a run collects it successfully. Where the path is a package `__init__.py` the tree
 below it is what gets replayed: discovery never yields an `__init__.py` as a test file, so an
-exact match on it matches nothing, and nothing under it was collected either. The same asymmetry
+exact match on it matches nothing, and nothing under it was collected either. Narrowing the file
+set never narrows what counts as a *test module*, though: `collect` is told the whole discovered
+set alongside the slice it is collecting, so a `velox.use(...)` in a file `--lf` left out does not
+become a misplaced declaration the moment a collected file imports that module. The same asymmetry
 decides when the entry clears — collecting anything beneath a package is what imports it, so a
 failure the run did not report again is one the run fixed.
 
@@ -46,8 +49,16 @@ whose file this run *read*. Three kinds escape it, so each is closed where it ar
 * A collection error on a path **discovery does not produce** is never settled either.
   `_misplaced_declarations` reports a `velox.use(...)` in a module velox never collects, named
   absolutely when it lies outside `rootdir` and by a bare dotted module name when it has no
-  `__file__`. Such an error is not recorded at all: the rule for what may go in mirrors the rule
-  for what comes out, and every run that imports the module finds it again anyway.
+  `__file__`. Such an error is not recorded at all: the rule for what may go in is literally the
+  rule for what comes out — one `settled_paths` call, read both ways round — and every run that
+  imports the module finds it again anyway. That mirror is also why the answer for a package
+  `__init__.py` is `package_inits`' own walk rather than "somewhere below it": a directory with
+  no `__init__.py` ends the chain collection follows, so `velox pkg/sub` over a namespace
+  `pkg/sub/` never imports `pkg/__init__.py` and has nothing to say about it.
+* **A file under a broken package** was never read, and carries no error of its own —
+  `collect` attributes that one to the `__init__.py`, once, however many files sit beneath it.
+  It is excluded from what counts as read, or absence-as-an-answer would drop every failure
+  recorded in it.
 * **`--lf`'s own deselections** are not `-k`'s. A deselected test that never reached expansion
   keeps its recorded `[case]` ids, since the run never built them — true of `-k` and `-m`, and
   false of `--lf`, which deselects a skip it knows the answer for. Settling therefore reads the

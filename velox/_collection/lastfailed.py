@@ -29,12 +29,14 @@ from velox._collection.collect import (
     TestRecord,
     display_path,
 )
+from velox._collection.requires import package_inits
 
 __all__ = [
     "Recorded",
     "candidate_files",
     "error_paths",
     "missing_paths",
+    "read_files",
     "reorder",
     "select",
     "settled_paths",
@@ -133,46 +135,57 @@ def missing_paths(last_run: LastRun, *, rootdir: Path) -> set[str]:
     return {path for path in Recorded.of(last_run).paths if not (rootdir / path).exists()}
 
 
-def error_paths(errors: Iterable[CollectionError], *, attempted: Collection[str]) -> set[str]:
-    """The paths of `errors` some later run would be in a position to settle.
-
-    Mirrors `settled_paths`, which is what clears these again: the only paths a run answers for
-    are the files discovery handed collection and the package `__init__.py` files importing
-    those required. An error on anything else is one no discovery will ever produce a path for,
-    so recording it leaves `error_files` holding a string nothing takes out again -- and a `--lf`
-    narrowing to a file it never finds, selecting nothing and exiting 5 from then on.
-
-    That is `_misplaced_declarations`: a `velox.use(...)` in a module velox never collects, named
-    by an absolute path when it lies outside `rootdir` (machine-specific besides) and by a bare
-    dotted module name when it has no `__file__` at all. Every run that imports the module finds
-    it again and reports it, which is what makes leaving it out of the cache safe.
-    """
-    recordable: set[str] = set()
-    for error in errors:
-        under_attempted = error.path.name == "__init__.py" and any(
-            error.path.parent in Path(candidate).parents for candidate in attempted
-        )
-        if str(error.path) in attempted or under_attempted:
-            recordable.add(str(error.path))
-    return recordable
-
-
-def settled_paths(last_run: LastRun, attempted: Iterable[str]) -> set[str]:
+def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
     """The rootdir-relative paths this run has an answer for.
 
-    Every file collection was handed, plus a recorded package `__init__.py` beneath which it was
-    handed one: importing that package is what collecting anything under it requires, so a
-    failure the run did not report again is one the run fixed. Without the second half a broken
-    `__init__.py` stays recorded for good, since discovery never yields it as a file of its own.
+    Every file collection was handed, plus the package `__init__.py` files importing those
+    required -- `package_inits`' own rule, which is what collection walks: an unbroken
+    `__init__.py` chain up from the file's directory. Importing a package is what collecting
+    anything under it requires, so a recorded failure the run did not report again is one the run
+    fixed; without that a broken `__init__.py` stays recorded for good, since discovery never
+    yields it as a file of its own. A directory with no `__init__.py` ends the chain, so
+    `velox pkg/sub` over a namespace `pkg/sub/` answers for nothing about `pkg/__init__.py` --
+    it never imported it.
     """
     answered = set(attempted)
-    for path in last_run.error_files:
-        package = Path(path)
-        if package.name == "__init__.py" and any(
-            package.parent in Path(candidate).parents for candidate in answered
-        ):
-            answered.add(path)
+    for candidate in attempted:
+        for init in package_inits(rootdir / candidate, rootdir):
+            if init.is_relative_to(rootdir):
+                answered.add(str(init.relative_to(rootdir)))
     return answered
+
+
+def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) -> set[str]:
+    """The paths of `errors` some later run would be in a position to settle.
+
+    The exact mirror of `settled_paths`, which is what clears these again. An error on any other
+    path is one no discovery will ever produce, so recording it leaves `error_files` holding a
+    string nothing takes back out -- and a `--lf` narrowing to a file it never finds, selecting
+    nothing and exiting 5 from then on.
+
+    That is `_misplaced_declarations`: a `velox.use(...)` in a module velox never collects, named
+    by an absolute path when it lies outside `rootdir` and by a bare dotted module name when it
+    has no `__file__` at all. Every run that imports the module finds it again and reports it,
+    which is what makes leaving it out of the cache safe.
+    """
+    return {str(error.path) for error in errors if str(error.path) in answered}
+
+
+def read_files(attempted: Collection[str], errored: Collection[str]) -> set[str]:
+    """The attempted paths whose entire test set this run established.
+
+    Not simply `attempted - errored`: a file under a package whose `__init__.py` failed to import
+    is skipped before it is read, and carries no error of its own -- `collect` attributes that
+    one to the `__init__.py`, once, however many files sit under it. Left in, such a file reads
+    to `vanished` as "collected, and holding nothing", which would drop every failure recorded
+    in it.
+    """
+    broken_trees = tuple(Path(path).parent for path in errored if Path(path).name == "__init__.py")
+    return {
+        path
+        for path in attempted
+        if path not in errored and not any(tree in Path(path).parents for tree in broken_trees)
+    }
 
 
 def vanished(

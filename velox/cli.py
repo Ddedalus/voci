@@ -801,6 +801,7 @@ def main(argv: list[str] | None = None) -> int:
         # Before collect, not after: not importing the files that hold nothing --lf would run
         # is where the flag's speed comes from. `files` stays exactly what collection was
         # handed, which is what the merge below reads as "settled by this run".
+        discovered = files
         if replay_last_failed:
             files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
         collected = _collect.collect(
@@ -809,6 +810,9 @@ def main(argv: list[str] | None = None) -> int:
             tag_expr=markexpr,
             keyword_expr=keywordexpr,
             id_selection=id_selection,
+            # The unnarrowed set, so --lf leaving a test module out doesn't turn its
+            # `velox.use(...)` into a misplaced declaration. Nothing here is imported.
+            collectible=discovered,
         )
         # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
         # flags already made, so `velox --lf -k users` means both.
@@ -990,7 +994,10 @@ def main(argv: list[str] | None = None) -> int:
         # next --lf its ordering, and must not touch this one's output or exit code.
         resolved_rootdir = rootdir.resolve()
         attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}
-        errored = _lastfailed.error_paths(collected.errors, attempted=attempted)
+        # One computation used both ways round: what this run can settle is exactly what it may
+        # record, so no error goes into the cache that no later run could take back out.
+        answered = _lastfailed.settled_paths(attempted, rootdir=resolved_rootdir)
+        errored = _lastfailed.error_paths(collected.errors, answered=answered)
         # A recorded file that is no longer on disk is settled by that alone: discovery will
         # never hand it to collection again, so this is the only run that can take it out.
         gone = _lastfailed.missing_paths(last_run, rootdir=resolved_rootdir)
@@ -1002,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
         settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
         settled_ids |= {s.id for s in collected.skipped}
         settled_ids |= _lastfailed.vanished(
-            last_run, found, known_files=(attempted - errored) | gone
+            last_run, found, known_files=_lastfailed.read_files(attempted, errored) | gone
         )
         _cache.save(
             rootdir,
@@ -1011,7 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
                 failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
                 errored=errored,
                 settled_ids=settled_ids,
-                settled_files=_lastfailed.settled_paths(last_run, attempted) | gone,
+                settled_files=answered | gone,
             ),
         )
         return exit_status

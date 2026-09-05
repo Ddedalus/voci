@@ -2229,6 +2229,74 @@ def test_last_failed_settles_the_cases_of_a_test_that_became_skipped(
     assert "--lf: nothing recorded" in capsys.readouterr().out
 
 
+def test_a_run_below_a_namespace_dir_does_not_clear_a_broken_package(
+    project: Project,
+) -> None:
+    """Collecting under a package is what imports it, and a directory without an `__init__.py`
+    ends that walk. A run that never imported `pkg/__init__.py` has no answer about it, so it
+    must not report the recorded failure to import it fixed."""
+    # Pins rootdir, so both runs below share the one cache rather than the narrower run
+    # starting its own next to the directory it was pointed at.
+    project.write_pyproject("[tool.velox]\n")
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    project.write("pkg/test_b.py", "async def test_y():\n    pass\n")
+    # No __init__.py of its own, so collecting it never imports the package above it.
+    project.write("pkg/sub/test_a.py", "async def test_x():\n    pass\n")
+    assert main([str(project.root)]) == 1
+
+    assert main([str(project.root / "pkg" / "sub")]) == 0
+
+    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    assert recorded["error_files"] == ["pkg/__init__.py"]
+
+
+def test_last_failed_does_not_invent_a_misplaced_declaration(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--lf narrows which files are collected, not which ones are test modules: a
+    `velox.use(...)` in a test module left out of the run is still a declaration in a test
+    module, however the run reaches that module."""
+    project.write(
+        "test_shared.py",
+        "import velox\n\n"
+        "@velox.fixture()\nasync def thing() -> int:\n    return 1\n\n"
+        "velox.use(thing)\n\n"
+        "async def test_shared_ok():\n    pass\n",
+    )
+    project.write(
+        "test_a.py",
+        "import test_shared\n\nasync def test_bad():\n    assert 1 == 2\n",
+    )
+    try:
+        assert main([str(project.root)]) == 1
+        project.write(
+            "test_a.py",
+            "import test_shared\n\nasync def test_bad():\n    pass\n",
+        )
+        capsys.readouterr()
+
+        assert main([str(project.root), "--lf"]) == 0
+    finally:
+        sys.modules.pop("test_shared", None)
+    assert "COLLECTION ERROR" not in capsys.readouterr().out
+
+
+def test_a_broken_package_does_not_settle_the_failures_below_it(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file under a package that failed to import is skipped before it is read, and carries no
+    error of its own -- so it must not read as "collected, and holding nothing", which would
+    drop the failures recorded in it."""
+    project.write("pkg/__init__.py", "")
+    project.write("pkg/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
+    assert main([str(project.root)]) == 1
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    assert main([str(project.root)]) == 1
+
+    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    assert "pkg/test_a.py::test_bad" in recorded["failed"]
+
+
 def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
     """The rewriter fills the same directory during collection, so a project whose only velox
     invocation is --collect-only must not pick up an untracked one."""

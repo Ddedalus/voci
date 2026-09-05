@@ -276,8 +276,13 @@ def collect(
     tag_expr: TagExpression | None = None,
     keyword_expr: KeywordExpression | None = None,
     id_selection: IdSelection | None = None,
+    collectible: Iterable[Path] = (),
 ) -> CollectionResult:
     """Import each file and build its records; `index` assigned once over the whole result.
+
+    `collectible` is the wider set of test files discovery found, when `files` is a narrowed
+    slice of it (`--lf`). Nothing in it is imported; it only tells `_misplaced_declarations`
+    which modules are test modules, so narrowing the run cannot invent a collection error.
 
     Per file, in the order given:
 
@@ -339,7 +344,15 @@ def collect(
     index = 0
     resolved_rootdir = Path(rootdir).resolve()
 
+    #: Seeded with every file discovery found -- `collectible`, which `--lf` narrows `files`
+    #: down from -- rather than only the ones this call collects. A `velox.use(...)` in a test
+    #: module left out of this run is a declaration in a test module all the same, and
+    #: `_misplaced_declarations` must not report it as misplaced because a file that *was*
+    #: collected imported that module under its real name.
     declaring_files: set[Path] = set()
+    for collectible_path in collectible:
+        declaring_files.add(Path(collectible_path).resolve())
+        declaring_files.update(package_inits(collectible_path, rootdir))
     #: `__init__.py` path -> what that package declared, or `None` if it failed to import. One
     #: entry per package for the whole call, so every test under a package shares the one import
     #: and therefore the one `Fixture` object: two imports would be two identities, and a

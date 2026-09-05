@@ -218,51 +218,68 @@ def test_missing_paths_is_empty_when_every_recorded_file_is_still_there(tmp_path
     assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == set()
 
 
-def test_error_paths_keeps_an_error_on_a_file_collection_was_handed() -> None:
+def _package(tmp_path: Path, *relpaths: str) -> None:
+    for relpath in relpaths:
+        target = tmp_path / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("")
+
+
+def test_settled_paths_answers_for_a_package_whose_tree_was_collected(tmp_path: Path) -> None:
+    _package(tmp_path, "pkg/__init__.py", "pkg/test_a.py")
+    assert lastfailed.settled_paths({"pkg/test_a.py"}, rootdir=tmp_path) == {
+        "pkg/test_a.py",
+        "pkg/__init__.py",
+    }
+
+
+def test_settled_paths_leaves_a_package_no_file_was_collected_under(tmp_path: Path) -> None:
+    _package(tmp_path, "pkg/__init__.py", "test_b.py")
+    assert lastfailed.settled_paths({"test_b.py"}, rootdir=tmp_path) == {"test_b.py"}
+
+
+def test_settled_paths_stops_at_a_directory_without_an_init(tmp_path: Path) -> None:
+    """Collection imports a package by walking an unbroken `__init__.py` chain up from the file.
+    A namespace directory ends that walk, so `velox pkg/sub` never imports `pkg/__init__.py` and
+    has no business clearing a recorded failure to import it."""
+    _package(tmp_path, "pkg/__init__.py", "pkg/sub/test_a.py")
+    assert lastfailed.settled_paths({"pkg/sub/test_a.py"}, rootdir=tmp_path) == {
+        "pkg/sub/test_a.py"
+    }
+
+
+def test_error_paths_keeps_an_error_on_a_path_the_run_answers_for() -> None:
     error = CollectionError(path=Path("test_a.py"), message="boom")
-    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == {"test_a.py"}
-
-
-def test_error_paths_keeps_an_error_on_a_package_above_an_attempted_file() -> None:
-    """Discovery never yields an `__init__.py` as a test file, so this is the one path outside
-    `attempted` a later run still answers for -- by collecting anything under it."""
-    error = CollectionError(path=Path("pkg/__init__.py"), message="boom")
-    assert lastfailed.error_paths([error], attempted={"pkg/test_a.py"}) == {"pkg/__init__.py"}
+    assert lastfailed.error_paths([error], answered={"test_a.py"}) == {"test_a.py"}
 
 
 def test_error_paths_drops_an_error_on_a_module_velox_never_collects() -> None:
     """`_misplaced_declarations` reports a helper module under `rootdir` that discovery does not
     hand back, so nothing would ever settle the entry."""
     error = CollectionError(path=Path("helper.py"), message="boom")
-    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+    assert lastfailed.error_paths([error], answered={"test_a.py"}) == set()
 
 
 def test_error_paths_drops_an_absolute_path(tmp_path: Path) -> None:
     """A misplaced declaration outside `rootdir` is named absolutely -- machine-specific, and
     never equal to a rootdir-relative discovery path."""
     error = CollectionError(path=tmp_path / "helper.py", message="boom")
-    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+    assert lastfailed.error_paths([error], answered={"test_a.py"}) == set()
 
 
 def test_error_paths_drops_a_dotted_module_name() -> None:
     """A module with no `__file__` is named by its dotted name, which is not a path at all."""
     error = CollectionError(path=Path("some.module"), message="boom")
-    assert lastfailed.error_paths([error], attempted={"test_a.py"}) == set()
+    assert lastfailed.error_paths([error], answered={"test_a.py"}) == set()
 
 
-def test_error_paths_drops_a_package_init_no_attempted_file_sits_under() -> None:
-    error = CollectionError(path=Path("other/__init__.py"), message="boom")
-    assert lastfailed.error_paths([error], attempted={"pkg/test_a.py"}) == set()
-
-
-def test_settled_paths_answers_for_a_package_whose_tree_was_collected() -> None:
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert lastfailed.settled_paths(last_run, {"pkg/test_a.py"}) == {
-        "pkg/test_a.py",
-        "pkg/__init__.py",
+def test_read_files_drops_a_file_under_a_package_that_failed_to_import() -> None:
+    """The file carries no error of its own -- the `__init__.py` does -- but it was never read,
+    so it says nothing about which of its tests still exist."""
+    assert lastfailed.read_files({"pkg/test_a.py", "test_b.py"}, {"pkg/__init__.py"}) == {
+        "test_b.py"
     }
 
 
-def test_settled_paths_leaves_a_package_no_file_was_collected_under() -> None:
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert lastfailed.settled_paths(last_run, {"test_b.py"}) == {"test_b.py"}
+def test_read_files_drops_a_file_that_failed_to_import_itself() -> None:
+    assert lastfailed.read_files({"test_a.py", "test_b.py"}, {"test_a.py"}) == {"test_b.py"}
