@@ -15,7 +15,8 @@ from _support import Project
 
 from velox import __version__
 from velox._collection import collect as _collect_module
-from velox.cli import _default_test_roots, _friendly_path, build_parser, main
+from velox._collection import discovery as _discovery
+from velox.cli import _default_test_roots, _friendly_path, _watch_scope, build_parser, main
 
 
 def _lines_starting_with(out: str, *prefixes: str, exclude_summary: bool = True) -> list[str]:
@@ -1295,6 +1296,146 @@ def test_main_collect_only_reports_a_collection_error_and_exits_one(
     assert "COLLECTION ERROR" in capsys.readouterr().out
 
 
+def test_co_json_prints_one_json_object_with_id_path_and_lineno(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "async def test_one():\n    pass\n\n\nasync def test_two():\n    pass\n",
+    )
+
+    status = main([str(project.root), "--co-json"])
+
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["runner"] == "velox"
+    assert report["rootpath"] == str(project.root)
+    assert report["tests"] == [
+        {"id": "test_sample.py::test_one", "path": "test_sample.py", "lineno": 1},
+        {"id": "test_sample.py::test_two", "path": "test_sample.py", "lineno": 5},
+    ]
+    assert report["skipped"] == []
+    assert report["deselected"] == []
+    assert report["collection_errors"] == []
+
+
+def test_co_json_implies_collect_only(project: Project, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--co-json` alone, with no `--collect-only`, still never runs anything."""
+    project.write(
+        "test_sample.py", "async def test_boom():\n    raise AssertionError('must not run')\n"
+    )
+
+    status = main([str(project.root), "--co-json"])
+
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [test["id"] for test in report["tests"]] == ["test_sample.py::test_boom"]
+
+
+def test_co_json_reports_a_skip_with_its_path_and_reason(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "import velox\n\n"
+        "@velox.skip('not ready')\n"
+        "async def test_skipped():\n"
+        "    raise AssertionError('must not run')\n",
+    )
+
+    status = main([str(project.root), "--co-json"])
+
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["tests"] == []
+    assert report["skipped"] == [
+        {"id": "test_sample.py::test_skipped", "path": "test_sample.py", "reason": "not ready"}
+    ]
+
+
+def test_co_json_reports_deselected_ids(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_sample.py",
+        "async def test_keep():\n    pass\n\n\nasync def test_drop():\n    pass\n",
+    )
+
+    status = main([str(project.root), "--co-json", "-k", "test_keep"])
+
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [test["id"] for test in report["tests"]] == ["test_sample.py::test_keep"]
+    assert report["deselected"] == ["test_sample.py::test_drop"]
+
+
+def test_co_json_reports_a_collection_error_and_exits_one(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write("test_broken.py", "raise RuntimeError('boom')\n")
+
+    status = main([str(project.root), "--co-json"])
+
+    assert status == 1
+    report = json.loads(capsys.readouterr().out)
+    assert len(report["collection_errors"]) == 1
+    error = report["collection_errors"][0]
+    assert error["path"] == "test_broken.py"
+    assert "boom" in error["message"]
+
+
+def test_co_json_exits_five_when_nothing_is_collected(tmp_path: Path) -> None:
+    assert main([str(tmp_path), "--co-json"]) == 5
+
+
+def test_co_json_prints_nothing_else_to_stdout(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One line of JSON and nothing else -- no startup header, no config line, no import-time
+    warning -- so stdout stays parseable as a single object on its own."""
+    project.write(
+        "test_sample.py",
+        "import warnings\n\nwarnings.warn('legacy')\n\n\nasync def test_ok():\n    pass\n",
+    )
+
+    status = main([str(project.root), "--co-json"])
+
+    assert status == 0
+    captured = capsys.readouterr()
+    # Would raise -- on the leading "config: none" header, or on a trailing warnings summary --
+    # if anything but the one JSON object reached stdout.
+    report = json.loads(captured.out)
+    assert [test["id"] for test in report["tests"]] == ["test_sample.py::test_ok"]
+    # The warning wasn't dropped -- it went to stderr instead of polluting stdout.
+    assert "legacy" in captured.err
+
+
+def test_co_json_answers_from_the_index_without_reimporting(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_passing_test()
+    assert main([str(project.root), "--co-json"]) == 0  # warms the index
+    warm = json.loads(capsys.readouterr().out)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("collect() should not run when the index answers")
+
+    monkeypatch.setattr("velox._collection.collect.collect", _boom)
+    assert main([str(project.root), "--co-json"]) == 0
+    assert json.loads(capsys.readouterr().out) == warm
+
+
+def test_report_json_not_written_for_co_json(project: Project, tmp_path: Path) -> None:
+    """`--co-json` never runs anything either, same as `--collect-only`."""
+    project.write_passing_test()
+    out = tmp_path / "report.json"
+
+    status = main([str(project.root), f"--report-json={out}", "--co-json"])
+
+    assert status == 0
+    assert not out.exists()
+
+
 def test_main_x_stops_after_the_first_failure(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2508,3 +2649,109 @@ def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) ->
     gitignore = project.root / ".velox_cache" / ".gitignore"
     assert gitignore.exists()
     assert gitignore.read_text().endswith("*\n")
+
+
+# --watch: dispatch out of main() into _watch.run, and the roots/ignore_dirs approximation that
+# feeds it. The loop itself (rerunning on a change, --lf ordering, Ctrl-C) is tests/test_watch.py.
+
+
+def test_watch_dispatches_to_the_watch_loop_with_watch_stripped(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project.write_passing_test()
+    captured: dict[str, object] = {}
+
+    def fake_watch_run(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("velox.cli._watch_run", fake_watch_run)
+
+    status = main([str(project.root), "--watch"])
+
+    assert status == 0
+    assert captured["base_argv"] == [str(project.root)]
+    assert captured["apply_last_failed"] is True
+    assert captured["run_once"] is main
+
+
+@pytest.mark.parametrize("flag", ["--lf", "--ff"])
+def test_watch_does_not_double_apply_an_explicit_last_failed_or_failed_first(
+    project: Project, monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    """--watch's own automatic --lf is only for an invocation that didn't already settle its
+    ordering -- one that gave --lf or --ff itself keeps exactly that, every rerun."""
+    project.write_passing_test()
+    captured: dict[str, object] = {}
+
+    def fake_watch_run(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("velox.cli._watch_run", fake_watch_run)
+
+    main([str(project.root), "--watch", flag])
+
+    assert captured["apply_last_failed"] is False
+    assert flag in captured["base_argv"]  # type: ignore[operator]
+
+
+def test_watch_scope_uses_an_explicit_path(chdir_project: Project) -> None:
+    sub = chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n").parent
+    args = build_parser().parse_args([str(sub), "--watch"])
+
+    roots, _ = _watch_scope(args)
+
+    assert roots == [sub]
+
+
+def test_watch_scope_reanchors_a_pasted_back_id_on_the_rootdir(
+    chdir_project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test id `--collect-only`/`--co-json` printed is rootdir-relative -- read literally from
+    some other directory under a project with a [tool.velox] table, it would otherwise name a
+    path that doesn't exist, which `_watch_scope` would happily watch forever without ever
+    seeing the real file's changes (main's own `_reread_on_rootdir` is what saves a real run
+    from the same trap)."""
+    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write("tests/test_a.py", "async def test_ok():\n    pass\n")
+    elsewhere = chdir_project.root / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    args = build_parser().parse_args(["tests/test_a.py::test_ok", "--watch"])
+
+    roots, _ = _watch_scope(args)
+
+    assert roots == [chdir_project.root / "tests" / "test_a.py"]
+
+
+def test_watch_scope_falls_back_to_configured_testpaths(chdir_project: Project) -> None:
+    chdir_project.write_pyproject('[tool.velox]\ntestpaths = ["sub"]\n')
+    chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
+    args = build_parser().parse_args(["--watch"])
+
+    roots, _ = _watch_scope(args)
+
+    assert roots == [chdir_project.root / "sub"]
+
+
+def test_watch_scope_falls_back_to_the_built_in_default(chdir_project: Project) -> None:
+    args = build_parser().parse_args(["--watch"])
+
+    roots, ignore_dirs = _watch_scope(args)
+
+    assert roots == _default_test_roots(Path.cwd().resolve())
+    assert "__pycache__" in ignore_dirs
+
+
+def test_watch_scope_never_raises_on_a_broken_config(chdir_project: Project) -> None:
+    """A `[tool.velox]` table `main`'s own resolution would reject as a usage error still gives
+    `--watch` something to poll -- that error, and reporting it, are `main`'s own first run's
+    job, not this approximation's."""
+    chdir_project.write_pyproject("not valid toml [[[")
+    args = build_parser().parse_args(["--watch"])
+
+    roots, ignore_dirs = _watch_scope(args)
+
+    assert roots  # doesn't raise, and settles on something rather than nothing
+    assert ignore_dirs == _discovery.DEFAULT_IGNORE_DIRS

@@ -138,7 +138,11 @@ def test_answer_reads_every_fresh_file_in_order(tmp_path: Path) -> None:
     }
     result = index.answer(entries, [file_a, file_b], rootdir=tmp_path)
     assert result == index.Answer(
-        ids=("test_a.py::test_x",), skipped=(("test_b.py::test_y", "not ready"),)
+        ids=("test_a.py::test_x",),
+        skipped=(("test_b.py::test_y", "not ready"),),
+        paths=("test_a.py",),
+        lines=(1,),
+        skipped_paths=("test_b.py",),
     )
 
 

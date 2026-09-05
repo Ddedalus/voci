@@ -19,7 +19,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import overload
+from typing import TextIO, overload
 
 from velox import __version__, _cache, _config, _warnings
 from velox._assertions import rewrite as _rewrite
@@ -30,6 +30,7 @@ from velox._collection import index as _index
 from velox._collection import lastfailed as _lastfailed
 from velox._collection import selection as _selection
 from velox._collection import targets as _targets
+from velox._report import collect_json as _collect_json
 from velox._report import color as _color
 from velox._report import json_report as _json_report
 from velox._report import terminal as _report
@@ -37,6 +38,7 @@ from velox._run import isolated as _isolated
 from velox._run import run as _run
 from velox._run import safety as _safety
 from velox._wallclock import PROCESS_START
+from velox._watch import run as _watch_run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -100,6 +102,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the whole suite, with the tests that failed on the last run first. Unlike "
         "--lf this changes only the order, so a run that is still red says so within the first "
         "few results.",
+    )
+    parser.add_argument(
+        "--watch",
+        dest="watch",
+        action="store_true",
+        help="Rerun after every change to a .py file under the selected paths, instead of "
+        "exiting. The first run is whatever PATHS/-k/-m/--lf/--ff already say; every run after "
+        "that applies --lf on top -- unless --lf or --ff was already given, which is left alone "
+        "-- so a red run is what gets rerun until it's green, and a change with nothing left "
+        "failing reruns the whole suite. Stops on Ctrl-C.",
     )
     # --assert and --rewrite-cache below both affect real behavior, not just help text.
     parser.add_argument(
@@ -252,6 +264,17 @@ def build_parser() -> argparse.ArgumentParser:
         "without running any of them.",
     )
     parser.add_argument(
+        "--co-json",
+        dest="co_json",
+        action="store_true",
+        help="Like --collect-only (and implies it), but print one JSON object to stdout instead "
+        "of the plain id list: every selected test's id, file and definition line, plus what "
+        "else collection found -- skips, deselections, and any file that failed to import. For "
+        "an editor integration that wants the result as data. Nothing else goes to stdout during "
+        "this run, including the usual startup header and any import-time warnings, which are "
+        "printed to stderr instead so the one line of JSON stays parseable on its own.",
+    )
+    parser.add_argument(
         "--report-json",
         dest="report_json",
         type=Path,
@@ -259,7 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Write one JSON record of the run to PATH: an outcome, duration and failure reason "
         "per test, so a consumer reads the result as data instead of parsing this reporter's own "
-        "output. Not written for --collect-only, which never runs anything to report on.",
+        "output. Not written for --collect-only/--co-json, which never run anything to report "
+        "on.",
     )
     # A fresh, numbered session root by default (see
     # _capture.DEFAULT_BASETEMP_RETENTION), or this override. Validated by hand in
@@ -295,6 +319,41 @@ def _default_test_roots(rootdir: Path | None = None) -> list[Path]:
     if tests_dir.is_dir():
         return [tests_dir]
     return [base]
+
+
+def _watch_scope(args: argparse.Namespace) -> tuple[list[Path], frozenset[str]]:
+    """A best-effort approximation of the roots and ignored directories `main`'s own
+    resolution below would settle on -- good enough for `--watch` to know what to poll for
+    changes, computed once, before the first of its runs.
+
+    Deliberately looser than `main`'s own: a bad path or a broken `[tool.velox]` table here
+    just means less gets watched (or the built-in default does), rather than failing the way a
+    real run's validation does -- that validation, and its error message, still happen inside
+    every iteration `--watch` actually runs, `_watch_scope` never being the thing that reports
+    a usage error.
+    """
+    targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Same re-anchoring `main` itself does below, and for the same reason: a test id pasted
+    # back from a previous run is rootdir-relative, and read literally from a subdirectory of a
+    # project with a [tool.velox] table it would otherwise name a path that doesn't exist --
+    # nothing `discover_files` would ever see a change under.
+    with contextlib.suppress(_config.ConfigError):
+        targets = _reread_on_rootdir(targets)
+    try:
+        config = _config.resolve([target.path for target in targets])
+    except _config.ConfigError:
+        return (
+            [target.path for target in targets] or _default_test_roots(),
+            _discovery.DEFAULT_IGNORE_DIRS,
+        )
+    ignore_dirs = (
+        frozenset(config.ignore) if config.ignore is not None else _discovery.DEFAULT_IGNORE_DIRS
+    )
+    if targets:
+        return [target.path for target in targets], ignore_dirs
+    if config.testpaths is not None:
+        return [config.rootdir / p for p in config.testpaths], ignore_dirs
+    return _default_test_roots(config.rootdir), ignore_dirs
 
 
 def _friendly_path(path: Path, *, max_up_hops: int = 2) -> str:
@@ -448,9 +507,19 @@ def _report_collection(
     collected_line = f"{total} test{'' if found == 1 else 's'} collected"
     print(" · ".join(part for part in (collected_line, counts) if part))
 
-    # Spelled out rather than deferred to `_run.exit_code_for`, which reads an empty result
-    # list as "nothing ran, so nothing was collected" -- true of a real run, false here,
-    # where nothing running is the whole point.
+    return _collection_exit_status(ids=ids, skipped=skipped, errors=errors)
+
+
+def _collection_exit_status(
+    *, ids: Sequence[str], skipped: Sequence[object], errors: Sequence[object]
+) -> int:
+    """The exit code for a run that stopped at collection -- shared by `--collect-only`'s
+    plain-text report and `--co-json`'s JSON one.
+
+    Spelled out rather than deferred to `_run.exit_code_for`, which reads an empty result
+    list as "nothing ran, so nothing was collected" -- true of a real run, false here,
+    where nothing running is the whole point.
+    """
     if errors:
         return 1
     if not ids and not skipped:
@@ -503,13 +572,19 @@ def _save_collection_index(
     )
 
 
-def _report_warnings(rootdir: Path) -> None:
-    """Print the warnings a run raised on its way to an exit that never reaches `Reporter`."""
+def _report_warnings(rootdir: Path, *, stream: TextIO = sys.stdout) -> None:
+    """Print the warnings a run raised on its way to an exit that never reaches `Reporter`.
+
+    `stream` defaults to stdout, same as every other report this early-exit path prints, but
+    `--co-json` passes stderr instead: that mode's contract is one line of JSON on stdout and
+    nothing else, so anything a diagnostic like this has to say goes where it won't be mistaken
+    for part of the payload.
+    """
     _report.print_warnings(
         [(_report.NO_TEST_RUNNING, _warnings.session_warnings())],
-        stream=sys.stdout,
+        stream=stream,
         rootdir=rootdir,
-        color_enabled=_color.color_enabled(sys.stdout),
+        color_enabled=_color.color_enabled(stream),
     )
 
 
@@ -526,7 +601,7 @@ def _parse_filters(
         return f"{source} {exc}", ()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
     # test module) all happen before a single test runs, and a run that spends its time
@@ -534,10 +609,35 @@ def main(argv: list[str] | None = None) -> int:
     # covers the fast part. What remains between this and `time velox` is the launcher
     # in front of the interpreter -- `uv run` and the console script -- which no timer
     # inside the process can see.
-    wall_start = PROCESS_START
+    #
+    # `wall_start` is a parameter, not always this module's own PROCESS_START, for --watch's
+    # sake below: every run after its first is one this same process started well after its own
+    # launch, and must time itself from there instead or report an ever-growing "wall" that
+    # counts every second spent idling between changes.
+    if wall_start is None:
+        wall_start = PROCESS_START
+
+    # A concrete list even when the caller passed none, mirroring argparse's own None ->
+    # sys.argv[1:] default -- needed below so --watch's own re-invocations of this function
+    # have something to filter their own flag out of.
+    argv = list(sys.argv[1:] if argv is None else argv)
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.watch:
+        # Every re-invocation below is this same function, so args.watch must not still be
+        # set on it -- leaving it in would just recurse into this branch forever.
+        watch_argv = [item for item in argv if item != "--watch"]
+        roots, ignore_dirs = _watch_scope(args)
+        return _watch_run(
+            base_argv=watch_argv,
+            apply_last_failed=not args.failed_first and not args.last_failed,
+            roots=roots,
+            ignore_dirs=ignore_dirs,
+            initial_wall_start=wall_start,
+            run_once=main,
+        )
 
     # argparse's choices= can't express "unless this other flag is set", so this
     # contradiction (--rewrite-cache with --assert=plain, which never touches the
@@ -756,9 +856,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     # -q drops the two header lines and nothing else: they describe how the run was set
     # up, which is exactly the part a quiet run is asking to do without. What the run
-    # *found* is printed at every verbosity.
+    # *found* is printed at every verbosity. --co-json drops them the same way -q does,
+    # regardless of verbosity: its contract is one line of JSON on stdout, nothing else.
     verbosity = (1 if args.verbose else 0) - (1 if args.quiet else 0)
-    if verbosity >= 0:
+    if verbosity >= 0 and not args.co_json:
         header = setup.header_line()
         if header is not None:
             print(header)
@@ -854,29 +955,51 @@ def main(argv: list[str] | None = None) -> int:
         # handed, which is what the merge below reads as "settled by this run".
         discovered = files
 
-        # A plain --collect-only -- no -k/-m/id/--lf/--ff narrowing it to something the index
-        # doesn't track -- can answer from `collection_index` alone when every discovered file
-        # is still fresh in it, skipping collect() and therefore every import it would have
+        # A plain --collect-only/--co-json -- no -k/-m/id/--lf/--ff narrowing it to something the
+        # index doesn't track -- can answer from `collection_index` alone when every discovered
+        # file is still fresh in it, skipping collect() and therefore every import it would have
         # done. Anything narrower falls through to a real collection exactly as before.
         if (
-            args.collect_only
+            (args.collect_only or args.co_json)
             and not replay_last_failed
             and not replay_failed_first
             and not narrowed_by_selection
         ):
             fast_answer = _index.answer(collection_index, files, rootdir=rootdir)
             if fast_answer is not None:
-                color_enabled = _color.color_enabled(sys.stdout)
-                status = _report_collection(
-                    ids=fast_answer.ids,
-                    skipped=fast_answer.skipped,
-                    deselected=0,
-                    errors=(),
-                    color_enabled=color_enabled,
-                )
+                warnings_stream = sys.stderr if args.co_json else sys.stdout
+                if args.co_json:
+                    _collect_json.print_report(
+                        tests=[
+                            _collect_json.TestLocation(id=id_, path=path, lineno=lineno)
+                            for id_, path, lineno in zip(
+                                fast_answer.ids, fast_answer.paths, fast_answer.lines, strict=True
+                            )
+                        ],
+                        skipped=[
+                            (id_, path, reason)
+                            for (id_, reason), path in zip(
+                                fast_answer.skipped, fast_answer.skipped_paths, strict=True
+                            )
+                        ],
+                        deselected=(),
+                        errors=(),
+                        rootdir=rootdir,
+                    )
+                    status = _collection_exit_status(
+                        ids=fast_answer.ids, skipped=fast_answer.skipped, errors=()
+                    )
+                else:
+                    status = _report_collection(
+                        ids=fast_answer.ids,
+                        skipped=fast_answer.skipped,
+                        deselected=0,
+                        errors=(),
+                        color_enabled=_color.color_enabled(sys.stdout),
+                    )
                 # Called for symmetry with every other exit through this function: this run
                 # imported nothing, so in the ordinary case there is nothing recorded to print.
-                _report_warnings(rootdir)
+                _report_warnings(rootdir, stream=warnings_stream)
                 return status
 
         if replay_last_failed:
@@ -944,7 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"velox: no test matches {', '.join(repr(name) for name in missing)}",
                     file=sys.stderr,
                 )
-                _report_warnings(rootdir)
+                _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
                 return 4
 
         # Shared with reporter's own coloring (it resolves the same thing internally
@@ -953,7 +1076,7 @@ def main(argv: list[str] | None = None) -> int:
         # instead of being colored by a different rule.
         color_enabled = _color.color_enabled(sys.stdout)
 
-        if args.collect_only:
+        if args.collect_only or args.co_json:
             if not narrowed_by_selection:
                 _save_collection_index(
                     rootdir,
@@ -963,16 +1086,35 @@ def main(argv: list[str] | None = None) -> int:
                     discovered=discovered,
                     roots=roots,
                 )
-            status = _report_collection(
-                ids=[record.id for record in collected.records],
-                skipped=[(skip.id, skip.reason) for skip in collected.skipped],
-                deselected=len(collected.deselected),
-                errors=collected.errors,
-                color_enabled=color_enabled,
-            )
+            if args.co_json:
+                _collect_json.print_report(
+                    tests=[
+                        _collect_json.TestLocation(
+                            id=record.id, path=str(record.path), lineno=record.lineno
+                        )
+                        for record in collected.records
+                    ],
+                    skipped=[(skip.id, str(skip.path), skip.reason) for skip in collected.skipped],
+                    deselected=collected.deselected,
+                    errors=[(str(error.path), error.message) for error in collected.errors],
+                    rootdir=rootdir,
+                )
+                status = _collection_exit_status(
+                    ids=[record.id for record in collected.records],
+                    skipped=collected.skipped,
+                    errors=collected.errors,
+                )
+            else:
+                status = _report_collection(
+                    ids=[record.id for record in collected.records],
+                    skipped=[(skip.id, skip.reason) for skip in collected.skipped],
+                    deselected=len(collected.deselected),
+                    errors=collected.errors,
+                    color_enabled=color_enabled,
+                )
             # Collection is what imports every test module, so a module that warns at import
             # has warned by now -- and this is the only report this run will print.
-            _report_warnings(rootdir)
+            _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
             return status
 
         capture_passthrough = args.capture == "no" or args.capture_s
