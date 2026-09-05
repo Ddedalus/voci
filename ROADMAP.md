@@ -70,12 +70,6 @@ pool sync tests already use — not a backend-agnostic runner. Costed and decide
 Ctrl-C) stay best-effort, same as a sync test today.
 
 
-## `just build` fails whenever `.venv-3.13` exists
-`uv build`'s sdist walks `.venv-3.13` and chokes on its absolute `bin/python` symlink; the venv is
-invisible to git only through the `*` in its own `.gitignore`, which hatchling's sdist inclusion
-does not read. `.venv` escapes by name, `.venv-3.13` does not. Any checkout that has run
-`just py sync 3.13` — the default state after following CLAUDE.md — cannot build.
-
 ## Not planned
 
 A plugin and hook system — dependency injection is the extension point, and zero hook dispatch on
