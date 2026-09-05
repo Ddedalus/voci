@@ -804,12 +804,6 @@ def main(argv: list[str] | None = None) -> int:
         discovered = files
         if replay_last_failed:
             files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
-            # Otherwise the run below reports "0 tests" and exits 5, which reads as a suite
-            # that collected nothing rather than as a selection the recorded failures sit
-            # outside of -- the `testpaths`-narrowed run, or the explicit path argument, whose
-            # failures another root holds and which no run of *this* shape can settle.
-            if not files and discovered and verbosity >= 0:
-                print("--lf: no recorded failure is in this run's selection")
         collected = _collect.collect(
             files,
             rootdir=rootdir,
@@ -832,6 +826,14 @@ def main(argv: list[str] | None = None) -> int:
         found = collected
         if replay_last_failed:
             collected = _lastfailed.select(collected, last_run)
+            # Otherwise the run below reports "0 tests" and exits 5, which reads as a suite
+            # that collected nothing rather than as one holding none of what was recorded --
+            # a run pointed somewhere else, or a failing test renamed since. Checked on the
+            # selection rather than on the candidate files, since a file can survive the
+            # narrowing and still contribute nothing to it.
+            empty = not collected.records and not collected.skipped and not collected.errors
+            if empty and verbosity >= 0:
+                print("--lf: no recorded failure is in this run's selection")
         elif replay_failed_first:
             collected = _lastfailed.reorder(collected, last_run)
         # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
@@ -1008,12 +1010,18 @@ def main(argv: list[str] | None = None) -> int:
         # Recorded paths this run establishes nothing will ever collect again: gone from
         # disk, or in a directory it walked and no longer discovered there. Nothing else is
         # in a position to take these out of the cache.
-        gone = _lastfailed.dead_paths(
-            last_run,
-            discovered={str(_collect.display_path(path, resolved_rootdir)) for path in discovered},
-            roots=roots,
-            rootdir=resolved_rootdir,
-        )
+        # Skipped outright with nothing recorded: there is no entry for a walk to declare
+        # dead, and resolving every discovered path to find that out is not free.
+        gone: set[str] = set()
+        if not last_run.is_empty():
+            gone = _lastfailed.dead_paths(
+                last_run,
+                discovered={
+                    str(_collect.display_path(path, resolved_rootdir)) for path in discovered
+                },
+                roots=roots,
+                rootdir=resolved_rootdir,
+            )
         # A file that collected tests was read, whatever else in it went wrong: one malformed
         # test does not make the ids beside it unknowable, and treating the file as unread
         # would leave a renamed sibling recorded for good.

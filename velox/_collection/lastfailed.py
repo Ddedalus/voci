@@ -166,6 +166,9 @@ def dead_paths(
     unbroken `__init__.py` chain that would import it, never through a namespace directory
     sitting under it, and a plain file counts through being discovered at all.
     """
+    recorded = Recorded.of(last_run).paths
+    if not recorded:
+        return set()
     walked = tuple(Path(root).resolve() for root in roots)
     reachable = settled_paths(discovered, rootdir=rootdir)
 
@@ -176,7 +179,7 @@ def dead_paths(
         looked_in = any(absolute.parent.is_relative_to(root) for root in walked)
         return looked_in and path not in reachable
 
-    return {path for path in Recorded.of(last_run).paths if is_dead(path)}
+    return {path for path in recorded if is_dead(path)}
 
 
 def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) -> set[str]:

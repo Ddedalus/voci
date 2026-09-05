@@ -38,7 +38,8 @@ never reached — behind a `--maxfail` stop, a Ctrl-C, or a path argument naming
 keep what the run before said about them, so iterating on one file leaves the failures found
 elsewhere intact.
 
-Because those are kept, a `--lf` pointed somewhere they do not live selects nothing. It says so
+Because those are kept, a `--lf` whose selection holds none of them — pointed somewhere they do
+not live, or run right after the failing test was renamed — selects nothing. It says so
 (`--lf: no recorded failure is in this run's selection`) and exits `5`, rather than leaving the
 empty run to be read as a suite that collected nothing.
 

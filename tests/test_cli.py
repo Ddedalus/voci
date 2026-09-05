@@ -2138,8 +2138,12 @@ def test_last_failed_selecting_nothing_does_not_exit_zero(
 
     status = main([str(project.root), "--lf"])
 
+    out = capsys.readouterr().out
     assert status == 5
-    assert "1 skipped" not in capsys.readouterr().out
+    assert "1 skipped" not in out
+    # The candidate file survived the narrowing and still holds nothing recorded, so the
+    # explanation has to come off the selection rather than off the file set.
+    assert "--lf: no recorded failure is in this run's selection" in out
 
 
 def test_last_failed_settles_a_recorded_test_whose_file_was_deleted(
