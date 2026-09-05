@@ -44,6 +44,14 @@ fallback-version = "0.0.0"
 [tool.hatch.build.hooks.vcs]
 version-file = "velox/_version.py"
 
+# `.venv` is in hatchling's own hardcoded EXCLUDED_DIRECTORIES, but `just py sync <version>`
+# (justfile, recipes/py.just) gives every non-default interpreter its own `.venv-X.Y` alongside
+# it, and hatchling only reads the root `.gitignore` for vcs-based exclusion, not the `*` one uv
+# writes inside each venv it creates. Left uncovered, the sdist walk finds `.venv-3.13/bin/python`
+# -- an absolute symlink to the system interpreter -- and `uv build` fails outright.
+[tool.hatch.build]
+exclude = ["/.venv-*"]
+
 # Distribution name ("velox-test") no longer matches the importable package directory
 # ("velox"), so hatchling's name-based auto-detection can't find it — point it there explicitly.
 [tool.hatch.build.targets.wheel]
