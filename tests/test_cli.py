@@ -2316,6 +2316,25 @@ def test_a_package_that_loses_its_last_test_stops_being_recorded(
     assert "--lf: nothing recorded" in capsys.readouterr().out
 
 
+def test_a_run_inside_a_package_does_not_declare_it_empty(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Walking a test-free directory *within* a broken package is not evidence the package holds
+    no test -- one sits right beside it."""
+    project.write_pyproject("[tool.velox]\n")
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    project.write("pkg/other/__init__.py", "")
+    project.write("pkg/other/test_x.py", "async def test_x():\n    pass\n")
+    (project.root / "pkg" / "sub").mkdir(parents=True)
+    assert main([str(project.root)]) == 1
+
+    assert main([str(project.root / "pkg" / "sub")]) == 5
+    capsys.readouterr()
+
+    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    assert recorded["error_files"] == ["pkg/__init__.py"]
+
+
 def test_last_failed_says_when_no_recorded_failure_is_in_the_selection(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

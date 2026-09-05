@@ -167,8 +167,9 @@ def emptied_packages(
     Every later `--lf` then narrows to a tree holding no test -- 0 tests, exit 5, permanently.
 
     Discovery having looked in the package's directory and produced nothing under it is this
-    run's answer in that case. Scoped to the roots it actually walked, so `velox one/` still says
-    nothing about a package under `two/`.
+    run's answer in that case. Scoped to the roots it actually walked, and to packages those
+    roots contain rather than ones they sit inside, so neither `velox one/` nor `velox pkg/sub`
+    concludes anything about a package it only saw part of.
     """
     walked = tuple(Path(root).resolve() for root in roots)
     settled: set[str] = set()
@@ -177,9 +178,9 @@ def emptied_packages(
         if package.name != "__init__.py":
             continue
         directory = (rootdir / package).parent
-        looked_in = any(
-            directory.is_relative_to(root) or root.is_relative_to(directory) for root in walked
-        )
+        # One direction only: walking a directory *inside* the package says nothing about
+        # what the rest of it holds -- the same inference `settled_paths` refuses.
+        looked_in = any(directory.is_relative_to(root) for root in walked)
         if looked_in and not any(package.parent in Path(found).parents for found in discovered):
             settled.add(path)
     return settled

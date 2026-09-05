@@ -808,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
             # that collected nothing rather than as a selection the recorded failures sit
             # outside of -- the `testpaths`-narrowed run, or the explicit path argument, whose
             # failures another root holds and which no run of *this* shape can settle.
-            if not files and discovered:
+            if not files and discovered and verbosity >= 0:
                 print("--lf: no recorded failure is in this run's selection")
         collected = _collect.collect(
             files,
@@ -817,8 +817,9 @@ def main(argv: list[str] | None = None) -> int:
             keyword_expr=keywordexpr,
             id_selection=id_selection,
             # The unnarrowed set, so --lf leaving a test module out doesn't turn its
-            # `velox.use(...)` into a misplaced declaration. Nothing here is imported.
-            collectible=discovered,
+            # `velox.use(...)` into a misplaced declaration. Nothing here is imported. Only
+            # when narrowed: otherwise it is `files`, which the loop below walks anyway.
+            collectible=discovered if replay_last_failed else (),
         )
         # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
         # flags already made, so `velox --lf -k users` means both.

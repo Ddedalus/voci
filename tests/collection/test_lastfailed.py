@@ -265,6 +265,21 @@ def test_emptied_packages_leaves_a_package_that_still_holds_a_test(tmp_path: Pat
     )
 
 
+def test_emptied_packages_leaves_a_package_only_partly_walked(tmp_path: Path) -> None:
+    """`velox pkg/sub` looked inside the package, not at it: what the rest of `pkg/` holds is
+    exactly what this run did not find out."""
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert (
+        lastfailed.emptied_packages(
+            last_run,
+            discovered=set(),
+            roots=[tmp_path / "pkg" / "sub"],
+            rootdir=tmp_path,
+        )
+        == set()
+    )
+
+
 def test_emptied_packages_leaves_a_package_outside_the_roots_walked(tmp_path: Path) -> None:
     """`velox one/` looked in one directory and must not conclude anything about another."""
     last_run = LastRun(error_files=("two/pkg/__init__.py",))
