@@ -2335,6 +2335,65 @@ def test_a_run_inside_a_package_does_not_declare_it_empty(
     assert recorded["error_files"] == ["pkg/__init__.py"]
 
 
+def test_a_package_reached_only_through_a_namespace_dir_stops_being_recorded(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A test under `pkg/sub/` with no `__init__.py` of its own never imports `pkg/__init__.py`,
+    so collecting it can never settle the recorded failure to import it. Being unreachable is
+    what makes the entry dead."""
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    project.write("pkg/test_a.py", "async def test_x():\n    pass\n")
+    project.write_passing_test()
+    assert main([str(project.root)]) == 1
+    # Only a namespace directory holds tests under the package now.
+    (project.root / "pkg" / "test_a.py").unlink()
+    project.write("pkg/sub/test_b.py", "async def test_y():\n    pass\n")
+
+    assert main([str(project.root)]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
+def test_a_recorded_test_in_a_newly_ignored_directory_stops_being_recorded(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The file is still on disk, so nothing about the filesystem says the entry is dead. This
+    run walked past it and no longer discovers it, which does."""
+    project.write("legacy/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
+    project.write_passing_test()
+    assert main([str(project.root)]) == 1
+    project.write_pyproject('[tool.velox]\nignore = ["legacy"]\n')
+
+    assert main([str(project.root)]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
+def test_one_malformed_test_does_not_strand_a_renamed_sibling(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The file collected fine except for the one bad test, so velox knows its ids in full: a
+    recorded failure it no longer holds is settled like any other."""
+    project.write(
+        "test_a.py",
+        "async def test_bad():\n    assert 1 == 2\n\nasync def test_ok():\n    pass\n",
+    )
+    assert main([str(project.root)]) == 1
+    project.write(
+        "test_a.py",
+        "def _impl():\n    pass\n\ntest_alias = _impl\n\nasync def test_renamed():\n    pass\n",
+    )
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    assert recorded["failed"] == []
+
+
 def test_last_failed_says_when_no_recorded_failure_is_in_the_selection(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

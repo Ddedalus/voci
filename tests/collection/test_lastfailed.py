@@ -199,30 +199,89 @@ def test_vanished_names_an_id_whose_file_this_run_knows_is_gone() -> None:
     }
 
 
-def test_missing_paths_names_a_recorded_file_that_no_longer_exists(tmp_path: Path) -> None:
-    (tmp_path / "test_a.py").write_text("")
-    last_run = LastRun(failed=("test_a.py::test_x", "test_gone.py::test_y"))
-    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == {"test_gone.py"}
-
-
-def test_missing_paths_names_a_recorded_error_file_that_no_longer_exists(tmp_path: Path) -> None:
-    """`error_files` goes the same way as `failed`: a file deleted while it was still failing to
-    import has nothing left to import, and no later run would take it out."""
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == {"pkg/__init__.py"}
-
-
-def test_missing_paths_is_empty_when_every_recorded_file_is_still_there(tmp_path: Path) -> None:
-    (tmp_path / "test_a.py").write_text("")
-    last_run = LastRun(failed=("test_a.py::test_x",), error_files=("test_a.py",))
-    assert lastfailed.missing_paths(last_run, rootdir=tmp_path) == set()
-
-
 def _package(tmp_path: Path, *relpaths: str) -> None:
     for relpath in relpaths:
         target = tmp_path / relpath
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("")
+
+
+def _dead(
+    last_run: LastRun, tmp_path: Path, discovered: set[str], roots: list[Path] | None = None
+) -> set[str]:
+    return lastfailed.dead_paths(
+        last_run,
+        discovered=discovered,
+        roots=[tmp_path] if roots is None else roots,
+        rootdir=tmp_path,
+    )
+
+
+def test_dead_paths_names_a_recorded_file_that_no_longer_exists(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text("")
+    last_run = LastRun(failed=("test_a.py::test_x", "test_gone.py::test_y"))
+    assert _dead(last_run, tmp_path, {"test_a.py"}) == {"test_gone.py"}
+
+
+def test_dead_paths_names_a_recorded_error_file_that_no_longer_exists(tmp_path: Path) -> None:
+    """`error_files` goes the same way as `failed`: a file deleted while it was still failing to
+    import has nothing left to import, and no later run would take it out."""
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, set()) == {"pkg/__init__.py"}
+
+
+def test_dead_paths_is_empty_when_every_recorded_file_is_still_discovered(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text("")
+    last_run = LastRun(failed=("test_a.py::test_x",), error_files=("test_a.py",))
+    assert _dead(last_run, tmp_path, {"test_a.py"}) == set()
+
+
+def test_dead_paths_names_a_file_this_run_walked_past_and_no_longer_discovers(
+    tmp_path: Path,
+) -> None:
+    """Still on disk, but `ignore` or `test_file_patterns` has stopped it being a test file --
+    so no run collects it again, and only this one is in a position to say so."""
+    (tmp_path / "test_a.py").write_text("")
+    (tmp_path / "helper.py").write_text("")
+    last_run = LastRun(failed=("helper.py::test_x",))
+    assert _dead(last_run, tmp_path, {"test_a.py"}) == {"helper.py"}
+
+
+def test_dead_paths_settles_a_package_with_no_test_left_under_it(tmp_path: Path) -> None:
+    _package(tmp_path, "pkg/__init__.py", "test_b.py")
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, {"test_b.py"}) == {"pkg/__init__.py"}
+
+
+def test_dead_paths_settles_a_package_only_a_namespace_dir_holds_tests_under(
+    tmp_path: Path,
+) -> None:
+    """`pkg/sub/` has no `__init__.py`, so collecting under it never imports `pkg/__init__.py`.
+    A discovered file beneath the package is not on its own evidence the package is live."""
+    _package(tmp_path, "pkg/__init__.py", "pkg/sub/test_x.py")
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, {"pkg/sub/test_x.py"}) == {"pkg/__init__.py"}
+
+
+def test_dead_paths_leaves_a_package_a_discovered_file_still_reaches(tmp_path: Path) -> None:
+    _package(tmp_path, "pkg/__init__.py", "pkg/test_a.py")
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, {"pkg/test_a.py"}) == set()
+
+
+def test_dead_paths_leaves_a_package_outside_the_roots_walked(tmp_path: Path) -> None:
+    """`velox one/` looked in one directory and must not conclude anything about another."""
+    _package(tmp_path, "two/pkg/__init__.py", "one/test_a.py")
+    last_run = LastRun(error_files=("two/pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, {"one/test_a.py"}, roots=[tmp_path / "one"]) == set()
+
+
+def test_dead_paths_leaves_a_package_only_partly_walked(tmp_path: Path) -> None:
+    """`velox pkg/sub` looked inside the package, not at it: what the rest of `pkg/` holds is
+    exactly what this run did not find out."""
+    _package(tmp_path, "pkg/__init__.py", "pkg/sub/test_x.py")
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert _dead(last_run, tmp_path, set(), roots=[tmp_path / "pkg" / "sub"]) == set()
 
 
 def test_settled_paths_answers_for_a_package_whose_tree_was_collected(tmp_path: Path) -> None:
@@ -246,49 +305,6 @@ def test_settled_paths_stops_at_a_directory_without_an_init(tmp_path: Path) -> N
     assert lastfailed.settled_paths({"pkg/sub/test_a.py"}, rootdir=tmp_path) == {
         "pkg/sub/test_a.py"
     }
-
-
-def test_emptied_packages_settles_a_package_with_no_test_left_under_it(tmp_path: Path) -> None:
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert lastfailed.emptied_packages(
-        last_run, discovered={"test_b.py"}, roots=[tmp_path], rootdir=tmp_path
-    ) == {"pkg/__init__.py"}
-
-
-def test_emptied_packages_leaves_a_package_that_still_holds_a_test(tmp_path: Path) -> None:
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert (
-        lastfailed.emptied_packages(
-            last_run, discovered={"pkg/test_a.py"}, roots=[tmp_path], rootdir=tmp_path
-        )
-        == set()
-    )
-
-
-def test_emptied_packages_leaves_a_package_only_partly_walked(tmp_path: Path) -> None:
-    """`velox pkg/sub` looked inside the package, not at it: what the rest of `pkg/` holds is
-    exactly what this run did not find out."""
-    last_run = LastRun(error_files=("pkg/__init__.py",))
-    assert (
-        lastfailed.emptied_packages(
-            last_run,
-            discovered=set(),
-            roots=[tmp_path / "pkg" / "sub"],
-            rootdir=tmp_path,
-        )
-        == set()
-    )
-
-
-def test_emptied_packages_leaves_a_package_outside_the_roots_walked(tmp_path: Path) -> None:
-    """`velox one/` looked in one directory and must not conclude anything about another."""
-    last_run = LastRun(error_files=("two/pkg/__init__.py",))
-    assert (
-        lastfailed.emptied_packages(
-            last_run, discovered={"one/test_a.py"}, roots=[tmp_path / "one"], rootdir=tmp_path
-        )
-        == set()
-    )
 
 
 def test_error_paths_keeps_an_error_on_a_path_the_run_answers_for() -> None:

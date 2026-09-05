@@ -40,37 +40,37 @@ nothing from it — a wedge only deleting the cache directory recovers from.
 
 **Every entry the cache accepts is one some run can take back out.** That wedge is the failure
 mode the whole settling story exists to prevent, and absence-as-an-answer only reaches entries
-whose file this run *read*. Three kinds escape it, so each is closed where it arises:
+whose file this run *read*. What escapes it is closed from two directions.
 
-* A deleted or renamed **file** is never handed to collection again, so no import settles it.
-  Its entries are settled by the filesystem instead — read off `rootdir`, not off this run's
-  discovery, so running one directory still leaves the rest of the suite recorded rather than
-  declaring everything it did not look at gone.
-* A collection error on a path **discovery does not produce** is never settled either.
-  `_misplaced_declarations` reports a `velox.use(...)` in a module velox never collects, named
-  absolutely when it lies outside `rootdir` and by a bare dotted module name when it has no
-  `__file__`. Such an error is not recorded at all: the rule for what may go in is literally the
-  rule for what comes out — one `settled_paths` call, read both ways round — and every run that
-  imports the module finds it again anyway. That mirror is also why the answer for a package
-  `__init__.py` is `package_inits`' own walk rather than "somewhere below it": a directory with
-  no `__init__.py` ends the chain collection follows, so `velox pkg/sub` over a namespace
-  `pkg/sub/` never imports `pkg/__init__.py` and has nothing to say about it.
-* A **package that loses its last test file** has nothing left to collect beneath it, so the
-  `__init__.py` route never fires again and the file itself is still on disk. Discovery having
-  walked that directory and produced nothing under it is the answer, scoped to the roots this
-  run walked.
-* **A file under a broken package** was never read, and carries no error of its own —
-  `collect` attributes that one to the `__init__.py`, once, however many files sit beneath it.
-  It is excluded from what counts as read, or absence-as-an-answer would drop every failure
-  recorded in it.
+`dead_paths` is the first: a recorded path is dead when the file is gone from disk, or when this
+run walked the directory it sits in and discovery produced nothing that reaches it — deleted,
+renamed, newly `ignore`d, or no longer matching `test_file_patterns`. "Reaches it" is
+`settled_paths` over the discovered set, which makes it the exact complement of settling rather
+than a second, looser rule: a package `__init__.py` counts as live only through the unbroken
+`__init__.py` chain that would import it, never through a namespace directory sitting under it.
+The filesystem half is read against `rootdir` rather than against this run's discovery, and the
+discovery half is scoped to the roots actually walked — and to directories those roots *contain*,
+not ones they sit inside — so neither `velox one/` nor `velox pkg/sub` concludes anything about
+what it only saw part of.
+
+The second is what may go in at all. `error_paths` records a collection error only on a path
+`settled_paths` could later answer for; anything else — `_misplaced_declarations` reporting a
+`velox.use(...)` in a module velox never collects, named absolutely outside `rootdir` and by a
+bare dotted module name with no `__file__` — is reported by every run that imports the module and
+not cached. One `settled_paths` call, read both ways round.
+
+Two smaller rules fall out of the same invariant:
+
+* **A file under a broken package** was never read, and carries no error of its own — `collect`
+  attributes that one to the `__init__.py`, once, however many files sit beneath it. It is
+  excluded from what counts as read, or absence-as-an-answer would drop every failure recorded in
+  it. A file that *did* collect tests is read whatever else in it went wrong: one malformed test
+  does not make the ids beside it unknowable, and the file is still recorded whole so a `--lf`
+  cannot report green while that error stands.
 * **`--lf`'s own deselections** are not `-k`'s. A deselected test that never reached expansion
   keeps its recorded `[case]` ids, since the run never built them — true of `-k` and `-m`, and
   false of `--lf`, which deselects a skip it knows the answer for. Settling therefore reads the
   collection result as it was *found*, before `select` narrowed it.
-
-**`--lf` deselects skips as well as records.** A collection-time skip is counted as something the
-run collected, so leaving a skip-marked sibling in place would let a `--lf` that executed nothing
-exit `0` while the recorded failure is still red.
 
 **What is out of a run's *selection* stays recorded, and is said out loud.** A recorded failure
 under a root this run was not pointed at is one the run has no answer for, so it survives — but a

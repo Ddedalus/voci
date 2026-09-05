@@ -34,9 +34,8 @@ from velox._collection.requires import package_inits
 __all__ = [
     "Recorded",
     "candidate_files",
-    "emptied_packages",
+    "dead_paths",
     "error_paths",
-    "missing_paths",
     "read_files",
     "reorder",
     "select",
@@ -123,19 +122,6 @@ def reorder(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
     return replace(collected, records=_reindexed([*failed, *rest]))
 
 
-def missing_paths(last_run: LastRun, *, rootdir: Path) -> set[str]:
-    """The recorded paths with no file behind them any more.
-
-    A deleted or renamed *file* is never handed to collection again, so no import settles what
-    it recorded and `vanished` never hears about its ids: left alone, the entries outlive the
-    file for good, and once the rest of the suite goes green `--lf` narrows to nothing and exits
-    5 on every invocation after that. Read off the filesystem rather than off this run's
-    discovery, so a run over one directory still leaves the rest of the suite's failures
-    recorded rather than declaring the files it didn't look at gone.
-    """
-    return {path for path in Recorded.of(last_run).paths if not (rootdir / path).exists()}
-
-
 def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
     """The rootdir-relative paths this run has an answer for.
 
@@ -156,34 +142,41 @@ def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
     return answered
 
 
-def emptied_packages(
+def dead_paths(
     last_run: LastRun, *, discovered: Collection[str], roots: Collection[Path], rootdir: Path
 ) -> set[str]:
-    """Recorded package `__init__.py` paths whose tree this run walked and found no test in.
+    """The recorded paths nothing will ever hand to collection again.
 
-    `settled_paths` reaches a package only through a file collected beneath it, so one that
-    failed to import and has since lost its last test file would stay recorded for good: there
-    is nothing left to collect, and `missing_paths` sees the `__init__.py` itself still on disk.
-    Every later `--lf` then narrows to a tree holding no test -- 0 tests, exit 5, permanently.
+    Settling normally goes through a run that *collected* the path, so a path discovery has
+    stopped producing is one no run can answer for: the entry outlives the file, and once the
+    rest of the suite goes green `--lf` narrows to it, selects nothing and exits 5 on every
+    invocation after that. Two kinds of evidence close that, each with its own reach:
 
-    Discovery having looked in the package's directory and produced nothing under it is this
-    run's answer in that case. Scoped to the roots it actually walked, and to packages those
-    roots contain rather than ones they sit inside, so neither `velox one/` nor `velox pkg/sub`
-    concludes anything about a package it only saw part of.
+    * The file is gone from disk. Read off the filesystem rather than off this run's discovery,
+      so a run over one directory still leaves the rest of the suite's failures recorded rather
+      than declaring every file it did not look at gone.
+    * This run walked the directory the path sits in and discovery produced nothing that reaches
+      it -- deleted, renamed, newly `ignore`d, or no longer matching `test_file_patterns`.
+      Scoped to the roots actually walked, and to directories those roots *contain* rather than
+      ones they sit inside, so neither `velox one/` nor `velox pkg/sub` concludes anything about
+      what it only saw part of.
+
+    "Reaches it" is `settled_paths` over the discovered set, which is what makes this the exact
+    complement of settling: a package `__init__.py` counts as still live only through the
+    unbroken `__init__.py` chain that would import it, never through a namespace directory
+    sitting under it, and a plain file counts through being discovered at all.
     """
     walked = tuple(Path(root).resolve() for root in roots)
-    settled: set[str] = set()
-    for path in last_run.error_files:
-        package = Path(path)
-        if package.name != "__init__.py":
-            continue
-        directory = (rootdir / package).parent
-        # One direction only: walking a directory *inside* the package says nothing about
-        # what the rest of it holds -- the same inference `settled_paths` refuses.
-        looked_in = any(directory.is_relative_to(root) for root in walked)
-        if looked_in and not any(package.parent in Path(found).parents for found in discovered):
-            settled.add(path)
-    return settled
+    reachable = settled_paths(discovered, rootdir=rootdir)
+
+    def is_dead(path: str) -> bool:
+        absolute = rootdir / path
+        if not absolute.exists():
+            return True
+        looked_in = any(absolute.parent.is_relative_to(root) for root in walked)
+        return looked_in and path not in reachable
+
+    return {path for path in Recorded.of(last_run).paths if is_dead(path)}
 
 
 def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) -> set[str]:
@@ -202,20 +195,23 @@ def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) 
     return {str(error.path) for error in errors if str(error.path) in answered}
 
 
-def read_files(attempted: Collection[str], errored: Collection[str]) -> set[str]:
+def read_files(attempted: Collection[str], unread: Collection[str]) -> set[str]:
     """The attempted paths whose entire test set this run established.
 
-    Not simply `attempted - errored`: a file under a package whose `__init__.py` failed to import
-    is skipped before it is read, and carries no error of its own -- `collect` attributes that
-    one to the `__init__.py`, once, however many files sit under it. Left in, such a file reads
-    to `vanished` as "collected, and holding nothing", which would drop every failure recorded
-    in it.
+    `unread` is the files that yielded no test at all -- a failed import, not a file that
+    collected fine except for one malformed test, whose remaining ids velox knows in full. Its
+    tree goes with it: a file under a package whose `__init__.py` failed to import is skipped
+    before it is read and carries no error of its own, `collect` attributing that one to the
+    `__init__.py`, once, however many files sit beneath it.
+
+    Left in, such a file reads to `vanished` as "collected, and holding nothing", which would
+    drop every failure recorded in it.
     """
-    broken_trees = tuple(Path(path).parent for path in errored if Path(path).name == "__init__.py")
+    broken_trees = tuple(Path(path).parent for path in unread if Path(path).name == "__init__.py")
     return {
         path
         for path in attempted
-        if path not in errored and not any(tree in Path(path).parents for tree in broken_trees)
+        if path not in unread and not any(tree in Path(path).parents for tree in broken_trees)
     }
 
 

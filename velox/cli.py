@@ -1005,18 +1005,20 @@ def main(argv: list[str] | None = None) -> int:
         # record, so no error goes into the cache that no later run could take back out.
         answered = _lastfailed.settled_paths(attempted, rootdir=resolved_rootdir)
         errored = _lastfailed.error_paths(collected.errors, answered=answered)
-        # A recorded file that is no longer on disk is settled by that alone: discovery will
-        # never hand it to collection again, so this is the only run that can take it out.
-        gone = _lastfailed.missing_paths(last_run, rootdir=resolved_rootdir)
-        # And a package this run looked inside and found no test under: `answered` reaches an
-        # `__init__.py` only through a file collected beneath it, so a package that lost its
-        # last test file would otherwise keep its recorded import failure for good.
-        gone |= _lastfailed.emptied_packages(
+        # Recorded paths this run establishes nothing will ever collect again: gone from
+        # disk, or in a directory it walked and no longer discovered there. Nothing else is
+        # in a position to take these out of the cache.
+        gone = _lastfailed.dead_paths(
             last_run,
             discovered={str(_collect.display_path(path, resolved_rootdir)) for path in discovered},
             roots=roots,
             rootdir=resolved_rootdir,
         )
+        # A file that collected tests was read, whatever else in it went wrong: one malformed
+        # test does not make the ids beside it unknowable, and treating the file as unread
+        # would leave a renamed sibling recorded for good.
+        produced = {str(record.path) for record in collected.records}
+        produced |= {str(skip.path) for skip in collected.skipped}
         # A CANCELLED test never got to say anything about the code under test, so it settles
         # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
         # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:
@@ -1025,7 +1027,9 @@ def main(argv: list[str] | None = None) -> int:
         settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
         settled_ids |= {s.id for s in collected.skipped}
         settled_ids |= _lastfailed.vanished(
-            last_run, found, known_files=_lastfailed.read_files(attempted, errored) | gone
+            last_run,
+            found,
+            known_files=_lastfailed.read_files(attempted, errored - produced) | gone,
         )
         _cache.save(
             rootdir,
