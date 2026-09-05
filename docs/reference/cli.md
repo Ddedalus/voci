@@ -1,7 +1,8 @@
 # Command line
 
-`velox` runs the suite. With no arguments it collects from the configured `testpaths`, or from the
-rootdir if none are configured, and runs everything it finds.
+`velox` runs the suite. With no arguments it collects from the configured `testpaths`; with none
+configured, from `tests/` if there is one and the current directory otherwise. It runs everything
+it finds.
 
 ```console
 $ velox
@@ -28,7 +29,10 @@ layered: a flag typed on the command line beats the config file, which beats the
 
 At the end of every run that executed tests, velox writes `.velox_cache/lastfailed.json` under the
 rootdir: the ids of the tests that failed, errored or timed out, and the paths of the files that
-failed to collect at all. `--lf` and `--ff` read it back. The directory is the same one the
+failed to collect at all. `--lf` and `--ff` read it back. The rootdir is anchored on the nearest
+`pyproject.toml` rather than on the arguments, so `velox` and `velox tests/` share one cache —
+see [sharing code across test files](../how-to/sharing-code-across-test-files.md). The directory
+is the same one the
 assertion rewriter keeps its bytecode in, and velox leaves a `.gitignore` inside it covering
 everything, so a project picks up no diff for having run its suite.
 

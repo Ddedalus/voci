@@ -572,11 +572,23 @@ def _save_collection_index(
     is false -- `found` rather than whatever `--lf`/`--ff` narrowed or reordered it into, matching
     `_cache.merge`'s own use of it below: the index describes what a file holds, not what one
     particular invocation asked to see. -k/-m/an id argument narrow `found` itself, at the
-    `collect()` call that built it, which is what callers check before ever reaching here."""
+    `collect()` call that built it, which is what callers check before ever reaching here.
+
+    Re-read at the write like `_cache.update`, and for the same reason: two runs sharing a rootdir
+    both write a whole payload, so merging into the snapshot taken at startup lets the second to
+    finish drop the entries the first added. It costs a later `--collect-only` its shortcut rather
+    than anything correct -- `_index.answer` re-stats every entry and falls back to a real
+    collection on any mismatch -- but the entries are just as cheap to keep.
+    """
     _index.save(
         rootdir,
         _index.refresh(
-            previous, found, rootdir=rootdir, files=files, discovered=discovered, roots=roots
+            {**previous, **_index.load(rootdir)},
+            found,
+            rootdir=rootdir,
+            files=files,
+            discovered=discovered,
+            roots=roots,
         ),
     )
 
@@ -839,9 +851,12 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
                 )
                 return 4
     else:
-        # config.rootdir only when a [tool.velox] table fixed it -- that table is a deliberate
-        # statement about where the suite lives, and the tier below resolves against cwd
-        # otherwise so that climbing to the project root doesn't widen a bare run's selection.
+        # config.source, not config.anchored: a configured project keeps resolving this tier
+        # against its rootdir exactly as it always has -- a table that sets no testpaths is a
+        # thin thing to read intent from, but changing what it selects is not this change's
+        # business. Everything else resolves against cwd, so the rootdir climbing to the nearest
+        # pyproject.toml (`_config.resolve`) doesn't quietly widen a bare `velox` run inside
+        # tests/unit into the whole suite the new rootdir can see.
         roots = _default_test_roots(config.rootdir if config.source is not None else None)
 
     # Loaded whether or not this run reads it back: the merge at the end of main needs what
@@ -1294,6 +1309,7 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
         # while it was running.
         _cache.update(
             rootdir,
+            last_run,
             failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
             errored=errored,
             settled_ids=settled_ids,

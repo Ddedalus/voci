@@ -93,10 +93,15 @@ though it still bounds the search — it says nothing about where a suite's impo
 it is routinely somewhere a rootdir has no business being, a dotfiles repo at `$HOME` being the
 case that decided it.
 
-The cost of climbing at all is that `sys.path` climbs too: a suite whose tests import a helper
-module sitting beside them resolved that helper only because `velox tests/unit` used to root
-itself there. Anchoring to a `pyproject.toml` alone is what keeps that narrow — a tree with no
-`pyproject.toml` anywhere above it, which is what such a suite usually is, does not move.
+`sys.path` climbs with it, and that is the point rather than the cost. rootdir is the one directory
+velox puts on `sys.path`, so an argument-derived rootdir made the arguments decide which imports
+resolve: `velox` from the project root resolved the documented `from tests.fixtures import ...` and
+broke a bare `from helper import ...`, while `velox tests/` did the exact reverse. The same disease
+as the two caches, in the half that decides whether a suite collects at all. Anchoring fixes both
+at once, and it fixes them in favour of what `docs/how-to/sharing-code-across-test-files.md`
+already documents — a module reached by its full dotted path from the rootdir. A suite importing a
+sibling module by a bare name was relying on where its arguments happened to put the rootdir, and
+now does not collect under a `pyproject.toml`; the doc says so.
 
 Rootdir is not the *selection*, though. Climbing to the project root would otherwise widen a bare
 `velox` run from inside `tests/unit` into the whole suite, so the built-in default tier

@@ -12,12 +12,24 @@ doesn't stop the walk — a package nested inside a bigger repo, say. The walk a
 first directory holding a `.git`, checking that directory's own `pyproject.toml` first but never
 looking past it. Reaching the filesystem root with no match and no `.git` stops it too.
 
-If nothing was found, the rootdir is just wherever the search started, with no config attached —
-the case the startup header's `config: none` line names.
+If no `[tool.velox]` table was found, the rootdir is the directory of the nearest plain
+`pyproject.toml` the walk passed — the startup header's `config: none` line names that case. Only
+when there was no `pyproject.toml` at all does the rootdir fall back to wherever the search
+started.
 
 The rootdir does double duty: it's what `testpaths` and `ignore` are resolved against, what test
 ids are shown relative to, where `.velox_cache/lastfailed.json` lives, and the one directory velox
 puts on `sys.path`.
+
+Which is why a `pyproject.toml` anchors it, rather than the arguments. Every one of those four
+would otherwise change with the arguments: `velox` and `velox tests/` would print ids in different
+spellings, read different `.velox_cache` directories, and resolve `from tests.fixtures import ...`
+in one case and not the other. Put a `pyproject.toml` at the root of any project you want the same
+answer from twice — an empty one is enough, and `[tool.velox]` makes it explicit.
+
+The corollary is that a test file cannot import a module sitting beside it by a bare name. Under a
+project root, `tests/helper.py` is `tests.helper`, never `helper`. Reach it by its full dotted path
+from the rootdir, exactly as the next section does.
 
 ## rootdir on sys.path
 

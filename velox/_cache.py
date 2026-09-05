@@ -60,13 +60,23 @@ NOTHING_RECORDED = LastRun()
 
 def load(rootdir: Path) -> LastRun:
     """What `rootdir`'s cache says the last run found, or `NOTHING_RECORDED`."""
+    return _read(rootdir) or NOTHING_RECORDED
+
+
+def _read(rootdir: Path) -> LastRun | None:
+    """`rootdir`'s cache, or `None` if there isn't a usable one to read.
+
+    `load` flattens that `None` into `NOTHING_RECORDED`, which is the right answer for a caller
+    asking what the last run found. `update` needs the two apart: "the cache says nothing failed"
+    is a fact to merge into, and "the cache could not be read just now" is not.
+    """
     path = rootdir / CACHE_DIR_NAME / _LAST_RUN_FILE
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return NOTHING_RECORDED
+        return None
     if not isinstance(payload, dict) or payload.get("version") != _SCHEMA_VERSION:
-        return NOTHING_RECORDED
+        return None
     return LastRun(
         failed=_strings(payload.get("failed")), error_files=_strings(payload.get("error_files"))
     )
@@ -95,6 +105,7 @@ def save(rootdir: Path, last_run: LastRun) -> None:
 
 def update(
     rootdir: Path,
+    baseline: LastRun,
     *,
     failed: Iterable[str],
     errored: Iterable[str],
@@ -103,25 +114,32 @@ def update(
 ) -> None:
     """Merge this run's findings into `rootdir`'s cache and write it back.
 
-    The baseline is re-read here rather than reusing the one loaded at startup. Two runs sharing
-    a rootdir both merge into a whole payload and the second to finish wins, so merging against a
-    baseline from before the run leaves the window for a lost update open for the entire length
-    of the run -- long enough that an editor running a scoped suite while a full run finishes in
-    a terminal drops the full run's new failures, silently and into a cache that still looks
-    plausible. A run's own findings don't depend on the baseline, so the freshest one on disk is
-    strictly the better thing to merge into: whatever the other run recorded is not in this run's
-    `settled_*` and so is carried forward, which is the same rule that already keeps a `--maxfail`
-    stop from erasing the rest of the suite.
+    The baseline is re-read here rather than reusing `baseline`, the one loaded at startup. Two
+    runs sharing a rootdir both merge into a whole payload and the second to finish wins, so
+    merging against a baseline from before the run leaves the window for a lost update open for
+    the entire length of the run -- long enough that an editor running a scoped suite while a full
+    run finishes in a terminal drops the full run's new failures, silently and into a cache that
+    still looks plausible. A run's own findings don't depend on the baseline, so the freshest one
+    on disk is strictly the better thing to merge into: whatever the other run recorded is not in
+    this run's `settled_*` and so is carried forward, which is the same rule that already keeps a
+    `--maxfail` stop from erasing the rest of the suite.
+
+    `baseline` is what that re-read falls back to, and is why it is passed in at all. A cache that
+    has gone unreadable since startup -- deleted mid-run, or a transient `OSError` -- reads as
+    "nothing recorded" through `load`, and merging into that would drop every failure this run
+    never reached, which is the exact loss the re-read is here to prevent. The startup baseline is
+    stale but real, so it is the better of the two.
 
     This narrows the window to the gap between the read and the `os.replace` rather than closing
     it, which is the trade the module means to make: a lock here would sit on the exit path of a
     run that has already reported its result, to buy the last microseconds of a race whose cost
     is a `--lf` that misses a failure the next run re-finds.
     """
+    fresh = _read(rootdir)
     save(
         rootdir,
         merge(
-            load(rootdir),
+            baseline if fresh is None else fresh,
             failed=failed,
             errored=errored,
             settled_ids=settled_ids,

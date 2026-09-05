@@ -132,11 +132,13 @@ def test_update_merges_into_what_is_on_disk_not_a_stale_baseline(tmp_path: Path)
     `b.py` is not among the scoped run's settled files, so it is carried forward by the same rule
     that already survives a `--maxfail` stop.
     """
-    _cache.save(tmp_path, _cache.LastRun(failed=("a.py::t1",)))
+    baseline = _cache.LastRun(failed=("a.py::t1",))
+    _cache.save(tmp_path, baseline)
 
     # The full run: t1 now passes, t2 newly fails.
     _cache.update(
         tmp_path,
+        baseline,
         failed=["b.py::t2"],
         errored=[],
         settled_ids={"a.py::t1", "b.py::t2"},
@@ -145,6 +147,7 @@ def test_update_merges_into_what_is_on_disk_not_a_stale_baseline(tmp_path: Path)
     # The scoped run, `velox a.py`, landing second off the older baseline.
     _cache.update(
         tmp_path,
+        baseline,
         failed=["a.py::t1"],
         errored=[],
         settled_ids={"a.py::t1"},
@@ -157,8 +160,31 @@ def test_update_merges_into_what_is_on_disk_not_a_stale_baseline(tmp_path: Path)
 def test_update_still_forgets_what_the_run_that_wrote_last_settled(tmp_path: Path) -> None:
     """Carrying entries forward must not resurrect one the writing run has an answer for: a run
     that collected `a.py` and saw `t1` pass is the freshest word on `t1`."""
-    _cache.save(tmp_path, _cache.LastRun(failed=("a.py::t1", "b.py::t2")))
+    baseline = _cache.LastRun(failed=("a.py::t1", "b.py::t2"))
+    _cache.save(tmp_path, baseline)
 
-    _cache.update(tmp_path, failed=[], errored=[], settled_ids={"a.py::t1"}, settled_files={"a.py"})
+    _cache.update(
+        tmp_path, baseline, failed=[], errored=[], settled_ids={"a.py::t1"}, settled_files={"a.py"}
+    )
 
+    assert _cache.load(tmp_path).failed == ("b.py::t2",)
+
+
+def test_update_falls_back_to_the_startup_baseline_when_the_re_read_fails(tmp_path: Path) -> None:
+    """A cache that has gone unreadable since startup must not read as "nothing recorded".
+
+    `load` flattens an unreadable file into `NOTHING_RECORDED`, which is the right answer for a
+    caller asking what the last run found and the wrong one to merge into: it would drop every
+    failure this run never reached, the exact loss the re-read exists to prevent. The startup
+    baseline is stale but real.
+    """
+    baseline = _cache.LastRun(failed=("a.py::t1", "b.py::t2"))
+    _cache.save(tmp_path, baseline)
+    _cache_file(tmp_path).write_text("{ truncated")
+
+    _cache.update(
+        tmp_path, baseline, failed=[], errored=[], settled_ids={"a.py::t1"}, settled_files={"a.py"}
+    )
+
+    # t1, settled and passing, is dropped; t2, which this run never reached, survives.
     assert _cache.load(tmp_path).failed == ("b.py::t2",)
