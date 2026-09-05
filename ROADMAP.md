@@ -10,12 +10,11 @@ None known.
 
 ## Features
 
-### Collection index
-An index of `relpath → {mtime_ns, size, ids, lines}` written alongside the run cache and
-invalidated per file by `(mtime_ns, size)`, so `--collect-only` and the test count answer without
-importing anything. It is also what `--co-json` (machine-readable collection, for editor
-integrations) and a watch mode (`--watch`: the index, a file watcher, and `--lf` ordering) would
-be built on.
+### `--co-json` and watch mode
+The collection index (`velox._collection.index`, invalidated per file by `(mtime_ns, size)`) now
+backs `--collect-only`'s fast path. Still to build on it: `--co-json` (machine-readable collection,
+for editor integrations) and a watch mode (`--watch`: the index, a file watcher, and `--lf`
+ordering).
 
 ### velox-migrate
 `plans/migration-tool-plan.md`

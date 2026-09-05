@@ -26,6 +26,7 @@ from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
+from velox._collection import index as _index
 from velox._collection import lastfailed as _lastfailed
 from velox._collection import selection as _selection
 from velox._collection import targets as _targets
@@ -398,9 +399,20 @@ def _invalid_basetemp_argument(basetemp: Path | None) -> str | None:
     return None
 
 
-def _report_collection(collected: _collect.CollectionResult, *, color_enabled: bool) -> int:
+def _report_collection(
+    *,
+    ids: Sequence[str],
+    skipped: Sequence[tuple[str, str]],
+    deselected: int,
+    errors: Sequence[_collect.CollectionError],
+    color_enabled: bool,
+) -> int:
     """`--collect-only`: every selected test's id in the order they would run, then what
     collection found besides them, and the exit code for a run that stopped here.
+
+    Plain primitives rather than a `CollectionResult`, so this same function serves both a real
+    `collect()` and `_index.answer`'s index-only one, which has no `TestRecord`s (no import ran
+    to build them) -- only the ids, lines and skip reasons the index kept.
 
     The ids are printed bare, one per line, so the list pipes into another tool (or back
     into `velox` as arguments) without stripping anything. An id's path is relative to the
@@ -411,27 +423,27 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
     before it runs, and a file that failed to import is exactly what such an inspection is
     looking for.
     """
-    for record in collected.records:
-        print(record.id)
+    for test_id in ids:
+        print(test_id)
 
     skipped_word = _color.paint("SKIPPED", _color.YELLOW, enabled=color_enabled)
-    for skipped in collected.skipped:
-        reason = _color.paint(f"({skipped.reason})", _color.GRAY, enabled=color_enabled)
-        print(f"{skipped.id} {skipped_word} {reason}")
+    for skip_id, reason in skipped:
+        reason_text = _color.paint(f"({reason})", _color.GRAY, enabled=color_enabled)
+        print(f"{skip_id} {skipped_word} {reason_text}")
 
     error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
-    for error in collected.errors:
+    for error in errors:
         print(f"{error.path} {error_word}")
         print(error.message)
 
-    errors = len(collected.errors)
+    error_count = len(errors)
     counts = _color.counts(
-        (len(collected.skipped), "skipped", _color.YELLOW),
-        (len(collected.deselected), "deselected", _color.GRAY),
-        (errors, "collection error" if errors == 1 else "collection errors", _color.RED),
+        (len(skipped), "skipped", _color.YELLOW),
+        (deselected, "deselected", _color.GRAY),
+        (error_count, "collection error" if error_count == 1 else "collection errors", _color.RED),
         enabled=color_enabled,
     )
-    found = len(collected.records)
+    found = len(ids)
     total = _color.paint(str(found), _color.PRIMARY, enabled=color_enabled)
     collected_line = f"{total} test{'' if found == 1 else 's'} collected"
     print(" · ".join(part for part in (collected_line, counts) if part))
@@ -439,9 +451,9 @@ def _report_collection(collected: _collect.CollectionResult, *, color_enabled: b
     # Spelled out rather than deferred to `_run.exit_code_for`, which reads an empty result
     # list as "nothing ran, so nothing was collected" -- true of a real run, false here,
     # where nothing running is the whole point.
-    if collected.errors:
+    if errors:
         return 1
-    if not collected.records and not collected.skipped:
+    if not ids and not skipped:
         return 5
     return 0
 
@@ -466,6 +478,27 @@ def _resolve_layered(cli_value, config_value, default=None):
     if config_value is not None:
         return config_value
     return default
+
+
+def _save_collection_index(
+    rootdir: Path,
+    previous: _index.Index,
+    found: _collect.CollectionResult,
+    *,
+    files: Sequence[Path],
+    discovered: Sequence[Path],
+    roots: Sequence[Path],
+) -> None:
+    """Persist `previous` updated with what this run's real collection (`found`, over `files`)
+    established. Called once per run that actually collected -- `found` rather than whatever
+    `--lf`/`--ff` narrowed or reordered it into, matching `_cache.merge`'s own use of it below:
+    the index describes what a file holds, not what one particular invocation asked to see."""
+    _index.save(
+        rootdir,
+        _index.refresh(
+            previous, found, rootdir=rootdir, files=files, discovered=discovered, roots=roots
+        ),
+    )
 
 
 def _report_warnings(rootdir: Path) -> None:
@@ -688,6 +721,10 @@ def main(argv: list[str] | None = None) -> int:
     # Loaded whether or not this run reads it back: the merge at the end of main needs what
     # the previous run recorded about tests this one never reaches.
     last_run = _cache.load(config.rootdir)
+    # Loaded up front for the same reason: a `--collect-only` run below may answer from it
+    # without ever reaching `collect()`, and every other run still needs it to build the
+    # updated index it writes back at the end.
+    collection_index = _index.load(config.rootdir)
     # An empty cache leaves both flags meaning "the whole suite, in logical order", which is
     # what makes --lf safe to leave in a shell alias -- a first run, or one that went green,
     # runs everything rather than nothing.
@@ -802,6 +839,34 @@ def main(argv: list[str] | None = None) -> int:
         # is where the flag's speed comes from. `files` stays exactly what collection was
         # handed, which is what the merge below reads as "settled by this run".
         discovered = files
+
+        # A plain --collect-only -- no -k/-m/id/--lf/--ff narrowing it to something the index
+        # doesn't track -- can answer from `collection_index` alone when every discovered file
+        # is still fresh in it, skipping collect() and therefore every import it would have
+        # done. Anything narrower falls through to a real collection exactly as before.
+        if (
+            args.collect_only
+            and not replay_last_failed
+            and not replay_failed_first
+            and markexpr is None
+            and keywordexpr is None
+            and id_selection is None
+        ):
+            fast_answer = _index.answer(collection_index, files, rootdir=rootdir)
+            if fast_answer is not None:
+                color_enabled = _color.color_enabled(sys.stdout)
+                status = _report_collection(
+                    ids=fast_answer.ids,
+                    skipped=fast_answer.skipped,
+                    deselected=0,
+                    errors=(),
+                    color_enabled=color_enabled,
+                )
+                # Called for symmetry with every other exit through this function: this run
+                # imported nothing, so in the ordinary case there is nothing recorded to print.
+                _report_warnings(rootdir)
+                return status
+
         if replay_last_failed:
             files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
         collected = _collect.collect(
@@ -877,7 +942,16 @@ def main(argv: list[str] | None = None) -> int:
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
-            status = _report_collection(collected, color_enabled=color_enabled)
+            _save_collection_index(
+                rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
+            )
+            status = _report_collection(
+                ids=[record.id for record in collected.records],
+                skipped=[(skip.id, skip.reason) for skip in collected.skipped],
+                deselected=len(collected.deselected),
+                errors=collected.errors,
+                color_enabled=color_enabled,
+            )
             # Collection is what imports every test module, so a module that warns at import
             # has warned by now -- and this is the only report this run will print.
             _report_warnings(rootdir)
@@ -1050,6 +1124,9 @@ def main(argv: list[str] | None = None) -> int:
                 settled_ids=settled_ids,
                 settled_files=answered | gone,
             ),
+        )
+        _save_collection_index(
+            rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
         )
         return exit_status
     except KeyboardInterrupt:

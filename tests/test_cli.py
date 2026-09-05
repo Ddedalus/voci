@@ -14,6 +14,7 @@ import pytest
 from _support import Project
 
 from velox import __version__
+from velox._collection import collect as _collect_module
 from velox.cli import _default_test_roots, _friendly_path, build_parser, main
 
 
@@ -2036,6 +2037,55 @@ def test_collect_only_leaves_the_cache_alone(
 
     assert main([str(project.root), "--lf"]) == 1
     assert "1 test · " in capsys.readouterr().out
+
+
+def test_collect_only_answers_from_the_index_without_reimporting(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project.write_passing_test()
+    assert main([str(project.root), "--collect-only"]) == 0  # warms the index
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("collect() should not run when the index answers")
+
+    monkeypatch.setattr("velox._collection.collect.collect", _boom)
+    assert main([str(project.root), "--collect-only"]) == 0
+
+
+def test_collect_only_reimports_a_file_that_changed_since_it_was_indexed(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_passing_test()
+    assert main([str(project.root), "--collect-only"]) == 0
+    capsys.readouterr()
+
+    project.write(
+        "test_ok.py", "async def test_ok():\n    pass\n\nasync def test_added():\n    pass\n"
+    )
+    assert main([str(project.root), "--collect-only"]) == 0
+    out = capsys.readouterr().out
+    assert "test_ok.py::test_ok" in out
+    assert "test_ok.py::test_added" in out
+
+
+def test_collect_only_with_a_keyword_filter_still_imports(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`-k`/`-m`/an id argument/`--lf`/`--ff` narrow to something the index has no record of,
+    so a warm index must not short-circuit any of them."""
+    project.write_passing_test()
+    assert main([str(project.root), "--collect-only"]) == 0  # warms the index
+
+    calls: list[object] = []
+    real_collect = _collect_module.collect
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        calls.append(None)
+        return real_collect(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("velox._collection.collect.collect", _spy)
+    assert main([str(project.root), "--collect-only", "-k", "test_ok"]) == 0
+    assert calls
 
 
 def test_maxfail_keeps_the_failures_it_stopped_short_of(
