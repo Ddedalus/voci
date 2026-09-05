@@ -21,11 +21,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import overload
 
-from velox import __version__, _config, _warnings
+from velox import __version__, _cache, _config, _warnings
 from velox._assertions import rewrite as _rewrite
 from velox._builtins import capture as _capture
 from velox._collection import collect as _collect
 from velox._collection import discovery as _discovery
+from velox._collection import lastfailed as _lastfailed
 from velox._collection import selection as _selection
 from velox._collection import targets as _targets
 from velox._report import color as _color
@@ -77,6 +78,27 @@ def build_parser() -> argparse.ArgumentParser:
         "must be quoted, e.g. \"'smoke.fast'\". Tags not mentioned in EXPR count as absent. A "
         "test that doesn't match is deselected, not skipped; a skip-marked test is always "
         "skipped, regardless of EXPR.",
+    )
+    # Both read the run cache main writes at the end of every run. Spelled as pytest spells
+    # them, since the muscle memory is the whole value of a two-letter flag.
+    parser.add_argument(
+        "--lf",
+        "--last-failed",
+        dest="last_failed",
+        action="store_true",
+        help="Run only the tests that failed, errored or timed out on the last run, plus every "
+        "test in a file that failed to collect. Files holding none of them are not even "
+        "imported. With nothing recorded -- a first run, or a run that went green -- the whole "
+        "suite runs.",
+    )
+    parser.add_argument(
+        "--ff",
+        "--failed-first",
+        dest="failed_first",
+        action="store_true",
+        help="Run the whole suite, with the tests that failed on the last run first. Unlike "
+        "--lf this changes only the order, so a run that is still red says so within the first "
+        "few results.",
     )
     # --assert and --rewrite-cache below both affect real behavior, not just help text.
     parser.add_argument(
@@ -511,6 +533,15 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 4
+    # One says "run only these", the other "run everything, these first"; picking a winner
+    # silently would misreport what the run was.
+    if args.last_failed and args.failed_first:
+        print(
+            "velox: --lf runs only the last run's failures and --ff runs the whole suite with "
+            "them first -- pass one or the other",
+            file=sys.stderr,
+        )
+        return 4
     if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
         print(
             f"velox: -x is --maxfail=1, and --maxfail={args.maxfail} was also given",
@@ -654,6 +685,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         roots = _default_test_roots(config.rootdir)
 
+    # Loaded whether or not this run reads it back: the merge at the end of main needs what
+    # the previous run recorded about tests this one never reaches.
+    last_run = _cache.load(config.rootdir)
+    # An empty cache leaves both flags meaning "the whole suite, in logical order", which is
+    # what makes --lf safe to leave in a shell alias -- a first run, or one that went green,
+    # runs everything rather than nothing.
+    replay_last_failed = args.last_failed and not last_run.is_empty()
+    replay_failed_first = args.failed_first and not last_run.is_empty()
+
     # Resolved and probed up front so a silent fallback to plain mode is visible
     # before a run commits to it -- a benchmark that silently fell back would be a
     # corrupted one. plan warns on stderr; the header line (when there is one -- see
@@ -680,6 +720,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"config: {_friendly_path(config.source)}")
         else:
             print("config: none")
+        # Said out loud rather than left to be inferred from the test count: the difference
+        # between "--lf ran four tests" and "--lf ran the suite" is the whole point of asking.
+        if (args.last_failed or args.failed_first) and last_run.is_empty():
+            flag = "--lf" if args.last_failed else "--ff"
+            print(f"{flag}: nothing recorded -- running the whole suite")
 
     rootdir = config.rootdir
 
@@ -753,6 +798,11 @@ def main(argv: list[str] | None = None) -> int:
             else _discovery.DEFAULT_IGNORE_DIRS
         )
         files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
+        # Before collect, not after: not importing the files that hold nothing --lf would run
+        # is where the flag's speed comes from. `files` stays exactly what collection was
+        # handed, which is what the merge below reads as "settled by this run".
+        if replay_last_failed:
+            files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
         collected = _collect.collect(
             files,
             rootdir=rootdir,
@@ -760,6 +810,12 @@ def main(argv: list[str] | None = None) -> int:
             keyword_expr=keywordexpr,
             id_selection=id_selection,
         )
+        # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
+        # flags already made, so `velox --lf -k users` means both.
+        if replay_last_failed:
+            collected = _lastfailed.select(collected, last_run)
+        elif replay_failed_first:
+            collected = _lastfailed.reorder(collected, last_run)
         # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
         # would otherwise select nothing and exit 5, indistinguishable from a file that
         # genuinely holds no tests.
@@ -773,7 +829,10 @@ def main(argv: list[str] | None = None) -> int:
         # collected.unexpanded is the part of that which stops short of its own `[case]` ids
         # (a skip, or a test -m excluded), so `test_role[admin]` naming a case of one of those
         # counts as a match rather than reading as a typo.
-        if id_selection is not None and not collected.errors:
+        #
+        # Not under --lf: an id naming a test that passed last time matches nothing there by
+        # design, and velox has no way to tell that apart from a typo.
+        if id_selection is not None and not collected.errors and not replay_last_failed:
             missing = id_selection.unmatched(
                 [record.id for record in collected.records]
                 + [skipped.id for skipped in collected.skipped]
@@ -920,6 +979,26 @@ def main(argv: list[str] | None = None) -> int:
                 wall_clock=wall_clock,
                 session_warnings=_warnings.session_warnings(),
             )
+        # Last, after everything this run had to say: a cache velox cannot write costs the
+        # next --lf its ordering, and must not touch this one's output or exit code.
+        failing = [r.id for r in results if r.outcome in _run.FAILING_OUTCOMES]
+        # A CANCELLED test never got to say anything about the code under test, so it settles
+        # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
+        # Ctrl-C -- would drop every failure it cut short.
+        settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
+        settled_ids |= {s.id for s in collected.skipped}
+        resolved_rootdir = rootdir.resolve()
+        settled_files = {str(_collect.display_path(p, resolved_rootdir)) for p in files}
+        _cache.save(
+            rootdir,
+            _cache.merge(
+                last_run,
+                failed=failing,
+                errored=[str(error.path) for error in collected.errors],
+                settled_ids=settled_ids,
+                settled_files=settled_files,
+            ),
+        )
         return exit_status
     except KeyboardInterrupt:
         # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second

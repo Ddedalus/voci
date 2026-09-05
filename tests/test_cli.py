@@ -1855,3 +1855,205 @@ def test_collect_only_still_reports_what_collection_warned_about(
     out = capsys.readouterr().out
     assert status == 0
     assert "UserWarning: at import" in out
+
+
+def _failing_and_passing(project: Project) -> None:
+    """Two files, one of which holds the only failure in the project."""
+    project.write(
+        "test_a.py",
+        "async def test_ok_a():\n    pass\n\nasync def test_bad_a():\n    assert 1 == 2\n",
+    )
+    project.write("test_b.py", "async def test_ok_b():\n    pass\n")
+
+
+def test_last_failed_reruns_only_the_failure(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "1 test · " in out
+    assert "test_a.py::test_bad_a" in out
+
+
+def test_last_failed_does_not_import_a_file_holding_no_failure(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Not importing what it has no intention of running is where --lf's speed comes from,
+    so the marker a passing file writes at import time must not appear the second time."""
+    _failing_and_passing(project)
+    marker = project.root / "imported"
+    project.write(
+        "test_b.py",
+        f"from pathlib import Path\n\nPath({str(marker)!r}).touch()\n\n"
+        "async def test_ok_b():\n    pass\n",
+    )
+    assert main([str(project.root)]) == 1
+    marker.unlink()
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 1
+    assert not marker.exists()
+
+
+def test_last_failed_with_nothing_recorded_runs_the_whole_suite(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A first run, or one that went green, must not read as "no tests to run"."""
+    project.write_passing_test()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "--lf: nothing recorded" in out
+
+
+def test_last_failed_forgets_a_test_that_now_passes(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    project.write(
+        "test_a.py",
+        "async def test_ok_a():\n    pass\n\nasync def test_bad_a():\n    pass\n",
+    )
+    assert main([str(project.root), "--lf"]) == 0
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "--lf: nothing recorded" in out
+    assert "3 tests" in out
+
+
+def test_last_failed_keeps_a_failure_a_narrower_run_never_reached(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Running one file must not erase what the run before it found in another."""
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    assert main([str(project.root / "test_b.py")]) == 0
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    assert status == 1
+    assert "test_a.py::test_bad_a" in capsys.readouterr().out
+
+
+def test_last_failed_replays_a_file_that_failed_to_collect(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A broken import contributed no ids, so the whole file is what --lf has to replay."""
+    project.write_passing_test()
+    project.write("test_broken.py", "import nosuchmodule\n\nasync def test_x():\n    pass\n")
+    assert main([str(project.root)]) == 1
+    project.write("test_broken.py", "async def test_x():\n    pass\n")
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 test · " in out
+    assert "test_broken.py" in out
+
+
+def test_failed_first_runs_everything_with_the_failure_leading(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root), "--ff", "-v"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "3 tests" in out
+    assert _lines_starting_with(out, "FAILED", "PASSED")[0].startswith("FAILED")
+
+
+def test_last_failed_narrows_a_keyword_selection_rather_than_replacing_it(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write(
+        "test_a.py",
+        "async def test_bad_one():\n    assert 1 == 2\n\n"
+        "async def test_bad_two():\n    assert 1 == 2\n",
+    )
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf", "-k", "one"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "1 test · " in out
+    assert "test_bad_two" not in _lines_starting_with(out, "FAILED")[0]
+
+
+def test_last_failed_and_failed_first_together_are_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    status = main([str(project.root), "--lf", "--ff"])
+
+    assert status == 4
+    assert "--lf" in capsys.readouterr().err
+
+
+def test_collect_only_lists_what_last_failed_selected(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf", "--collect-only"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "test_a.py::test_bad_a" in out
+    assert "test_ok_b" not in out
+
+
+def test_collect_only_leaves_the_cache_alone(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nothing ran, so there is nothing new to say about what failed."""
+    _failing_and_passing(project)
+    assert main([str(project.root)]) == 1
+    assert main([str(project.root), "--collect-only"]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 1
+    assert "1 test · " in capsys.readouterr().out
+
+
+def test_maxfail_keeps_the_failures_it_stopped_short_of(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`velox -x --lf` is the loop --lf exists for, so a run cut short must not report that
+    every test it never reached has stopped failing."""
+    project.write(
+        "test_a.py",
+        "async def test_bad_one():\n    assert 1 == 2\n\n"
+        "async def test_bad_two():\n    assert 1 == 2\n",
+    )
+    assert main([str(project.root), "--serial"]) == 1
+    assert main([str(project.root), "--serial", "-x", "--lf"]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root), "--serial", "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "2 tests" in out

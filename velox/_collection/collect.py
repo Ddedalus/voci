@@ -79,6 +79,7 @@ __all__ = [
     "Skipped",
     "TestRecord",
     "collect",
+    "display_path",
     "module_name_for",
 ]
 
@@ -212,7 +213,7 @@ def _escape_segment(segment: str) -> str:
     return escaped
 
 
-def _display_path(path: Path, resolved_rootdir: Path) -> Path:
+def display_path(path: Path, resolved_rootdir: Path) -> Path:
     """`path`, relative to `rootdir` when possible.
 
     `TestRecord.path` is relative to `rootdir` so a test id stays portable across machines,
@@ -348,7 +349,7 @@ def collect(
     for path in files:
         resolved_path = Path(path).resolve()
         declaring_files.add(resolved_path)
-        display_path = _display_path(path, resolved_rootdir)
+        relpath = display_path(path, resolved_rootdir)
 
         inherited = _package_declarations(
             path, rootdir=rootdir, cache=package_declarations, errors=errors
@@ -364,7 +365,7 @@ def collect(
         except Exception as error:
             # Attributed to the file, not raised: one broken test module must not take the
             # rest of the suite down with it.
-            errors.append(CollectionError(path=display_path, message=_import_failure(error, path)))
+            errors.append(CollectionError(path=relpath, message=_import_failure(error, path)))
             continue
 
         implicit = combined(inherited, requires_of(module))
@@ -375,22 +376,22 @@ def collect(
                 # test in the file.
                 plan_for(_no_dependencies, implicit=implicit)
             except Exception:
-                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
                 continue
 
         candidates, problems = _module_candidates(module, module_name)
-        errors.extend(CollectionError(path=display_path, message=problem) for problem in problems)
+        errors.extend(CollectionError(path=relpath, message=problem) for problem in problems)
 
         for candidate in candidates:
             func = candidate.func
-            test_id = f"{display_path}::{candidate.name}"
+            test_id = f"{relpath}::{candidate.name}"
             marks = marks_of(func)
             try:
                 reason = _skip_reason(marks)
             except Exception:
                 # One test's malformed marks must not abort the file's remaining tests any more
                 # than a broken import aborts the remaining files.
-                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
                 continue
 
             if reason is not None:
@@ -413,7 +414,7 @@ def collect(
                 # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
                 # regardless of -m -- @velox.skip is never silently reclassified as deselected
                 # depending on which tags happen to be in play.
-                skipped.append(Skipped(id=test_id, reason=reason, path=display_path))
+                skipped.append(Skipped(id=test_id, reason=reason, path=relpath))
                 continue
 
             # Deferred to the expansion below when a case carries tags of its own: the
@@ -465,7 +466,7 @@ def collect(
                 # both claim, and a case's own condition raises whatever it raises. All are
                 # attributed to this test and collection continues, same as the `_skip_reason`
                 # catch above.
-                errors.append(CollectionError(path=display_path, message=traceback.format_exc()))
+                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
                 continue
 
             # `cases` is `None` for a test with no `@velox.parametrize` mark; `expansions` always
@@ -487,7 +488,7 @@ def collect(
             ]
             for case_id, params, record_plan, record_marks, case_reason in entries:
                 name = f"{candidate.name}[{case_id}]" if case_id else candidate.name
-                record_id = f"{display_path}::{name}"
+                record_id = f"{relpath}::{name}"
                 # Both filters run here rather than per function, above: a `-k` term and a
                 # `path.py::test_name[case]` argument alike can name one case of a parametrized
                 # test, which doesn't exist as an id until this expansion.
@@ -500,7 +501,7 @@ def collect(
                 # A case's own `skip`/`skipif`: the function's was answered before the expansion
                 # and excluded the whole test there, so anything left here is one case's alone.
                 if case_reason is not None:
-                    skipped.append(Skipped(id=record_id, reason=case_reason, path=display_path))
+                    skipped.append(Skipped(id=record_id, reason=case_reason, path=relpath))
                     continue
                 if (
                     tag_expr is not None
@@ -513,7 +514,7 @@ def collect(
                     TestRecord(
                         id=record_id,
                         index=index,
-                        path=display_path,
+                        path=relpath,
                         lineno=defined.__code__.co_firstlineno,
                         qualname=func.__qualname__,
                         func=func,
@@ -559,7 +560,7 @@ def _package_declarations(
                 cache[init] = None
                 errors.append(
                     CollectionError(
-                        path=_display_path(init, Path(rootdir).resolve()),
+                        path=display_path(init, Path(rootdir).resolve()),
                         message=_import_failure(error, init),
                     )
                 )

@@ -21,6 +21,7 @@ DEFAULT_TEST_FILE_PATTERNS: tuple[str, ...] = ("test_*.py", "*_test.py")
 DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset(
     {
         ".git",
+        ".velox_cache",
         ".venv",
         "__pycache__",
         "node_modules",

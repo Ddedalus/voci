@@ -16,4 +16,5 @@ Why velox is shaped the way it is - back story on decisions made. It covers impo
 - [rationale/capture.md](rationale/capture.md) — `_builtins/capture.py`, capture and routing
 - [rationale/rewrite.md](rationale/rewrite.md) — `_assertions/rewrite.py`, assertion introspection
 - [rationale/cli.md](rationale/cli.md) — `cli.py`, entrypoint
+- [rationale/cache.md](rationale/cache.md) — `_cache.py` / `_collection/lastfailed.py`, the run cache and `--lf`/`--ff`
 - [rationale/terminal.md](rationale/terminal.md) — `_report/terminal.py`, reporting

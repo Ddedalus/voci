@@ -10,8 +10,12 @@ None known.
 
 ## Features
 
-### Collection cache
-A persistent collection cache, `--lf`/`--ff`.
+### Collection index
+An index of `relpath → {mtime_ns, size, ids, lines}` written alongside the run cache and
+invalidated per file by `(mtime_ns, size)`, so `--collect-only` and the test count answer without
+importing anything. It is also what `--co-json` (machine-readable collection, for editor
+integrations) and a watch mode (`--watch`: the index, a file watcher, and `--lf` ordering) would
+be built on.
 
 ### velox-migrate
 `plans/migration-tool-plan.md`
