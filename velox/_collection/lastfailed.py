@@ -34,6 +34,7 @@ from velox._collection.requires import package_inits
 __all__ = [
     "Recorded",
     "candidate_files",
+    "emptied_packages",
     "error_paths",
     "missing_paths",
     "read_files",
@@ -153,6 +154,35 @@ def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
             if init.is_relative_to(rootdir):
                 answered.add(str(init.relative_to(rootdir)))
     return answered
+
+
+def emptied_packages(
+    last_run: LastRun, *, discovered: Collection[str], roots: Collection[Path], rootdir: Path
+) -> set[str]:
+    """Recorded package `__init__.py` paths whose tree this run walked and found no test in.
+
+    `settled_paths` reaches a package only through a file collected beneath it, so one that
+    failed to import and has since lost its last test file would stay recorded for good: there
+    is nothing left to collect, and `missing_paths` sees the `__init__.py` itself still on disk.
+    Every later `--lf` then narrows to a tree holding no test -- 0 tests, exit 5, permanently.
+
+    Discovery having looked in the package's directory and produced nothing under it is this
+    run's answer in that case. Scoped to the roots it actually walked, so `velox one/` still says
+    nothing about a package under `two/`.
+    """
+    walked = tuple(Path(root).resolve() for root in roots)
+    settled: set[str] = set()
+    for path in last_run.error_files:
+        package = Path(path)
+        if package.name != "__init__.py":
+            continue
+        directory = (rootdir / package).parent
+        looked_in = any(
+            directory.is_relative_to(root) or root.is_relative_to(directory) for root in walked
+        )
+        if looked_in and not any(package.parent in Path(found).parents for found in discovered):
+            settled.add(path)
+    return settled
 
 
 def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) -> set[str]:

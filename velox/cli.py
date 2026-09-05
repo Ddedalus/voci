@@ -804,6 +804,12 @@ def main(argv: list[str] | None = None) -> int:
         discovered = files
         if replay_last_failed:
             files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
+            # Otherwise the run below reports "0 tests" and exits 5, which reads as a suite
+            # that collected nothing rather than as a selection the recorded failures sit
+            # outside of -- the `testpaths`-narrowed run, or the explicit path argument, whose
+            # failures another root holds and which no run of *this* shape can settle.
+            if not files and discovered:
+                print("--lf: no recorded failure is in this run's selection")
         collected = _collect.collect(
             files,
             rootdir=rootdir,
@@ -1001,6 +1007,15 @@ def main(argv: list[str] | None = None) -> int:
         # A recorded file that is no longer on disk is settled by that alone: discovery will
         # never hand it to collection again, so this is the only run that can take it out.
         gone = _lastfailed.missing_paths(last_run, rootdir=resolved_rootdir)
+        # And a package this run looked inside and found no test under: `answered` reaches an
+        # `__init__.py` only through a file collected beneath it, so a package that lost its
+        # last test file would otherwise keep its recorded import failure for good.
+        gone |= _lastfailed.emptied_packages(
+            last_run,
+            discovered={str(_collect.display_path(path, resolved_rootdir)) for path in discovered},
+            roots=roots,
+            rootdir=resolved_rootdir,
+        )
         # A CANCELLED test never got to say anything about the code under test, so it settles
         # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
         # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:

@@ -248,6 +248,34 @@ def test_settled_paths_stops_at_a_directory_without_an_init(tmp_path: Path) -> N
     }
 
 
+def test_emptied_packages_settles_a_package_with_no_test_left_under_it(tmp_path: Path) -> None:
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert lastfailed.emptied_packages(
+        last_run, discovered={"test_b.py"}, roots=[tmp_path], rootdir=tmp_path
+    ) == {"pkg/__init__.py"}
+
+
+def test_emptied_packages_leaves_a_package_that_still_holds_a_test(tmp_path: Path) -> None:
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert (
+        lastfailed.emptied_packages(
+            last_run, discovered={"pkg/test_a.py"}, roots=[tmp_path], rootdir=tmp_path
+        )
+        == set()
+    )
+
+
+def test_emptied_packages_leaves_a_package_outside_the_roots_walked(tmp_path: Path) -> None:
+    """`velox one/` looked in one directory and must not conclude anything about another."""
+    last_run = LastRun(error_files=("two/pkg/__init__.py",))
+    assert (
+        lastfailed.emptied_packages(
+            last_run, discovered={"one/test_a.py"}, roots=[tmp_path / "one"], rootdir=tmp_path
+        )
+        == set()
+    )
+
+
 def test_error_paths_keeps_an_error_on_a_path_the_run_answers_for() -> None:
     error = CollectionError(path=Path("test_a.py"), message="boom")
     assert lastfailed.error_paths([error], answered={"test_a.py"}) == {"test_a.py"}

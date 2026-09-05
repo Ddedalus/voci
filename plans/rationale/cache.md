@@ -55,6 +55,10 @@ whose file this run *read*. Three kinds escape it, so each is closed where it ar
   `__init__.py` is `package_inits`' own walk rather than "somewhere below it": a directory with
   no `__init__.py` ends the chain collection follows, so `velox pkg/sub` over a namespace
   `pkg/sub/` never imports `pkg/__init__.py` and has nothing to say about it.
+* A **package that loses its last test file** has nothing left to collect beneath it, so the
+  `__init__.py` route never fires again and the file itself is still on disk. Discovery having
+  walked that directory and produced nothing under it is the answer, scoped to the roots this
+  run walked.
 * **A file under a broken package** was never read, and carries no error of its own —
   `collect` attributes that one to the `__init__.py`, once, however many files sit beneath it.
   It is excluded from what counts as read, or absence-as-an-answer would drop every failure
@@ -67,6 +71,19 @@ whose file this run *read*. Three kinds escape it, so each is closed where it ar
 **`--lf` deselects skips as well as records.** A collection-time skip is counted as something the
 run collected, so leaving a skip-marked sibling in place would let a `--lf` that executed nothing
 exit `0` while the recorded failure is still red.
+
+**What is out of a run's *selection* stays recorded, and is said out loud.** A recorded failure
+under a root this run was not pointed at is one the run has no answer for, so it survives — but a
+`--lf` narrowed to a selection holding none of them would then report `0 tests` and exit `5`,
+which reads as a suite that collected nothing rather than as the flag having nothing to do here.
+It says so instead. This is the one wedge left deliberately open: the entry is real, and only a
+run that reaches it can clear it.
+
+**Two velox runs sharing one rootdir can lose each other's failures.** `save` is atomic against a
+torn *read* — a pid-suffixed temporary file replaced into place — but not against a lost *update*:
+both runs load the same baseline and both write a whole payload, so the second to finish wins.
+Not locked, because the cost is a `--lf` that misses some failures the very next run re-finds,
+and every alternative puts a lock on the exit path of a run that has already reported its result.
 
 **Every filesystem failure is swallowed.** An unreadable, truncated, hand-edited or
 wrong-version cache reads as "nothing recorded", which makes both flags mean "the whole suite in

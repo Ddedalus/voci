@@ -2297,6 +2297,43 @@ def test_a_broken_package_does_not_settle_the_failures_below_it(
     assert "pkg/test_a.py::test_bad" in recorded["failed"]
 
 
+def test_a_package_that_loses_its_last_test_stops_being_recorded(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nothing is left to collect under the package, so no import can settle it and the file is
+    still on disk for `missing_paths` to find. Discovery looking and finding nothing is the only
+    answer available -- without it every later --lf narrows to an empty tree and exits 5."""
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    project.write("pkg/test_a.py", "async def test_x():\n    pass\n")
+    project.write_passing_test()
+    assert main([str(project.root)]) == 1
+    (project.root / "pkg" / "test_a.py").unlink()
+
+    assert main([str(project.root)]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
+def test_last_failed_says_when_no_recorded_failure_is_in_the_selection(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The recorded failure is real and this run is right not to settle it, but "0 tests" and
+    exit 5 on their own read as a suite that collected nothing."""
+    # Pins rootdir, so the narrower run reads the cache the first one wrote.
+    project.write_pyproject("[tool.velox]\n")
+    project.write("one/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
+    project.write("two/test_b.py", "async def test_ok():\n    pass\n")
+    assert main([str(project.root)]) == 1
+    capsys.readouterr()
+
+    status = main([str(project.root / "two"), "--lf"])
+
+    assert status == 5
+    assert "--lf: no recorded failure is in this run's selection" in capsys.readouterr().out
+
+
 def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
     """The rewriter fills the same directory during collection, so a project whose only velox
     invocation is --collect-only must not pick up an untracked one."""

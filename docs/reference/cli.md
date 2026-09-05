@@ -38,6 +38,10 @@ never reached — behind a `--maxfail` stop, a Ctrl-C, or a path argument naming
 keep what the run before said about them, so iterating on one file leaves the failures found
 elsewhere intact.
 
+Because those are kept, a `--lf` pointed somewhere they do not live selects nothing. It says so
+(`--lf: no recorded failure is in this run's selection`) and exits `5`, rather than leaving the
+empty run to be read as a suite that collected nothing.
+
 Deleting the directory is always safe. The next `--lf` finds nothing recorded and runs the whole
 suite, which is also what it does on a first run and after one that went green.
 
