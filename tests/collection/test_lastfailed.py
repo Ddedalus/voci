@@ -10,7 +10,7 @@ from _support import make_record
 
 from velox._cache import NOTHING_RECORDED, LastRun
 from velox._collection import lastfailed
-from velox._collection.collect import CollectionResult
+from velox._collection.collect import CollectionResult, Skipped
 
 
 def _stub() -> None:
@@ -113,3 +113,90 @@ def test_reorder_with_nothing_recorded_changes_nothing() -> None:
         "test_a.py::test_x",
         "test_b.py::test_y",
     ]
+
+
+def _skip(path: str, qualname: str) -> Skipped:
+    return Skipped(id=f"{path}::{qualname}", reason="later", path=Path(path))
+
+
+def test_candidate_files_keeps_the_tree_under_a_package_that_failed_to_import(
+    tmp_path: Path,
+) -> None:
+    """Discovery never yields an `__init__.py`, so matching it exactly would match nothing."""
+    files = [tmp_path / "pkg" / "test_a.py", tmp_path / "test_b.py"]
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    kept = lastfailed.candidate_files(files, last_run, rootdir=tmp_path)
+    assert kept == [tmp_path / "pkg" / "test_a.py"]
+
+
+def test_select_deselects_a_skip_that_is_not_a_recorded_failure() -> None:
+    """Left in, it would report a --lf that executed nothing as a run that collected
+    something."""
+    collected = _collected(("test_a.py", "test_x"))
+    collected.skipped.append(_skip("test_a.py", "test_skipped"))
+    selected = lastfailed.select(collected, LastRun(failed=("test_a.py::test_x",)))
+    assert selected.skipped == []
+    assert selected.deselected == ["test_a.py::test_skipped"]
+
+
+def test_select_keeps_a_skip_that_is_a_recorded_failure() -> None:
+    collected = _collected()
+    collected.skipped.append(_skip("test_a.py", "test_x"))
+    selected = lastfailed.select(collected, LastRun(failed=("test_a.py::test_x",)))
+    assert [skip.id for skip in selected.skipped] == ["test_a.py::test_x"]
+
+
+def test_vanished_names_an_id_the_file_no_longer_holds() -> None:
+    collected = _collected(("test_a.py", "test_new"))
+    last_run = LastRun(failed=("test_a.py::test_old",))
+    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == {
+        "test_a.py::test_old"
+    }
+
+
+def test_vanished_leaves_an_id_in_a_file_this_run_did_not_read() -> None:
+    collected = _collected(("test_a.py", "test_x"))
+    last_run = LastRun(failed=("test_b.py::test_y",))
+    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+
+
+def test_vanished_leaves_an_id_that_was_only_deselected() -> None:
+    collected = _collected()
+    collected.deselected.append("test_a.py::test_x")
+    last_run = LastRun(failed=("test_a.py::test_x",))
+    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+
+
+def test_vanished_leaves_a_case_of_a_test_deselected_before_expansion() -> None:
+    """`-m` excludes a test before its cases exist, so the recorded case id has only the bare
+    id to match against."""
+    collected = _collected()
+    collected.deselected.append("test_a.py::test_x")
+    collected.unexpanded.append("test_a.py::test_x")
+    last_run = LastRun(failed=("test_a.py::test_x[one]",))
+    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == set()
+
+
+def test_vanished_names_a_case_of_a_test_that_is_now_skipped() -> None:
+    """A skip settles the test's cases; matching them to the bare id would leave them recorded
+    for good, since nothing is ever going to run one again."""
+    collected = _collected()
+    collected.skipped.append(_skip("test_a.py", "test_x"))
+    collected.unexpanded.append("test_a.py::test_x")
+    last_run = LastRun(failed=("test_a.py::test_x[one]",))
+    assert lastfailed.vanished(last_run, collected, imported={"test_a.py"}) == {
+        "test_a.py::test_x[one]"
+    }
+
+
+def test_settled_paths_answers_for_a_package_whose_tree_was_collected() -> None:
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert lastfailed.settled_paths(last_run, {"pkg/test_a.py"}) == {
+        "pkg/test_a.py",
+        "pkg/__init__.py",
+    }
+
+
+def test_settled_paths_leaves_a_package_no_file_was_collected_under() -> None:
+    last_run = LastRun(error_files=("pkg/__init__.py",))
+    assert lastfailed.settled_paths(last_run, {"test_b.py"}) == {"test_b.py"}

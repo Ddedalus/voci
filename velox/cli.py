@@ -981,22 +981,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         # Last, after everything this run had to say: a cache velox cannot write costs the
         # next --lf its ordering, and must not touch this one's output or exit code.
-        failing = [r.id for r in results if r.outcome in _run.FAILING_OUTCOMES]
+        resolved_rootdir = rootdir.resolve()
+        attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}
+        errored = {str(error.path) for error in collected.errors}
         # A CANCELLED test never got to say anything about the code under test, so it settles
         # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
-        # Ctrl-C -- would drop every failure it cut short.
+        # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:
+        # a recorded id a file collection fully read no longer has is settled by its absence,
+        # there being no run left to settle it.
         settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
         settled_ids |= {s.id for s in collected.skipped}
-        resolved_rootdir = rootdir.resolve()
-        settled_files = {str(_collect.display_path(p, resolved_rootdir)) for p in files}
+        settled_ids |= _lastfailed.vanished(last_run, collected, imported=attempted - errored)
         _cache.save(
             rootdir,
             _cache.merge(
                 last_run,
-                failed=failing,
-                errored=[str(error.path) for error in collected.errors],
+                failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
+                errored=errored,
                 settled_ids=settled_ids,
-                settled_files=settled_files,
+                settled_files=_lastfailed.settled_paths(last_run, attempted),
             ),
         )
         return exit_status
@@ -1029,6 +1032,9 @@ def main(argv: list[str] | None = None) -> int:
         if sys_path_inserted:
             with contextlib.suppress(ValueError):
                 sys.path.remove(rootdir_str)
+        # Whatever this run did or didn't get to, the rewriter may have written bytecode
+        # into the cache directory on its way there.
+        _cache.ensure_gitignore(rootdir)
         # Symmetric with env_backup's own comment above: restores exactly the keys
         # this call touched, to exactly what they were before it touched them.
         for key, prev_value in env_backup.items():

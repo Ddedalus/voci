@@ -19,13 +19,25 @@ straight off the ids, with no second index to keep in sync and no staleness ques
 is nothing for `--lf` to match against, and matching against nothing would mean the one run that
 had something to say about that file is the one that leaves it out. The cache therefore stores
 those paths separately from the failed ids, and every test in such a file counts as a recorded
-failure until a run collects it successfully.
+failure until a run collects it successfully. Where the path is a package `__init__.py` the tree
+below it is what gets replayed: discovery never yields an `__init__.py` as a test file, so an
+exact match on it matches nothing, and nothing under it was collected either. The same asymmetry
+decides when the entry clears — collecting anything beneath a package is what imports it, so a
+failure the run did not report again is one the run fixed.
 
-**A run only overwrites what it settled.** Merging keeps every previously-failed id the run
-produced no result for and every previously-erroring path it did not collect. Without that,
-`velox -x --lf` would drop the run's remaining failures the moment `--maxfail` stopped it, and
-running one directory would erase the failures found in another — both of which turn `--lf` into a
-flag you cannot trust twice in a row.
+**A run only overwrites what it settled, and absence is an answer.** Merging keeps every
+previously-failed id the run produced no result for and every previously-erroring path it did not
+collect. Without that, `velox -x --lf` would drop the run's remaining failures the moment
+`--maxfail` stopped it, and running one directory would erase the failures found in another — both
+of which turn `--lf` into a flag you cannot trust twice in a row. The converse matters just as
+much: a recorded id under a file collection read *without error* and did not produce names a test
+that has been renamed or deleted, and nothing will ever run it again. Leaving it recorded would
+keep the cache permanently non-empty, so every later `--lf` narrows to that file and selects
+nothing from it — a wedge only deleting the cache directory recovers from.
+
+**`--lf` deselects skips as well as records.** A collection-time skip is counted as something the
+run collected, so leaving a skip-marked sibling in place would let a `--lf` that executed nothing
+exit `0` while the recorded failure is still red.
 
 **Every filesystem failure is swallowed.** An unreadable, truncated, hand-edited or
 wrong-version cache reads as "nothing recorded", which makes both flags mean "the whole suite in

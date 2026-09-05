@@ -16,7 +16,15 @@ from collections.abc import Container, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["CACHE_DIR_NAME", "NOTHING_RECORDED", "LastRun", "load", "merge", "save"]
+__all__ = [
+    "CACHE_DIR_NAME",
+    "NOTHING_RECORDED",
+    "LastRun",
+    "ensure_gitignore",
+    "load",
+    "merge",
+    "save",
+]
 
 #: Shares the directory the assertion rewriter caches its pycs in (`rewrite.resolve_cache_dir`),
 #: so a project has one velox-owned directory to ignore rather than two.
@@ -108,9 +116,21 @@ def merge(
     )
 
 
+def ensure_gitignore(rootdir: Path) -> None:
+    """Ignore `rootdir`'s cache directory from inside it, if it exists.
+
+    Called on every exit path rather than only from `save`, since the assertion rewriter writes
+    its bytecode into the same directory: a run that collects but never executes still leaves it
+    behind, and a project must pick up no diff for having run velox.
+    """
+    directory = rootdir / CACHE_DIR_NAME
+    if directory.is_dir():
+        with contextlib.suppress(OSError):
+            _write_gitignore(directory)
+
+
 def _write_gitignore(directory: Path) -> None:
-    """Ignore the cache directory from inside it, so a project picks up no diff for having run
-    velox once. Left alone once written, in case the project edited it."""
+    """Left alone once written, in case the project edited it."""
     gitignore = directory / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(_GITIGNORE, encoding="utf-8")

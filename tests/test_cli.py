@@ -2057,3 +2057,98 @@ def test_maxfail_keeps_the_failures_it_stopped_short_of(
     out = capsys.readouterr().out
     assert status == 1
     assert "2 tests" in out
+
+
+def test_last_failed_forgets_a_test_that_no_longer_exists(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A renamed or deleted failure has no run left to settle it, so collection's own answer
+    about what the file holds is what takes it out -- otherwise the cache never empties and
+    every later --lf narrows to a file it selects nothing from."""
+    project.write("test_a.py", "async def test_old():\n    assert 1 == 2\n")
+    assert main([str(project.root)]) == 1
+    project.write("test_a.py", "async def test_new():\n    pass\n")
+    assert main([str(project.root)]) == 0
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "--lf: nothing recorded" in out
+
+
+def test_last_failed_keeps_a_test_a_keyword_expression_left_out(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Deselected is not gone: the run that skipped past a failure must not report it fixed."""
+    project.write(
+        "test_a.py",
+        "async def test_bad():\n    assert 1 == 2\n\nasync def test_ok():\n    pass\n",
+    )
+    assert main([str(project.root)]) == 1
+    assert main([str(project.root), "-k", "ok"]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--lf"]) == 1
+    assert "test_a.py::test_bad" in capsys.readouterr().out
+
+
+def test_last_failed_replays_a_package_whose_init_failed_to_import(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A package `__init__.py` is never itself a discovered test file, so the tree below it is
+    what --lf has to replay -- and what fixing it has to settle."""
+    project.write("pkg/__init__.py", "import nosuchmodule\n")
+    project.write("pkg/test_a.py", "async def test_x():\n    pass\n")
+    project.write_passing_test()
+    assert main([str(project.root)]) == 1
+    project.write("pkg/__init__.py", "")
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "1 test · " in out
+    assert "pkg/test_a.py" in out
+
+    capsys.readouterr()
+    assert main([str(project.root), "--lf"]) == 0
+    assert "--lf: nothing recorded" in capsys.readouterr().out
+
+
+def test_last_failed_selecting_nothing_does_not_exit_zero(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A skip-marked sibling in the candidate file must not count as "something was collected",
+    which would report a --lf that executed nothing as a green run."""
+    project.write(
+        "test_a.py",
+        "import velox\n\nasync def test_bad():\n    assert 1 == 2\n\n"
+        "@velox.skip('later')\nasync def test_skipped():\n    pass\n",
+    )
+    assert main([str(project.root)]) == 1
+    project.write(
+        "test_a.py",
+        "import velox\n\nasync def test_renamed():\n    assert 1 == 2\n\n"
+        "@velox.skip('later')\nasync def test_skipped():\n    pass\n",
+    )
+    capsys.readouterr()
+
+    status = main([str(project.root), "--lf"])
+
+    assert status == 5
+    assert "1 skipped" not in capsys.readouterr().out
+
+
+def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
+    """The rewriter fills the same directory during collection, so a project whose only velox
+    invocation is --collect-only must not pick up an untracked one."""
+    project.write_passing_test()
+
+    assert main([str(project.root), "--collect-only"]) == 0
+
+    gitignore = project.root / ".velox_cache" / ".gitignore"
+    assert gitignore.exists()
+    assert gitignore.read_text().endswith("*\n")

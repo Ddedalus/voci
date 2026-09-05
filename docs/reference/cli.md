@@ -33,9 +33,10 @@ assertion rewriter keeps its bytecode in, and velox leaves a `.gitignore` inside
 everything, so a project picks up no diff for having run its suite.
 
 A run overwrites only what it has an answer for. Tests it executed or skipped are settled by their
-own outcome; tests it never reached — behind a `--maxfail` stop, a Ctrl-C, or a path argument
-naming somewhere else — keep what the run before said about them, so iterating on one file leaves
-the failures found elsewhere intact.
+own outcome, as is a recorded test that no longer exists in a file the run collected; tests it
+never reached — behind a `--maxfail` stop, a Ctrl-C, or a path argument naming somewhere else —
+keep what the run before said about them, so iterating on one file leaves the failures found
+elsewhere intact.
 
 Deleting the directory is always safe. The next `--lf` finds nothing recorded and runs the whole
 suite, which is also what it does on a first run and after one that went green.
