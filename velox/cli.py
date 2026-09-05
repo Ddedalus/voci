@@ -490,9 +490,11 @@ def _save_collection_index(
     roots: Sequence[Path],
 ) -> None:
     """Persist `previous` updated with what this run's real collection (`found`, over `files`)
-    established. Called once per run that actually collected -- `found` rather than whatever
-    `--lf`/`--ff` narrowed or reordered it into, matching `_cache.merge`'s own use of it below:
-    the index describes what a file holds, not what one particular invocation asked to see."""
+    established. Called once per run that actually collected, and only when `narrowed_by_selection`
+    is false -- `found` rather than whatever `--lf`/`--ff` narrowed or reordered it into, matching
+    `_cache.merge`'s own use of it below: the index describes what a file holds, not what one
+    particular invocation asked to see. -k/-m/an id argument narrow `found` itself, at the
+    `collect()` call that built it, which is what callers check before ever reaching here."""
     _index.save(
         rootdir,
         _index.refresh(
@@ -628,6 +630,18 @@ def main(argv: list[str] | None = None) -> int:
     except _selection.SelectionError as exc:
         print(f"velox: {exc}", file=sys.stderr)
         return 4
+
+    # -k/-m/an id argument bake their narrowing straight into collect()'s own records and
+    # deselected -- `tag_expr`/`keyword_expr`/`id_selection` below -- so a run any of them
+    # narrows sees a partial file, never the whole of what it holds. Read in two places: the
+    # collection-index fast path won't answer under one (it has no notion of the narrowing to
+    # replay), and a real collection under one must not write its partial view of a file into
+    # the index either, where a later un-narrowed --collect-only would take it as the whole
+    # file. --lf/--ff don't have this problem -- they narrow which files collect() sees, never
+    # what one collected file reports -- so they're not part of this.
+    narrowed_by_selection = (
+        markexpr is not None or keywordexpr is not None or id_selection is not None
+    )
 
     # [tool.velox]-anchored upward search, stopping at the git root -- see
     # _config.resolve's own docstring for exactly where it starts and stops. A
@@ -848,9 +862,7 @@ def main(argv: list[str] | None = None) -> int:
             args.collect_only
             and not replay_last_failed
             and not replay_failed_first
-            and markexpr is None
-            and keywordexpr is None
-            and id_selection is None
+            and not narrowed_by_selection
         ):
             fast_answer = _index.answer(collection_index, files, rootdir=rootdir)
             if fast_answer is not None:
@@ -942,9 +954,15 @@ def main(argv: list[str] | None = None) -> int:
         color_enabled = _color.color_enabled(sys.stdout)
 
         if args.collect_only:
-            _save_collection_index(
-                rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
-            )
+            if not narrowed_by_selection:
+                _save_collection_index(
+                    rootdir,
+                    collection_index,
+                    found,
+                    files=files,
+                    discovered=discovered,
+                    roots=roots,
+                )
             status = _report_collection(
                 ids=[record.id for record in collected.records],
                 skipped=[(skip.id, skip.reason) for skip in collected.skipped],
@@ -1125,9 +1143,10 @@ def main(argv: list[str] | None = None) -> int:
                 settled_files=answered | gone,
             ),
         )
-        _save_collection_index(
-            rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
-        )
+        if not narrowed_by_selection:
+            _save_collection_index(
+                rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
+            )
         return exit_status
     except KeyboardInterrupt:
         # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second

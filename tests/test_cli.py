@@ -2088,6 +2088,24 @@ def test_collect_only_with_a_keyword_filter_still_imports(
     assert calls
 
 
+def test_a_keyword_filtered_run_does_not_poison_the_index(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`-k`/`-m`/an id argument narrow `collect()`'s own output for one file, so a run under one
+    of them must not write that partial view into the index -- a later, un-narrowed
+    --collect-only would otherwise take a narrowed run's leftovers as the whole file."""
+    project.write(
+        "test_a.py", "async def test_keep():\n    pass\n\nasync def test_drop():\n    pass\n"
+    )
+    assert main([str(project.root), "--collect-only", "-k", "test_keep"]) == 0
+    capsys.readouterr()
+
+    assert main([str(project.root), "--collect-only"]) == 0
+    out = capsys.readouterr().out
+    assert "test_a.py::test_keep" in out
+    assert "test_a.py::test_drop" in out
+
+
 def test_maxfail_keeps_the_failures_it_stopped_short_of(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
