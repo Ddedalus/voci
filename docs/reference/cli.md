@@ -50,11 +50,11 @@ suite, which is also what it does on a first run and after one that went green.
 
 ```console
 $ velox --help
-usage: velox [-h] [--version] [-k EXPR] [-m EXPR] [--lf] [--ff] [--assert {rewrite,plain}]
-             [--rewrite-cache DIR] [--concurrency N] [--timeout SECONDS]
-             [--loop-watchdog SECONDS] [--capture no] [-s] [--serial] [--maxfail N] [-x] [-v]
-             [-q] [--durations N] [-W SPEC] [--collect-only] [--report-json PATH]
-             [--basetemp DIR]
+usage: velox [-h] [--version] [-k EXPR] [-m EXPR] [--lf] [--ff] [--watch]
+             [--assert {rewrite,plain}] [--rewrite-cache DIR] [--concurrency N]
+             [--timeout SECONDS] [--loop-watchdog SECONDS] [--capture no] [-s] [--serial]
+             [--maxfail N] [-x] [-v] [-q] [--durations N] [-W SPEC] [--collect-only]
+             [--co-json] [--report-json PATH] [--basetemp DIR]
              [paths ...]
 ```
 
@@ -101,6 +101,13 @@ first run, or a run that went green -- the whole suite runs.
 
 Run the whole suite, with the tests that failed on the last run first. Unlike --lf this changes only
 the order, so a run that is still red says so within the first few results.
+
+### `--watch`
+
+Rerun after every change to a .py file under the selected paths, instead of exiting. The first run
+is whatever PATHS/-k/-m/--lf/--ff already say; every run after that applies --lf on top -- unless
+--lf or --ff was already given, which is left alone -- so a red run is what gets rerun until it's
+green, and a change with nothing left failing reruns the whole suite. Stops on Ctrl-C.
 
 ### `--assert {rewrite,plain}`
 
@@ -180,11 +187,20 @@ reported either way; a filter decides which are silenced and which fail the test
 Print the id of every selected test, in the order they would run, and exit without running any of
 them.
 
+### `--co-json`
+
+Like --collect-only (and implies it), but print one JSON object to stdout instead of the plain id
+list: every selected test's id, file and definition line, plus what else collection found -- skips,
+deselections, and any file that failed to import. For an editor integration that wants the result as
+data. Nothing else goes to stdout during this run, including the usual startup header and any
+import-time warnings, which are printed to stderr instead so the one line of JSON stays parseable on
+its own.
+
 ### `--report-json PATH`
 
 Write one JSON record of the run to PATH: an outcome, duration and failure reason per test, so a
 consumer reads the result as data instead of parsing this reporter's own output. Not written for
---collect-only, which never runs anything to report on.
+--collect-only/--co-json, which never run anything to report on.
 
 ### `--basetemp DIR`
 

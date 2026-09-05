@@ -62,10 +62,20 @@ EMPTY: Index = {}
 
 @dataclass(frozen=True, slots=True)
 class Answer:
-    """What a fully-fresh index says `--collect-only` would find, in file order."""
+    """What a fully-fresh index says `--collect-only` would find, in file order.
+
+    `paths`/`lines` are parallel to `ids` -- the file each test was collected from (rootdir-
+    relative, same form `display_path` gives a real collection's own `TestRecord.path`) and the
+    line it's defined at. `skipped_paths` is the same pairing for `skipped`. Both exist for
+    `--co-json`, which is the first consumer to need a location rather than just an id -- the
+    plain-text `--collect-only` report never prints one.
+    """
 
     ids: tuple[str, ...]
     skipped: tuple[tuple[str, str], ...]
+    paths: tuple[str, ...]
+    lines: tuple[int, ...]
+    skipped_paths: tuple[str, ...]
 
 
 def load(rootdir: Path) -> Index:
@@ -138,6 +148,9 @@ def answer(index: Index, files: Iterable[Path], *, rootdir: Path) -> Answer | No
     resolved_rootdir = Path(rootdir).resolve()
     ids: list[str] = []
     skipped: list[tuple[str, str]] = []
+    paths: list[str] = []
+    lines: list[int] = []
+    skipped_paths: list[str] = []
     for path in files:
         relpath = str(display_path(path, resolved_rootdir))
         entry = index.get(relpath)
@@ -146,7 +159,16 @@ def answer(index: Index, files: Iterable[Path], *, rootdir: Path) -> Answer | No
             return None
         ids.extend(entry.ids)
         skipped.extend(entry.skipped)
-    return Answer(ids=tuple(ids), skipped=tuple(skipped))
+        paths.extend([relpath] * len(entry.ids))
+        lines.extend(entry.lines)
+        skipped_paths.extend([relpath] * len(entry.skipped))
+    return Answer(
+        ids=tuple(ids),
+        skipped=tuple(skipped),
+        paths=tuple(paths),
+        lines=tuple(lines),
+        skipped_paths=tuple(skipped_paths),
+    )
 
 
 def refresh(
