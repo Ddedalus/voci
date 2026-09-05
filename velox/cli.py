@@ -333,6 +333,12 @@ def _watch_scope(args: argparse.Namespace) -> tuple[list[Path], frozenset[str]]:
     a usage error.
     """
     targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Same re-anchoring `main` itself does below, and for the same reason: a test id pasted
+    # back from a previous run is rootdir-relative, and read literally from a subdirectory of a
+    # project with a [tool.velox] table it would otherwise name a path that doesn't exist --
+    # nothing `discover_files` would ever see a change under.
+    with contextlib.suppress(_config.ConfigError):
+        targets = _reread_on_rootdir(targets)
     try:
         config = _config.resolve([target.path for target in targets])
     except _config.ConfigError:

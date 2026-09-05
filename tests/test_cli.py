@@ -2705,6 +2705,26 @@ def test_watch_scope_uses_an_explicit_path(chdir_project: Project) -> None:
     assert roots == [sub]
 
 
+def test_watch_scope_reanchors_a_pasted_back_id_on_the_rootdir(
+    chdir_project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test id `--collect-only`/`--co-json` printed is rootdir-relative -- read literally from
+    some other directory under a project with a [tool.velox] table, it would otherwise name a
+    path that doesn't exist, which `_watch_scope` would happily watch forever without ever
+    seeing the real file's changes (main's own `_reread_on_rootdir` is what saves a real run
+    from the same trap)."""
+    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write("tests/test_a.py", "async def test_ok():\n    pass\n")
+    elsewhere = chdir_project.root / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    args = build_parser().parse_args(["tests/test_a.py::test_ok", "--watch"])
+
+    roots, _ = _watch_scope(args)
+
+    assert roots == [chdir_project.root / "tests" / "test_a.py"]
+
+
 def test_watch_scope_falls_back_to_configured_testpaths(chdir_project: Project) -> None:
     chdir_project.write_pyproject('[tool.velox]\ntestpaths = ["sub"]\n')
     chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
