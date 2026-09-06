@@ -60,7 +60,10 @@ NOTHING_RECORDED = LastRun()
 
 def load(rootdir: Path) -> LastRun:
     """What `rootdir`'s cache says the last run found, or `NOTHING_RECORDED`."""
-    return _read(rootdir) or NOTHING_RECORDED
+    # `is None`, not `or`: a `LastRun` recording nothing is a perfectly good answer, and only
+    # truthiness-by-default makes `or` return it rather than fall through.
+    read = _read(rootdir)
+    return NOTHING_RECORDED if read is None else read
 
 
 def _read(rootdir: Path) -> LastRun | None:
