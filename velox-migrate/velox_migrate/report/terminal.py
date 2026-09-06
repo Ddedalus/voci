@@ -73,6 +73,13 @@ def _gaps(audit: Audit) -> list[str]:
         )
     if audit.blind_spots:
         lines.append(f"{len(audit.blind_spots)} constructs no scan can see; the report names them")
+    if audit.unclassified:
+        lines.append(
+            f"unclassified ({len(audit.unclassified)}): a fixture, test or class pytest resolved "
+            f"that no scan located, touching "
+            f"{plural(audit.summary.unclassified_tests, 'test')} excluded from clean — the "
+            f"report names them"
+        )
     return lines
 
 

@@ -77,6 +77,7 @@ def test_the_payload_carries_every_block_of_the_schema_it_names() -> None:
         "type_readiness",
         "findings",
         "blind_spots",
+        "unclassified",
     }
 
 

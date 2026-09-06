@@ -15,11 +15,10 @@ findings.
 
 from __future__ import annotations
 
-import ast
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
-from velox_migrate.audit import config, marks, readiness, wiring
+from velox_migrate.audit import completeness, config, marks, readiness, wiring
 from velox_migrate.audit.findings import (
     Audit,
     Finding,
@@ -28,6 +27,7 @@ from velox_migrate.audit.findings import (
     Summary,
     TypeReadiness,
     Unannotated,
+    Unclassified,
     ordered,
     summarize,
 )
@@ -44,6 +44,7 @@ __all__ = [
     "Summary",
     "TypeReadiness",
     "Unannotated",
+    "Unclassified",
     "run",
     "sources_of",
 ]
@@ -72,7 +73,7 @@ def run(ground_truth: GroundTruth, *, root: Path, budget: int = DEFAULT_BUDGET) 
 
     wanted = sources_of(ground_truth, root=root)
     present = [path for path in wanted if Path(root, path).is_file()]
-    missing = [path for path in wanted if path not in set(present)]
+    absent = [path for path in wanted if path not in set(present)]
     scan = sources.scan([Path(root, path) for path in present], root=root)
     # A construct that belongs to the suite — a hook, a plugin declaration — is charged to no
     # test: it converts nothing on its own, and counting it against every test in the file it sits
@@ -84,15 +85,19 @@ def run(ground_truth: GroundTruth, *, root: Path, budget: int = DEFAULT_BUDGET) 
         for finding in scan.findings
     ]
 
+    defined = completeness.parse(root, present)
+    unclassified = completeness.missing(ground_truth, reach, defined)
+
     findings = ordered([*wiring_findings, *mark_findings, *config_findings, *scanned])
     return Audit(
-        suite=_suite(ground_truth, reach, findings, root=root, files=present),
+        suite=_suite(ground_truth, reach, findings, defined=defined),
         findings=findings,
-        summary=summarize(findings, tests=len(ground_truth.items)),
+        summary=summarize(findings, tests=len(ground_truth.items), unclassified=unclassified),
         scanned_files=scan.files,
-        unparsed=tuple(sorted({*scan.unparsed, *missing})),
+        unparsed=tuple(sorted({*scan.unparsed, *absent})),
         budget=budget,
         type_readiness=readiness.assess(ground_truth, root=root),
+        unclassified=unclassified,
     )
 
 
@@ -136,8 +141,7 @@ def _suite(
     reach: Reach,
     findings: Iterable[Finding],
     *,
-    root: Path,
-    files: list[str],
+    defined: dict[str, completeness.Defined],
 ) -> Suite:
     reached = [
         fixture for fixture in wiring.reached(ground_truth).values() if not fixture.direct_param
@@ -155,7 +159,7 @@ def _suite(
         environment=dict(ground_truth.environment),
         tests=len(ground_truth.items),
         test_files=len({item.path for item in ground_truth.items if item.path is not None}),
-        async_tests=_async_tests(ground_truth, root, files),
+        async_tests=_async_tests(ground_truth, defined),
         fixtures=len(own),
         plugin_fixtures=len(reached) - len(own),
         conftests=len(conftests),
@@ -167,38 +171,18 @@ def _suite(
     )
 
 
-def _async_tests(ground_truth: GroundTruth, root: Path, files: list[str]) -> int:
+def _async_tests(ground_truth: GroundTruth, defined: dict[str, completeness.Defined]) -> int:
     """How many collected tests are `async def`.
 
     velox runs both kinds, so this is not a translation question — it is the denominator for the
     blocking-call hazard, which only bites inside a coroutine.
     """
-    asynchronous: set[tuple[str, str]] = set()
-    for file in files:
-        try:
-            tree = ast.parse(Path(root, file).read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, ValueError):
-            continue
-        for qualname, node in _functions(tree):
-            if isinstance(node, ast.AsyncFunctionDef):
-                asynchronous.add((file, qualname))
+    asynchronous = {
+        (file, qualname) for file, info in defined.items() for qualname in info.async_functions
+    }
     return sum(
         1
         for item in ground_truth.items
         if (item.path, f"{item.cls}.{item.originalname}" if item.cls else item.originalname)
         in asynchronous
     )
-
-
-def _functions(tree: ast.Module) -> list[tuple[str, ast.AST]]:
-    found: list[tuple[str, ast.AST]] = []
-
-    def walk(body: list[ast.stmt], prefix: str) -> None:
-        for node in body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                found.append((f"{prefix}{node.name}", node))
-            elif isinstance(node, ast.ClassDef):
-                walk(node.body, f"{prefix}{node.name}.")
-
-    walk(tree.body, "")
-    return found

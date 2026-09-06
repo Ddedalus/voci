@@ -1,6 +1,6 @@
 # pytest → velox migration tool: implementation plan
 
-The tool exists and its own suite is green (973 tests). Two real suites have been through it:
+The tool exists and its own suite is green (981 tests). Two real suites have been through it:
 marshmallow converts and runs, httpx2 has been audited but not converted. What that turned up is in
 [migration-findings.md](migration-findings.md), and it is why the remaining work below is not just
 "finish Phase 4".
@@ -25,15 +25,11 @@ Exit: httpx2 migrated end to end and written up.
 - [x] **3. httpx2: audit findings write-up.** 342 blocked of 1991, 88.0% serial on one autouse
   `clean_environ`, no override chains.
 
-- [ ] **4. Make the audit report what it does not recognise.** A construct with no matrix row is
-  currently counted as *converts untouched*, so the headline number cannot distinguish "nothing
-  wrong with this" from "nothing looked at this" — which is how marshmallow's audit came back clean
-  on four constructs that then generated uncompilable code. Add an unclassified count: a fixture,
-  test body, class body or config key that no rule claimed is listed with its file and line rather
-  than silently absorbed into the clean bucket.
-
-  *Exit:* audit a suite from outside the corpus and outside the ten already scanned; the surprises
-  in it land in the unclassified list rather than in the clean count.
+- [x] **4. Make the audit report what it does not recognise.** `audit/completeness.py`
+  cross-checks the dump's fixture/test/class census against a plain `ast` walk of the same sources;
+  a name pytest resolved that the walk can't find is `Audit.unclassified`, pulled out of
+  `clean_tests` and listed in `migration-report.md`'s "What this audit cannot see". Config keys
+  already had no such gap (`VX309` classifies every unrecognised setting).
 
 ### Coexistence workspace
 

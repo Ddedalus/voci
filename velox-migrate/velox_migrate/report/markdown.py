@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from velox_migrate.audit.findings import Audit, Finding, Unannotated, ordered
+from velox_migrate.audit.findings import Audit, Finding, Unannotated, Unclassified, ordered
 from velox_migrate.matrix import Area, Construct, Disposition
 
 # Enough sites to recognize a pattern; past this a reader is counting, not reading.
@@ -84,6 +84,12 @@ def _verdict(audit: Audit) -> list[str]:
         notes.append(
             f"Blocked: {totals.blocked_tests} of {totals.tests} tests "
             f"({_percent(totals.blocked_percent)}) have no conversion path as they stand."
+        )
+    if audit.unclassified:
+        notes.append(
+            f"Unclassified: {_unclassified_count(audit)}, touching "
+            f"{plural(totals.unclassified_tests, 'test')}, that nothing here looked at — see "
+            f'"What this audit cannot see".'
         )
     if notes:
         blocks.append(" ".join(notes))
@@ -246,6 +252,15 @@ def _blind_spots(audit: Audit) -> list[str]:
             f"from a test body is a lower bound while that is true:"
         )
         blocks.append("\n".join(f"- {name}" for name in sorted(audit.unparsed)))
+    if audit.unclassified:
+        blocks.append(
+            f"{_unclassified_count(audit)} pytest resolved have no matching definition in this "
+            f"scan of the suite's sources — built dynamically, hidden behind a decorator that "
+            f"does not preserve it, or nested somewhere the walk does not descend into. No finding "
+            f'above could have looked at any of them, so their tests are left out of "converts '
+            f'untouched" rather than assumed clean:'
+        )
+        blocks.append(_unclassified_list(audit.unclassified))
     return blocks if len(blocks) > 1 else []
 
 
@@ -285,6 +300,18 @@ def _blind_spot(row: Construct) -> str:
     return f"**{row.subject}** — {row.note}" + (f" {row.action}" if row.action else "")
 
 
+def _unclassified_count(audit: Audit) -> str:
+    return plural(len(audit.unclassified), "fixture, test or class", "fixtures, tests or classes")
+
+
+def _unclassified_list(rows: Sequence[Unclassified]) -> str:
+    shown = rows[:SITE_CAP]
+    bullets = [f"- {row.kind} `{row.name}`, {row.site}" for row in shown]
+    if len(rows) > len(shown):
+        bullets.append(f"- …and {len(rows) - len(shown)} more")
+    return "\n".join(bullets)
+
+
 def _grouped(findings: Iterable[Finding]) -> list[tuple[str, tuple[Finding, ...]]]:
     """`findings` bucketed by code, each bucket in the order it was first reached."""
     buckets: dict[str, list[Finding]] = {}
@@ -294,7 +321,7 @@ def _grouped(findings: Iterable[Finding]) -> list[tuple[str, tuple[Finding, ...]
 
 
 def _anything_to_decide(audit: Audit) -> bool:
-    return any(
+    return bool(audit.unclassified) or any(
         finding.disposition is not Disposition.MECHANICAL or finding.area is Area.CONFIG
         for finding in audit.findings
     )
