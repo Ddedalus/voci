@@ -21,11 +21,13 @@ from velox_migrate.audit.findings import (
     Suite,
     Summary,
     TypeReadiness,
+    Unclassified,
     ordered,
+    unclassified_ordered,
 )
 from velox_migrate.matrix import Construct
 
-FINDINGS_VERSION = 2
+FINDINGS_VERSION = 3
 
 
 def payload(audit: Audit) -> dict[str, Any]:
@@ -42,6 +44,7 @@ def payload(audit: Audit) -> dict[str, Any]:
         "type_readiness": _type_readiness(audit.type_readiness),
         "findings": [_finding(finding) for finding in findings],
         "blind_spots": [_blind_spot(construct) for construct in audit.blind_spots],
+        "unclassified": [_unclassified(row) for row in unclassified_ordered(audit.unclassified)],
     }
 
 
@@ -80,6 +83,7 @@ def _totals(summary: Summary) -> dict[str, Any]:
         "clean_tests": summary.clean_tests,
         "marker_tests": summary.marker_tests,
         "hazard_tests": summary.hazard_tests,
+        "unclassified_tests": summary.unclassified_tests,
         "blocked_tests": summary.blocked_tests,
         "convertible_tests": summary.convertible_tests,
         "suite_findings": summary.suite_findings,
@@ -146,4 +150,15 @@ def _blind_spot(construct: Construct) -> dict[str, Any]:
         "subject": construct.subject,
         "note": construct.note,
         "action": construct.action,
+    }
+
+
+def _unclassified(row: Unclassified) -> dict[str, Any]:
+    return {
+        "kind": row.kind,
+        "name": row.name,
+        "file": row.site.file,
+        "line": row.site.line,
+        "function": row.site.function,
+        "tests": list(row.tests),
     }
