@@ -111,9 +111,29 @@ def missing(
                 )
             )
 
-    seen_classes: set[tuple[str, str]] = set()
+    missing_classes: set[tuple[str, str]] = set()
+    for item in ground_truth.items:
+        if item.cls is None or item.path is None or item.path not in defined:
+            continue
+        key = (item.path, item.cls)
+        if key in missing_classes or item.cls in defined[item.path].classes:
+            continue
+        missing_classes.add(key)
+        found.append(
+            Unclassified(
+                kind="class",
+                name=item.cls,
+                site=Site(item.path, None, item.cls),
+                tests=reach.tests_at(item.path, item.cls),
+            )
+        )
+
     for item in ground_truth.items:
         if item.path is None or item.path not in defined:
+            continue
+        # A class this walk never found already reports every test under it; a method the walk
+        # cannot resolve because its class isn't there is the same gap, not a second one.
+        if item.cls is not None and (item.path, item.cls) in missing_classes:
             continue
         qualname = f"{item.cls}.{item.originalname}" if item.cls else item.originalname
         if qualname not in defined[item.path].functions:
@@ -125,17 +145,6 @@ def missing(
                     tests=(item.nodeid,),
                 )
             )
-        if item.cls and (item.path, item.cls) not in seen_classes:
-            seen_classes.add((item.path, item.cls))
-            if item.cls not in defined[item.path].classes:
-                found.append(
-                    Unclassified(
-                        kind="class",
-                        name=item.cls,
-                        site=Site(item.path, None, item.cls),
-                        tests=reach.tests_at(item.path, item.cls),
-                    )
-                )
 
     return unclassified_ordered(found)
 

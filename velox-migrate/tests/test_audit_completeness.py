@@ -75,10 +75,13 @@ def test_a_class_the_scan_cannot_find_is_unclassified() -> None:
 
     result = _audit(suite, dump)
 
-    rows = [row for row in result.unclassified if row.kind == "class"]
-    assert len(rows) == 1
-    assert rows[0].name == "GhostClass"
-    assert set(rows[0].tests) == {item["nodeid"] for item in renamed}
+    # One entry for the whole class, not one more per test method it no longer resolves to —
+    # both would otherwise report the same root cause.
+    assert len(result.unclassified) == 1
+    row = result.unclassified[0]
+    assert row.kind == "class"
+    assert row.name == "GhostClass"
+    assert set(row.tests) == {item["nodeid"] for item in renamed}
 
 
 def test_an_unclassified_tests_own_test_is_pulled_out_of_the_clean_bucket() -> None:
