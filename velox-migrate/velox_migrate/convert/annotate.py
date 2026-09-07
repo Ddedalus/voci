@@ -17,6 +17,7 @@ import annotations`, which binds that name in the package's own namespace: a sub
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -45,6 +46,9 @@ __all__ = [
     "infer",
     "statements",
 ]
+
+
+_Factory = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +150,7 @@ class Resolver:
         self._layout = plan_layout
         self._origin = {target: source for source, target in plan_layout.moves.items()}
         self._bindings: dict[str, Mapping[str, TypeImport | None]] = {}
+        self._factories: dict[tuple[str, str | None], _Factory | None] = {}
         self._spelled: dict[tuple[str, TypeImport], _Spelling] = {}
         self._taken: dict[str, set[str]] = {}
         self._degraded: list[Degraded] = []
@@ -203,7 +208,7 @@ class Resolver:
             # A decorator moved the factory to another module, so the names in its annotation are
             # bound in that module's namespace rather than in the one this can read.
             return None, "factory written in another module"
-        node = factory(text, fixture.func.qualname)
+        node = self._factory(source, text, fixture.func.qualname)
         if node is None:
             return None, "factory not found in its own source"
         annotation = for_factory(fixture.returns, node, text, source)
@@ -288,6 +293,17 @@ class Resolver:
             claimed |= {item.bound for item in self._layout.imports_for(consumer)}
             self._taken[consumer] = claimed
         return claimed
+
+    def _factory(self, source: str, text: str, qualname: str | None) -> _Factory | None:
+        """`factory(text, qualname)`, parsed once per `(source, qualname)` rather than per site.
+
+        A fixture injected into hundreds of sites would otherwise have its defining module
+        reparsed and walked once per site; every one of them wants the same node.
+        """
+        key = (source, qualname)
+        if key not in self._factories:
+            self._factories[key] = factory(text, qualname)
+        return self._factories[key]
 
     def _table(self, file: str) -> Mapping[str, TypeImport | None]:
         table = self._bindings.get(file)

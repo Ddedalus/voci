@@ -862,7 +862,7 @@ def _propagate(
     """Grow `blocked` until every fixture depending on a blocked one is blocked too."""
     edges: dict[str, set[str]] = {}
     for item in ground_truth.items:
-        for fixture in item.walk():
+        for fixture, deps in item.edges():
             if fixture.key not in translatable:
                 # A `parametrize` mark's desugaring, a lifecycle wrapper pytest invented, or a
                 # fixture from pytest itself: none has source in the suite to rewrite, and what
@@ -874,7 +874,7 @@ def _propagate(
                 # A name a body asked for is a dependency like any other, so a refusal reaches
                 # this fixture through it exactly as it does through a parameter.
                 requested |= {key for _, key in body.requested}
-            for edge in item.dependencies(fixture):
+            for edge in deps:
                 if edge.fixture is not None:
                     requested.add(edge.fixture.key)
                 elif edge.name != REQUEST:
@@ -1292,7 +1292,7 @@ def _injections(
     node: str | None = None,
     bodies: Mapping[tuple[str, str], Body] = {},
     carried: Mapping[str, Carried] = {},
-    typed: Resolver | None = None,
+    typed: Resolver,
 ) -> tuple[Injection, ...]:
     """What each parameter of the fixture `key`'s factory becomes, seen from `node`."""
     fixture = ground_truth.fixture_defs[key]
@@ -1330,10 +1330,11 @@ def _test_injections(
     consumer: str,
     converting: Mapping[str, FixtureDef],
     special: Specialization,
-    bodies: Mapping[tuple[str, str], Body] = {},
-    node: str | None = None,
-    typed: Resolver | None = None,
-    site: str = "",
+    bodies: Mapping[tuple[str, str], Body],
+    *,
+    node: str | None,
+    typed: Resolver,
+    site: str,
 ) -> tuple[Injection, ...]:
     body = _body_of_item(bodies, item)
     resolved: dict[str, FixtureDef | None] = {name: item.resolve(name) for name in item.argnames}
@@ -1404,10 +1405,11 @@ def _from_names(
     converting: Mapping[str, FixtureDef],
     parametrized: bool,
     special: Specialization,
+    *,
     asked: frozenset[str] = frozenset(),
     node: str | None = None,
-    typed: Resolver | None = None,
-    site: str = "",
+    typed: Resolver,
+    site: str,
 ) -> tuple[Injection, ...]:
     found: list[Injection] = []
     for name in names:
@@ -1431,7 +1433,7 @@ def _from_names(
             reference = imported.bound if imported is not None else home.symbol
             # The type is the original factory's, whichever copy of it this consumer gets: a
             # specialization re-binds a fixture's dependencies and never its return annotation.
-            wanted = typed.of(fixture, consumer, site=site) if typed is not None else None
+            wanted = typed.of(fixture, consumer, site=site)
             found.append(
                 Injection(
                     was=name,
@@ -1450,7 +1452,7 @@ def _from_names(
             # hands back unchanged it *replaces* whatever the source wrote, since `capsys` really
             # does stop being a `CaptureFixture` and pytest's annotation for it is now wrong.
             param, reference = builtin
-            wanted = typed.builtin(fixture.argname, consumer) if typed is not None else None
+            wanted = typed.builtin(fixture.argname, consumer)
             found.append(
                 Injection(
                     was=name,

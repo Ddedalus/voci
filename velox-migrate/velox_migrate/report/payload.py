@@ -50,7 +50,17 @@ def payload(audit: Audit) -> dict[str, Any]:
 
 def write(audit: Audit, path: str | Path) -> None:
     """`audit` written to `path` as UTF-8 JSON ending in a newline."""
-    text = json.dumps(payload(audit), indent=1, ensure_ascii=False)
+    write_json(payload(audit), path)
+
+
+def write_json(data: Any, path: str | Path) -> None:
+    """`data` written to `path` as UTF-8 JSON, indented and ending in a newline.
+
+    The one place that convention (indent width, `ensure_ascii`) is decided, so `write` above and
+    `verify/report.py::write_payload` -- the only other JSON artifact this tool writes from a
+    process that can import the package -- cannot drift apart on it.
+    """
+    text = json.dumps(data, indent=1, ensure_ascii=False)
     Path(path).write_text(f"{text}\n", encoding="utf-8")
 
 

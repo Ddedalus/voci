@@ -202,8 +202,11 @@ def plan(
 def module_level_names(source: str) -> frozenset[str]:
     """Every name a module binds at its top level, as far as a parse can see.
 
-    Imports, assignments, functions and classes — the bindings an added import could collide with.
-    Unparseable source binds nothing, which errs toward aliasing an import that needed no alias.
+    Imports, assignments, functions, classes and type aliases — the bindings an added import could
+    collide with. Unparseable source binds nothing, which errs toward aliasing an import that
+    needed no alias. Kept in step with `inference.bindings()`'s own node-matching, which
+    `Resolver._claimed()` unions this with: a shape one recognizes and the other does not is a
+    binding the two would disagree about.
     """
     try:
         tree = ast.parse(source)
@@ -219,7 +222,7 @@ def module_level_names(source: str) -> frozenset[str]:
                     found.add(alias.asname or alias.name.partition(".")[0])
             case ast.Assign():
                 found |= {target.id for target in node.targets if isinstance(target, ast.Name)}
-            case ast.AnnAssign(target=ast.Name(id=name)):
+            case ast.AnnAssign(target=ast.Name(id=name)) | ast.TypeAlias(name=ast.Name(id=name)):
                 found.add(name)
             case _:
                 pass

@@ -252,7 +252,7 @@ class Audit:
     scanned_files: int
     unparsed: tuple[str, ...]
     budget: int
-    type_readiness: TypeReadiness = TypeReadiness()
+    type_readiness: TypeReadiness = field(default_factory=TypeReadiness)
     unclassified: tuple[Unclassified, ...] = ()
 
     def of_disposition(self, disposition: Disposition) -> tuple[Finding, ...]:

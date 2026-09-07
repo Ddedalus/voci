@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from velox_migrate.schema import CLEAN_EXIT_STATUSES
+
 # Kept in step with `outcomes.DEFAULT_OUT`/`outcomes.OUTCOMES_VERSION`, which cannot be imported
 # from: the plugin imports pytest, and nothing outside `extract`'s subprocess may.
 DEFAULT_BASELINE = os.path.join(".velox-migrate", "pytest-outcomes.json")
@@ -40,12 +42,6 @@ __all__ = [
     "run_velox",
     "velox_record",
 ]
-
-# pytest's own "collection finished" statuses, plus velox's: all passed, something failed, and
-# nothing was collected. Anything else — interrupted, internal error, usage error — means the run
-# stopped short of reporting on the whole suite, and comparing against it would read every test
-# it never reached as a divergence.
-CLEAN_EXIT_STATUSES = frozenset({0, 1, 5})
 
 
 class RunnerError(Exception):
@@ -99,20 +95,20 @@ def run_pytest(tree: Path, *, out: Path, paths: list[str], extra: list[str]) -> 
         str(out),
     ]
     completed, duration = _run(command, tree)
-    if not out.is_file():
-        raise RunnerError(
-            f"pytest exited {completed.returncode} in {tree} without recording any outcome:\n"
-            f"{_tail(completed)}"
-        )
-    if completed.returncode not in CLEAN_EXIT_STATUSES:
+    _require_clean(
+        completed,
+        tree,
+        out,
+        runner="pytest",
+        verb="recording any outcome",
         # The record exists but describes only the tests pytest reached before it stopped, and
         # every test it never reached would read as one the conversion lost.
-        out.unlink(missing_ok=True)
-        raise RunnerError(
-            f"pytest exited {completed.returncode} in {tree}, so it never ran the whole suite "
-            f"and there is nothing to compare against. Fix whatever it reports — the output is "
-            f"pytest's own:\n{_tail(completed)}"
-        )
+        incomplete=(
+            "there is nothing to compare against. Fix whatever it reports — the output is "
+            "pytest's own"
+        ),
+        cleanup=True,
+    )
     return record(load_record(out), tree=tree, duration=duration, command=command)
 
 
@@ -139,18 +135,18 @@ def run_velox(tree: Path, *, paths: list[str], concurrency: int) -> Run:
             str(report_path),
         ]
         completed, duration = _run(command, tree)
-        if not report_path.is_file():
-            raise RunnerError(
-                f"velox exited {completed.returncode} in {tree} without writing a report:\n"
-                f"{_tail(completed)}"
-            )
-        if completed.returncode not in CLEAN_EXIT_STATUSES:
-            # An interrupted or misconfigured run reports on part of the suite at most, and the
-            # part it never reached is indistinguishable from tests the conversion lost.
-            raise RunnerError(
-                f"velox exited {completed.returncode} in {tree}, so it never ran the whole suite "
-                f"and there is nothing to compare:\n{_tail(completed)}"
-            )
+        # An interrupted or misconfigured run reports on part of the suite at most, and the part
+        # it never reached is indistinguishable from tests the conversion lost. Unlike `out` in
+        # `run_pytest`, `report_path` is scratch the `TemporaryDirectory` block removes either way,
+        # so there is nothing here for a bad run to leave stale for a later read to trust.
+        _require_clean(
+            completed,
+            tree,
+            report_path,
+            runner="velox",
+            verb="writing a report",
+            incomplete="there is nothing to compare",
+        )
         loaded = load_velox_report(report_path)
     return velox_record(loaded, tree=tree, duration=duration, command=command)
 
@@ -259,6 +255,37 @@ def _run(command: list[str], tree: Path) -> tuple[subprocess.CompletedProcess[st
     except OSError as exc:
         raise RunnerError(f"could not run {command[0]}: {exc}") from None
     return completed, time.monotonic() - started
+
+
+def _require_clean(
+    completed: subprocess.CompletedProcess[str],
+    tree: Path,
+    artifact: Path,
+    *,
+    runner: str,
+    verb: str,
+    incomplete: str,
+    cleanup: bool = False,
+) -> None:
+    """Raise unless `completed` wrote `artifact` and exited a status `CLEAN_EXIT_STATUSES` names.
+
+    `verb` names what a missing `artifact` means the run never did (`"recording any outcome"`,
+    `"writing a report"`), and `incomplete` says what a run that stopped short leaves nothing to
+    compare against — each in the calling runner's own words. `cleanup` unlinks `artifact` on the
+    second failure rather than the first, for the one caller whose artifact outlives this call and
+    would otherwise be read back as describing the whole suite it never finished.
+    """
+    if not artifact.is_file():
+        raise RunnerError(
+            f"{runner} exited {completed.returncode} in {tree} without {verb}:\n{_tail(completed)}"
+        )
+    if completed.returncode not in CLEAN_EXIT_STATUSES:
+        if cleanup:
+            artifact.unlink(missing_ok=True)
+        raise RunnerError(
+            f"{runner} exited {completed.returncode} in {tree}, so it never ran the whole suite "
+            f"and {incomplete}:\n{_tail(completed)}"
+        )
 
 
 def _tail(completed: subprocess.CompletedProcess[str], lines: int = 20) -> str:
