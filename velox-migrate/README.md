@@ -128,6 +128,37 @@ dependence, teardown timing, state behind application code — are named in the 
 counted, and any source file that could not be read is listed with a note that the body-level counts
 are lower bounds while it is.
 
+## Coexisting with the pytest suite
+
+`convert --write` rewrites a tree in place, so nothing downstream of it can still be pytest's.
+`scaffold` builds the plain, disposable directory that split lives in, from the suite's own git
+history rather than a hand-kept copy:
+
+```console
+$ velox-migrate scaffold ../service work/service
+velox-migrate/relocation (created at the tip) rebased onto a1b2c3d4e5f6, exported to work/service
+relocation fixups go in .velox-migrate.service.relocation, committed there directly
+```
+
+The first call creates `velox-migrate/relocation` empty at the suite's own tip; every call after
+that rebases it onto the tip again and exports the result — handling suites that live in a
+read-only submodule the same way it handles any other, with no `cp` by hand.
+
+Content lives in exactly one place: the suite's own repository, never the export. A change the
+suite keeps — a prefactor — is an ordinary commit there, verified green under the suite's own
+pytest before `scaffold` runs again. The one thing the export is allowed to carry that the suite's
+history doesn't is a relocation fixup — a hardcoded path or anything else that only broke because
+the suite now lives somewhere else — committed straight onto the relocation branch, in the
+worktree `scaffold` prints and leaves it checked out in (not the suite's own working directory,
+which `scaffold` never touches). Landing either and re-running `scaffold` brings the export up to
+date; landing both on the same lines surfaces as an ordinary rebase conflict, resolved once with
+git's own tooling at the path the error names.
+
+`convert --write` snapshots the export — everything but its own `.velox-migrate/` state — into
+`.velox-migrate/baseline/tree`, and records the suite's pytest outcomes into
+`.velox-migrate/baseline/pytest-outcomes.json`, before it overwrites anything. That is a safety
+net rather than a replacement for `verify --record` below: nothing reads the snapshot back yet.
+
 ## Verifying a conversion
 
 `verify` runs both runners and compares them test for test: pytest on the tree that still holds

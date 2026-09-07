@@ -10,8 +10,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from _support import git_commit, git_repo
 
-from velox_migrate import cli, extractor, schema
+from velox_migrate import cli, extractor, schema, workspace
 from velox_migrate.convert.edits import EditSet
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus"
@@ -234,6 +235,61 @@ def test_converting_with_write_rewrites_the_tree_and_counts_the_files(
     assert _tree(suite) != before
 
 
+def test_converting_with_write_records_a_pytest_baseline_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The suite is real and green under plain pytest, so --write has something honest to record
+    # before it overwrites it.
+    suite = _copy_of_showcase(tmp_path, "suite")
+    before_conftest = (suite / "conftest.py").read_text(encoding="utf-8")
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "recorded" in out and "pytest outcome" in out
+    baseline = suite / workspace.BASELINE_DIR
+    outcomes = json.loads((baseline / workspace.OUTCOMES_NAME).read_text(encoding="utf-8"))
+    assert outcomes["exit_status"] == 0
+    # The snapshot is what pytest saw: the suite as it stood before conversion, not after.
+    assert (baseline / workspace.TREE_DIR / "conftest.py").read_text(
+        encoding="utf-8"
+    ) == before_conftest
+
+
+def test_converting_with_write_and_nothing_to_change_skips_the_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    suite = _copy_of_showcase(tmp_path, "suite")
+    monkeypatch.setattr(EditSet, "diff", lambda self: "")
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 0
+    assert "recorded" not in capsys.readouterr().out
+    assert not (suite / ".velox-migrate").exists()
+
+
+def test_converting_with_write_and_no_pytest_here_refuses_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    suite = _copy_of_showcase(tmp_path, "suite")
+    before = _tree(suite)
+    real_find_spec = cli.importlib.util.find_spec
+    monkeypatch.setattr(
+        cli.importlib.util,
+        "find_spec",
+        lambda name, *a, **kw: None if name == "pytest" else real_find_spec(name, *a, **kw),
+    )
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 1
+    assert "no pytest" in capsys.readouterr().err
+    assert _tree(suite) == before
+    assert not (suite / ".velox-migrate").exists()
+
+
 def test_a_reader_who_quits_part_way_through_the_diff_still_gets_the_whole_conversion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -265,3 +321,41 @@ def test_a_write_that_fails_part_way_names_the_tree_it_left_behind(
 
     assert code == 1
     assert str(suite) in capsys.readouterr().err
+
+
+def test_scaffold_cli_rebases_and_exports(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = git_repo(tmp_path / "source")
+    (source / "test_thing.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    tip = git_commit(source, "initial")
+    dest = tmp_path / "dest"
+
+    code = cli.main(["scaffold", str(source), str(dest)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert tip[:12] in out
+    assert "relocation fixups go in" in out
+    assert (dest / "test_thing.py").is_file()
+
+
+def test_scaffold_cli_reports_a_conflict_with_a_nonzero_exit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = git_repo(tmp_path / "source")
+    (source / "conftest.py").write_text("ROOT = 'orig'\n", encoding="utf-8")
+    git_commit(source, "initial")
+    dest = tmp_path / "dest"
+    assert cli.main(["scaffold", str(source), str(dest)]) == 0
+
+    scratch = workspace._scratch_worktree(source.resolve())
+    (scratch / "conftest.py").write_text("ROOT = 'fixup'\n", encoding="utf-8")
+    git_commit(scratch, "relocation fixup")
+    (source / "conftest.py").write_text("ROOT = 'prefactor'\n", encoding="utf-8")
+    git_commit(source, "prefactor touches the same line")
+
+    code = cli.main(["scaffold", str(source), str(dest)])
+
+    assert code == 1
+    assert "does not rebase cleanly" in capsys.readouterr().err

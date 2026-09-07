@@ -52,36 +52,15 @@ hand.
 `source`'s current tip — cheap to regenerate wholesale, never worth reconciling. That only holds if
 nothing that changes the suite's meaning is ever applied to `dest` alone: prefactors (below) land on
 `source` as ordinary commits, verified green under the suite's own pytest, *before* `scaffold` is
-ever run. The one thing `dest` is allowed to carry that `source` doesn't is a relocation
-fixup — a hardcoded path or anything else that only broke because the suite now lives somewhere
-else. Anything found while poking at `dest` that isn't that goes back into `source` and `dest` gets
-re-scaffolded, never patched in place. This is what keeps the reset/reconvert loop in task 6 sound:
-there is exactly one tree suite content can change in, so there is nothing for two copies to
-disagree about.
+ever run. Anything found while poking at `dest` that isn't a relocation fixup goes back into
+`source` and `dest` gets re-scaffolded, never patched in place. This is what keeps the
+reset/reconvert loop in task 6 sound: there is exactly one tree suite content can change in, so
+there is nothing for two copies to disagree about. `scaffold` (task 5, done) is the mechanism.
 
-A re-scaffold has to happen every time a prefactor lands on `source` — that's the whole point of
-routing prefactors there — so a relocation fixup a human re-does by hand on every `scaffold` call is
-not a one-time cost, it is redone once per prefactor. Rather than build a patch-capture-and-apply
-mechanism, this reuses `source`'s own git, which already has to be there for prefactors to land as
-ordinary commits. Relocation fixups are commits on a small branch, `velox-migrate/relocation`;
-`scaffold` rebases that branch onto `source`'s current tip and materializes the rebased tree into
-`dest` as a plain export (`git archive`/`checkout-index`, not a worktree — `dest` stays a plain
-directory as already decided, git is only the merge engine here). A prefactor commit that touches
-the same lines as a relocation fixup surfaces as an ordinary rebase conflict, resolved once with
-git's own tooling, not a bespoke "patch failed to apply" path.
-
-- [ ] **5. `scaffold`, the relocation branch, and the baseline snapshot.** `velox-migrate scaffold
-  <source> [dest]` rebases `velox-migrate/relocation` onto `source`'s tip (creating the branch
-  empty, off the tip, the first time) and exports the result into `dest` — handles suites that live
-  in a read-only submodule, same as marshmallow needed by hand (migration-findings.md). The user
-  runs pytest there and fixes what's still broken by committing directly to the relocation branch
-  (`dest` tracks it) until it's green. `convert --write` snapshots `dest` into
-  `.velox-migrate/baseline/` (a plain copy) and records pytest outcomes before it overwrites
-  anything, closing today's footgun where a forgotten `--record` loses the baseline for good.
-  *Exit:* landing a second prefactor on `source` and re-running `scaffold` reproduces a green `dest`
-  with no hand-editing when the branches don't conflict, and a real conflict when they do. Running
-  `--write` twice in a row without touching `dest` in between still leaves a usable baseline both
-  times.
+- [x] **5. `scaffold`, the relocation branch, and the baseline snapshot.** `velox_migrate/
+  workspace.py`; see the code, its tests, and the README's "Coexisting with the pytest suite" for
+  the shape. Not wired into anything downstream yet — `verify` still reads its own
+  `--record`ed baseline rather than `scaffold`'s snapshot, which is task 6's job.
 
 - [ ] **6. `convert --reset`, and adoption.** Restores `dest` from `.velox-migrate/baseline/`, so
   reconverting after a codegen tweak is `--reset` then `convert --write` again — no re-copy, no
