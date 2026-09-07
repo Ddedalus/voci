@@ -228,6 +228,21 @@ def test_a(monkeypatch):
     assert _codes(source) == ["VX401"]
 
 
+def test_request_forwarded_into_a_helper_is_still_read_there() -> None:
+    # Unlike `monkeypatch` above, the forwarding call site itself has to hold pytest's own
+    # `request` before the helper's identically named parameter is trusted -- which is what keeps
+    # `handler`'s own `request` two tests up unrecognized, since nothing there ever calls it.
+    source = """
+def _register_cleanup(request):
+    request.addfinalizer(close)
+
+def test_a(request):
+    _register_cleanup(request)
+"""
+
+    assert _codes(source) == ["VX013", "VX017"]
+
+
 def test_a_test_and_a_test_method_take_the_request_pytest_injects() -> None:
     source = """
 def test_engine(request):
@@ -432,6 +447,36 @@ pytest_plugins = ["tests.fixtures.db"]
 
     assert finding.code == "VX025"
     assert "tests.fixtures.db" in finding.message
+
+
+# --- known_tests from a dump --------------------------------------------------------------------
+
+
+def test_a_customized_python_functions_pattern_is_recognized_from_a_dump() -> None:
+    # `python_functions = ["*_check"]` collects `thing_check` as a test, which starts with none of
+    # the prefixes a name-only guess could use; `known_tests` is the dump's own word on it, read
+    # instead of the guess.
+    source = """
+def thing_check(request):
+    return request.node
+"""
+
+    found = sources.scan_source(source, path=PATH, known_tests=frozenset({"thing_check"}))
+
+    assert [finding.code for finding in found] == ["VX015"]
+
+
+def test_a_name_starting_with_test_but_absent_from_the_dump_is_not_one() -> None:
+    # Once a dump is in hand, starting with "test" is not enough on its own either: the dump's
+    # collected names replace the guess rather than widen it.
+    source = """
+def test_helper(request):
+    return request.node
+"""
+
+    found = sources.scan_source(source, path=PATH, known_tests=frozenset())
+
+    assert found == ()
 
 
 # --- marks -------------------------------------------------------------------------------------
@@ -1052,3 +1097,13 @@ def test_scanning_reads_each_path_once(tmp_path: Path) -> None:
 
     assert scan.files == 1
     assert len(scan.findings) == 1
+
+
+def test_scanning_threads_known_tests_through_to_each_path(tmp_path: Path) -> None:
+    # `known_tests` is keyed the same way `scan`'s own paths are sited: relative to `root`.
+    path = _write(tmp_path, "test_dsl.py", "def thing_check(request):\n    return request.node\n")
+
+    known_tests = {"test_dsl.py": frozenset({"thing_check"})}
+    scan = sources.scan([path], root=tmp_path, known_tests=known_tests)
+
+    assert [f.code for f in scan.findings] == ["VX015"]

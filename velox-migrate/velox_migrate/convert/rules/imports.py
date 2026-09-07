@@ -40,13 +40,17 @@ class _Relative(RuleTransformer):
 
         `None` too where the dots reach past the root the suite was collected from: a package
         above the suite is one nothing here can name, and leaving the import alone keeps the
-        failure the suite already had rather than inventing a module.
+        failure the suite already had rather than inventing a module. A file two packages deep
+        (`parts` two long) resolves a level-1 or level-2 import -- pytest's own
+        `_resolve_name(name, package, level)` needs `len(package.split('.')) >= level`, and
+        `parts` is `package.split('.')` here -- but not level-3, which is the same "beyond
+        top-level package" `ImportError` pytest itself raises.
         """
         level = len(node.relative)
         if level == 0:
             return None
         parts = PurePosixPath(self.context.path).parent.parts
-        if level - 1 > len(parts):
+        if level > len(parts):
             return None
         held = parts[: len(parts) - (level - 1)]
         tail = _dotted(node.module) if node.module is not None else ""
