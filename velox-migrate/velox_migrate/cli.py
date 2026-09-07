@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from velox_migrate import schema
+from velox_migrate import schema, workspace
 from velox_migrate.audit import DEFAULT_BUDGET, sources_of
 from velox_migrate.model import GroundTruth
 from velox_migrate.verify.runners import DEFAULT_BASELINE
@@ -98,6 +98,36 @@ def _parser() -> argparse.ArgumentParser:
     )
     extract.set_defaults(run=_extract)
 
+    scaffold_cmd = commands.add_parser(
+        "scaffold",
+        help="rebase the relocation branch onto the suite's tip and export it as a plain tree",
+        description=(
+            f"Rebase {workspace.RELOCATION_BRANCH!r} (created empty at the tip the first time) "
+            "onto SOURCE's current tip, and export the result into DEST as a plain directory -- "
+            "the coexistence workspace `convert`/`verify` work in from here. A prefactor a suite "
+            "keeps lands as an ordinary commit on SOURCE; a relocation fixup -- a path or "
+            "anything else that only broke because the suite now lives somewhere else -- is "
+            "committed straight onto the relocation branch, in the worktree this command prints "
+            "and leaves it checked out in. Re-run after either to bring DEST up to date; a real "
+            "conflict between the two is left for you to resolve there with git's own tooling."
+        ),
+    )
+    scaffold_cmd.add_argument("source", metavar="SOURCE", help="the suite's own git repository")
+    scaffold_cmd.add_argument(
+        "dest",
+        nargs="?",
+        default=None,
+        metavar="DEST",
+        help="where to export the rebased tree (default: ./<SOURCE's directory name>)",
+    )
+    scaffold_cmd.add_argument(
+        "--branch",
+        default=workspace.RELOCATION_BRANCH,
+        metavar="NAME",
+        help=f"the relocation branch to rebase (default: {workspace.RELOCATION_BRANCH})",
+    )
+    scaffold_cmd.set_defaults(run=_scaffold)
+
     audit = commands.add_parser(
         "audit",
         help="classify everything in the suite and report what migrating it would cost",
@@ -152,8 +182,10 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Translate the suite's wiring, marks, bodies and configuration into their velox "
             "spelling, refusing anything that needs a decision and naming it in the source. "
-            "Prints the plan and a diff; writes nothing without --write, and with it writes "
-            "everything before printing either."
+            "Prints the plan and a diff; writes nothing without --write. With it, first snapshots "
+            "the tree and records its pytest outcomes into .velox-migrate/baseline/ -- the last "
+            "moment the tree still holds the pytest suite -- then writes the conversion before "
+            "printing either. Anything after `--` is passed to that pytest run."
         ),
     )
     convert.add_argument(
@@ -364,10 +396,16 @@ def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
         disabled=[code.strip() for code in args.disable.split(",") if code.strip()],
     )
 
+    diff = result.edits.diff()
+    baseline_note = None
+    if args.write and diff:
+        baseline_note = _record_baseline(root, passthrough)
+        if baseline_note is None:
+            return 1
+
     # The rewrite lands before a line of it is printed. A reader who closes a pager part of the
     # way down the diff kills this process where it stands, and the tree they are left with is
     # the converted one either way rather than however far the writing had got.
-    diff = result.edits.diff()
     try:
         written = result.edits.apply(root) if args.write else ()
     except OSError as exc:
@@ -385,8 +423,56 @@ def _convert(args: argparse.Namespace, passthrough: list[str]) -> int:
 
     if args.write:
         print(f"\nwrote {len(written)} file(s) under {root}")
+        if baseline_note:
+            print(baseline_note)
     elif diff:
         print("\nnothing written; pass --write to apply")
+    return 0
+
+
+def _record_baseline(root: Path, passthrough: list[str]) -> str | None:
+    """Snapshot `root` and record its pytest outcomes into `.velox-migrate/baseline/`, the last
+    moment before `--write` overwrites it. Returns the note to print, or `None` after reporting
+    why it could not -- in which case `--write` must not touch the tree at all."""
+    if importlib.util.find_spec("pytest") is None:
+        print(
+            "velox-migrate: `convert --write` records a pytest baseline before it overwrites "
+            f"{root}, and this environment has no pytest. Install pytest here, or record the "
+            "baseline yourself in the suite's own environment with `velox_migrate/outcomes.py` "
+            "copied in and its output passed back as --baseline, before converting.",
+            file=sys.stderr,
+        )
+        return None
+
+    from velox_migrate import verify
+
+    baseline = workspace.snapshot_baseline(root)
+    try:
+        recorded = verify.run_pytest(
+            root, out=baseline / workspace.OUTCOMES_NAME, paths=[], extra=passthrough
+        )
+    except verify.RunnerError as exc:
+        print(
+            f"velox-migrate: {exc}\ncould not record a baseline before converting {root}; "
+            "nothing was written.",
+            file=sys.stderr,
+        )
+        return None
+    return f"recorded {len(recorded.outcomes)} pytest outcome(s) to {baseline}"
+
+
+def _scaffold(args: argparse.Namespace, passthrough: list[str]) -> int:
+    try:
+        result = workspace.scaffold(
+            Path(args.source), Path(args.dest) if args.dest else None, branch=args.branch
+        )
+    except workspace.WorkspaceError as exc:
+        print(f"velox-migrate: {exc}", file=sys.stderr)
+        return 1
+
+    created = " (created at the tip)" if result.created_branch else ""
+    print(f"{result.branch}{created} rebased onto {result.tip[:12]}, exported to {result.dest}")
+    print(f"relocation fixups go in {result.relocation_worktree}, committed there directly")
     return 0
 
 
