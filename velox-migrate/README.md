@@ -136,9 +136,12 @@ history rather than a hand-kept copy:
 
 ```console
 $ velox-migrate scaffold ../service work/service
-velox-migrate/relocation (created at the tip) rebased onto a1b2c3d4e5f6, exported to work/service
-relocation fixups go in .velox-migrate.service.relocation, committed there directly
+velox-migrate/relocation (created at the tip) rebased onto a1b2c3d4e5f6, exported to /home/you/work/service
+relocation fixups go in /home/you/.velox-migrate.service.relocation, committed there directly
 ```
+
+Both paths print resolved, regardless of how they were spelled on the command line — there is
+nothing left to resolve them against once the command has moved on.
 
 The first call creates `velox-migrate/relocation` empty at the suite's own tip; every call after
 that rebases it onto the tip again and exports the result — handling suites that live in a

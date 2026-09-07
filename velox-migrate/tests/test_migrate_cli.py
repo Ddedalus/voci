@@ -349,7 +349,7 @@ def test_scaffold_cli_reports_a_conflict_with_a_nonzero_exit(
     dest = tmp_path / "dest"
     assert cli.main(["scaffold", str(source), str(dest)]) == 0
 
-    scratch = workspace._scratch_worktree(source.resolve())
+    scratch = workspace._scratch_worktree(source.resolve(), workspace.RELOCATION_BRANCH)
     (scratch / "conftest.py").write_text("ROOT = 'fixup'\n", encoding="utf-8")
     git_commit(scratch, "relocation fixup")
     (source / "conftest.py").write_text("ROOT = 'prefactor'\n", encoding="utf-8")

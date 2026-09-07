@@ -113,7 +113,7 @@ def test_scaffold_carries_a_relocation_fixup_across_a_later_source_commit(tmp_pa
     # A relocation fixup lands on the relocation branch, committed where scaffold checked it out
     # -- a worktree of its own, since the branch stays checked out there rather than in source's
     # own working directory.
-    scratch = workspace._scratch_worktree(source.resolve())
+    scratch = workspace._scratch_worktree(source.resolve(), workspace.RELOCATION_BRANCH)
     _write(scratch, "conftest.py", "ROOT = '/relocated/path'\n")
     git_commit(scratch, "relocation fixup")
 
@@ -139,7 +139,7 @@ def test_scaffold_surfaces_a_real_conflict_for_the_user_to_resolve(tmp_path: Pat
     dest = tmp_path / "dest"
     workspace.scaffold(source, dest)
 
-    scratch = workspace._scratch_worktree(source.resolve())
+    scratch = workspace._scratch_worktree(source.resolve(), workspace.RELOCATION_BRANCH)
     _write(scratch, "conftest.py", "ROOT = 'fixup'\n")
     git_commit(scratch, "relocation fixup")
 
@@ -166,6 +166,39 @@ def test_scaffold_refuses_to_clobber_unrelated_content_at_dest(tmp_path: Path) -
         workspace.scaffold(source, dest)
 
     assert (dest / "unrelated.txt").read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_scaffold_preserves_a_baseline_already_snapshotted_at_dest(tmp_path: Path) -> None:
+    source = git_repo(tmp_path / "source")
+    _write(source, "a.py", "a = 1\n")
+    git_commit(source, "initial")
+    dest = tmp_path / "dest"
+    workspace.scaffold(source, dest)
+    # `convert --write` would have snapshotted `dest` here, before overwriting it, ahead of a
+    # re-scaffold that picks up a later prefactor.
+    baseline = workspace.snapshot_baseline(dest)
+    (baseline / workspace.OUTCOMES_NAME).write_text("{}", encoding="utf-8")
+
+    _write(source, "a.py", "a = 2\n")
+    git_commit(source, "prefactor")
+    workspace.scaffold(source, dest)
+
+    assert (dest / "a.py").read_text(encoding="utf-8") == "a = 2\n"
+    assert (baseline / workspace.OUTCOMES_NAME).is_file()
+    assert (baseline / workspace.TREE_DIR / "a.py").read_text(encoding="utf-8") == "a = 1\n"
+
+
+def test_scaffold_keeps_two_relocation_branches_against_one_source_apart(tmp_path: Path) -> None:
+    source = git_repo(tmp_path / "source")
+    _write(source, "a.py", "a = 1\n")
+    git_commit(source, "initial")
+
+    a = workspace.scaffold(source, tmp_path / "dest-a", branch="relocation/a")
+    b = workspace.scaffold(source, tmp_path / "dest-b", branch="relocation/b")
+
+    assert a.relocation_worktree != b.relocation_worktree
+    assert git(a.relocation_worktree, "branch", "--show-current").stdout.strip() == "relocation/a"
+    assert git(b.relocation_worktree, "branch", "--show-current").stdout.strip() == "relocation/b"
 
 
 def test_scaffold_refuses_a_non_git_source(tmp_path: Path) -> None:

@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
+from velox_migrate.verify.runners import _tail
+
 #: Created empty at `source`'s tip the first time `scaffold` sees it, then rebased onto that tip
 #: on every later call. A relocation fixup -- a path or anything else that only broke because the
 #: suite now lives somewhere else -- is a commit here, never on `source`'s own branches.
@@ -91,7 +93,7 @@ def scaffold(
     if created_branch:
         _git(source, "branch", branch, tip)
 
-    scratch = _scratch_worktree(source)
+    scratch = _scratch_worktree(source, branch)
     if _rebase_in_progress(scratch):
         raise WorkspaceError(
             f"a rebase of {branch} onto {source} is still unresolved in {scratch}. Finish it "
@@ -174,11 +176,13 @@ def _branch_exists(source: Path, branch: str) -> bool:
     return completed.returncode == 0
 
 
-def _scratch_worktree(source: Path) -> Path:
-    """Where the relocation branch is checked out to rebase it -- a fixed, discoverable sibling of
-    `source` rather than a random temp directory, so a rebase conflict has somewhere to be
-    resolved and a later `scaffold` call can find it again."""
-    return source.parent / f".velox-migrate.{source.name}.relocation"
+def _scratch_worktree(source: Path, branch: str) -> Path:
+    """Where `branch` is checked out to rebase it -- a fixed, discoverable sibling of `source`
+    rather than a random temp directory, so a rebase conflict has somewhere to be resolved and a
+    later `scaffold` call can find it again. Keyed by `branch` too, so two relocation branches
+    against the same `source` don't fight over one worktree."""
+    slug = branch.replace("/", "-")
+    return source.parent / f".velox-migrate.{source.name}.{slug}"
 
 
 def _connect_scratch_worktree(source: Path, scratch: Path, branch: str) -> None:
@@ -210,8 +214,16 @@ def _export(scratch: Path, dest: Path, *, source: Path, branch: str) -> None:
                 f"{dest} already has content scaffold didn't write ({marker} is missing). Point "
                 "scaffold at an empty or new directory, or remove it yourself first."
             )
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
+        # Everything but `.velox-migrate/` is disposable suite content, wholesale-replaced on
+        # every export -- but `.velox-migrate/` can hold a baseline `convert --write` already
+        # snapshotted there, which a re-scaffold (to pick up a new prefactor or fixup) must not
+        # destroy.
+        for entry in dest.iterdir():
+            if entry.name == ".velox-migrate":
+                continue
+            shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+    else:
+        dest.mkdir(parents=True)
 
     archived = subprocess.run(
         ["git", "archive", "HEAD"], cwd=scratch, capture_output=True, check=False
@@ -233,8 +245,3 @@ def _git(cwd: Path, *args: str) -> str:
     if completed.returncode != 0:
         raise WorkspaceError(f"git {' '.join(args)} failed in {cwd}:\n{_tail(completed)}")
     return completed.stdout.strip()
-
-
-def _tail(completed: subprocess.CompletedProcess[str], lines: int = 20) -> str:
-    output = (completed.stdout or "") + (completed.stderr or "")
-    return "\n".join(output.splitlines()[-lines:])
