@@ -61,7 +61,8 @@ def test_a_plain_pyproject_without_tool_velox_is_skipped(tmp_path: Path) -> None
 
 
 def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
-    """The search never walks above the git root, even when nothing was found."""
+    """The search never walks above the git root, even when nothing was found. `rootdir`
+    stays the search start, but the git root is still recorded separately, as `git_root`."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     project = repo / "sub"
@@ -71,7 +72,7 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
 
     config = resolve([project])
 
-    assert config == Config(rootdir=project)
+    assert config == Config(rootdir=project, git_root=repo)
 
 
 def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -> None:
@@ -86,6 +87,18 @@ def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -
 
     assert config.rootdir == repo
     assert config.concurrency == 12
+
+
+def test_git_root_is_unset_when_a_table_is_found_first(tmp_path: Path) -> None:
+    """The walk stops as soon as it finds a table, before ever checking for `.git` -- so a
+    match below the git root leaves `git_root` unset, same as a repo-less project would."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    Project(repo).write_pyproject("[tool.velox]\nconcurrency = 12\n")
+
+    config = resolve([repo])
+
+    assert config.git_root is None
 
 
 def test_no_explicit_paths_searches_from_cwd(

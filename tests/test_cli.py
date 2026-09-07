@@ -1248,11 +1248,12 @@ def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
     assert "1 test · 1 passed" in out
 
 
-def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table(
+def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table_or_a_git_root(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With no config file the rootdir is derived from the arguments, so re-reading one against
-    it would make an argument's meaning depend on what it was typed alongside."""
+    """With no config file and no `.git` boundary either, there's no fixed rootdir to
+    re-read an argument against -- deriving one from the arguments themselves would make
+    an argument's meaning depend on what it was typed alongside."""
     chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
     chdir_project.write("sub/test_b.py", "async def test_b():\n    pass\n")
 
@@ -1260,6 +1261,23 @@ def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table(
 
     assert status == 4
     assert "path does not exist: 'test_b.py'" in capsys.readouterr().err
+
+
+def test_main_rereads_a_missing_path_against_the_git_root_without_a_tool_velox_table(
+    chdir_project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No `[tool.velox]` table still leaves the enclosing `.git` directory as a fixed rootdir,
+    so an argument typed from a subdirectory is re-read against it just the same."""
+    (chdir_project.root / ".git").mkdir()
+    chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
+    chdir_project.write("test_b.py", "async def test_b():\n    pass\n")
+
+    monkeypatch.chdir(chdir_project.root / "sub")
+    status = main(["test_a.py", "test_b.py"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "2 tests · 2 passed" in out
 
 
 def test_main_prefers_the_local_reading_of_a_path_that_exists(
