@@ -74,7 +74,8 @@ def run(ground_truth: GroundTruth, *, root: Path, budget: int = DEFAULT_BUDGET) 
     wanted = sources_of(ground_truth, root=root)
     present = [path for path in wanted if Path(root, path).is_file()]
     absent = [path for path in wanted if path not in set(present)]
-    scan = sources.scan([Path(root, path) for path in present], root=root)
+    known_tests = {path: reach.known_tests(path) for path in present}
+    scan = sources.scan([Path(root, path) for path in present], root=root, known_tests=known_tests)
     # A construct that belongs to the suite — a hook, a plugin declaration — is charged to no
     # test: it converts nothing on its own, and counting it against every test in the file it sits
     # in would report a whole suite as unconvertible over one `conftest.py`.

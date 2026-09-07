@@ -26,6 +26,7 @@ class Reach:
         by_file: dict[str, list[str]] = {}
         by_qualname: dict[tuple[str, str], list[str]] = {}
         by_class: dict[tuple[str, str], list[str]] = {}
+        qualnames_by_file: dict[str, set[str]] = {}
         fixture_tests: dict[str, set[str]] = {}
         fixtures_in_file: dict[str, set[str]] = {}
         location: dict[tuple[str, str], set[str]] = {}
@@ -35,6 +36,7 @@ class Reach:
                 by_file.setdefault(item.path, []).append(item.nodeid)
                 qualname = f"{item.cls}.{item.originalname}" if item.cls else item.originalname
                 by_qualname.setdefault((item.path, qualname), []).append(item.nodeid)
+                qualnames_by_file.setdefault(item.path, set()).add(qualname)
                 if item.cls:
                     by_class.setdefault((item.path, item.cls), []).append(item.nodeid)
             for fixture in item.walk():
@@ -51,6 +53,7 @@ class Reach:
         self._by_file = {file: tuple(nodeids) for file, nodeids in by_file.items()}
         self._by_qualname = {key: tuple(nodeids) for key, nodeids in by_qualname.items()}
         self._by_class = {key: tuple(nodeids) for key, nodeids in by_class.items()}
+        self._known_tests = {file: frozenset(names) for file, names in qualnames_by_file.items()}
         self._fixture_tests = fixture_tests
         self._fixtures_in_file = fixtures_in_file
         self._location = location
@@ -62,6 +65,13 @@ class Reach:
 
     def tests_in_file(self, file: str) -> tuple[str, ...]:
         return self._by_file.get(file, ())
+
+    def known_tests(self, file: str) -> frozenset[str]:
+        """The qualnames -- `Class.method` or a bare function name -- pytest actually collected as
+        tests in `file`, however its own `python_functions` pattern is spelled. Empty for a file
+        with none, which is as good an answer as a populated set: `sources.scan` reads either as
+        the dump's own word on what counts, rather than guessing from a name prefix."""
+        return self._known_tests.get(file, frozenset())
 
     def tests_of_fixture(self, key: str) -> tuple[str, ...]:
         """The tests whose fixture closure reaches the definition keyed `key`."""
