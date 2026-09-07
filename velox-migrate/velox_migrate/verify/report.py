@@ -8,11 +8,12 @@ of runs always renders to one set of bytes.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from velox_migrate.verify import Run, Verification
+from velox_migrate.report.markdown import table
+from velox_migrate.report.payload import write_json
+from velox_migrate.verify import Divergence, Run, Verification
 
 __all__ = ["VERIFY_VERSION", "markdown", "payload", "terminal", "write_markdown", "write_payload"]
 
@@ -44,10 +45,7 @@ def markdown(verification: Verification) -> str:
         "",
         f"`{before.runner}` on `{before.tree}` against `{after.runner}` on `{after.tree}`.",
         "",
-        "| | tests | outcomes | wall |",
-        "|---|---:|---|---:|",
-        _row(before),
-        _row(after),
+        table(("", "tests", "outcomes", "wall"), (_run_row(before), _run_row(after))),
         "",
         (
             f"{verification.agreed} agreed, {len(verification.divergences)} diverged."
@@ -70,9 +68,7 @@ def markdown(verification: Verification) -> str:
             "",
             f"{_HEADLINES[kind]}.",
             "",
-            "| test | pytest | velox |",
-            "|---|---|---|",
-            *(f"| `{item.id}` | {item.before or '—'} | {item.after or '—'} |" for item in items),
+            table(("test", "pytest", "velox"), [_divergence_row(item) for item in items]),
             "",
         ]
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -103,9 +99,7 @@ def write_markdown(verification: Verification, path: Path) -> None:
 
 
 def write_payload(verification: Verification, path: Path) -> None:
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload(verification), handle, indent=1)
-        handle.write("\n")
+    write_json(payload(verification), path)
 
 
 def _run_payload(run: Run) -> dict[str, Any]:
@@ -155,9 +149,13 @@ def _queue(verification: Verification) -> list[str]:
     return lines
 
 
-def _row(run: Run) -> str:
+def _run_row(run: Run) -> tuple[str, str, str, str]:
     outcomes = ", ".join(f"{count} {outcome}" for outcome, count in run.counts().items())
-    return f"| {run.runner} | {len(run.outcomes)} | {outcomes or '—'} | {run.duration:.2f}s |"
+    return (run.runner, str(len(run.outcomes)), outcomes or "—", f"{run.duration:.2f}s")
+
+
+def _divergence_row(item: Divergence) -> tuple[str, str, str]:
+    return (f"`{item.id}`", item.before or "—", item.after or "—")
 
 
 def _clip(text: str) -> str:

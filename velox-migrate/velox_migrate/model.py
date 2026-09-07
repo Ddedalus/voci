@@ -193,6 +193,15 @@ class Item:
         Depth-first from the names the test starts with, following each fixture's own requests,
         so a definition that is only reachable as an override's super is included.
         """
+        return (fixture for fixture, _ in self.edges())
+
+    def edges(self) -> Iterator[tuple[FixtureDef, tuple[Dependency, ...]]]:
+        """`walk()`'s traversal, paired with the dependencies it resolves along the way.
+
+        A caller that wants both a fixture and what it requests would otherwise call
+        `dependencies(fixture)` again for every fixture this yields, redoing the same resolution
+        `walk()` already did to find where to go next.
+        """
         seen: set[str] = set()
         stack = [
             fixture
@@ -204,12 +213,9 @@ class Item:
             if fixture.key in seen:
                 continue
             seen.add(fixture.key)
-            yield fixture
-            stack.extend(
-                edge.fixture
-                for edge in reversed(self.dependencies(fixture))
-                if edge.fixture is not None
-            )
+            deps = self.dependencies(fixture)
+            yield fixture, deps
+            stack.extend(edge.fixture for edge in reversed(deps) if edge.fixture is not None)
 
 
 @dataclass(frozen=True, slots=True)

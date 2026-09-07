@@ -297,8 +297,8 @@ class _Wiring(VisitorBasedCodemodCommand):
 def _rewrite(
     params: Sequence[cst.Param],
     by_name: Mapping[str, Injection],
-    added: Sequence[cst.Param] = (),
-    claims: _Claims | None = None,
+    added: Sequence[cst.Param],
+    claims: _Claims,
 ) -> tuple[cst.Param, ...]:
     """`params`, each injected one rewritten as its injection, with `added` written on the end.
 
@@ -345,7 +345,7 @@ def _declared(params: cst.Parameters) -> frozenset[str]:
     return frozenset(named)
 
 
-def _param(injection: Injection, claims: _Claims | None = None) -> cst.Param:
+def _param(injection: Injection, claims: _Claims) -> cst.Param:
     """The parameter a dependency asked for by name becomes: injected, and written with a comma."""
     return cst.Param(
         name=cst.Name(injection.param),
@@ -354,9 +354,7 @@ def _param(injection: Injection, claims: _Claims | None = None) -> cst.Param:
     )
 
 
-def _inject(
-    param: cst.Param, injection: Injection | None, claims: _Claims | None = None
-) -> cst.Param:
+def _inject(param: cst.Param, injection: Injection | None, claims: _Claims) -> cst.Param:
     if injection is None:
         return param
     if injection.was == REQUEST:
@@ -366,7 +364,7 @@ def _inject(
     # against someone who had already decided one. A built-in is the exception -- `capsys` becomes
     # a `velox.Capture`, so the `CaptureFixture[str]` the source wrote is no longer true of it.
     ours = injection.retypes or param.annotation is None
-    if ours and param.annotation is not None and claims is not None:
+    if ours and param.annotation is not None:
         claims.replaced.append(param.annotation)
     carried = None if ours else param.annotation
     return param.with_changes(
@@ -378,7 +376,7 @@ def _inject(
 
 
 def _annotated(
-    injection: Injection, carried: cst.Annotation | None, claims: _Claims | None
+    injection: Injection, carried: cst.Annotation | None, claims: _Claims
 ) -> cst.Annotation:
     """`Annotated[T, Depends(fixture)]`, where `T` is `carried` or the type inferred for it."""
     inner = _bare(carried) if carried is not None else _type(injection, claims)
@@ -432,7 +430,7 @@ def _named(expression: cst.BaseExpression, name: str) -> bool:
             return False
 
 
-def _type(injection: Injection, claims: _Claims | None) -> cst.BaseExpression:
+def _type(injection: Injection, claims: _Claims) -> cst.BaseExpression:
     """The inferred type for this parameter, claiming the imports that make it spellable.
 
     Claimed here rather than when the plan was made, so that a definition the rewrite backs out of
@@ -441,12 +439,10 @@ def _type(injection: Injection, claims: _Claims | None) -> cst.BaseExpression:
     such a parameter had anyway, said out loud.
     """
     if injection.annotation is None:
-        if claims is not None:
-            claims.untyped = True
+        claims.untyped = True
         return cst.Name(ANY)
-    if claims is not None:
-        claims.imports.extend(injection.needs)
-        claims.annotated = True
+    claims.imports.extend(injection.needs)
+    claims.annotated = True
     return cst.parse_expression(injection.annotation)
 
 

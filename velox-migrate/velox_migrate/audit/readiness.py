@@ -19,13 +19,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from velox_migrate.audit.findings import Site, TypeReadiness, Unannotated
-from velox_migrate.audit.wiring import in_suite
+from velox_migrate.audit.wiring import _SYNTHETIC_PREFIXES, in_suite
 from velox_migrate.inference import factory, for_factory, infer
 from velox_migrate.model import FixtureDef, GroundTruth
-
-# pytest's own wrappers around a class lifecycle, and the fixture `@parametrize` desugars to:
-# neither is a factory anyone wrote a signature for.
-_SYNTHETIC_PREFIXES = ("_xunit_", "_unittest_")
 
 
 def assess(ground_truth: GroundTruth, *, root: Path | None = None) -> TypeReadiness:
@@ -110,10 +106,10 @@ def _injection_sites(ground_truth: GroundTruth) -> dict[str, set[tuple[str, str]
             requested = item.resolve(name)
             if requested is not None:
                 found.setdefault(requested.key, set()).add((owner, name))
-        for fixture in item.walk():
+        for fixture, deps in item.edges():
             if not in_suite(fixture):
                 continue
-            for edge in item.dependencies(fixture):
+            for edge in deps:
                 if edge.fixture is not None:
                     found.setdefault(edge.fixture.key, set()).add((fixture.key, edge.name))
     return found

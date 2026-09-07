@@ -71,7 +71,7 @@ def _verdict(audit: Audit) -> list[str]:
             f"**{_percent(totals.serialized_percent)}**",
         ),
     ]
-    blocks = ["## The verdict", _table(("Outcome", "Tests", "Share"), rows)]
+    blocks = ["## The verdict", table(("Outcome", "Tests", "Share"), rows)]
 
     notes = []
     review = totals.marker_tests + totals.hazard_tests
@@ -327,8 +327,12 @@ def _anything_to_decide(audit: Audit) -> bool:
     )
 
 
-def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """A pipe table padded to even columns, first column left-aligned and the rest right."""
+def table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """A pipe table padded to even columns, first column left-aligned and the rest right.
+
+    Shared with `verify/report.py`, which tables the same two shapes: one runner per row, and one
+    divergence per row.
+    """
     grid = [[_cell(text) for text in row] for row in (header, *rows)]
     widths = [max(len(row[column]) for row in grid) for column in range(len(header))]
     rule = ["-" * widths[0]] + ["-" * (width - 1) + ":" for width in widths[1:]]
