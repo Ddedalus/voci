@@ -24,6 +24,13 @@ Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by
 
 Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
 
+Complexity concentrated in a handful of `velox-migrate` functions (line-count + `ruff --select
+C901` sweep, general lint and pyrefly otherwise clean): `plans/complexity-reduction-plan.md`.
+
+`cli.py`'s `main` is still ~530 lines after pulling its validation/config preamble into
+`_prepare_run`; decomposing the run itself (cache/index settlement, install/uninstall) is
+`plans/cli-main-decomposition-plan.md`.
+
 ### Reporting
 JUnit XML and GitHub annotations
 
