@@ -17,7 +17,7 @@ import os
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TextIO, overload
 
@@ -132,12 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Dispatches tests as asyncio.Tasks under a shared semaphore(N). type=int makes
     # argparse reject non-numeric input on its own; "positive" is checked by hand in
-    # main, so it can report exit code 4 with a velox-styled message instead of
+    # _prepare_run, so it can report exit code 4 with a velox-styled message instead of
     # argparse's generic one.
     #
-    # default=None, not DEFAULT_CONCURRENCY: main needs to tell "the user typed
+    # default=None, not DEFAULT_CONCURRENCY: _prepare_run needs to tell "the user typed
     # --concurrency" apart from "argparse filled in a default" to apply CLI >
-    # [tool.velox] > built-in default correctly -- see main's concurrency-resolution
+    # [tool.velox] > built-in default correctly -- see its own concurrency-resolution
     # comment for where None gets folded back to the real default.
     parser.add_argument(
         "--concurrency",
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Wraps each test's setup+call in asyncio.timeout. Default is None (off): pytest
     # itself has no default test timeout either, so leaving this off keeps an existing
     # suite's behavior unchanged until the user opts in. <= 0 and non-finite values are
-    # rejected by hand in main, same exit-4 style as --concurrency: asyncio.timeout(0)
+    # rejected by hand in _prepare_run, same exit-4 style as --concurrency: asyncio.timeout(0)
     # neither raises nor means "no limit" -- it fires at the test's first suspension
     # point (or never, if it has none), which isn't a real, useful mode. None already
     # doubles as "unset" here, same trick as --concurrency above.
@@ -287,7 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # A fresh, numbered session root by default (see
     # _capture.DEFAULT_BASETEMP_RETENTION), or this override. Validated by hand in
-    # main (_invalid_basetemp_argument, exit code 4) before it ever reaches
+    # _prepare_run (_invalid_basetemp_argument, exit code 4) before it ever reaches
     # _capture.install's own shutil.rmtree -- the one "does real work" flag whose
     # failure mode is irreversible.
     parser.add_argument(
@@ -603,6 +603,219 @@ def _parse_filters(
         return f"{source} {exc}", ()
 
 
+@dataclass(frozen=True)
+class _PreparedRun:
+    """Everything `main`'s execute phase needs, once every usage error checkable before a
+    single test file is touched has been ruled out by `_prepare_run`: the compiled
+    `-k`/`-m` expressions (and whether either of them, or an id selector, narrows this
+    run), the resolved `[tool.velox]` config, the three-tier-resolved run options, and
+    the roots collection walks."""
+
+    id_selection: _targets.IdSelection | None
+    markexpr: _selection.TagExpression | None
+    keywordexpr: _selection.KeywordExpression | None
+    narrowed_by_selection: bool
+    config: _config.Config
+    concurrency: int
+    timeout: float | None
+    watchdog: float
+    filterwarnings: tuple[str, ...]
+    roots: list[Path]
+    maxfail: int | None
+
+
+def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | None]:
+    """Resolve `args` into everything `main`'s execute phase needs, or the first usage
+    error found along the way -- unprefixed, like `_parse_filters`'s, since `main` is
+    what knows to prefix every one of these the same way.
+
+    Deliberately linear, in the same order `main` itself checked these before this was
+    pulled out of it: a flag's own contradictions first (cheap, and needs nothing but
+    `args`), then targets, then the -k/-m expressions the id-selection needs to make
+    sense of, then config (which targets anchor the search for), then the options
+    config and CLI flags both feed, then the roots collection actually walks -- each
+    tier depends on the ones before it, so this is not a set of independent checks that
+    could run in a different order or in parallel.
+    """
+    # argparse's choices= can't express "unless this other flag is set", so this
+    # contradiction (--rewrite-cache with --assert=plain, which never touches the
+    # cache) is checked by hand.
+    if args.assert_mode == "plain" and args.rewrite_cache is not None:
+        return (
+            "--rewrite-cache has no effect with --assert=plain "
+            "(plain mode never touches the rewrite cache)",
+            None,
+        )
+
+    # --basetemp is the one "does real work" flag whose failure mode is irreversible
+    # (_capture.install eventually shutil.rmtrees it), so it's checked here, before
+    # collection and rewrite-hook setup run for a call that was always going to fail.
+    basetemp_problem = _invalid_basetemp_argument(args.basetemp)
+    if basetemp_problem is not None:
+        return basetemp_problem, None
+
+    # Both shorthands mean exactly one other flag's value, so the contradiction is worth
+    # reporting rather than silently picking a winner -- a run that quietly ignored
+    # --serial (or -x) would report the wrong thing about what it did.
+    if args.serial and args.concurrency is not None and args.concurrency != 1:
+        return (
+            f"--serial is --concurrency=1, and --concurrency={args.concurrency} was also given",
+            None,
+        )
+    # One says "run only these", the other "run everything, these first"; picking a winner
+    # silently would misreport what the run was.
+    if args.last_failed and args.failed_first:
+        return (
+            "--lf runs only the last run's failures and --ff runs the whole suite with "
+            "them first -- pass one or the other",
+            None,
+        )
+    if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
+        return f"-x is --maxfail=1, and --maxfail={args.maxfail} was also given", None
+
+    # Checked by hand rather than through argparse, same as --concurrency and --timeout
+    # below: exit code 4 with a velox-styled message instead of argparse's generic one.
+    maxfail = 1 if args.exitfirst else args.maxfail
+    if maxfail is not None and maxfail < 1:
+        return f"--maxfail must be a positive integer, got {maxfail}", None
+    if args.durations < 0:
+        return f"--durations must be zero or more, got {args.durations}", None
+
+    targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
+    # nothing from the current directory gets that reading before anything else looks at
+    # it: pasting an id `--collect-only` printed back as an argument is the point.
+    try:
+        targets = _reread_on_rootdir(targets)
+    except _config.ConfigError as exc:
+        return str(exc), None
+
+    # A typo'd path and a genuinely empty suite must not look the same: without this,
+    # a bad path would silently walk to nothing and exit 5 "no tests collected",
+    # indistinguishable from an honest empty selection.
+    problem = _invalid_target_argument(targets)
+    if problem is not None:
+        return problem, None
+    # None unless some argument actually carried a `::` selector, which is what lets
+    # collection skip id filtering entirely in the common case.
+    id_selection = _targets.IdSelection.of(targets)
+
+    # Compiled up front, before collection does any real work, so a malformed -m/-k
+    # expression fails fast with a usage error rather than surfacing mid-collection.
+    markexpr = None
+    keywordexpr = None
+    try:
+        if args.markexpr is not None:
+            markexpr = _selection.compile_tag_expression(args.markexpr)
+        if args.keywordexpr is not None:
+            keywordexpr = _selection.compile_keyword_expression(args.keywordexpr)
+    except _selection.SelectionError as exc:
+        return str(exc), None
+
+    # -k/-m/an id argument bake their narrowing straight into collect()'s own records and
+    # deselected -- `tag_expr`/`keyword_expr`/`id_selection` below -- so a run any of them
+    # narrows sees a partial file, never the whole of what it holds. Read in two places: the
+    # collection-index fast path won't answer under one (it has no notion of the narrowing to
+    # replay), and a real collection under one must not write its partial view of a file into
+    # the index either, where a later un-narrowed --collect-only would take it as the whole
+    # file. --lf/--ff don't have this problem -- they narrow which files collect() sees, never
+    # what one collected file reports -- so they're not part of this.
+    narrowed_by_selection = (
+        markexpr is not None or keywordexpr is not None or id_selection is not None
+    )
+
+    # [tool.velox]-anchored upward search, stopping at the git root -- see
+    # _config.resolve's own docstring for exactly where it starts and stops. A
+    # malformed pyproject.toml/[tool.velox] table is always a usage error: never
+    # silently fall back to defaults over a config the user wrote but velox can't honor.
+    # The file part of a `path.py::test_name` argument is what anchors the search, the
+    # same as a plain path does.
+    try:
+        config = _config.resolve([target.path for target in targets])
+    except _config.ConfigError as exc:
+        return str(exc), None
+
+    # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
+    # args.timeout are None exactly when the flag wasn't given (see build_parser's
+    # comments on both). --serial joins the CLI tier: a flag typed on the command line
+    # outranks [tool.velox] concurrency whichever of the two spellings was used.
+    effective_concurrency = _resolve_layered(
+        1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
+    )
+    effective_timeout = _resolve_layered(args.timeout, config.timeout)
+    effective_watchdog = _resolve_layered(
+        args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
+    )
+
+    # Named by its actual source (the CLI flag, or the config file that set it) rather
+    # than always saying --concurrency/--timeout -- a bad [tool.velox] concurrency
+    # shouldn't point the user at a flag they never touched.
+    if effective_concurrency < 1:
+        source = (
+            "--concurrency" if args.concurrency is not None else f"{config.source} 'concurrency'"
+        )
+        return f"{source} must be a positive integer, got {effective_concurrency}", None
+    if effective_timeout is not None and not (
+        math.isfinite(effective_timeout) and effective_timeout > 0
+    ):
+        source = "--timeout" if args.timeout is not None else f"{config.source} 'timeout'"
+        return (
+            f"{source} must be a positive, finite number of seconds, got {effective_timeout}",
+            None,
+        )
+    # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
+    # negative and non-finite values are usage errors.
+    if not math.isfinite(effective_watchdog) or effective_watchdog < 0:
+        source = (
+            "--loop-watchdog"
+            if args.loop_watchdog is not None
+            else f"{config.source} 'loop_watchdog'"
+        )
+        return (
+            f"{source} must be zero (off) or a positive, finite number of seconds, got "
+            f"{effective_watchdog}",
+            None,
+        )
+
+    # Both tiers, in precedence order rather than layered like the scalars above: warning
+    # filters accumulate, and the last one to match a warning is the one that decides it,
+    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
+    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
+    # class the suite defines itself is not importable before then.
+    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
+
+    # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
+    # relative to wherever [tool.velox] was declared, so they're resolved against
+    # config.rootdir here, not cwd().
+    # is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
+    # and means "nothing" -- truthiness would silently run the built-in default instead.
+    if targets:
+        roots = [target.path for target in targets]
+    elif config.testpaths is not None:
+        roots = [config.rootdir / p for p in config.testpaths]
+        # Mirrors _invalid_target_argument's reasoning for CLI paths: a typo'd testpaths
+        # entry must not silently look like an honest empty selection either.
+        for root, raw in zip(roots, config.testpaths, strict=True):
+            if not root.exists():
+                return f"{config.source}: testpaths entry does not exist: {raw!r}", None
+    else:
+        roots = _default_test_roots(config.rootdir)
+
+    return None, _PreparedRun(
+        id_selection=id_selection,
+        markexpr=markexpr,
+        keywordexpr=keywordexpr,
+        narrowed_by_selection=narrowed_by_selection,
+        config=config,
+        concurrency=effective_concurrency,
+        timeout=effective_timeout,
+        watchdog=effective_watchdog,
+        filterwarnings=effective_filterwarnings,
+        roots=roots,
+        maxfail=maxfail,
+    )
+
+
 def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -641,198 +854,26 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
             run_once=main,
         )
 
-    # argparse's choices= can't express "unless this other flag is set", so this
-    # contradiction (--rewrite-cache with --assert=plain, which never touches the
-    # cache) is checked by hand. Exit 4: usage error.
-    if args.assert_mode == "plain" and args.rewrite_cache is not None:
-        print(
-            "velox: --rewrite-cache has no effect with --assert=plain "
-            "(plain mode never touches the rewrite cache)",
-            file=sys.stderr,
-        )
-        return 4
-
-    # --basetemp is the one "does real work" flag whose failure mode is irreversible
-    # (_capture.install eventually shutil.rmtrees it), so it's checked here, before
-    # collection and rewrite-hook setup run for a call that was always going to fail.
-    basetemp_problem = _invalid_basetemp_argument(args.basetemp)
-    if basetemp_problem is not None:
-        print(f"velox: {basetemp_problem}", file=sys.stderr)
-        return 4
-
-    # Both shorthands mean exactly one other flag's value, so the contradiction is worth
-    # reporting rather than silently picking a winner -- a run that quietly ignored
-    # --serial (or -x) would report the wrong thing about what it did.
-    if args.serial and args.concurrency is not None and args.concurrency != 1:
-        print(
-            f"velox: --serial is --concurrency=1, and --concurrency={args.concurrency} was also "
-            f"given",
-            file=sys.stderr,
-        )
-        return 4
-    # One says "run only these", the other "run everything, these first"; picking a winner
-    # silently would misreport what the run was.
-    if args.last_failed and args.failed_first:
-        print(
-            "velox: --lf runs only the last run's failures and --ff runs the whole suite with "
-            "them first -- pass one or the other",
-            file=sys.stderr,
-        )
-        return 4
-    if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
-        print(
-            f"velox: -x is --maxfail=1, and --maxfail={args.maxfail} was also given",
-            file=sys.stderr,
-        )
-        return 4
-
-    # Checked by hand rather than through argparse for the same reason --concurrency is:
-    # exit code 4 with a velox-styled message instead of argparse's generic one.
-    maxfail = 1 if args.exitfirst else args.maxfail
-    if maxfail is not None and maxfail < 1:
-        print(f"velox: --maxfail must be a positive integer, got {maxfail}", file=sys.stderr)
-        return 4
-    if args.durations < 0:
-        print(
-            f"velox: --durations must be zero or more, got {args.durations}",
-            file=sys.stderr,
-        )
-        return 4
-
-    targets = [_targets.parse_target(raw) for raw in args.paths]
-    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
-    # nothing from the current directory gets that reading before anything else looks at
-    # it: pasting an id `--collect-only` printed back as an argument is the point.
-    try:
-        targets = _reread_on_rootdir(targets)
-    except _config.ConfigError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # A typo'd path and a genuinely empty suite must not look the same: without this,
-    # a bad path would silently walk to nothing and exit 5 "no tests collected",
-    # indistinguishable from an honest empty selection.
-    problem = _invalid_target_argument(targets)
+    # Every usage error checkable before collection touches a single test file, in one
+    # phase: a flag's own contradictions, PATHS, -k/-m, [tool.velox], and the run
+    # options all three of those and the CLI feed. See _prepare_run's own docstring for
+    # why this has to stay linear.
+    problem, prepared = _prepare_run(args)
     if problem is not None:
         print(f"velox: {problem}", file=sys.stderr)
         return 4
-    # None unless some argument actually carried a `::` selector, which is what lets
-    # collection skip id filtering entirely in the common case.
-    id_selection = _targets.IdSelection.of(targets)
-
-    # Compiled up front, before collection does any real work, so a malformed -m/-k
-    # expression fails fast with a usage error rather than surfacing mid-collection.
-    markexpr = None
-    keywordexpr = None
-    try:
-        if args.markexpr is not None:
-            markexpr = _selection.compile_tag_expression(args.markexpr)
-        if args.keywordexpr is not None:
-            keywordexpr = _selection.compile_keyword_expression(args.keywordexpr)
-    except _selection.SelectionError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # -k/-m/an id argument bake their narrowing straight into collect()'s own records and
-    # deselected -- `tag_expr`/`keyword_expr`/`id_selection` below -- so a run any of them
-    # narrows sees a partial file, never the whole of what it holds. Read in two places: the
-    # collection-index fast path won't answer under one (it has no notion of the narrowing to
-    # replay), and a real collection under one must not write its partial view of a file into
-    # the index either, where a later un-narrowed --collect-only would take it as the whole
-    # file. --lf/--ff don't have this problem -- they narrow which files collect() sees, never
-    # what one collected file reports -- so they're not part of this.
-    narrowed_by_selection = (
-        markexpr is not None or keywordexpr is not None or id_selection is not None
-    )
-
-    # [tool.velox]-anchored upward search, stopping at the git root -- see
-    # _config.resolve's own docstring for exactly where it starts and stops. A
-    # malformed pyproject.toml/[tool.velox] table is always a usage error: never
-    # silently fall back to defaults over a config the user wrote but velox can't honor.
-    # The file part of a `path.py::test_name` argument is what anchors the search, the
-    # same as a plain path does.
-    try:
-        config = _config.resolve([target.path for target in targets])
-    except _config.ConfigError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
-    # args.timeout are None exactly when the flag wasn't given (see build_parser's
-    # comments on both). --serial joins the CLI tier: a flag typed on the command line
-    # outranks [tool.velox] concurrency whichever of the two spellings was used.
-    effective_concurrency = _resolve_layered(
-        1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
-    )
-    effective_timeout = _resolve_layered(args.timeout, config.timeout)
-    effective_watchdog = _resolve_layered(
-        args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
-    )
-
-    # Named by its actual source (the CLI flag, or the config file that set it) rather
-    # than always saying --concurrency/--timeout -- a bad [tool.velox] concurrency
-    # shouldn't point the user at a flag they never touched.
-    if effective_concurrency < 1:
-        source = (
-            "--concurrency" if args.concurrency is not None else f"{config.source} 'concurrency'"
-        )
-        print(
-            f"velox: {source} must be a positive integer, got {effective_concurrency}",
-            file=sys.stderr,
-        )
-        return 4
-    if effective_timeout is not None and not (
-        math.isfinite(effective_timeout) and effective_timeout > 0
-    ):
-        source = "--timeout" if args.timeout is not None else f"{config.source} 'timeout'"
-        print(
-            f"velox: {source} must be a positive, finite number of seconds, got "
-            f"{effective_timeout}",
-            file=sys.stderr,
-        )
-        return 4
-    # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
-    # negative and non-finite values are usage errors.
-    if not math.isfinite(effective_watchdog) or effective_watchdog < 0:
-        source = (
-            "--loop-watchdog"
-            if args.loop_watchdog is not None
-            else f"{config.source} 'loop_watchdog'"
-        )
-        print(
-            f"velox: {source} must be zero (off) or a positive, finite number of seconds, got "
-            f"{effective_watchdog}",
-            file=sys.stderr,
-        )
-        return 4
-
-    # Both tiers, in precedence order rather than layered like the scalars above: warning
-    # filters accumulate, and the last one to match a warning is the one that decides it,
-    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
-    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
-    # class the suite defines itself is not importable before then.
-    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
-
-    # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
-    # relative to wherever [tool.velox] was declared, so they're resolved against
-    # config.rootdir here, not cwd().
-    # is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
-    # and means "nothing" -- truthiness would silently run the built-in default instead.
-    if targets:
-        roots = [target.path for target in targets]
-    elif config.testpaths is not None:
-        roots = [config.rootdir / p for p in config.testpaths]
-        # Mirrors _invalid_target_argument's reasoning for CLI paths: a typo'd testpaths
-        # entry must not silently look like an honest empty selection either.
-        for root, raw in zip(roots, config.testpaths, strict=True):
-            if not root.exists():
-                print(
-                    f"velox: {config.source}: testpaths entry does not exist: {raw!r}",
-                    file=sys.stderr,
-                )
-                return 4
-    else:
-        roots = _default_test_roots(config.rootdir)
+    assert prepared is not None
+    id_selection = prepared.id_selection
+    markexpr = prepared.markexpr
+    keywordexpr = prepared.keywordexpr
+    narrowed_by_selection = prepared.narrowed_by_selection
+    config = prepared.config
+    effective_concurrency = prepared.concurrency
+    effective_timeout = prepared.timeout
+    effective_watchdog = prepared.watchdog
+    effective_filterwarnings = prepared.filterwarnings
+    roots = prepared.roots
+    maxfail = prepared.maxfail
 
     # Loaded whether or not this run reads it back: the merge at the end of main needs what
     # the previous run recorded about tests this one never reaches.
