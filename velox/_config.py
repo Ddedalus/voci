@@ -59,6 +59,12 @@ class Config:
     #: The `pyproject.toml` that supplied this config, or `None` if none was found — surfaced so
     #: `cli.py` can name it in the startup header.
     source: Path | None = None
+    #: The nearest ancestor of the search start containing `.git`, noted on the same upward walk
+    #: that looked for `[tool.velox]` — set even when `source` is `None`, unlike `rootdir`, which
+    #: falls back to the search start itself in that case and so is no use as a fixed anchor.
+    #: `None` when the walk never crossed a `.git` boundary, or crossed one only after already
+    #: finding a table (that walk stops the moment it finds one, before checking any further).
+    git_root: Path | None = None
     testpaths: tuple[str, ...] | None = None
     concurrency: int | None = None
     timeout: float | None = None
@@ -103,7 +109,7 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
             if table is not None:
                 return _parse(table, rootdir=current, source=pyproject_path)
         if (current / ".git").exists():
-            break
+            return Config(rootdir=start, git_root=current)
         parent = current.parent
         if parent == current:
             # Filesystem root, reached without ever finding a `.git` boundary (a repo-less

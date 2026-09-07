@@ -406,16 +406,18 @@ def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
 
     The rootdir here is the one a `[tool.velox]` table fixes, found by `_config.resolve`'s own
     upward search from the current directory and raising its `ConfigError` the same way. A run
-    with no such table has a rootdir derived from the arguments themselves, which would make one
-    argument's meaning depend on the others, so those runs are left alone. Searched at all only
-    when some argument names nothing from here, which is the uncommon case.
+    with no such table falls back to the enclosing `.git` directory instead, when there is one --
+    a fixed point, unlike `config.rootdir` in that case, which is just the search start and would
+    make one argument's meaning depend on the others were it used here. With neither, there's no
+    anchor to re-read against and the arguments are left alone. Searched at all only when some
+    argument names nothing from here, which is the uncommon case.
     """
     if all(target.path.is_absolute() or target.path.exists() for target in targets):
         return targets
     config = _config.resolve([])
-    if config.source is None:
+    rootdir = config.rootdir if config.source is not None else config.git_root
+    if rootdir is None:
         return targets
-    rootdir = config.rootdir
     reread = []
     for target in targets:
         on_rootdir = rootdir / target.path
@@ -476,11 +478,11 @@ def _report_collection(
     The ids are printed bare, one per line, so the list pipes into another tool (or back
     into `velox` as arguments) without stripping anything. An id's path is relative to the
     rootdir, and so is an argument that names nothing from the current directory, so a run
-    a `[tool.velox]` table gives a fixed rootdir takes its own ids back from any directory
-    under it. Skips and collection errors are
-    shown the way a real run shows them: `--collect-only` is how a suite is inspected
-    before it runs, and a file that failed to import is exactly what such an inspection is
-    looking for.
+    with a fixed rootdir -- one a `[tool.velox]` table gives, or failing that the enclosing
+    `.git` directory -- takes its own ids back from any directory under it. Skips and
+    collection errors are shown the way a real run shows them: `--collect-only` is how a
+    suite is inspected before it runs, and a file that failed to import is exactly what
+    such an inspection is looking for.
     """
     for test_id in ids:
         print(test_id)
