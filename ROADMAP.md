@@ -16,10 +16,6 @@ None known.
 Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by review, in
 `plans/migrate-review-followups.md`.
 
-Two migration skills (`unwind-override`, `concurrency-triage`) are written but unmerged, on branch
-`vx-migrate-skills` (worktree `velox-wt-migrate-skills`) — see task 14 in
-`plans/migration-tool-plan.md`.
-
 ### docs
 `plans/docsite-plan.md`
 
