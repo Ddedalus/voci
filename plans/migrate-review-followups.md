@@ -9,7 +9,11 @@ each with a regression test; see `audit/sources.py`, `convert/rules/imports.py` 
 rather than this document for the detail. `audit/sources.py`'s prefix-based test recognition, the
 other half of the `_takes()` fix, also closed the altitude note below about a `test_*`-named method
 on a class `python_classes` would not collect: a dump-backed scan now reads `ground_truth.items`
-instead of guessing, so a class the dump never collected contributes no false positive.
+instead of guessing, so a class the dump never collected contributes no false positive. The
+forwarding fix follows a chain of same-file helpers to its end and does not conflate two functions
+sharing a name in different scopes, but stays file-local by design: a helper imported from a
+sibling module keeps its `request` parameter unrecognized, the same conservative direction the rest
+of this heuristic already takes.
 
 ## Altitude — not urgent, revisit before a second plugin of the kind
 

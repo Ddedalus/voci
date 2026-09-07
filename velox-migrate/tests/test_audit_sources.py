@@ -243,6 +243,43 @@ def test_a(request):
     assert _codes(source) == ["VX013", "VX017"]
 
 
+def test_a_chain_of_forwarding_helpers_is_read_all_the_way_in() -> None:
+    # `test_a` hands `request` to `_outer`, which hands it on to `_inner` -- two hops, not the one
+    # a single extra pass would catch.
+    source = """
+def _inner(request):
+    request.addfinalizer(close)
+
+def _outer(request):
+    _inner(request)
+
+def test_a(request):
+    _outer(request)
+"""
+
+    assert _codes(source) == ["VX013", "VX017", "VX017"]
+
+
+def test_two_helpers_sharing_a_name_in_different_scopes_are_not_conflated() -> None:
+    # The module-level `helper` is genuinely forwarded pytest's `request`; the one nested inside
+    # `test_b` shares the name but takes a request of its own, and forwarding one must not mark
+    # the other.
+    source = """
+def helper(request):
+    return request.node
+
+def test_a(request):
+    helper(request)
+
+def test_b():
+    def helper(request):
+        return request.node
+    helper(build_request())
+"""
+
+    assert _codes(source) == ["VX015", "VX017"]
+
+
 def test_a_test_and_a_test_method_take_the_request_pytest_injects() -> None:
     source = """
 def test_engine(request):
@@ -477,6 +514,23 @@ def test_helper(request):
     found = sources.scan_source(source, path=PATH, known_tests=frozenset())
 
     assert found == ()
+
+
+def test_a_test_method_nested_two_classes_deep_still_matches_the_dump() -> None:
+    # The dump's own `item.cls` is `TestOuter.TestInner`, pytest's `__qualname__` for the class --
+    # not just the immediate one -- so `known_tests` is keyed the same way here.
+    source = """
+class TestOuter:
+    class TestInner:
+        def test_a(self, request):
+            return request.node
+"""
+
+    found = sources.scan_source(
+        source, path=PATH, known_tests=frozenset({"TestOuter.TestInner.test_a"})
+    )
+
+    assert [finding.code for finding in found] == ["VX015"]
 
 
 # --- marks -------------------------------------------------------------------------------------

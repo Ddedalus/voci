@@ -251,17 +251,19 @@ def scan_source(
     """
     wrapper = MetadataWrapper(cst.parse_module(source), unsafe_skip_copy=True)
     module_names = _module_level_names(wrapper.module)
-    first = _Scanner(path, module_names, known_tests=known_tests)
-    wrapper.visit(first)
-    forwarded = first.forwarded_targets
-    if not forwarded:
-        return first.findings
-    # A second pass, now knowing which locally defined functions have pytest's own `request`
-    # forwarded into them by name -- discovered from the first pass over the same module, since a
-    # forwarding call site can be written above or below the `def` it hands `request` to.
-    second = _Scanner(path, module_names, known_tests=known_tests, forwarded=forwarded)
-    wrapper.visit(second)
-    return second.findings
+    forwarded: frozenset[str] = frozenset()
+    scanner = _Scanner(path, module_names, known_tests=known_tests, forwarded=forwarded)
+    wrapper.visit(scanner)
+    # Re-scan for as long as a pass finds a function newly forwarded `request` -- a forwarding call
+    # site can be written above or below the `def` it hands `request` to, and a chain of helpers
+    # (a test forwards into one, which forwards into another) only surfaces its outermost link on
+    # the first pass, its next on the second, and so on. Bounded by the module's own finite set of
+    # callable names, so this always settles.
+    while scanner.forwarded_targets - forwarded:
+        forwarded = scanner.forwarded_targets
+        scanner = _Scanner(path, module_names, known_tests=known_tests, forwarded=forwarded)
+        wrapper.visit(scanner)
+    return scanner.findings
 
 
 @dataclass(slots=True)
@@ -324,9 +326,9 @@ class _Scanner(cst.CSTVisitor):
         # Kept per module rather than per scope, since the pattern is always write-then-start.
         self._patchers: set[str] = set()
         self._findings: dict[tuple[str, int, str], Finding] = {}
-        # Locally called functions seen handed this frame's own pytest `request` by name, for a
-        # second pass to treat as injecting it too. Collected regardless of pass, but only read
-        # from the first: `scan_source` stops after one where nothing was found.
+        # Functions in this file seen handed this frame's own pytest `request` by name (qualified,
+        # so two functions sharing a plain name in different scopes are not conflated), for a later
+        # pass to treat as injecting it too.
         self._forwarded_targets: set[str] = set()
 
     @property
@@ -344,11 +346,15 @@ class _Scanner(cst.CSTVisitor):
         at_module_level = len(self._stack) == 1
         in_class = not at_module_level and not self._stack[-1].is_function
         params = _param_names(node.params)
+        # `QualifiedNameProvider` resolves a nested class's own dotted chain
+        # (`TestOuter.TestInner.test_a`) and a nested function's (`test_b.<locals>.helper`), the
+        # same two shapes `known_tests` and `_forwarded` are keyed by -- the first from the dump's
+        # own `item.cls.__qualname__`, the second from resolving a call site the same way.
+        qualified = self._names(node)
         if self._known_tests is None:
             is_test = name.startswith(_TEST_PREFIX) and (at_module_level or in_class)
         else:
-            qualname = f"{self._stack[-1].name}.{name}" if in_class else name
-            is_test = (at_module_level or in_class) and qualname in self._known_tests
+            is_test = (at_module_level or in_class) and bool(qualified & self._known_tests)
         self._stack.append(
             _Frame(
                 name=name,
@@ -358,7 +364,7 @@ class _Scanner(cst.CSTVisitor):
                 is_async=node.asynchronous is not None,
                 injects=_is_fixture_def(node)
                 or is_test
-                or (REQUEST in params and name in self._forwarded),
+                or (REQUEST in params and bool(qualified & self._forwarded)),
             )
         )
         if in_class and _is_fixture_def(node):
@@ -491,15 +497,21 @@ class _Scanner(cst.CSTVisitor):
         self._forwarding_call(node)
 
     def _forwarding_call(self, node: cst.Call) -> None:
-        """Record `node` where it hands this frame's own pytest `request` to a locally defined
-        function by the same name -- `helper(request)` or `helper(request=request)` -- so a second
-        pass can tell that function's identically named parameter is pytest's `request` too.
+        """Record `node` where it hands this frame's own pytest `request` to a function defined
+        somewhere in this same file, by the same name -- `helper(request)` or
+        `helper(request=request)` -- so a later pass can tell that function's identically named
+        parameter is pytest's `request` too. A call into another file is not seen this way: this
+        scan is one file at a time, so a helper imported from a sibling module keeps its `request`
+        parameter unrecognized.
 
         Only a bare call to a name, not a method or an attribute, since there is no signature to
-        match a keyword against and no body to re-scan for anything else. A positional match is
-        taken on faith until the second pass finds the target actually declares a `request`
-        parameter of its own; a keyword spelled anything else lands on a parameter this scan
-        cannot follow, so it is left as the existing `VX017` finding at this call site says.
+        match a keyword against and no body to re-scan for anything else. The target is recorded by
+        its resolved qualified name -- `helper`, or `test_b.<locals>.helper` for one nested inside
+        another function -- so two functions sharing a plain name in different scopes are not
+        conflated. A positional match is taken on faith until a later pass finds the target
+        actually declares a `request` parameter of its own; a keyword spelled anything else lands on
+        a parameter this scan cannot follow, so it is left as the existing `VX017` finding at this
+        call site says.
         """
         func = node.func
         if not isinstance(func, cst.Name) or not self._takes(REQUEST):
@@ -511,7 +523,7 @@ class _Scanner(cst.CSTVisitor):
             for arg in node.args
         )
         if forwards:
-            self._forwarded_targets.add(func.value)
+            self._forwarded_targets.update(self._names(node))
 
     def _tabled_call(self, node: cst.Call, names: frozenset[str]) -> None:
         for name in sorted(names):
