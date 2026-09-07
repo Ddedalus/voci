@@ -19,7 +19,7 @@ jq '[.findings[] | select(.serialized or (.code|startswith("VX41")))]
 ```
 
 `serialized: true` is exactly the set behind `.totals.serialized_percent`, the number this pass
-exists to bring down: `VX108`, `VX205`, `VX216`, `VX217`, `VX218`, `VX219`, `VX322`,
+exists to bring down: `VX205`, `VX216`, `VX217`, `VX218`, `VX219`, `VX322`,
 `VX401`–`VX408`. `VX409`–`VX413` cost correctness rather than scheduling, so they are in the queue
 but not in the percentage.
 

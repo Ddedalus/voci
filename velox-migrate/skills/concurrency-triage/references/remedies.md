@@ -17,7 +17,6 @@ mark.
 | `VX407` | `locale.setlocale`, `decimal.setcontext`, `decimal.localcontext`, `sys.setrecursionlimit`, `sys.setswitchinterval` | Pass the context to the code under test where its API allows it. | `@velox.isolated` |
 | `VX408` | `freezegun.freeze_time`, `time_machine.travel` | Inject a clock: the code under test takes a `now()` callable, the fixture supplies a fake. | `@velox.solo` |
 | `VX322` | a plugin that mutates process-global state | Drop the plugin's use. | `@velox.solo`, or `@velox.isolated` if what it mutates is interpreter-level |
-| `VX108` | `@pytest.mark.filterwarnings` (unsupported — `convert` refused it) | Move the filter into the body with `warnings.catch_warnings`. | `@velox.solo` on that test |
 | `VX205` | `caplog.set_level(...)` | Narrow the region that needs the level, then as `VX404`. | `@velox.solo` |
 | `VX216` | `pytest.warns`, `recwarn`, `pytest.deprecated_call` (unsupported) | Assert on what the warning accompanies. | catch inside a `@velox.solo` test |
 | `VX219` | `mocker` (pytest-mock) | Rewrite each `mocker.` call as the `mock` call it wraps; the result is then `VX217` or `VX218`. | — |
