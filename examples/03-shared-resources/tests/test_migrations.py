@@ -10,8 +10,8 @@ import asyncio
 import sqlite3
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from ledger.migrations import LATEST, current_version, migrate
 from tests.fixtures import migration_db
@@ -71,11 +71,11 @@ async def test_downgrade_below_one_drops_the_table(
     await asyncio.to_thread(migrate, conn, LATEST)
     await asyncio.to_thread(migrate, conn, 0)
 
-    with velox.raises(sqlite3.OperationalError, match="no such table: entries"):
+    with voci.raises(sqlite3.OperationalError, match="no such table: entries"):
         await asyncio.to_thread(conn.execute, "SELECT * FROM entries")
 
 
-@velox.tag("slow")
+@voci.tag("slow")
 async def test_full_chain_is_idempotent(
     conn: Annotated[sqlite3.Connection, Depends(migration_db)],
 ) -> None:

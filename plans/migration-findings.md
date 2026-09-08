@@ -1,4 +1,4 @@
-# pytest → velox migration: findings
+# pytest → voci migration: findings
 
 Internal working document, and the evidence half of
 [migration-tool-plan.md](migration-tool-plan.md): the corpus that was picked to prove the tool
@@ -11,7 +11,7 @@ Two suites have been through the tool end to end or most of the way, and between
 the two things standing between "the pipeline runs" and "a suite is migrated".
 
 **The audit's failure mode is silence, not misclassification.** marshmallow's audit came back
-clean and the conversion emitted code velox could not construct. Every one of the four defects was
+clean and the conversion emitted code voci could not construct. Every one of the four defects was
 a construct the support matrix had no row for at all, so each read as *converts untouched* — a
 number in the headline that meant "nothing recognised it" rather than "nothing wrong with it". The
 corpus suites were written alongside the machinery and cover what the machinery already knew about;
@@ -57,7 +57,7 @@ plugin-wired async story, and no override chains.
 | Fixture graph | 14 fixtures / 2 conftests, 0 overrides |
 | Plugins | anyio, pytest-trio, pytest-httpbin, pytest-codspeed, flaky |
 | Blocked | 342 tests (17.2%), 294 of them the trio half of `anyio_backend` |
-| Serializing hazards | VX402 ×5 — one autouse `clean_environ` reaches 1739 tests |
+| Serializing hazards | VC402 ×5 — one autouse `clean_environ` reaches 1739 tests |
 | Naive serial share | 88.0% |
 
 ### flask — the ladder
@@ -67,7 +67,7 @@ plugin-wired async story, and no override chains.
 | Test count | 386 (31 parametrized, 7 classes) |
 | Fixture graph | 17 fixtures / 1 root conftest + 2 example conftests |
 | Plugins | coverage only |
-| Estimated refusals | VX210 ×19, VX401 ×77, VX405 ×6, VX017 ×1 |
+| Estimated refusals | VC210 ×19, VC401 ×77, VC405 ×6, VC017 ×1 |
 | Monkeypatch uses | 77 |
 
 `_standard_os_environ(monkeypatch)` is autouse in the root conftest, so the whole suite serializes
@@ -97,7 +97,7 @@ trivially unwound. Almost no fixture graph. Its value is scale: before/after con
 | Test count | 691 (32 parametrized, 45 classes) |
 | Fixture graph | 21 fixtures / 1 conftest |
 | Plugins | pytest-timeout, trio |
-| Estimated refusals | VX014 ×1 |
+| Estimated refusals | VC014 ×1 |
 | Monkeypatch uses | 6 |
 
 One fixture returns `request.param` over parametrized `_asyncio_run` and `trio.run`, which exercises
@@ -107,11 +107,11 @@ the indirect-parametrization path. One `request.addfinalizer` refuses.
 
 | Suite | Blocker |
 |---|---|
-| starlette | `tmpdir` ×130 (VX208). Needs a `tmpdir→tmp_path` prefactor codemod to exist first. |
-| structlog | `pytest.warns` ×56 (VX216, unsupported *and* serializing), time-machine (VX408), `asyncio_mode = auto`, pytest-randomly. |
-| attrs | hypothesis (VX030/VX323), `pytest_configure` hook (VX022). |
-| click | `capfd` ×40 (VX203, no equivalent), pytest-randomly. |
-| uvicorn | pytest-mock (VX219), `pytest.param(marks=)` ×12 (VX102), tests binding real network ports (VX413). |
+| starlette | `tmpdir` ×130 (VC208). Needs a `tmpdir→tmp_path` prefactor codemod to exist first. |
+| structlog | `pytest.warns` ×56 (VC216, unsupported *and* serializing), time-machine (VC408), `asyncio_mode = auto`, pytest-randomly. |
+| attrs | hypothesis (VC030/VC323), `pytest_configure` hook (VC022). |
+| click | `capfd` ×40 (VC203, no equivalent), pytest-randomly. |
+| uvicorn | pytest-mock (VC219), `pytest.param(marks=)` ×12 (VC102), tests binding real network ports (VC413). |
 
 ## marshmallow, migrated
 
@@ -122,19 +122,44 @@ extrapolated, which counted test *functions* rather than collected cases.
 | Runner | Passed | Failed | Wall |
 |---|---:|---:|---:|
 | pytest | 1188 | 0 | 0.77s |
-| `velox --serial` | 1183 | 5 | 2.12s |
-| `velox` (11.4x) | 1183 | 5 | 0.69s |
+| `voci --serial` | 1183 | 5 | 2.12s |
+| `voci` (11.4x) | 1183 | 5 | 0.69s |
 
-Nothing refused, no `VELOX-TODO` markers written, and concurrency cost nothing: the same five tests
-fail serially and in parallel, so none of the 203 tests the audit flagged under VX412 (seeded
+Nothing refused, no `VOCI-TODO` markers written, and concurrency cost nothing: the same five tests
+fail serially and in parallel, so none of the 203 tests the audit flagged under VC412 (seeded
 randomness) actually depends on running alone.
+
+**Re-run 2026-09-08, post velox→voci rename.** Same suite, same commit, against the renamed tool.
+The pass/fail numbers above reproduced exactly — `voci --serial` and `voci` (9.5x) both 1183/5, the
+same five `test_registry.py` cases — so the rename itself introduced no behavioral change. Two
+things drifted since the original run above, and both were confirmed present on `main` *before*
+the rename too (checked by running the identical repro against a pre-rename worktree), so neither
+is a rename regression:
+
+- **`convert --write`'s baseline recording breaks on a suite that sets its own `norecursedirs`.**
+  `_record_baseline` (`voci_migrate/workspace.py`'s `snapshot_baseline` + `voci_migrate/cli.py`'s
+  `_record_baseline`) snapshots the tree into `root/.voci-migrate/baseline/tree` and then reruns
+  pytest over `root` with no explicit paths, relying on pytest's default `norecursedirs = ('.*', ...)`
+  to skip back over that snapshot. marshmallow's own `pyproject.toml` sets
+  `norecursedirs = ".git .ropeproject .tox docs env venv tests/mypy_test_cases"`, which replaces
+  rather than extends the default and drops the `.*` wildcard, so pytest walks into
+  `.voci-migrate/baseline/tree/tests` too and collects two same-named `tests` packages at different
+  paths — `_pytest.pathlib.ImportPathMismatchError`, baseline recording aborts, `convert --write`
+  refuses to touch the tree. Worked around here with `convert --write -- --ignore=.voci-migrate`;
+  the real fix is snapshotting outside `root` (or passing `--ignore` unconditionally) so the
+  baseline survives suites that don't lean on pytest's default excludes.
+- **15 `VOCI-TODO[VC114]` markers now appear where the original run had none** (four files:
+  `test_decorators.py`, `test_deserialization.py`, `test_fields.py`, `test_serialization.py`), all
+  the same row — parametrize calls without attributable ids. Not investigated further; flagged here
+  as drift since the original baseline's "no markers" claim, worth reconciling next time this suite
+  is re-run.
 
 ### Environment obstacles worth remembering
 
 `convert --write` rewrites the tree in place, so the suite has to be copied out of `oss/` first —
 those are read-only submodules pinned at a commit. The suite's own `uv run pytest` will not do
-either, since that resolves a lockfile that knows nothing about velox; the environment needs
-`-e .`, `-e ~/velox` and `-e ~/velox/velox-migrate` together. `convert --write` writes the whole
+either, since that resolves a lockfile that knows nothing about voci; the environment needs
+`-e .`, `-e ~/voci` and `-e ~/voci/voci-migrate` together. `convert --write` writes the whole
 tree before printing a line of the plan or the diff, so quitting the pager early still leaves the
 converted suite on disk.
 
@@ -143,23 +168,23 @@ converted suite on disk.
 Four defects in what the suite itself needed, and seven more behind them once the machinery had a
 class-shaped override node to work with. No corpus suite had a case for any of them.
 
-**Fixtures written inside a test class were converted into broken code (VX032).** marshmallow writes
-16 of them across 9 classes. A velox test class is pure namespacing, so a factory in one has to be
+**Fixtures written inside a test class were converted into broken code (VC032).** marshmallow writes
+16 of them across 9 classes. A voci test class is pure namespacing, so a factory in one has to be
 lifted to module level — `convert/lift.py` does that under a name carrying the class's
 (`TestLoadOnly.schema` becomes `load_only_schema`), written above the class because a `Depends()`
 default is evaluated while the class body runs. The audit reported four of the sixteen, and only
 because they happened to override a conftest fixture; the other twelve were invisible to it.
 
-**A class fixture reading `self` (VX033).** Four of the sixteen read a schema class written in the
+**A class fixture reading `self` (VC033).** Four of the sixteen read a schema class written in the
 class body. Reading it through the class survives the lift; anything else `self` could mean is
 refused with its own row rather than converted into a `NameError`.
 
-**Relative imports (VX034).** velox imports test modules under synthetic `velox_tests.*` names with
+**Relative imports (VC034).** voci imports test modules under synthetic `voci_tests.*` names with
 no package behind them, so `from .foo_serializer import ...` cannot resolve — a fact `layout.dotted`
 already relied on when writing its own imports, while nothing rewrote the ones the suite already had.
 
-**`ignore` could not express a path (velox itself).** `norecursedirs = ... tests/mypy_test_cases`
-converted to `ignore = [..., "tests/mypy_test_cases"]`, which velox matched against bare directory
+**`ignore` could not express a path (voci itself).** `norecursedirs = ... tests/mypy_test_cases`
+converted to `ignore = [..., "tests/mypy_test_cases"]`, which voci matched against bare directory
 names only. `_collection/discovery.py` now matches a `/`-bearing entry the way pytest's
 `norecursedirs` does.
 
@@ -172,9 +197,9 @@ to it.
 ### The five that still fail
 
 All five are `tests/test_registry.py`, and all five are the same thing: marshmallow's class registry
-keys on `cls.__module__`, which under velox is `velox_tests.tests.test_registry` rather than
+keys on `cls.__module__`, which under voci is `voci_tests.tests.test_registry` rather than
 `tests.test_registry`. The path-derived module name is deliberate — it is what deletes pytest's
-`ImportPathMismatchError` — so this is a divergence to name rather than a bug to fix. It is `VX035`,
+`ImportPathMismatchError` — so this is a divergence to name rather than a bug to fix. It is `VC035`,
 an undetectable row the audit reports as a blind spot: no scan can see that a library three call
 frames away is reading the test module's name.
 
@@ -189,9 +214,9 @@ fork still parametrize over trio* — turned out to be one the audit answered wr
 
 `pydantic/httpx2` at `main`, cloned fresh. It is a monorepo: two workspace members, `src/httpx2` and
 `src/httpcore2`, with one `tests/` tree covering both. The suite's own environment pins Python 3.10
-and velox needs 3.13, so the extraction environment has to be pinned with `uv sync --python 3.13`.
+and voci needs 3.13, so the extraction environment has to be pinned with `uv sync --python 3.13`.
 That generalizes: the dump is ground truth *for the environment it ran in*, and for a suite whose
-floor is below velox's, the only environment both runners share is the suite's ceiling.
+floor is below voci's, the only environment both runners share is the suite's ceiling.
 
 ### The verdict
 
@@ -208,22 +233,22 @@ floor is below velox's, the only environment both runners share is the suite's c
 
 | Code | Disposition | Sites | Tests | What |
 |---|---|---:|---:|---|
-| VX324 | unsupported | 23 | 294 | `anyio_backend` parametrized over trio |
-| VX030 | unsupported | 4 | 29 | `benchmark`/`codspeed_benchmark`, `httpbin`/`httpbin_secure` |
-| VX216 | unsupported | 6 | 12 | `pytest.warns`, `deprecated_call` |
-| VX108 | mechanical | 6 | 9 | `@pytest.mark.filterwarnings` |
-| VX112 | unsupported | 2 | 7 | `@pytest.mark.trio` |
-| VX307 | mechanical | 1 | — | `filterwarnings = ["error"]` in `pyproject.toml` |
-| VX402 | hazard | 5 | 1739 | `os.environ` writes, autouse in the root conftest |
-| VX413 | hazard | 89 | 133 | a fixed host and port |
-| VX401 | hazard | 4 | 37 | monkeypatch |
-| VX405 | hazard | 6 | 13 | `sys.modules` surgery |
-| VX205 | marker | 4 | 5 | `caplog.set_level` |
-| VX218 | mechanical | 4 | 5 | `mock.patch` as a context manager |
-| VX008 | mechanical | 2 | 1739 | autouse fixtures |
+| VC324 | unsupported | 23 | 294 | `anyio_backend` parametrized over trio |
+| VC030 | unsupported | 4 | 29 | `benchmark`/`codspeed_benchmark`, `httpbin`/`httpbin_secure` |
+| VC216 | unsupported | 6 | 12 | `pytest.warns`, `deprecated_call` |
+| VC108 | mechanical | 6 | 9 | `@pytest.mark.filterwarnings` |
+| VC112 | unsupported | 2 | 7 | `@pytest.mark.trio` |
+| VC307 | mechanical | 1 | — | `filterwarnings = ["error"]` in `pyproject.toml` |
+| VC402 | hazard | 5 | 1739 | `os.environ` writes, autouse in the root conftest |
+| VC413 | hazard | 89 | 133 | a fixed host and port |
+| VC401 | hazard | 4 | 37 | monkeypatch |
+| VC405 | hazard | 6 | 13 | `sys.modules` surgery |
+| VC205 | marker | 4 | 5 | `caplog.set_level` |
+| VC218 | mechanical | 4 | 5 | `mock.patch` as a context manager |
+| VC008 | mechanical | 2 | 1739 | autouse fixtures |
 
-These counts predate `@velox.filterwarnings` and `[tool.velox] filterwarnings`, which carry VX108
-and VX307 across mechanically. Re-run the audit before converting to get the totals under the
+These counts predate `@voci.filterwarnings` and `[tool.voci] filterwarnings`, which carry VC108
+and VC307 across mechanically. Re-run the audit before converting to get the totals under the
 current matrix.
 
 ### The two questions the spike existed to ask
@@ -234,7 +259,7 @@ parametrized `("asyncio", "trio")` whenever trio is installed, and it hangs a
 `usefixtures("anyio_backend")` mark on every test it marks. 294 of the 1991 collected cases are the
 trio half of that matrix — every `[trio]` id in the suite is anyio's doing, not the suite's. On top
 of that, 7 tests carry `@pytest.mark.trio` and go through pytest-trio directly. 301 cases, 15% of
-the suite, run on a loop velox does not have.
+the suite, run on a loop voci does not have.
 
 **Has the fork changed the conftest/fixture graph?** Not in a way that matters. Two conftests, 14
 fixtures, no overrides, one `request.param` read that converts. The wiring is simpler than flask's.
@@ -247,23 +272,23 @@ The first audit run reported 233 findings over 19 constructs; 161 over 17 surviv
 the sites actually were. Four defects, all the same shape — a signal read from a name without asking
 who wrote it.
 
-**`request` is a domain object in an HTTP suite (VX015 ×64, VX017 ×10).** The source scan treated
+**`request` is a domain object in an HTTP suite (VC015 ×64, VC017 ×10).** The source scan treated
 any function with a parameter named `request` as a fixture, so httpx2's mock applications
 (`def __call__(self, request: httpx2.Request)`) and its `Auth.auth_flow` implementations read as
 fixtures holding pytest's request past setup — 245 and 113 tests between them, none of them true.
 `_takes` now resolves the innermost `def` that declares the name and asks whether pytest is what
 calls it.
 
-**anyio's `usefixtures` marks read as the suite's (VX009 ×10, VX010 ×13).** 883 tests were reported
-as needing a `velox.use(...)` declaration. httpx2 does not write the word `usefixtures` anywhere:
-every one of those marks is anyio's wiring for a fixture whose whole job velox does itself. `marks`
+**anyio's `usefixtures` marks read as the suite's (VC009 ×10, VC010 ×13).** 883 tests were reported
+as needing a `voci.use(...)` declaration. httpx2 does not write the word `usefixtures` anywhere:
+every one of those marks is anyio's wiring for a fixture whose whole job voci does itself. `marks`
 now skips a `usefixtures` naming a fixture some plugin provides and migration deletes.
 
-**pytest-trio's mark was invisible (VX323).** `trio` sat in `KNOWN_MARKS` — the marks pytest or the
-runner answers — beside `asyncio` and `anyio`. It does not belong there: velox answers those two by
+**pytest-trio's mark was invisible (VC323).** `trio` sat in `KNOWN_MARKS` — the marks pytest or the
+runner answers — beside `asyncio` and `anyio`. It does not belong there: voci answers those two by
 running the test, and answers `trio` by running it on the wrong loop. Moved to `PLUGIN_MARKS`.
 
-**The trio half of the case list was reported by nothing at all (new: VX324).** anyio is a `VX320`
+**The trio half of the case list was reported by nothing at all (new: VC324).** anyio is a `VC320`
 plugin — "its whole job is done by the runner" — which is true of running a test and false of
 parametrizing one onto a backend. Every `[trio]` case counted as converting untouched.
 
@@ -273,13 +298,13 @@ what the plugin does to a dump.
 
 ### Two knowingly unfixed
 
-**VX324 reads callspecs, so a backend chosen in a fixture body is invisible.** A suite whose own
+**VC324 reads callspecs, so a backend chosen in a fixture body is invisible.** A suite whose own
 `anyio_backend` returns `"trio"` unparametrized runs entirely on trio with nothing reported — the
 value is in a function body, and the source scan has no notion of which fixture decides a loop. The
 shape that matters is the parametrized one, which is anyio's default. Worth a row of its own only if
 a suite is found that pins the wrong backend deliberately.
 
-**VX413 over-reports on a URL-heavy suite.** 89 of its sites are strings like
+**VC413 over-reports on a URL-heavy suite.** 89 of its sites are strings like
 `"http://localhost:8080/"` handed to a *mock* network backend — no port is ever bound. Narrowing the
 heuristic to calls that bind would miss the ones that matter, and `reach.py` already states the bias:
 over-reporting a hazard costs a reader an inspection, under-reporting costs them a red suite. A

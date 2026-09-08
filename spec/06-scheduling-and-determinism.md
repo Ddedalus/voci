@@ -50,7 +50,7 @@ where it lives — on the resource — and the scheduler derives the rest.
 
 Some operations cannot be made task-local at all: `unittest.mock.patch` and friends, `os.environ`
 mutation of a variable a library reads at call time, `warnings.filterwarnings` for one test. For
-these, a test declares `@velox.solo` — or velox marks it automatically, which is how all stock
+these, a test declares `@voci.solo` — or voci marks it automatically, which is how all stock
 `mock.patch` usage is handled in v0.1 ([08](08-patching-and-isolation.md)).
 
 **Model it as a reader-writer lock over the whole suite.** The hazard is racing a *non-patching
@@ -63,7 +63,7 @@ reader*, so:
 Cost is honest and visible: the reporter reports the number of solo tests and the wall-clock spent
 drained, because a suite that drifts into 200 solo tests has lost the plot and should see that.
 
-`@velox.isolated` is the next tier up (subprocess) and does *not* need the write lock — it is
+`@voci.isolated` is the next tier up (subprocess) and does *not* need the write lock — it is
 concurrent with everything, since it shares no process state.
 
 ## 4. The scheduler
@@ -143,7 +143,7 @@ sequential runner, so the two modes cannot drift).
   torn down before the next module starts)? It falls out naturally from greedy dispatch in logical
   order, but making it a documented guarantee constrains future scheduler changes. Proposed:
   document it as true-in-practice for `--concurrency=1`, not as a contract.
-- **Q15** — Should exclusive tokens be declarable directly on a *test* (`@velox.exclusive("redis")`)
+- **Q15** — Should exclusive tokens be declarable directly on a *test* (`@voci.exclusive("redis")`)
   and not only via fixtures? It is convenient and harmless for scheduling, but it puts resource
   facts somewhere other than the resource. Proposed: yes, as an escape hatch, documented as second
   choice.

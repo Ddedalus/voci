@@ -2,7 +2,7 @@
 
 See [rationale.md](../rationale.md) for the index.
 
-**Filters are evaluated in velox's own shim, not written into `warnings.filters`.** That list is
+**Filters are evaluated in voci's own shim, not written into `warnings.filters`.** That list is
 process-global and CPython consults it before `showwarning` is ever reached, so a per-test filter
 installed there governs every test dispatched alongside, and `catch_warnings`' save/restore of it
 races every concurrent test's own. The way out is to stop asking CPython to decide: the run-wide
@@ -15,7 +15,7 @@ means exactly that, at any concurrency.
 `showwarning` propagates through the call that warned, so the failure lands on the phase that
 reached the deprecated call — a fixture's setup errors, a test body's fails — with that call chain
 in the traceback. Recording the warning and failing the test afterwards would put the failure on
-velox's own frame and leave the reader to work out which of a hundred calls produced it.
+voci's own frame and leave the reader to work out which of a hundred calls produced it.
 
 **CPython's per-module warning registries are bypassed, and dedup is per test.** Those registries
 are what make Python report a warning once per source location for the whole process; under a
@@ -28,5 +28,5 @@ distinct registry scopes — a distinction that changes a number in the summary 
 **A warning's location is a filename; a filter's `module` field is a dotted name.** `showwarning`
 is handed no module, so the shim resolves the filename back through a `sys.modules` index, falling
 back to the filename with `.py` stripped — CPython's own fallback for code no imported module
-claims, which is what a test module velox imported by path is. The index is rebuilt only when
+claims, which is what a test module voci imported by path is. The index is rebuilt only when
 `sys.modules` changes size, and only for a run that actually has a `module`-narrowed filter.

@@ -1,4 +1,4 @@
-"""Tests for velox._run.run: dispatch, setup/call/teardown, concurrency, timeouts, reporting."""
+"""Tests for voci._run.run: dispatch, setup/call/teardown, concurrency, timeouts, reporting."""
 
 from __future__ import annotations
 
@@ -16,18 +16,18 @@ import pytest
 from _support import make_record as _record
 from _support import run_async
 
-import velox
-from velox._collection.collect import CollectionError
-from velox._di.fixtures import expand_cases, plan_for
-from velox._marks import marks_of
-from velox._run.run import (
+import voci
+from voci._collection.collect import CollectionError
+from voci._di.fixtures import expand_cases, plan_for
+from voci._marks import marks_of
+from voci._run.run import (
     AdmissionGate,
     Outcome,
     exit_code_for,
     run_suite,
     solo_for_patching,
 )
-from velox._run.run import TestResult as Result
+from voci._run.run import TestResult as Result
 
 
 async def _passes() -> None:
@@ -104,11 +104,11 @@ def test_sync_test_failure_produces_failed_with_traceback() -> None:
 
 
 def test_sync_test_with_a_fixture_is_injected_with_a_working_value() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def answer() -> int:
         return 42
 
-    def test_func(x: int = velox.Depends(answer)) -> None:
+    def test_func(x: int = voci.Depends(answer)) -> None:
         assert x == 42
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -118,7 +118,7 @@ def test_sync_test_with_a_fixture_is_injected_with_a_working_value() -> None:
 
 
 def test_parametrized_case_receives_its_own_values_as_kwargs() -> None:
-    """`record.params` -- the values `@velox.parametrize` expansion assigned this case -- are
+    """`record.params` -- the values `@voci.parametrize` expansion assigned this case -- are
     passed to `func` as extra kwargs, alongside `plan`'s own (empty, here)."""
 
     async def test_func(n: int, expected: int) -> None:
@@ -135,11 +135,11 @@ def test_parametrized_case_receives_its_own_values_as_kwargs() -> None:
 
 
 def test_parametrized_case_kwargs_combine_with_an_actual_dependency() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def answer() -> int:
         return 42
 
-    def test_func(n: int, x: int = velox.Depends(answer)) -> None:
+    def test_func(n: int, x: int = voci.Depends(answer)) -> None:
         assert n == 1
         assert x == 42
 
@@ -227,11 +227,11 @@ def test_empty_selection_still_builds_and_closes_a_runner() -> None:
 
 
 def test_function_scope_fixture_is_injected_with_a_working_value() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def answer() -> int:
         return 42
 
-    async def test_func(x: int = velox.Depends(answer)) -> None:
+    async def test_func(x: int = voci.Depends(answer)) -> None:
         assert x == 42
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -247,15 +247,15 @@ def test_session_scope_fixture_is_shared_and_built_exactly_once_across_tests() -
     rather than triggering a second construction."""
     builds: list[int] = []
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     def counted() -> int:
         builds.append(1)
         return len(builds)
 
-    async def test_a(x: int = velox.Depends(counted)) -> None:
+    async def test_a(x: int = voci.Depends(counted)) -> None:
         assert x == 1
 
-    async def test_b(x: int = velox.Depends(counted)) -> None:
+    async def test_b(x: int = voci.Depends(counted)) -> None:
         assert x == 1  # same shared instance, not rebuilt for this test
 
     results = run_suite(
@@ -277,16 +277,16 @@ def test_module_scope_fixture_is_shared_and_torn_down_once_across_tests_in_one_m
     builds: list[int] = []
     torn_down: list[str] = []
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def per_module():
         builds.append(1)
         yield len(builds)
         torn_down.append("closed")
 
-    async def test_a(x: int = velox.Depends(per_module)) -> None:
+    async def test_a(x: int = voci.Depends(per_module)) -> None:
         assert x == 1
 
-    async def test_b(x: int = velox.Depends(per_module)) -> None:
+    async def test_b(x: int = voci.Depends(per_module)) -> None:
         assert x == 1  # same module-scope instance, not rebuilt for this test
 
     results = run_suite(
@@ -312,12 +312,12 @@ def test_run_suite_end_to_end_with_a_parametrized_fixture() -> None:
     builds: list[str] = []
     seen: list[str] = []
 
-    @velox.fixture(scope="module", params=["sqlite", "postgres"])
+    @voci.fixture(scope="module", params=["sqlite", "postgres"])
     def backend(param: str) -> str:
         builds.append(param)
         return param
 
-    async def test_uses_backend(value: str = velox.Depends(backend)) -> None:
+    async def test_uses_backend(value: str = voci.Depends(backend)) -> None:
         seen.append(value)
 
     expansions = expand_cases(plan_for(test_uses_backend))
@@ -338,15 +338,15 @@ def test_module_scope_fixture_is_not_shared_across_different_modules() -> None:
     must each get their own instance."""
     builds: list[int] = []
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def per_module() -> int:
         builds.append(1)
         return len(builds)
 
-    async def test_a(x: int = velox.Depends(per_module)) -> None:
+    async def test_a(x: int = voci.Depends(per_module)) -> None:
         pass
 
-    async def test_b(x: int = velox.Depends(per_module)) -> None:
+    async def test_b(x: int = voci.Depends(per_module)) -> None:
         pass
 
     results = run_suite(
@@ -365,12 +365,12 @@ def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
     after `run_suite` has returned."""
     torn_down: list[str] = []
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     def db():
         yield "db"
         torn_down.append("db")
 
-    async def test_func(x: str = velox.Depends(db)) -> None:
+    async def test_func(x: str = voci.Depends(db)) -> None:
         assert x == "db"
 
     run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -379,11 +379,11 @@ def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
 
 
 def test_fixture_setup_failure_produces_error_not_failed() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def broken() -> int:
         raise RuntimeError("setup boom")
 
-    async def test_func(x: int = velox.Depends(broken)) -> None:
+    async def test_func(x: int = voci.Depends(broken)) -> None:
         raise AssertionError("must never run: setup already failed")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -396,12 +396,12 @@ def test_fixture_setup_failure_produces_error_not_failed() -> None:
 def test_fixture_teardown_failure_after_a_passing_call_produces_error() -> None:
     """A teardown failure surfaces as `error`, even though the call phase itself passed."""
 
-    @velox.fixture()
+    @voci.fixture()
     def flaky_teardown():
         yield 1
         raise RuntimeError("teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+    async def test_func(x: int = voci.Depends(flaky_teardown)) -> None:
         assert x == 1  # the call phase genuinely passes
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -412,12 +412,12 @@ def test_fixture_teardown_failure_after_a_passing_call_produces_error() -> None:
 
 
 def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def flaky_teardown():
         yield 1
         raise RuntimeError("teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+    async def test_func(x: int = voci.Depends(flaky_teardown)) -> None:
         raise AssertionError("call boom")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -428,7 +428,7 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
     assert "teardown boom" in result.failure
 
 
-# Fixtures a container declared with `velox.use(...)`: constructed and torn down like any
+# Fixtures a container declared with `voci.use(...)`: constructed and torn down like any
 # other, with nothing passed to the test.
 # ------------------------------------------------------------------------------------------
 
@@ -436,7 +436,7 @@ def test_call_and_teardown_both_failing_still_reports_error_with_both_tracebacks
 def test_a_declared_fixtures_side_effect_runs_and_its_value_is_discarded() -> None:
     events: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def declared():
         events.append("setup")
         yield "never seen"
@@ -457,19 +457,19 @@ def test_a_declared_fixture_wraps_the_tests_own_dependency() -> None:
     whole of an inner one's lifetime."""
     events: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def declared():
         events.append("declared setup")
         yield None
         events.append("declared teardown")
 
-    @velox.fixture()
+    @voci.fixture()
     def asked_for():
         events.append("asked_for setup")
         yield None
         events.append("asked_for teardown")
 
-    async def test_func(x: object = velox.Depends(asked_for)) -> None:
+    async def test_func(x: object = voci.Depends(asked_for)) -> None:
         events.append("call")
 
     plan = plan_for(test_func, implicit=[declared])
@@ -486,7 +486,7 @@ def test_a_declared_fixture_wraps_the_tests_own_dependency() -> None:
 
 
 def test_a_failing_declared_fixture_errors_the_test_and_names_itself() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def declared():
         raise RuntimeError("declared boom")
 
@@ -508,7 +508,7 @@ def test_a_declared_exclusive_fixture_serializes_every_test_that_holds_it() -> N
     in_flight = 0
     peak = 0
 
-    @velox.fixture(exclusive="database")
+    @voci.fixture(exclusive="database")
     def declared():
         return None
 
@@ -540,11 +540,11 @@ def test_failure_summary_for_a_failed_call_is_exception_type_and_message() -> No
 
 
 def test_failure_summary_for_a_setup_error_is_exception_type_and_message() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def broken() -> int:
         raise RuntimeError("setup boom")
 
-    async def test_func(x: int = velox.Depends(broken)) -> None:
+    async def test_func(x: int = voci.Depends(broken)) -> None:
         raise AssertionError("must never run: setup already failed")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -558,12 +558,12 @@ def test_failure_summary_for_a_teardown_error_is_the_exception_groups_own_summar
     failure; its own `str()` is a sensible one-line summary, not the box-drawing rule its
     rendered traceback ends in."""
 
-    @velox.fixture()
+    @voci.fixture()
     def flaky_teardown():
         yield 1
         raise RuntimeError("teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+    async def test_func(x: int = voci.Depends(flaky_teardown)) -> None:
         assert x == 1
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -579,12 +579,12 @@ def test_failure_summary_for_call_and_teardown_both_failing_leads_with_the_call(
     """When both the call and teardown fail, `failure_summary` is the call's summary, not
     teardown's."""
 
-    @velox.fixture()
+    @voci.fixture()
     def flaky_teardown():
         yield 1
         raise RuntimeError("teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
+    async def test_func(x: int = voci.Depends(flaky_teardown)) -> None:
         raise AssertionError("call boom")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -627,11 +627,11 @@ def test_passing_test_has_no_failure_summary() -> None:
 
 
 def test_keyboard_interrupt_from_a_fixture_setup_propagates_immediately() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def broken():
         raise KeyboardInterrupt
 
-    async def test_func(x: int = velox.Depends(broken)) -> None:
+    async def test_func(x: int = voci.Depends(broken)) -> None:
         pass
 
     with pytest.raises(KeyboardInterrupt):
@@ -644,12 +644,12 @@ def test_keyboard_interrupt_from_a_fixture_teardown_propagates_immediately() -> 
     `BaseExceptionGroup` — without that, this would surface as `ERROR` for the test and a run
     that keeps going, not a `KeyboardInterrupt` propagating out of `run_suite`."""
 
-    @velox.fixture()
+    @voci.fixture()
     def flaky():
         yield 1
         raise KeyboardInterrupt
 
-    async def test_func(x: int = velox.Depends(flaky)) -> None:
+    async def test_func(x: int = voci.Depends(flaky)) -> None:
         pass
 
     with pytest.raises(KeyboardInterrupt):
@@ -657,12 +657,12 @@ def test_keyboard_interrupt_from_a_fixture_teardown_propagates_immediately() -> 
 
 
 def test_system_exit_from_a_fixture_teardown_propagates_immediately() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def flaky():
         yield 1
         raise SystemExit(1)
 
-    async def test_func(x: int = velox.Depends(flaky)) -> None:
+    async def test_func(x: int = voci.Depends(flaky)) -> None:
         pass
 
     with pytest.raises(SystemExit):
@@ -675,12 +675,12 @@ def test_session_scope_fixture_is_still_torn_down_after_a_keyboard_interrupt_mid
     teardown on the way out."""
     torn_down: list[str] = []
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     def db():
         yield "db"
         torn_down.append("db")
 
-    async def test_func(x: str = velox.Depends(db)) -> None:
+    async def test_func(x: str = voci.Depends(db)) -> None:
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
@@ -696,12 +696,12 @@ def test_session_scope_teardown_failure_is_reported_to_stderr_and_does_not_fail_
     test's own outcome, and does not turn the run's exit code nonzero on its own -- there is no
     `TestResult` to attribute it to."""
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     def flaky_session():
         yield 1
         raise RuntimeError("session teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_session)) -> None:
+    async def test_func(x: int = voci.Depends(flaky_session)) -> None:
         assert x == 1
 
     results = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -748,8 +748,8 @@ def test_concurrency_bounds_module_scope_teardown_too() -> None:
     in_teardown = 0
     peak_teardown = 0
 
-    def _make_module_fixture() -> velox.Fixture[None]:
-        @velox.fixture(scope="module")
+    def _make_module_fixture() -> voci.Fixture[None]:
+        @voci.fixture(scope="module")
         async def per_module():
             nonlocal in_teardown, peak_teardown
             yield None
@@ -764,7 +764,7 @@ def test_concurrency_bounds_module_scope_teardown_too() -> None:
     for i in range(4):
         fixture = _make_module_fixture()
 
-        async def test_func(x: None = velox.Depends(fixture)) -> None:
+        async def test_func(x: None = voci.Depends(fixture)) -> None:
             pass
 
         records.append(
@@ -809,7 +809,7 @@ def test_concurrency_one_is_exactly_serial_in_logical_order() -> None:
     ]
 
 
-# `AdmissionGate`: `exclusive=` fixture admission and `@velox.solo`.
+# `AdmissionGate`: `exclusive=` fixture admission and `@voci.solo`.
 # ------------------------------------------------------------------------------------------
 
 
@@ -836,20 +836,20 @@ def test_exclusive_string_token_never_lets_two_tests_run_concurrently() -> None:
     would stop their tests running at once at `concurrency=4`."""
     enter, leave, peak = _overlap_tracker()
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     async def conn_a() -> AsyncIterator[None]:
         yield None
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     async def conn_b() -> AsyncIterator[None]:
         yield None
 
-    async def test_one(x: None = velox.Depends(conn_a)) -> None:
+    async def test_one(x: None = voci.Depends(conn_a)) -> None:
         enter()
         await asyncio.sleep(0.02)
         leave()
 
-    async def test_two(x: None = velox.Depends(conn_b)) -> None:
+    async def test_two(x: None = voci.Depends(conn_b)) -> None:
         enter()
         await asyncio.sleep(0.02)
         leave()
@@ -870,20 +870,20 @@ def test_exclusive_true_only_contends_with_its_own_fixture() -> None:
     fixtures never contend with each other, so their tests genuinely overlap."""
     enter, leave, peak = _overlap_tracker()
 
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     async def res_a() -> AsyncIterator[None]:
         yield None
 
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     async def res_b() -> AsyncIterator[None]:
         yield None
 
-    async def test_one(x: None = velox.Depends(res_a)) -> None:
+    async def test_one(x: None = voci.Depends(res_a)) -> None:
         enter()
         await asyncio.sleep(0.03)
         leave()
 
-    async def test_two(x: None = velox.Depends(res_b)) -> None:
+    async def test_two(x: None = voci.Depends(res_b)) -> None:
         enter()
         await asyncio.sleep(0.03)
         leave()
@@ -902,16 +902,16 @@ def test_exclusive_true_only_contends_with_its_own_fixture() -> None:
 def test_exclusive_true_serializes_two_tests_sharing_the_same_fixture() -> None:
     enter, leave, peak = _overlap_tracker()
 
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     async def shared() -> AsyncIterator[None]:
         yield None
 
-    async def test_one(x: None = velox.Depends(shared)) -> None:
+    async def test_one(x: None = voci.Depends(shared)) -> None:
         enter()
         await asyncio.sleep(0.02)
         leave()
 
-    async def test_two(x: None = velox.Depends(shared)) -> None:
+    async def test_two(x: None = voci.Depends(shared)) -> None:
         enter()
         await asyncio.sleep(0.02)
         leave()
@@ -928,7 +928,7 @@ def test_exclusive_true_serializes_two_tests_sharing_the_same_fixture() -> None:
 
 
 def test_solo_test_never_overlaps_with_anything_else() -> None:
-    """A `@velox.solo` test is never admitted alongside another test, ordinary or exclusive, and
+    """A `@voci.solo` test is never admitted alongside another test, ordinary or exclusive, and
     blocks every other admission for as long as it runs -- a suite-wide write lock. Ordinary
     tests are still free to overlap with *each other*, so a bare "nothing ever overlaps"
     assertion would pass for the wrong reason -- this checks specifically for `"solo"` sharing
@@ -944,7 +944,7 @@ def test_solo_test_never_overlaps_with_anything_else() -> None:
             await asyncio.sleep(0.02)
             active.discard(name)
 
-        return velox.solo(test_func) if solo else test_func
+        return voci.solo(test_func) if solo else test_func
 
     records = [_record(0, _make("solo", solo=True), "test_solo")]
     records += [_record(i, _make(f"ordinary_{i}"), f"test_ordinary_{i}") for i in range(1, 6)]
@@ -956,16 +956,16 @@ def test_solo_test_never_overlaps_with_anything_else() -> None:
 
 
 def test_ordinary_tests_still_overlap_around_an_unrelated_exclusive_fixture() -> None:
-    """A test with no `exclusive=` fixtures and no `@velox.solo` mark is unaffected by another
+    """A test with no `exclusive=` fixtures and no `@voci.solo` mark is unaffected by another
     test's unrelated exclusive resource -- `AdmissionGate` never over-serializes the whole suite
     for one contended fixture."""
     enter, leave, peak = _overlap_tracker()
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     async def db() -> AsyncIterator[None]:
         yield None
 
-    async def uses_db(x: None = velox.Depends(db)) -> None:
+    async def uses_db(x: None = voci.Depends(db)) -> None:
         await asyncio.sleep(0.05)
 
     async def plain() -> None:
@@ -991,11 +991,11 @@ def test_piled_up_exclusive_contenders_never_take_a_concurrency_slot_from_others
     every slot and starve this unrelated test out of the suite entirely."""
     enter, leave, peak = _overlap_tracker()
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     async def db() -> AsyncIterator[None]:
         yield None
 
-    async def uses_db(x: None = velox.Depends(db)) -> None:
+    async def uses_db(x: None = voci.Depends(db)) -> None:
         enter()
         await asyncio.sleep(0.05)
         leave()
@@ -1152,14 +1152,14 @@ def test_concurrency_one_serializes_module_scope_teardown_before_the_next_test_s
     next test's result is recorded."""
     events: list[str] = []
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     async def per_module():
         yield None
         events.append("teardown-a start")
         await asyncio.sleep(0.05)
         events.append("teardown-a end")
 
-    async def test_a(x: None = velox.Depends(per_module)) -> None:
+    async def test_a(x: None = voci.Depends(per_module)) -> None:
         events.append("test-a")
 
     async def test_b() -> None:
@@ -1323,9 +1323,9 @@ def test_maxfail_counts_errors_and_timeouts_too() -> None:
         raise RuntimeError("setup boom")
         yield 1  # pragma: no cover -- unreachable, keeps this a generator fixture
 
-    broken = velox.fixture()(_boom)
+    broken = voci.fixture()(_boom)
 
-    async def _needs_it(value: int = velox.Depends(broken)) -> None:
+    async def _needs_it(value: int = voci.Depends(broken)) -> None:
         pass  # pragma: no cover -- setup fails before the body runs
 
     records = [
@@ -1357,15 +1357,15 @@ def test_run_suite_rejects_non_positive_or_non_finite_timeout(bad: float) -> Non
 
 
 def test_run_suite_rejects_an_isolated_record_without_isolated_config() -> None:
-    """`@velox.isolated`'s subprocess needs a rootdir to re-collect from -- run_suite refuses to
+    """`@voci.isolated`'s subprocess needs a rootdir to re-collect from -- run_suite refuses to
     silently run it in-process instead of raising, which is exactly the bug this mark used to
     have (ROADMAP.md, before the subprocess tier existed)."""
 
-    @velox.isolated
+    @voci.isolated
     async def test_func() -> None:
         pass
 
-    with pytest.raises(ValueError, match=r"@velox\.isolated"):
+    with pytest.raises(ValueError, match=r"@voci\.isolated"):
         run_suite([_record(0, test_func, "test_func")])
 
 
@@ -1440,13 +1440,13 @@ def test_module_scope_fixture_shared_and_torn_down_once_under_real_overlap() -> 
     in_flight = 0
     peak = 0
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def per_module():
         builds.append(1)
         yield len(builds)
         torn_down.append("closed")
 
-    async def test_func(x: int = velox.Depends(per_module)) -> None:
+    async def test_func(x: int = voci.Depends(per_module)) -> None:
         nonlocal in_flight, peak
         assert x == 1
         in_flight += 1
@@ -1473,25 +1473,25 @@ def test_module_scope_survives_a_sibling_setup_failure_under_concurrency() -> No
     builds: list[int] = []
     torn_down: list[str] = []
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def per_module():
         builds.append(1)
         yield len(builds)
         torn_down.append("closed")
 
-    @velox.fixture()
+    @voci.fixture()
     def broken():
         raise RuntimeError("setup boom")
 
-    @velox.fixture()
+    @voci.fixture()
     async def slow():
         await asyncio.sleep(0.03)
         return "ok"
 
-    async def test_a(m: int = velox.Depends(per_module), b: int = velox.Depends(broken)) -> None:
+    async def test_a(m: int = voci.Depends(per_module), b: int = voci.Depends(broken)) -> None:
         raise AssertionError("must never run: setup already failed")
 
-    async def test_b(s: str = velox.Depends(slow), m: int = velox.Depends(per_module)) -> None:
+    async def test_b(s: str = voci.Depends(slow), m: int = voci.Depends(per_module)) -> None:
         assert m == 1
 
     records = [
@@ -1513,25 +1513,25 @@ def test_module_scope_survives_a_sibling_timeout_mid_setup_under_concurrency() -
     builds: list[int] = []
     torn_down: list[str] = []
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def per_module():
         builds.append(1)
         yield len(builds)
         torn_down.append("closed")
 
-    @velox.fixture()
+    @voci.fixture()
     async def hangs():
         await asyncio.sleep(10)
 
-    @velox.fixture()
+    @voci.fixture()
     async def slow():
         await asyncio.sleep(0.03)
         return "ok"
 
-    async def test_a(m: int = velox.Depends(per_module), h: object = velox.Depends(hangs)) -> None:
+    async def test_a(m: int = voci.Depends(per_module), h: object = voci.Depends(hangs)) -> None:
         raise AssertionError("must never run: setup timed out")
 
-    async def test_b(s: str = velox.Depends(slow), m: int = velox.Depends(per_module)) -> None:
+    async def test_b(s: str = voci.Depends(slow), m: int = voci.Depends(per_module)) -> None:
         assert m == 1
 
     records = [
@@ -1589,17 +1589,17 @@ def test_timeout_while_building_a_shared_fixture_does_not_poison_it_for_later_te
     every one of them erroring with the `CancelledError` that stopped the first."""
     builds: list[int] = []
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     async def slow() -> AsyncIterator[str]:
         builds.append(1)
         await asyncio.sleep(0.06)
         yield "db"
 
-    @velox.timeout(0.02)
-    async def times_out(db: str = velox.Depends(slow)) -> None:
+    @voci.timeout(0.02)
+    async def times_out(db: str = voci.Depends(slow)) -> None:
         raise AssertionError("must never run: setup timed out")
 
-    async def uses_slow(db: str = velox.Depends(slow)) -> None:
+    async def uses_slow(db: str = voci.Depends(slow)) -> None:
         assert db == "db"
 
     records = [
@@ -1620,16 +1620,16 @@ def test_a_timed_out_waiter_on_a_shared_fixture_does_not_take_its_siblings_down_
     on the shared construction, not the one running it. Its deadline is still its own -- the test
     actually constructing the fixture must finish, and every other waiter must get the value."""
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     async def slow() -> AsyncIterator[str]:
         await asyncio.sleep(0.1)
         yield "db"
 
-    async def patient(db: str = velox.Depends(slow)) -> None:
+    async def patient(db: str = voci.Depends(slow)) -> None:
         assert db == "db"
 
-    @velox.timeout(0.02)
-    async def impatient(db: str = velox.Depends(slow)) -> None:
+    @voci.timeout(0.02)
+    async def impatient(db: str = voci.Depends(slow)) -> None:
         raise AssertionError("must never run: setup timed out")
 
     records = [
@@ -1649,12 +1649,12 @@ def test_a_timed_out_tests_teardown_is_bounded_rather_than_hanging_the_run() -> 
     and hang the whole run with nothing reported -- exactly the failure `--timeout` exists to
     bound -- so a timed-out test's teardown gets the same grace a cancelled one's does."""
 
-    @velox.fixture()
+    @voci.fixture()
     async def never_tears_down() -> AsyncIterator[str]:
         yield "x"
         await asyncio.sleep(60)
 
-    async def hangs(v: str = velox.Depends(never_tears_down)) -> None:
+    async def hangs(v: str = voci.Depends(never_tears_down)) -> None:
         await asyncio.sleep(10)
 
     records = [_record(0, hangs, "test_hangs", plan=plan_for(hangs))]
@@ -1689,13 +1689,13 @@ def test_timeout_during_setup_produces_timeout_and_does_not_run_teardown() -> No
     acquired."""
     torn_down: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     async def slow_setup():
         await asyncio.sleep(10)
         yield 1
         torn_down.append("closed")  # pragma: no cover -- must never be reached
 
-    async def test_func(x: int = velox.Depends(slow_setup)) -> None:
+    async def test_func(x: int = voci.Depends(slow_setup)) -> None:
         raise AssertionError("must never run: setup never finished")
 
     (result,) = run_suite(
@@ -1712,12 +1712,12 @@ def test_timeout_during_call_still_runs_teardown_for_what_setup_acquired() -> No
     runs."""
     torn_down: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def quick():
         yield 1
         torn_down.append("closed")
 
-    async def test_func(x: int = velox.Depends(quick)) -> None:
+    async def test_func(x: int = voci.Depends(quick)) -> None:
         assert x == 1
         await asyncio.sleep(10)
 
@@ -1730,10 +1730,10 @@ def test_timeout_during_call_still_runs_teardown_for_what_setup_acquired() -> No
 
 
 def test_timeout_mark_overrides_the_suite_wide_timeout() -> None:
-    """`@velox.timeout(...)` wins over `run_suite`'s own `timeout=` for that one test, even
+    """`@voci.timeout(...)` wins over `run_suite`'s own `timeout=` for that one test, even
     when the suite budget would otherwise have been generous enough to let it pass."""
 
-    @velox.timeout(0.05)
+    @voci.timeout(0.05)
     async def _hangs() -> None:
         await asyncio.sleep(10)
 
@@ -1745,7 +1745,7 @@ def test_timeout_mark_overrides_the_suite_wide_timeout() -> None:
 
 
 def test_timeout_mark_can_grant_more_time_than_the_suite_budget() -> None:
-    @velox.timeout(1)
+    @voci.timeout(1)
     async def _sleeps() -> None:
         await asyncio.sleep(0.05)
 
@@ -1754,12 +1754,12 @@ def test_timeout_mark_can_grant_more_time_than_the_suite_budget() -> None:
     assert result.outcome is Outcome.PASSED
 
 
-# `@velox.xfail`: a failing call reports XFAILED, a passing one XPASSED (or FAILED, if strict).
+# `@voci.xfail`: a failing call reports XFAILED, a passing one XPASSED (or FAILED, if strict).
 # ------------------------------------------------------------------------------------------
 
 
 def test_xfail_call_failure_reports_xfailed_not_failed() -> None:
-    @velox.xfail("known broken")
+    @voci.xfail("known broken")
     async def _fails() -> None:
         raise AssertionError("nope")
 
@@ -1771,7 +1771,7 @@ def test_xfail_call_failure_reports_xfailed_not_failed() -> None:
 
 
 def test_xfail_call_passing_reports_xpassed_not_passed() -> None:
-    @velox.xfail("thought this was broken")
+    @voci.xfail("thought this was broken")
     async def _passes() -> None:
         pass
 
@@ -1781,7 +1781,7 @@ def test_xfail_call_passing_reports_xpassed_not_passed() -> None:
 
 
 def test_xfail_strict_call_passing_reports_failed() -> None:
-    @velox.xfail("thought this was broken", strict=True)
+    @voci.xfail("thought this was broken", strict=True)
     async def _passes() -> None:
         pass
 
@@ -1793,7 +1793,7 @@ def test_xfail_strict_call_passing_reports_failed() -> None:
 
 
 def test_xfail_raises_matching_the_exception_type_reports_xfailed() -> None:
-    @velox.xfail("known broken", raises=ValueError)
+    @voci.xfail("known broken", raises=ValueError)
     async def _fails() -> None:
         raise ValueError("nope")
 
@@ -1806,7 +1806,7 @@ def test_xfail_raises_not_matching_the_exception_type_reports_failed() -> None:
     """A `raises=` mismatch is a real regression, not the expected failure -- reported FAILED,
     same as no `xfail` mark at all."""
 
-    @velox.xfail("known broken", raises=ValueError)
+    @voci.xfail("known broken", raises=ValueError)
     async def _fails() -> None:
         raise TypeError("wrong kind of broken")
 
@@ -1819,7 +1819,7 @@ def test_xfail_whose_condition_does_not_hold_reports_failed() -> None:
     """The condition is decided at collection, so what reaches the runner is a record with no
     expectation on it at all -- and a failure it reports as the failure it is."""
 
-    @velox.xfail("only on some platform", condition=False)
+    @voci.xfail("only on some platform", condition=False)
     async def _fails() -> None:
         raise AssertionError("nope")
 
@@ -1829,7 +1829,7 @@ def test_xfail_whose_condition_does_not_hold_reports_failed() -> None:
 
 
 def test_xfail_whose_condition_holds_reports_xfailed() -> None:
-    @velox.xfail("known broken here", condition=lambda: True)
+    @voci.xfail("known broken here", condition=lambda: True)
     async def _fails() -> None:
         raise AssertionError("nope")
 
@@ -1839,7 +1839,7 @@ def test_xfail_whose_condition_holds_reports_xfailed() -> None:
 
 
 def test_marks_are_read_from_the_record_not_the_function() -> None:
-    """Two records over one function, as a `velox.case(..., marks=...)` builds: the one carrying
+    """Two records over one function, as a `voci.case(..., marks=...)` builds: the one carrying
     the expectation reports XFAILED and the other, the same failure, FAILED."""
 
     async def _fails() -> None:
@@ -1853,7 +1853,7 @@ def test_marks_are_read_from_the_record_not_the_function() -> None:
     assert [result.outcome for result in results] == [Outcome.XFAILED, Outcome.FAILED]
 
 
-@velox.xfail("this case only")
+@voci.xfail("this case only")
 def _expects_failure() -> None: ...
 
 
@@ -1861,12 +1861,12 @@ def test_xfail_does_not_apply_to_a_setup_error() -> None:
     """`xfail` wraps the call phase only -- a fixture that raises during setup still reports
     ERROR, `xfail` mark or not."""
 
-    @velox.fixture()
+    @voci.fixture()
     def broken() -> int:
         raise RuntimeError("setup boom")
 
-    @velox.xfail("expected to fail")
-    async def test_func(x: int = velox.Depends(broken)) -> None:
+    @voci.xfail("expected to fail")
+    async def test_func(x: int = voci.Depends(broken)) -> None:
         raise AssertionError("must never run: setup already failed")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -1875,7 +1875,7 @@ def test_xfail_does_not_apply_to_a_setup_error() -> None:
 
 
 def test_xfail_does_not_apply_to_a_timeout() -> None:
-    @velox.xfail("expected to fail")
+    @voci.xfail("expected to fail")
     async def _hangs() -> None:
         await asyncio.sleep(10)
 
@@ -1884,14 +1884,14 @@ def test_xfail_does_not_apply_to_a_timeout() -> None:
     assert result.outcome is Outcome.TIMEOUT
 
 
-# `velox.Skipped`/`velox.Failed`: the runtime counterparts of `@velox.skip` and an assertion --
+# `voci.Skipped`/`voci.Failed`: the runtime counterparts of `@voci.skip` and an assertion --
 # pytest's `pytest.skip()`/`pytest.fail()`, raised as a statement rather than read off a mark.
 # ------------------------------------------------------------------------------------------
 
 
 def test_skip_raised_in_the_call_phase_reports_skipped_with_its_reason() -> None:
     async def _skips() -> None:
-        raise velox.Skipped("no backend configured")
+        raise voci.Skipped("no backend configured")
 
     (result,) = run_suite([_record(0, _skips, "test_skips")])
 
@@ -1900,11 +1900,11 @@ def test_skip_raised_in_the_call_phase_reports_skipped_with_its_reason() -> None
 
 
 def test_skip_raised_during_fixture_setup_reports_skipped_not_error() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def unavailable() -> int:
-        raise velox.Skipped("backend not installed")
+        raise voci.Skipped("backend not installed")
 
-    async def test_func(x: int = velox.Depends(unavailable)) -> None:
+    async def test_func(x: int = voci.Depends(unavailable)) -> None:
         raise AssertionError("must never run: setup already skipped")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
@@ -1916,14 +1916,14 @@ def test_skip_raised_during_fixture_setup_reports_skipped_not_error() -> None:
 def test_skip_in_the_call_phase_still_tears_fixtures_down() -> None:
     torn_down = False
 
-    @velox.fixture()
+    @voci.fixture()
     def resource():
         yield 1
         nonlocal torn_down
         torn_down = True
 
-    async def test_func(x: int = velox.Depends(resource)) -> None:
-        raise velox.Skipped("no backend")
+    async def test_func(x: int = voci.Depends(resource)) -> None:
+        raise voci.Skipped("no backend")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
 
@@ -1935,9 +1935,9 @@ def test_skip_in_the_call_phase_takes_priority_over_an_xfail_mark() -> None:
     """A skip reached mid-call is reported as skipped regardless of what an `xfail` mark on the
     same test expected -- pytest's own imperative skip takes the same priority."""
 
-    @velox.xfail("expected to fail, not skip")
+    @voci.xfail("expected to fail, not skip")
     async def _skips() -> None:
-        raise velox.Skipped("no backend")
+        raise voci.Skipped("no backend")
 
     (result,) = run_suite([_record(0, _skips, "test_skips")])
 
@@ -1948,13 +1948,13 @@ def test_a_teardown_failure_after_a_call_phase_skip_still_reports_error() -> Non
     """Mirrors teardown's priority over a passing or failing call: a skip that reached a clean
     call phase is not the last word if teardown then fails."""
 
-    @velox.fixture()
+    @voci.fixture()
     def flaky_teardown():
         yield 1
         raise RuntimeError("teardown boom")
 
-    async def test_func(x: int = velox.Depends(flaky_teardown)) -> None:
-        raise velox.Skipped("no backend")
+    async def test_func(x: int = voci.Depends(flaky_teardown)) -> None:
+        raise voci.Skipped("no backend")
 
     (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
 
@@ -1964,11 +1964,11 @@ def test_a_teardown_failure_after_a_call_phase_skip_still_reports_error() -> Non
 
 
 def test_failed_raised_in_the_call_phase_reports_failed_with_its_message() -> None:
-    """`velox.Failed` needs no special-casing in `_run_one`: it's caught by the same generic
+    """`voci.Failed` needs no special-casing in `_run_one`: it's caught by the same generic
     handler any other exception is, and reads as an ordinary failure."""
 
     async def _fails() -> None:
-        raise velox.Failed("unreachable")
+        raise voci.Failed("unreachable")
 
     (result,) = run_suite([_record(0, _fails, "test_fails")])
 
@@ -1980,9 +1980,9 @@ def test_failed_raised_in_the_call_phase_reports_failed_with_its_message() -> No
 def test_failed_raised_in_the_call_phase_reports_xfailed_under_an_xfail_mark() -> None:
     """Unlike `Skipped`, `Failed` is read through `xfail` exactly like any other failure."""
 
-    @velox.xfail("known broken")
+    @voci.xfail("known broken")
     async def _fails() -> None:
-        raise velox.Failed("unreachable")
+        raise voci.Failed("unreachable")
 
     (result,) = run_suite([_record(0, _fails, "test_fails")])
 
@@ -2036,13 +2036,13 @@ def test_exit_code_skipped_does_not_mask_a_real_failure() -> None:
 def test_exit_code_xfailed_and_xpassed_are_not_failures() -> None:
     """Both mean the test behaved exactly as its `xfail` mark said it would -- neither should
     turn a run red. A strict xpass reports FAILED instead of XPASSED (covered in test_run.py's
-    `@velox.xfail` section), so it never reaches `exit_code_for` as XPASSED."""
+    `@voci.xfail` section), so it never reaches `exit_code_for` as XPASSED."""
     results = [_result(Outcome.PASSED), _result(Outcome.XFAILED), _result(Outcome.XPASSED)]
     assert exit_code_for(results, []) == 0
 
 
 def test_exit_code_runtime_skipped_is_not_a_failure() -> None:
-    """A `velox.Skipped` result reaches `exit_code_for` inside `results` itself (unlike a
+    """A `voci.Skipped` result reaches `exit_code_for` inside `results` itself (unlike a
     `skip`-marked test, which never runs), and contributes `0` the same as PASSED."""
     results = [_result(Outcome.PASSED), _result(Outcome.SKIPPED)]
     assert exit_code_for(results, []) == 0
@@ -2054,7 +2054,7 @@ def test_exit_code_runtime_skipped_is_not_a_failure() -> None:
 
 def test_a_patching_test_never_overlaps_with_anything_else() -> None:
     """A test collection found `unittest.mock` patching on takes the whole gate, exactly as a
-    `@velox.solo`-marked one does -- a patch is a write every concurrent test would see."""
+    `@voci.solo`-marked one does -- a patch is a write every concurrent test would see."""
     active: set[str] = set()
     violations: list[frozenset[str]] = []
 
@@ -2078,7 +2078,7 @@ def test_a_patching_test_never_overlaps_with_anything_else() -> None:
 
 
 def test_an_isolated_test_is_not_serialized_for_its_patching() -> None:
-    """`@velox.isolated` patches its own subprocess, where there is nothing else to disturb."""
+    """`@voci.isolated` patches its own subprocess, where there is nothing else to disturb."""
 
     async def test_isolated() -> None:
         pass
@@ -2086,7 +2086,7 @@ def test_an_isolated_test_is_not_serialized_for_its_patching() -> None:
     async def test_plain() -> None:
         pass
 
-    isolated_record = _record(0, velox.isolated(test_isolated), "test_isolated", patches=("x",))
+    isolated_record = _record(0, voci.isolated(test_isolated), "test_isolated", patches=("x",))
     plain_record = _record(1, test_plain, "test_plain", patches=("x",))
 
     assert not solo_for_patching(isolated_record)
@@ -2114,7 +2114,7 @@ def test_a_solo_test_may_patch_in_its_body() -> None:
         with mock.patch("os.getcwd", return_value="/x"):
             assert os.getcwd() == "/x"
 
-    records = [_record(0, velox.solo(test_patches_in_its_body), "test_patches_in_its_body")]
+    records = [_record(0, voci.solo(test_patches_in_its_body), "test_patches_in_its_body")]
 
     (result,) = run_suite(records)
 
@@ -2191,7 +2191,7 @@ def test_an_xfail_mark_does_not_absorb_a_returned_value() -> None:
     async def test_returns() -> int:
         return 7
 
-    marked = velox.xfail(reason="known")(test_returns)
+    marked = voci.xfail(reason="known")(test_returns)
 
     (result,) = run_suite([_record(0, marked, "test_returns")])
 
@@ -2238,12 +2238,12 @@ def test_maxfail_cancels_the_tests_still_in_flight() -> None:
 def test_a_cancelled_test_still_tears_its_fixtures_down() -> None:
     torn_down: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     async def resource() -> AsyncIterator[str]:
         yield "resource"
         torn_down.append("resource")
 
-    async def test_slow(value: str = velox.Depends(resource)) -> None:
+    async def test_slow(value: str = voci.Depends(resource)) -> None:
         await asyncio.sleep(30)
 
     records = [
@@ -2261,12 +2261,12 @@ def test_a_cancelled_tests_teardown_is_time_boxed() -> None:
     """A fixture waiting on something that will never come must not hold a stopped run open
     -- the release is waited on for `teardown_grace` and then given up on."""
 
-    @velox.fixture()
+    @voci.fixture()
     async def never_releases() -> AsyncIterator[str]:
         yield "resource"
         await asyncio.sleep(30)
 
-    async def test_slow(value: str = velox.Depends(never_releases)) -> None:
+    async def test_slow(value: str = voci.Depends(never_releases)) -> None:
         await asyncio.sleep(30)
 
     records = [
@@ -2376,10 +2376,10 @@ def test_a_test_may_fan_out_over_more_threads_than_the_run_has_concurrency() -> 
     threading.current_thread() is not threading.main_thread(),
     reason="run_suite only takes SIGINT on the main thread",
 )
-def test_a_sigint_handler_velox_could_not_restore_is_left_alone(
+def test_a_sigint_handler_voci_could_not_restore_is_left_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`signal.getsignal` returns `None` for a handler installed from outside Python. Velox
+    """`signal.getsignal` returns `None` for a handler installed from outside Python. Voci
     has nothing to put back afterwards, so it doesn't take the signal in the first place."""
     installed: list[object] = []
     monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
@@ -2415,19 +2415,19 @@ def test_a_second_ctrl_c_aborts_and_leaves_no_watchdog_thread_behind() -> None:
     with pytest.raises(KeyboardInterrupt):
         run_suite([_record(0, test_interrupts_twice, "test_interrupts_twice")], loop_watchdog=0.05)
 
-    assert not [thread for thread in threading.enumerate() if thread.name == "velox-loop-watchdog"]
+    assert not [thread for thread in threading.enumerate() if thread.name == "voci-loop-watchdog"]
 
 
 def test_a_stop_landing_during_teardown_leaves_the_tests_own_verdict_alone() -> None:
     """The test had already answered; the run stopping mid-release is the run's doing, not a
     teardown error the test should be blamed for."""
 
-    @velox.fixture()
+    @voci.fixture()
     async def slow_release() -> AsyncIterator[str]:
         yield "resource"
         await asyncio.sleep(30)
 
-    async def test_passes_then_releases(value: str = velox.Depends(slow_release)) -> None:
+    async def test_passes_then_releases(value: str = voci.Depends(slow_release)) -> None:
         pass
 
     async def test_fails_a_moment_later() -> None:
@@ -2455,12 +2455,12 @@ def test_a_stop_landing_during_the_module_scope_flush_keeps_the_real_result() ->
     """The last test of a module releases that module's fixtures on its way out, holding a
     result it has already earned -- a cancellation there must not overwrite it."""
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     async def slow_module_release() -> AsyncIterator[str]:
         yield "resource"
         await asyncio.sleep(30)
 
-    async def test_fails_then_flushes(value: str = velox.Depends(slow_module_release)) -> None:
+    async def test_fails_then_flushes(value: str = voci.Depends(slow_module_release)) -> None:
         raise AssertionError("nope")
 
     async def test_fails_a_moment_later() -> None:

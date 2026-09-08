@@ -15,7 +15,7 @@ tests/
   test_ledger.py       no tokens — every test owns its own account namespace, fully concurrent
   test_migrations.py   exclusive=True
   test_webhooks.py     exclusive="port-8099" — one test, four scenarios run in sequence
-  test_safety.py       @velox.solo, and a blocking call that stalls the loop
+  test_safety.py       @voci.solo, and a blocking call that stalls the loop
 ```
 
 ## Setup
@@ -27,16 +27,16 @@ uv venv && uv pip install -e ../..
 ## Commands
 
 ```bash
-velox                    # everything (24 tests, 1 skipped)
-velox --concurrency 1    # exactly serial
-velox --timeout 5        # per-test setup+call budget
+voci                    # everything (24 tests, 1 skipped)
+voci --concurrency 1    # exactly serial
+voci --timeout 5        # per-test setup+call budget
 ```
 
 ## Expected output
 
 ```
-$ velox
-assertions: rewrite, cache /home/you/.cache/velox/rewrite
+$ voci
+assertions: rewrite, cache /home/you/.cache/voci/rewrite
 config: /path/to/examples/03-shared-resources/pyproject.toml
 PASS  tests/test_migrations.py                    7 tests  Σ 0.75s
 PASS  tests/test_webhooks.py                      1 test   Σ 0.07s
@@ -48,7 +48,7 @@ PASS  tests/test_safety.py                        5 tests  Σ 1.36s   (1 skipped
 
 ## What to look at
 
-- **`tests/fixtures.py::account`** derives a namespace from `velox.test_info.id`, so all eleven
+- **`tests/fixtures.py::account`** derives a namespace from `voci.test_info.id`, so all eleven
   tests in `test_ledger.py` share one database with no token at all — isolating by data instead of
   by exclusion.
 - **`tests/fixtures.py::migration_db`** — `exclusive=True`: the token is the fixture's own name,
@@ -59,7 +59,7 @@ PASS  tests/test_safety.py                        5 tests  Σ 1.36s   (1 skipped
   since two tests binding port 8099 at once is a real `OSError`, not a scheduling nuance.
   The same test also holds two tokens at once (`port-8099` and `migration_db`) for its last
   scenario.
-- **`tests/fixtures.py::feature_flags`** pairs with `@velox.solo` in `test_safety.py` for a
+- **`tests/fixtures.py::feature_flags`** pairs with `@voci.solo` in `test_safety.py` for a
   module-level dict with no per-task view. `test_strict_transfers_rejects_overdraft` is marked
   `skip` because it flips a flag that `test_ledger.py::test_transfer_is_permitted_to_overdraw_by_default`
   depends on staying off; `test_audit_flag_is_restored_afterwards` flips one nothing else reads, and

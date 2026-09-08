@@ -1,4 +1,4 @@
-"""Tests for velox._collection.collect: module import and collection errors."""
+"""Tests for voci._collection.collect: module import and collection errors."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from typing import Any, cast
 import pytest
 from _support import Project
 
-from velox._assertions import rewrite as _rewrite
-from velox._collection.collect import collect, module_name_for
-from velox._collection.selection import compile_tag_expression
-from velox._mocking import real_function
+from voci._assertions import rewrite as _rewrite
+from voci._collection.collect import collect, module_name_for
+from voci._collection.selection import compile_tag_expression
+from voci._mocking import real_function
 
 
 def _write(path: Path, source: str) -> Path:
@@ -23,13 +23,13 @@ def _write(path: Path, source: str) -> Path:
 
 def test_module_name_for_is_path_derived_and_rootdir_relative(tmp_path: Path) -> None:
     path = tmp_path / "pkg" / "test_utils.py"
-    assert module_name_for(path, tmp_path) == "velox_tests.pkg.test_utils"
+    assert module_name_for(path, tmp_path) == "voci_tests.pkg.test_utils"
 
 
 def test_module_name_for_escapes_non_identifier_segments(tmp_path: Path) -> None:
     path = tmp_path / "api-v2" / "test_a.py"
     name = module_name_for(path, tmp_path)
-    assert name.startswith("velox_tests.api_v2_")
+    assert name.startswith("voci_tests.api_v2_")
     assert name.endswith(".test_a")
 
 
@@ -131,20 +131,20 @@ def test_a_class_test_runs_on_a_fresh_instance_per_test(tmp_path: Path) -> None:
     assert result.errors == []
     for record in result.records:
         record.func()
-    # Through `real_function`: `record.func` is velox's own per-call wrapper, so the test
+    # Through `real_function`: `record.func` is voci's own per-call wrapper, so the test
     # module's globals are on the method underneath it.
     seen = real_function(result.records[0].func).__globals__["seen"]
     assert len(set(seen)) == 2
 
 
 def test_a_class_test_method_is_injected_like_any_other_test(tmp_path: Path) -> None:
-    """`self` is supplied by velox, so it must not read as a parameter with no injection."""
+    """`self` is supplied by voci, so it must not read as a parameter with no injection."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n"
-        "from velox import Depends\n"
+        "import voci\n"
+        "from voci import Depends\n"
         "\n"
-        "@velox.fixture()\n"
+        "@voci.fixture()\n"
         "async def number() -> int:\n"
         "    return 7\n"
         "\n"
@@ -231,10 +231,10 @@ def test_class_methods_and_module_functions_are_ordered_by_source_line(tmp_path:
 def test_a_parametrized_class_method_expands_per_case(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n"
+        "import voci\n"
         "\n"
         "class TestSomething:\n"
-        "    @velox.parametrize('n', [1, 2])\n"
+        "    @voci.parametrize('n', [1, 2])\n"
         "    def test_method(self, n):\n"
         "        assert n\n",
     )
@@ -365,7 +365,7 @@ def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
     tmp_path: Path,
 ) -> None:
     """A helper class that happens to define a `test_*`-named method (a fake client with a
-    `test_connection`, say) is ordinary code, not a suite velox lost."""
+    `test_connection`, say) is ordinary code, not a suite voci lost."""
     path = _write(
         tmp_path / "test_sample.py",
         "class Helper:\n    def test_method(self):\n        pass\n",
@@ -378,7 +378,7 @@ def test_a_class_not_named_like_a_test_is_not_flagged_even_with_a_test_method(
 
 
 def test_a_class_with_an_init_is_a_collection_error(tmp_path: Path) -> None:
-    """velox constructs the class itself, so an `__init__` it can't satisfy must be reported
+    """voci constructs the class itself, so an `__init__` it can't satisfy must be reported
     rather than left to fail once per test at run time."""
     path = _write(
         tmp_path / "test_sample.py",
@@ -454,13 +454,13 @@ def test_a_unittest_test_case_not_named_test_first_is_a_collection_error(tmp_pat
 
 
 def test_a_mark_on_a_class_is_a_collection_error(tmp_path: Path) -> None:
-    """A `@velox.skip` on the class would otherwise be read by nobody: its tests would run
+    """A `@voci.skip` on the class would otherwise be read by nobody: its tests would run
     exactly as though the mark weren't there."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n"
+        "import voci\n"
         "\n"
-        "@velox.skip('not yet')\n"
+        "@voci.skip('not yet')\n"
         "class TestSomething:\n"
         "    def test_method(self):\n"
         "        pass\n",
@@ -563,7 +563,7 @@ def test_a_test_name_bound_to_a_function_defined_under_another_name_is_a_collect
 
 def test_a_test_name_bound_to_a_callable_object_is_left_alone(tmp_path: Path) -> None:
     """`test_app = FastAPI()`, `test_client = Mock()`: callable, ordinary, and not a test body
-    anyone meant velox to run."""
+    anyone meant voci to run."""
     path = _write(
         tmp_path / "test_sample.py",
         "class Client:\n    def __call__(self):\n        pass\n\ntest_client = Client()\n",
@@ -587,7 +587,7 @@ def test_a_test_name_bound_to_data_is_left_alone(tmp_path: Path) -> None:
 
 def test_a_test_function_imported_from_another_module_is_left_alone(tmp_path: Path) -> None:
     """Not collected here (it belongs to the module that defines it) and not reported either:
-    the exclusion is deliberate, not a shape velox failed to understand."""
+    the exclusion is deliberate, not a shape voci failed to understand."""
     _write(tmp_path / "helpers.py", "def test_shared():\n    pass\n")
     path = _write(
         tmp_path / "test_sample.py",
@@ -689,34 +689,34 @@ def test_helper_named_test_star_imported_from_elsewhere_is_not_collected_twice(
     """The `__module__` filter: a `test_*`-named function imported into a module from
     somewhere else must not be collected as if it were defined there."""
     # `test_main.py`'s `from ... import ...` below is an ordinary Python import statement, which
-    # goes through the *real* import system (not velox's path-derived one) and therefore needs
-    # the helper module findable on `sys.path` — velox itself never touches `sys.path`, this is
+    # goes through the *real* import system (not voci's path-derived one) and therefore needs
+    # the helper module findable on `sys.path` — voci itself never touches `sys.path`, this is
     # purely to make the test's own fixture module importable the normal way.
     monkeypatch.syspath_prepend(str(tmp_path))
     helper = _write(
-        tmp_path / "velox_test_collect_helper.py", "async def test_helper():\n    pass\n"
+        tmp_path / "voci_test_collect_helper.py", "async def test_helper():\n    pass\n"
     )
     main = _write(
         tmp_path / "test_main.py",
-        "from velox_test_collect_helper import test_helper\n\nasync def test_own():\n    pass\n",
+        "from voci_test_collect_helper import test_helper\n\nasync def test_own():\n    pass\n",
     )
 
     try:
         result = collect([helper, main], rootdir=tmp_path)
     finally:
         # The plain `import` statement above registers a real, un-prefixed `sys.modules` entry,
-        # distinct from velox's own `velox_tests.velox_test_collect_helper`.
-        sys.modules.pop("velox_test_collect_helper", None)
+        # distinct from voci's own `voci_tests.voci_test_collect_helper`.
+        sys.modules.pop("voci_test_collect_helper", None)
 
     ids = [record.id for record in result.records]
-    assert ids == ["velox_test_collect_helper.py::test_helper", "test_main.py::test_own"]
+    assert ids == ["voci_test_collect_helper.py::test_helper", "test_main.py::test_own"]
 
 
 def test_skip_marked_test_is_excluded_from_records_and_reported_skipped(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n\n"
         "async def test_runs():\n"
@@ -735,11 +735,11 @@ def test_skip_marked_test_is_excluded_from_records_and_reported_skipped(tmp_path
 def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.skipif(True, reason='always')\n"
+        "import voci\n\n"
+        "@voci.skipif(True, reason='always')\n"
         "async def test_always_skipped():\n"
         "    pass\n\n"
-        "@velox.skipif(False, reason='never')\n"
+        "@voci.skipif(False, reason='never')\n"
         "async def test_not_skipped():\n"
         "    pass\n",
     )
@@ -753,8 +753,8 @@ def test_truthy_skipif_excludes_a_test_falsy_skipif_does_not(tmp_path: Path) -> 
 def test_tag_expr_excludes_non_matching_tests_into_deselected(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.tag('slow')\n"
+        "import voci\n\n"
+        "@voci.tag('slow')\n"
         "async def test_slow():\n"
         "    pass\n\n"
         "async def test_untagged():\n"
@@ -774,9 +774,9 @@ def test_skip_takes_priority_over_tag_expr_deselection(tmp_path: Path) -> None:
     test's skip status must not flip depending on which tags happen to be selected."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.tag('slow')\n"
-        "@velox.skip('unrelated reason')\n"
+        "import voci\n\n"
+        "@voci.tag('slow')\n"
+        "@voci.skip('unrelated reason')\n"
         "async def test_slow_and_skipped():\n"
         "    pass\n",
     )
@@ -792,7 +792,7 @@ def test_skip_takes_priority_over_tag_expr_deselection(tmp_path: Path) -> None:
 def test_no_tag_expr_deselects_nothing(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n@velox.tag('slow')\nasync def test_it():\n    pass\n",
+        "import voci\n\n@voci.tag('slow')\nasync def test_it():\n    pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
@@ -804,10 +804,10 @@ def test_no_tag_expr_deselects_nothing(tmp_path: Path) -> None:
 def test_deselected_tests_do_not_consume_an_index(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "async def test_a():\n"
         "    pass\n\n"
-        "@velox.tag('slow')\n"
+        "@voci.tag('slow')\n"
         "async def test_b():\n"
         "    pass\n\n"
         "async def test_c():\n"
@@ -828,11 +828,11 @@ def test_depends_defaulted_parameter_is_collected_with_a_real_resolution_plan(
     `_fixtures.plan_for` and attaches the resulting `ResolutionPlan` to the `TestRecord`."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 1\n\n"
-        "async def test_needs_db(value: int = velox.Depends(db)):\n"
+        "async def test_needs_db(value: int = voci.Depends(db)):\n"
         "    assert value == 1\n",
     )
 
@@ -867,8 +867,8 @@ def test_a_parametrized_test_expands_into_one_record_per_case(tmp_path: Path) ->
     injections and fail collection outright."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n, expected', [(1, 2), (2, 4)])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n, expected', [(1, 2), (2, 4)])\n"
         "async def test_double(n, expected):\n"
         "    assert n * 2 == expected\n",
     )
@@ -894,12 +894,12 @@ def test_a_parametrized_test_shares_its_plan_with_an_actual_dependency(tmp_path:
     former becomes `params`, the latter is resolved through `plan` exactly as usual."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 10\n\n"
-        "@velox.parametrize('n', [1, 2])\n"
-        "async def test_uses_both(n, value: int = velox.Depends(db)):\n"
+        "@voci.parametrize('n', [1, 2])\n"
+        "async def test_uses_both(n, value: int = voci.Depends(db)):\n"
         "    assert value == 10\n",
     )
 
@@ -914,9 +914,9 @@ def test_a_parametrized_test_shares_its_plan_with_an_actual_dependency(tmp_path:
 def test_stacked_parametrize_expands_the_full_cartesian_product(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('outer', [1, 2])\n"
-        "@velox.parametrize('inner', ['a', 'b'])\n"
+        "import voci\n\n"
+        "@voci.parametrize('outer', [1, 2])\n"
+        "@voci.parametrize('inner', ['a', 'b'])\n"
         "async def test_grid(outer, inner):\n"
         "    pass\n",
     )
@@ -935,9 +935,9 @@ def test_stacked_parametrize_expands_the_full_cartesian_product(tmp_path: Path) 
 def test_a_name_reused_across_stacked_parametrizes_is_a_collection_error(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, 2])\n"
-        "@velox.parametrize('n', [3, 4])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, 2])\n"
+        "@voci.parametrize('n', [3, 4])\n"
         "async def test_conflict(n):\n"
         "    pass\n",
     )
@@ -954,12 +954,12 @@ def test_a_parametrize_name_colliding_with_a_real_injection_is_a_collection_erro
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def value():\n"
         "    return 1\n\n"
-        "@velox.parametrize('value', [1, 2])\n"
-        "async def test_conflict(value: int = velox.Depends(value)):\n"
+        "@voci.parametrize('value', [1, 2])\n"
+        "async def test_conflict(value: int = voci.Depends(value)):\n"
         "    pass\n",
     )
 
@@ -975,9 +975,9 @@ def test_a_skipped_parametrized_test_is_reported_skipped_once_without_case_expan
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
-        "@velox.parametrize('n', [1, 2])\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
+        "@voci.parametrize('n', [1, 2])\n"
         "async def test_skipped(n):\n"
         "    raise AssertionError('must not run')\n",
     )
@@ -992,12 +992,12 @@ def test_a_skipped_parametrized_test_is_reported_skipped_once_without_case_expan
 def test_an_empty_argvalues_is_a_collection_error_not_a_silently_vanished_test(
     tmp_path: Path,
 ) -> None:
-    """`@velox.parametrize` rejects an empty `argvalues` at decoration time (module-import time,
+    """`@voci.parametrize` rejects an empty `argvalues` at decoration time (module-import time,
     from collection's point of view) rather than expanding into zero records with nothing to
     show for it."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n@velox.parametrize('n', [])\nasync def test_never_runs(n):\n    pass\n",
+        "import voci\n\n@voci.parametrize('n', [])\nasync def test_never_runs(n):\n    pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
@@ -1011,12 +1011,12 @@ def test_an_empty_argvalues_is_a_collection_error_not_a_silently_vanished_test(
 def test_a_parametrize_name_with_no_matching_parameter_is_a_collection_error(
     tmp_path: Path,
 ) -> None:
-    """A typo'd `@velox.parametrize` argument name -- one that doesn't match any parameter of the
+    """A typo'd `@voci.parametrize` argument name -- one that doesn't match any parameter of the
     test it decorates -- is refused at collection instead of expanding cleanly and then failing
     every case at call time with a bare `TypeError`."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n@velox.parametrize('typo', [1, 2])\nasync def test_x():\n    pass\n",
+        "import voci\n\n@voci.parametrize('typo', [1, 2])\nasync def test_x():\n    pass\n",
     )
 
     result = collect([path], rootdir=tmp_path)
@@ -1031,8 +1031,8 @@ def test_a_parametrize_name_is_allowed_when_the_test_takes_star_kwargs(tmp_path:
     exactly as valid there as it would be calling the function by hand."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, 2])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, 2])\n"
         "async def test_x(**kwargs):\n"
         "    assert kwargs['n'] in (1, 2)\n",
     )
@@ -1049,14 +1049,14 @@ def test_a_malformed_di_graph_is_still_a_collection_error(tmp_path: Path) -> Non
     attributed to the file, collection of the rest of the suite continues."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def narrow():\n"
         "    return 1\n\n"
-        "@velox.fixture(scope='session')\n"
-        "async def wide(x: int = velox.Depends(narrow)):\n"
+        "@voci.fixture(scope='session')\n"
+        "async def wide(x: int = voci.Depends(narrow)):\n"
         "    return x\n\n"
-        "async def test_needs_wide(value: int = velox.Depends(wide)):\n"
+        "async def test_needs_wide(value: int = voci.Depends(wide)):\n"
         "    assert value == 1\n",
     )
 
@@ -1088,11 +1088,11 @@ def test_a_test_depending_on_a_parametrized_fixture_expands_into_one_record_per_
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture(params=['sqlite', 'postgres'])\n"
+        "import voci\n\n"
+        "@voci.fixture(params=['sqlite', 'postgres'])\n"
         "async def backend(param):\n"
         "    return param\n\n"
-        "async def test_uses_backend(value: str = velox.Depends(backend)):\n"
+        "async def test_uses_backend(value: str = voci.Depends(backend)):\n"
         "    assert value in ('sqlite', 'postgres')\n",
     )
 
@@ -1103,7 +1103,7 @@ def test_a_test_depending_on_a_parametrized_fixture_expands_into_one_record_per_
         "test_sample.py::test_uses_backend[sqlite]",
         "test_sample.py::test_uses_backend[postgres]",
     ]
-    # Each case gets its own specialized plan, not a shared one -- unlike @velox.parametrize.
+    # Each case gets its own specialized plan, not a shared one -- unlike @voci.parametrize.
     assert result.records[0].plan is not result.records[1].plan
     assert [record.params for record in result.records] == [None, None]
 
@@ -1111,14 +1111,14 @@ def test_a_test_depending_on_a_parametrized_fixture_expands_into_one_record_per_
 def test_a_parametrized_fixture_expands_a_transitive_dependent_too(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture(params=['a', 'b'])\n"
+        "import voci\n\n"
+        "@voci.fixture(params=['a', 'b'])\n"
         "async def backend(param):\n"
         "    return param\n\n"
-        "@velox.fixture()\n"
-        "async def engine(b: str = velox.Depends(backend)):\n"
+        "@voci.fixture()\n"
+        "async def engine(b: str = voci.Depends(backend)):\n"
         "    return f'engine+{b}'\n\n"
-        "async def test_uses_engine(value: str = velox.Depends(engine)):\n"
+        "async def test_uses_engine(value: str = voci.Depends(engine)):\n"
         "    assert value.startswith('engine+')\n",
     )
 
@@ -1134,12 +1134,12 @@ def test_a_parametrized_fixture_expands_a_transitive_dependent_too(tmp_path: Pat
 def test_fixture_params_and_test_level_parametrize_cross_multiply(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture(params=['a', 'b'])\n"
+        "import voci\n\n"
+        "@voci.fixture(params=['a', 'b'])\n"
         "async def backend(param):\n"
         "    return param\n\n"
-        "@velox.parametrize('n', [1, 2])\n"
-        "async def test_both(n, value: str = velox.Depends(backend)):\n"
+        "@voci.parametrize('n', [1, 2])\n"
+        "async def test_both(n, value: str = voci.Depends(backend)):\n"
         "    pass\n",
     )
 
@@ -1163,8 +1163,8 @@ def test_fixture_params_and_test_level_parametrize_cross_multiply(tmp_path: Path
 def test_a_test_unrelated_to_a_parametrized_fixture_is_not_expanded(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture(params=['a', 'b'])\n"
+        "import voci\n\n"
+        "@voci.fixture(params=['a', 'b'])\n"
         "async def backend(param):\n"
         "    return param\n\n"
         "async def test_plain():\n"
@@ -1180,12 +1180,12 @@ def test_a_test_unrelated_to_a_parametrized_fixture_is_not_expanded(tmp_path: Pa
 def test_a_fixture_parametrized_with_no_param_argument_is_a_collection_error(
     tmp_path: Path,
 ) -> None:
-    """`@velox.fixture(params=...)` is validated at decoration time -- a broken fixture module
+    """`@voci.fixture(params=...)` is validated at decoration time -- a broken fixture module
     surfaces as a whole-file `CollectionError`, the same way any other bad decoration would."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture(params=['a', 'b'])\n"
+        "import voci\n\n"
+        "@voci.fixture(params=['a', 'b'])\n"
         "async def backend():\n"
         "    return 1\n\n"
         "async def test_never_collected():\n"
@@ -1237,12 +1237,12 @@ def test_a_patch_decorated_test_still_has_its_depends_defaults_injected(
     path = _write(
         tmp_path / "test_sample.py",
         "from unittest import mock\n"
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 1\n\n"
         "@mock.patch('os.getcwd', return_value='/x')\n"
-        "async def test_patched(getcwd, value: int = velox.Depends(db)):\n"
+        "async def test_patched(getcwd, value: int = voci.Depends(db)):\n"
         "    assert value == 1\n",
     )
 
@@ -1253,7 +1253,7 @@ def test_a_patch_decorated_test_still_has_its_depends_defaults_injected(
     record = result.records[0]
     assert record.plan.root_args == (("value", 0, False),)
     assert record.plan.steps[0].fixture.name == "db"
-    # The mock's own parameter is filled by `unittest.mock`, not by velox.
+    # The mock's own parameter is filled by `unittest.mock`, not by voci.
     assert record.patches == ("getcwd",)
 
 
@@ -1262,7 +1262,7 @@ def test_a_patch_decorated_test_records_what_it_patches(tmp_path: Path) -> None:
         tmp_path / "test_sample.py",
         "import os\n"
         "from unittest import mock\n\n"
-        "@mock.patch.dict(os.environ, {'VELOX_TEST': '1'})\n"
+        "@mock.patch.dict(os.environ, {'VOCI_TEST': '1'})\n"
         "async def test_env():\n"
         "    pass\n\n"
         "async def test_plain():\n"
@@ -1277,16 +1277,16 @@ def test_a_patch_decorated_test_records_what_it_patches(tmp_path: Path) -> None:
 
 def test_a_patch_multiple_test_collects_with_its_named_mock_parameters(tmp_path: Path) -> None:
     """`mock.patch.multiple` fills its parameters by name, so they are supplied rather than
-    missing -- exactly like `@velox.parametrize`'s, and alongside a real injection."""
+    missing -- exactly like `@voci.parametrize`'s, and alongside a real injection."""
     path = _write(
         tmp_path / "test_sample.py",
         "from unittest import mock\n"
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 1\n\n"
         "@mock.patch.multiple('os.path', exists=mock.DEFAULT, isdir=mock.DEFAULT)\n"
-        "async def test_patched(exists, isdir, value: int = velox.Depends(db)):\n"
+        "async def test_patched(exists, isdir, value: int = voci.Depends(db)):\n"
         "    assert value == 1\n",
     )
 
@@ -1331,12 +1331,12 @@ def test_a_depends_default_in_a_slot_mock_patch_fills_is_a_collection_error(
     path = _write(
         tmp_path / "test_sample.py",
         "from unittest import mock\n"
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 1\n\n"
         "@mock.patch('os.getcwd')\n"
-        "async def test_patched(value: int = velox.Depends(db), getcwd=None):\n"
+        "async def test_patched(value: int = voci.Depends(db), getcwd=None):\n"
         "    pass\n",
     )
 
@@ -1354,17 +1354,17 @@ def test_an_ordinary_wrapping_decorator_no_longer_hides_an_injection(tmp_path: P
     path = _write(
         tmp_path / "test_sample.py",
         "import functools\n"
-        "import velox\n\n"
+        "import voci\n\n"
         "def announce(fn):\n"
         "    @functools.wraps(fn)\n"
         "    async def wrapper(*args, **kwargs):\n"
         "        return await fn(*args, **kwargs)\n"
         "    return wrapper\n\n"
-        "@velox.fixture()\n"
+        "@voci.fixture()\n"
         "async def db():\n"
         "    return 1\n\n"
         "@announce\n"
-        "async def test_wrapped(value: int = velox.Depends(db)):\n"
+        "async def test_wrapped(value: int = voci.Depends(db)):\n"
         "    assert value == 1\n",
     )
 
@@ -1376,15 +1376,15 @@ def test_an_ordinary_wrapping_decorator_no_longer_hides_an_injection(tmp_path: P
     assert result.records[0].patches == ()
 
 
-# `velox.case(..., marks=...)`: marks that reach one case of a parametrized test.
+# `voci.case(..., marks=...)`: marks that reach one case of a parametrized test.
 # ------------------------------------------------------------------------------------------
 
 
 def test_a_case_marked_skip_is_skipped_and_its_siblings_still_run(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.skip('flaky case'))])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.skip('flaky case'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1400,8 +1400,8 @@ def test_a_case_marked_skip_is_skipped_and_its_siblings_still_run(tmp_path: Path
 def test_a_cases_marks_reach_that_cases_record_only(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.xfail('known'))])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.xfail('known'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1422,13 +1422,13 @@ def test_a_case_with_marks_of_its_own_does_not_re_evaluate_the_functions_own_con
     `decided` promises callers that evaluating it once is the whole contract."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "calls = []\n\n"
         "def _counted():\n"
         "    calls.append(1)\n"
         "    return True\n\n"
-        "@velox.xfail('known', condition=_counted)\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "@voci.xfail('known', condition=_counted)\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.tag('slow'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1446,8 +1446,8 @@ def test_a_tag_on_one_case_selects_that_case_alone(tmp_path: Path) -> None:
     for a test one of whose cases is tagged and the rest are not."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.tag('slow'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1461,8 +1461,8 @@ def test_a_tag_on_one_case_selects_that_case_alone(tmp_path: Path) -> None:
 def test_a_tagged_case_is_deselected_by_a_negated_tag_expression(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.tag('slow'))])\n"
+        "import voci\n\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.tag('slow'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1478,10 +1478,10 @@ def test_a_case_condition_that_raises_is_one_collection_error_for_the_test(
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "def _boom():\n"
         "    raise RuntimeError('condition boom')\n\n"
-        "@velox.parametrize('n', [1, velox.case(2, marks=velox.skipif(_boom, reason='x'))])\n"
+        "@voci.parametrize('n', [1, voci.case(2, marks=voci.skipif(_boom, reason='x'))])\n"
         "async def test_it(n):\n"
         "    pass\n",
     )
@@ -1498,7 +1498,7 @@ def test_a_records_marks_are_the_functions_own_where_no_case_carries_any(
 ) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n@velox.timeout(5)\nasync def test_it():\n    pass\n",
+        "import voci\n\n@voci.timeout(5)\nasync def test_it():\n    pass\n",
     )
 
     (record,) = collect([path], rootdir=tmp_path).records
@@ -1511,8 +1511,8 @@ def test_an_xfail_whose_condition_does_not_hold_is_not_on_the_record(tmp_path: P
     whether one applies."""
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.xfail('only elsewhere', condition=False)\n"
+        "import voci\n\n"
+        "@voci.xfail('only elsewhere', condition=False)\n"
         "async def test_it():\n"
         "    pass\n",
     )
@@ -1525,8 +1525,8 @@ def test_an_xfail_whose_condition_does_not_hold_is_not_on_the_record(tmp_path: P
 def test_an_xfail_condition_is_evaluated_at_collection_not_at_import(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
-        "import velox\n\n"
-        "@velox.xfail('computed', condition=lambda: True)\n"
+        "import voci\n\n"
+        "@voci.xfail('computed', condition=lambda: True)\n"
         "async def test_it():\n"
         "    pass\n",
     )

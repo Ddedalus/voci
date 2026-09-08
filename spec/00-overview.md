@@ -1,13 +1,13 @@
-# velox — Specification: Overview
+# voci — Specification: Overview
 
 Status: human reviewed.
 
-## 1. What velox is
+## 1. What voci is
 
-velox is a test runner for **fully-async Python codebases** (FastAPI + async SQLAlchemy is the
+voci is a test runner for **fully-async Python codebases** (FastAPI + async SQLAlchemy is the
 reference shape). It runs a whole suite in **one process on one long-lived event loop**, with tests
 as **concurrent asyncio tasks**, and it replaces pytest's implicit name-based fixture system with
-**explicit dependency injection** following FastAPI patterns. velox leverages the **existing pytest assertion introspection** to provide familiar error messages. velox also works with `coverage` out of the box.
+**explicit dependency injection** following FastAPI patterns. voci leverages the **existing pytest assertion introspection** to provide familiar error messages. voci also works with `coverage` out of the box.
 
 This allows some important wins over pytest and xdist:
 
@@ -17,8 +17,8 @@ This allows some important wins over pytest and xdist:
 
 
 The cost of admission is quite simple:
-1. velox is not pytest
-2. velox has no plugin ecosystem
+1. voci is not pytest
+2. voci has no plugin ecosystem
 3. you must rewrite your fixtures wiring, with the help of a migration tool
 4. python 3.13+
 
@@ -83,7 +83,7 @@ The cost of admission is quite simple:
 | 9 | Capture: stdout/stderr, logging, tmp_path | [09-capture-and-logging.md](09-capture-and-logging.md) |
 | 10 | Tracebacks, reporter, machine-readable output | [10-reporting.md](10-reporting.md) |
 | 11 | Runtime safety: watchdog, signals, warnings, unraisables, coverage | [11-runtime-safety.md](11-runtime-safety.md) |
-| 12 | pytest → velox migration codegen | [12-migration.md](12-migration.md) |
+| 12 | pytest → voci migration codegen | [12-migration.md](12-migration.md) |
 
 ## 6. Cross-cutting invariants
 
@@ -101,7 +101,7 @@ These are binding on every component. A design that violates one needs this docu
 - **I5 — Zero dispatch overhead on the hot path.** No hook system, no per-test object trees, no
   eager failure representations. Failure reprs are built only on failure.
 - **I6 — Escalate, never silently degrade.** Where a mechanism cannot be made concurrency-safe
-  (raw global patching, fd capture, per-test warning filters), velox escalates the test to a
+  (raw global patching, fd capture, per-test warning filters), voci escalates the test to a
   stricter tier (solo → isolated) or warns loudly and names the cause. It never pretends.
 - **I7 — Cold start is a first-class budget.** < 50 ms from process start to first test dispatched,
   CI-checked. No entry-point scanning, one argv parse, lazy imports, guaranteed-writable rewrite
@@ -111,7 +111,7 @@ These are binding on every component. A design that violates one needs this docu
 
 ## 7. MVP scope
 
-The MVP is **v0.1: a runner good enough to run velox's own test suite and one real FastAPI service
+The MVP is **v0.1: a runner good enough to run voci's own test suite and one real FastAPI service
 suite**, migrated by hand. Everything in the "MVP" column is required for that; everything else is
 sequenced in the roadmap sections of the component specs.
 
@@ -126,7 +126,7 @@ sequenced in the roadmap sections of the component specs.
 | Reporter: tty blocks, non-tty mode, short summary | live footer, `--durations`, JUnit XML, `--report-json`, GH annotations, `--stream-failures` |
 | Marks: skip/skipif | xfail/parametrize/tags, `-k`/`-m` |
 | Ctrl-C choreography, un-awaited-coroutine failure |  Loop-starvation watchdog, unraisable attribution polish, warnings-in-parallel story |
-| DI-override mocking; `velox.fastapi` ContextVar-layered `dependency_overrides`/`app.state`; stock `unittest.mock` detected and scheduled **solo** | General-purpose task-local routing `velox.patch` (tier c) |
+| DI-override mocking; `voci.fastapi` ContextVar-layered `dependency_overrides`/`app.state`; stock `unittest.mock` detected and scheduled **solo** | General-purpose task-local routing `voci.patch` (tier c) |
 | — | Migration codegen (separate deliverable, starts after v0.1 API freeze) |
 
 ## 8. Milestones
@@ -139,9 +139,9 @@ sequenced in the roadmap sections of the component specs.
 - **M2 — Safety and ergonomics.** Watchdog, signals, timeouts, exclusive/solo scheduling, patching
   tiers, `--isolated`, JUnit/JSON, collection cache.
 - **M3 — Adoption.** Migration codegen, `coverage.py` verification in CI, docs, the benchmark story
-  (velox vs pytest vs `xdist -n 4` on a real suite, published and reproducible).
+  (voci vs pytest vs `xdist -n 4` on a real suite, published and reproducible).
 
-**Gate on M1:** velox runs its own suite. **Gate on M2:** velox runs the reference FastAPI suite
+**Gate on M1:** voci runs its own suite. **Gate on M2:** voci runs the reference FastAPI suite
 green, with wall-clock ≥ 3× faster than serial pytest on the same machine. **Gate on M3:** the
 codegen migrates that suite from pytest with no hand edits to fixture wiring.
 
@@ -162,7 +162,7 @@ targets to hit.
 | JUnit/JSON emitters | 250 | |
 | CLI/config (single parse) | 200 | |
 | Patch router (tier c) | 300 | Not in MVP — see [08](08-patching-and-isolation.md) |
-| `velox.fastapi` layered client | 120 | Layered overrides + state, install-once, escalation ([08](08-patching-and-isolation.md) §3.1) |
+| `voci.fastapi` layered client | 120 | Layered overrides + state, install-once, escalation ([08](08-patching-and-isolation.md) §3.1) |
 | **Fresh total** | **~3.4k** | |
 | Vendored rewriter + explanation engine | ~2.4k | Plus upstream tests |
 
@@ -170,12 +170,12 @@ targets to hit.
 
 1. **Blocking calls in user code destroy the value proposition.** One sync DB driver freezes the
    whole suite. Mitigation is the watchdog and duration tracking.
-2. **Migration cost exceeds the speed win.** Mitigated by codegen; if codegen slips, velox is a
+2. **Migration cost exceeds the speed win.** Mitigated by codegen; if codegen slips, voci is a
    greenfield-only tool. This is the single biggest adoption risk and M3 exists for it.
-3. **Cold-start regression in CI containers.** If the rewrite pyc cache is unwritable velox silently
+3. **Cold-start regression in CI containers.** If the rewrite pyc cache is unwritable voci silently
    pays 4.6× per run. Must fall back to no-rewrite mode explicitly and loudly (R§2).
 4. **Concurrency exposes latent test-order and shared-state bugs in adopters' suites.** Real bugs,
-   but they will be reported as velox bugs. Needs a documented triage ladder and good failure
+   but they will be reported as voci bugs. Needs a documented triage ladder and good failure
    messages (`--concurrency=1` as the first debugging step).
 5. **Vendored-rewriter drift.** We fork `rewrite.py`; upstream keeps moving. Pin a known-good pytest
    commit, record it, and re-vendor deliberately rather than tracking.
@@ -186,16 +186,16 @@ Four things the examples surfaced. The second and first are **resolved**; they s
 their resolutions because the reasoning is load-bearing for the reference stack.
 
 ### Fixture import path — RESOLVED (2026-08-09)
-1. Nothing in the spec makes tests/fixtures.py importable. This is the real one. spec/02 §5 says velox never touches sys.path; spec/03 imports test modules under generated velox_tests.* names. Neither makes the test tree a package, so from tests.fixtures import api_client — the only way to share a fixture, since there's no conftest — cannot resolve. The examples assume velox prepends the rootdir to sys.path once at startup: one predictable insertion, not pytest's per-conftest-directory games. Whatever the answer, it needs writing down, because it's load-bearing for the no-conftest decision.
+1. Nothing in the spec makes tests/fixtures.py importable. This is the real one. spec/02 §5 says voci never touches sys.path; spec/03 imports test modules under generated voci_tests.* names. Neither makes the test tree a package, so from tests.fixtures import api_client — the only way to share a fixture, since there's no conftest — cannot resolve. The examples assume voci prepends the rootdir to sys.path once at startup: one predictable insertion, not pytest's per-conftest-directory games. Whatever the answer, it needs writing down, because it's load-bearing for the no-conftest decision.
 
 A: Editing sys.path is trivial. What matters is that we need a convention that will work with all the mainstream tooling: ruff, pyright/pyrefly, VSCode language server etc. There is no use of imports that show in red in the IDE or require intricate configuration for every new dev tool.
 
 The resolution takes the steer literally and stops there: `cli.main` prepends `rootdir` (the same
 `rootdir` `_config.resolve` already computes, spec/02 §3) to `sys.path[0]` exactly once, at the
-same point `[tool.velox] env` is applied — before the first test module import, restored in a
+same point `[tool.voci] env` is applied — before the first test module import, restored in a
 `finally` so repeated in-process `main()` calls (this repo's own suite does that) never accumulate
 duplicate entries. Nothing else changes: `_collect.py` keeps importing every test file under its
-unique, synthetic `velox_tests.<relpath>` name via `importlib.util.spec_from_file_location`
+unique, synthetic `voci_tests.<relpath>` name via `importlib.util.spec_from_file_location`
 (spec/03 §3), unmodified. That one insertion is enough because every import the examples actually
 need is a plain **absolute** import rooted at `rootdir` — `from relay.cache import FakeClock`
 (`examples/02-async-library`), `from tests.fixtures import api_client` and `from app.db import
@@ -207,36 +207,36 @@ adopters zero configuration — the review note's bar.
 
 What it deliberately does **not** fix: a *relative* import between test modules, e.g.
 `tests/assertion/test_explanations.py`'s `from .conftest import callequal`. That resolves against
-the importing module's `__package__`, which under the synthetic-name scheme is `velox_tests.
+the importing module's `__package__`, which under the synthetic-name scheme is `voci_tests.
 assertion` — a name with no directory anywhere on disk — so no `sys.path` entry can ever satisfy
-it (the failure names `velox_tests`, not `tests`; `sys.path` is never even consulted). Building
+it (the failure names `voci_tests`, not `tests`; `sys.path` is never even consulted). Building
 that back would mean synthesizing namespace-package stubs for every ancestor directory, i.e.
 reintroducing the per-directory package-walking machinery spec/03 §3 explicitly deletes versus
 pytest, to support a convention this resolution rejects outright: **relative imports between test
 modules are unsupported.** Share code via an absolute import rooted at `rootdir` instead (`from
 tests.assertion.conftest import callequal`) — the one `sys.path` insertion above already makes
 that work. This doesn't block the M1 gate: `examples/01`/`examples/02` use only absolute imports;
-`tests/assertion/`'s one relative import only surfaces when running velox's own suite under
-velox, which M1-PLAN's own dogfood item already treats as not realistic before M3.
+`tests/assertion/`'s one relative import only surfaces when running voci's own suite under
+voci, which M1-PLAN's own dogfood item already treats as not realistic before M3.
 Spec updated: [02](02-cli-and-config.md) §5, [03](03-discovery-and-collection.md) §3.
 
 ### FastAPI testing — RESOLVED (2026-08-07)
-2. `app.dependency_overrides` and `app.state` are per-app-instance mutable dicts, so the docs-blessed idiom — mutate a module-level singleton's overrides and reset in teardown — is a process-global write that concurrent tests clobber; the `create_app(settings)` factory that dodges it is adoption-hostile, because real FastAPI code is singleton-shaped and no team rewrites production wiring to adopt a test runner. The resolution keeps the singleton and moves the *view*: routes bake in only a pointer to the app (`dependency_overrides_provider`, captured at route-decoration time) and read the override dynamically on every request via `getattr(provider, "dependency_overrides", {}).get(call, call)`, so replacing that attribute once with a ContextVar-layered `Mapping` proxy makes overrides per-test while the app object stays shared and untouched. A new MVP module, `velox.fastapi`, installs the proxy once per app object and scopes each `client()` block's mappings to a layer — reads consult layer then base, writes inside a layer stay in the layer, nested clients stack inner-wins — with `app.state` layered the same way and a loud I6 escalation if the proxy is ever replaced out from under velox. This is tier (c)'s ContextVar-routing insight applied to exactly one well-behaved surface (~120 LOC, no general patch machinery); general-purpose `velox.patch` remains deferred. It rests on a handful of upstream facts, which velox pins with assumption tests (`tests/test_fastapi_layering.py`) so that an upstream change breaks velox's own suite rather than adopters' runs. Mechanism, limits, and rejected alternatives: [08](08-patching-and-isolation.md) §3.1; the surface and the canonical fixture: [01](01-public-api.md) §3.
+2. `app.dependency_overrides` and `app.state` are per-app-instance mutable dicts, so the docs-blessed idiom — mutate a module-level singleton's overrides and reset in teardown — is a process-global write that concurrent tests clobber; the `create_app(settings)` factory that dodges it is adoption-hostile, because real FastAPI code is singleton-shaped and no team rewrites production wiring to adopt a test runner. The resolution keeps the singleton and moves the *view*: routes bake in only a pointer to the app (`dependency_overrides_provider`, captured at route-decoration time) and read the override dynamically on every request via `getattr(provider, "dependency_overrides", {}).get(call, call)`, so replacing that attribute once with a ContextVar-layered `Mapping` proxy makes overrides per-test while the app object stays shared and untouched. A new MVP module, `voci.fastapi`, installs the proxy once per app object and scopes each `client()` block's mappings to a layer — reads consult layer then base, writes inside a layer stay in the layer, nested clients stack inner-wins — with `app.state` layered the same way and a loud I6 escalation if the proxy is ever replaced out from under voci. This is tier (c)'s ContextVar-routing insight applied to exactly one well-behaved surface (~120 LOC, no general patch machinery); general-purpose `voci.patch` remains deferred. It rests on a handful of upstream facts, which voci pins with assumption tests (`tests/test_fastapi_layering.py`) so that an upstream change breaks voci's own suite rather than adopters' runs. Mechanism, limits, and rejected alternatives: [08](08-patching-and-isolation.md) §3.1; the surface and the canonical fixture: [01](01-public-api.md) §3.
 
 ### B008 false positives — `with_()` portion superseded (2026-08-08)
-3. B008 fires on every test in a velox suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["velox.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started.
+3. B008 fires on every test in a voci suite. Depends(...) in a parameter default is a function call in an argument default. Fixable with extend-immutable-calls = ["voci.Depends"], which every example's pyproject.toml now carries — that line belongs in getting-started.
 
    The rest of this entry was about `with_()`'s ergonomics specifically: inline `with_(transport=fake)` has no qualified name to whitelist, so the examples bound derived fixtures to module-level names instead. `with_()` itself is now deferred to roadmap ([01](01-public-api.md) §10) for a different, more fundamental reason — a caching-identity problem — but this B008 cost is recorded there too, as a second, independent argument against shipping the surface as first drafted.
 
 A: I am confused here. I know pytest people would build fixtures like that, but I never saw a FastAPI dep built this way. With that note, the FastAPI DI has an annoying limitation that dep functions cannot be parametrized. I'd rather have `value: T = Depends(dep_factory, param=...)` than have to call the factories this way.
 
-   That instinct is most of why `with_()` ended up deferred rather than shipped: today's replacement is exactly the plain-function form gestured at above — a sibling `@velox.fixture()` that wires in the replacement dependency directly, no derivation method involved:
+   That instinct is most of why `with_()` ended up deferred rather than shipped: today's replacement is exactly the plain-function form gestured at above — a sibling `@voci.fixture()` that wires in the replacement dependency directly, no derivation method involved:
    ```python
-   @velox.fixture()
+   @voci.fixture()
    def flaky_relay(transport: FakeTransport = Depends(flaky_transport)) -> Relay:
        return Relay(transport, retries=3, base_delay=0.001)
    ```
    Being an ordinary function definition rather than a call expression sitting in an argument default, it never trips B008 in the first place.
 
 ### tmp factory type
-4. velox.tmp_path_factory has no named type. Used here as velox.TmpPathFactory with .mktemp(name).
+4. voci.tmp_path_factory has no named type. Used here as voci.TmpPathFactory with .mktemp(name).

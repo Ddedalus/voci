@@ -1,9 +1,9 @@
 [project]
-name = "velox-example-async-library"
+name = "voci-example-async-library"
 version = "0.0.0"
 requires-python = ">=3.13"
 
-[tool.velox]
+[tool.voci]
 testpaths = ["tests"]
 concurrency = 16
 timeout = 30

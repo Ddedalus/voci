@@ -1,4 +1,4 @@
-"""Tests for velox._warnings: filter-spec parsing, the shim's per-warning decision, and the
+"""Tests for voci._warnings: filter-spec parsing, the shim's per-warning decision, and the
 per-test/session collectors it records into.
 """
 
@@ -9,8 +9,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from velox import _warnings
-from velox._assertions._vendor.rewrite import VeloxAssertRewriteWarning
+from voci import _warnings
+from voci._assertions._vendor.rewrite import VociAssertRewriteWarning
 
 
 @pytest.fixture
@@ -63,10 +63,10 @@ def test_an_action_may_be_abbreviated() -> None:
 
 def test_a_dotted_category_is_imported() -> None:
     parsed = _warnings.parse_filter(
-        "ignore::velox._assertions._vendor.rewrite.VeloxAssertRewriteWarning"
+        "ignore::voci._assertions._vendor.rewrite.VociAssertRewriteWarning"
     )
 
-    assert parsed.category is VeloxAssertRewriteWarning
+    assert parsed.category is VociAssertRewriteWarning
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,7 @@ def test_a_dotted_category_is_imported() -> None:
     [
         "nope",
         "ignore::NotAWarning",
-        "ignore::velox.nothing.AtAll",
+        "ignore::voci.nothing.AtAll",
         "ignore::int",
         "ignore:(unclosed:UserWarning",
         "ignore::UserWarning::nine",

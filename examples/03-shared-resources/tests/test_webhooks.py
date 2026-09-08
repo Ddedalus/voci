@@ -11,8 +11,8 @@ import asyncio
 import sqlite3
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from ledger.migrations import LATEST, migrate
 from ledger.receiver import WEBHOOK_PORT, Receiver, send
@@ -22,7 +22,7 @@ from tests.fixtures import account, ledger, migration_db, receiver
 
 # Covers all four scenarios in sequence, so the budget covers their combined socket round-trips
 # and migration work, not just the heaviest one alone.
-@velox.timeout(20)
+@voci.timeout(20)
 async def test_receiver_scenarios(
     rx: Annotated[Receiver, Depends(receiver)],
     svc: Annotated[LedgerService, Depends(ledger)],

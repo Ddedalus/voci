@@ -1,4 +1,4 @@
-"""Tests for velox's public API: fixture declaration, marks, parametrize, builtin fixtures,
+"""Tests for voci's public API: fixture declaration, marks, parametrize, builtin fixtures,
 and the `approx`/`raises` assertion helpers.
 """
 
@@ -9,22 +9,22 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-import velox
-from velox import Depends
-from velox._marks import Marks, marks_of
+import voci
+from voci import Depends
+from voci._marks import Marks, marks_of
 
 
-@velox.fixture()
+@voci.fixture()
 def alpha() -> int:
     return 1
 
 
-@velox.fixture(scope="session", exclusive="db", name="the beta")
+@voci.fixture(scope="session", exclusive="db", name="the beta")
 def beta() -> str:
     return "b"
 
 
-@velox.fixture()
+@voci.fixture()
 def gamma(a: int = Depends(alpha), b: str = Depends(beta)) -> str:
     return f"{a}{b}"
 
@@ -46,7 +46,7 @@ def test_plan_is_read_from_defaults() -> None:
 
 
 def test_keyword_only_dependencies_are_found() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def delta(*, a: int = Depends(alpha)) -> int:
         return a
 
@@ -56,7 +56,7 @@ def test_keyword_only_dependencies_are_found() -> None:
 
 
 def test_ordinary_defaults_are_left_alone() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def epsilon(a: int = Depends(alpha), retries: int = 3) -> int:
         return a * retries
 
@@ -64,23 +64,23 @@ def test_ordinary_defaults_are_left_alone() -> None:
 
 
 def test_generators_and_async_are_all_fixtures() -> None:
-    @velox.fixture()
+    @voci.fixture()
     async def agen() -> AsyncIterator[int]:
         yield 1
 
-    @velox.fixture()
+    @voci.fixture()
     async def coro() -> int:
         return 1
 
-    assert isinstance(agen, velox.Fixture)
-    assert isinstance(coro, velox.Fixture)
+    assert isinstance(agen, voci.Fixture)
+    assert isinstance(coro, voci.Fixture)
 
 
 def test_marks_stack_into_one_record() -> None:
-    @velox.solo
-    @velox.tag("slow", "integration")
-    @velox.timeout(30)
-    @velox.xfail("upstream", strict=True, raises=TimeoutError)
+    @voci.solo
+    @voci.tag("slow", "integration")
+    @voci.timeout(30)
+    @voci.xfail("upstream", strict=True, raises=TimeoutError)
     def target() -> None: ...
 
     marks = marks_of(target)
@@ -99,7 +99,7 @@ def test_unmarked_function_has_an_empty_record() -> None:
 
 
 def test_parametrize_normalizes_names_and_cases() -> None:
-    @velox.parametrize("n,expected", [(1, 2), (2, 4)])
+    @voci.parametrize("n,expected", [(1, 2), (2, 4)])
     def target(n: int, expected: int) -> None: ...
 
     (param_set,) = marks_of(target).parametrizations
@@ -108,7 +108,7 @@ def test_parametrize_normalizes_names_and_cases() -> None:
 
 
 def test_parametrize_wraps_single_name_values() -> None:
-    @velox.parametrize("email", ["a@b.c", "d@e.f"])
+    @voci.parametrize("email", ["a@b.c", "d@e.f"])
     def target(email: str) -> None: ...
 
     (param_set,) = marks_of(target).parametrizations
@@ -116,18 +116,18 @@ def test_parametrize_wraps_single_name_values() -> None:
 
 
 def test_case_carries_marks_for_one_parametrize_case() -> None:
-    @velox.parametrize("n", [1, velox.case(2, marks=velox.xfail("known"))])
+    @voci.parametrize("n", [1, voci.case(2, marks=voci.xfail("known"))])
     def target(n: int) -> None: ...
 
     (param_set,) = marks_of(target).parametrizations
     assert param_set.argvalues == ((1,), (2,))
-    assert isinstance(velox.case(2), velox.ParamCase)
+    assert isinstance(voci.case(2), voci.ParamCase)
     assert [marks.xfail is not None for marks in param_set.case_marks] == [False, True]
 
 
 def test_stacked_parametrize_puts_the_outermost_first() -> None:
-    @velox.parametrize("outer", [1, 2])
-    @velox.parametrize("inner", ["a", "b"])
+    @voci.parametrize("outer", [1, 2])
+    @voci.parametrize("inner", ["a", "b"])
     def target(outer: int, inner: str) -> None: ...
 
     outer, inner = marks_of(target).parametrizations
@@ -137,23 +137,23 @@ def test_stacked_parametrize_puts_the_outermost_first() -> None:
 
 def test_parametrize_rejects_a_mismatched_case() -> None:
     with pytest.raises(ValueError, match="expected 2 value"):
-        velox.parametrize("a,b", [(1, 2), (3,)])
+        voci.parametrize("a,b", [(1, 2), (3,)])
 
 
 def test_builtin_fixtures_are_fixtures() -> None:
-    assert velox.tmp_path.scope == "function"
-    assert velox.tmp_path_factory.scope == "session"
-    assert velox.tmpdir.scope == "function"
-    assert velox.tmpdir_factory.scope == "session"
+    assert voci.tmp_path.scope == "function"
+    assert voci.tmp_path_factory.scope == "session"
+    assert voci.tmpdir.scope == "function"
+    assert voci.tmpdir_factory.scope == "session"
     assert all(
-        isinstance(f, velox.Fixture)
+        isinstance(f, voci.Fixture)
         for f in (
-            velox.tmp_path,
-            velox.tmpdir,
-            velox.tmpdir_factory,
-            velox.capture,
-            velox.log_records,
-            velox.test_info,
+            voci.tmp_path,
+            voci.tmpdir,
+            voci.tmpdir_factory,
+            voci.capture,
+            voci.log_records,
+            voci.test_info,
         )
     )
 
@@ -161,7 +161,7 @@ def test_builtin_fixtures_are_fixtures() -> None:
 def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
     """`set_level` validates its `level`/`logger` arguments the moment it is called, not
     deferred until `with ...:` is entered."""
-    records = velox.LogRecords([])
+    records = voci.LogRecords([])
 
     with pytest.raises(ValueError, match="unknown logging level"):
         records.set_level("not-a-real-level")
@@ -188,14 +188,14 @@ def test_log_records_set_level_raises_at_call_time_not_at_enter() -> None:
 
 
 def test_approx_compares_both_ways() -> None:
-    assert 0.1 + 0.2 == velox.approx(0.3)  # noqa: SIM300 — both orders are the point
-    assert velox.approx(0.3) == 0.1 + 0.2
-    assert velox.approx(0.3) != 0.3001
-    assert velox.approx(0.3, rel=0.01) == 0.3001
+    assert 0.1 + 0.2 == voci.approx(0.3)  # noqa: SIM300 — both orders are the point
+    assert voci.approx(0.3) == 0.1 + 0.2
+    assert voci.approx(0.3) != 0.3001
+    assert voci.approx(0.3, rel=0.01) == 0.3001
 
 
 def test_raises_matches_and_exposes_the_exception() -> None:
-    with velox.raises(ValueError, match="bad input") as caught:
+    with voci.raises(ValueError, match="bad input") as caught:
         raise ValueError("bad input here")
 
     assert caught.type is ValueError
@@ -203,15 +203,15 @@ def test_raises_matches_and_exposes_the_exception() -> None:
 
 
 def test_raises_fails_when_nothing_is_raised() -> None:
-    with pytest.raises(AssertionError, match="DID NOT RAISE ValueError"), velox.raises(ValueError):
+    with pytest.raises(AssertionError, match="DID NOT RAISE ValueError"), voci.raises(ValueError):
         pass
 
 
 def test_raises_lets_an_unexpected_exception_through() -> None:
-    with pytest.raises(KeyError), velox.raises(ValueError):
+    with pytest.raises(KeyError), voci.raises(ValueError):
         raise KeyError("other")
 
 
 def test_raises_fails_when_the_message_does_not_match() -> None:
-    with pytest.raises(AssertionError, match="does not match"), velox.raises(ValueError, match="x"):
+    with pytest.raises(AssertionError, match="does not match"), voci.raises(ValueError, match="x"):
         raise ValueError("something else")

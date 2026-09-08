@@ -43,7 +43,7 @@ This is why `_di.setup`'s partial-failure cleanup is told not to release module-
 executor installed and a `KeyboardInterrupt` propagating out of the last `run_until_complete`,
 `Runner.close()`'s automatic executor shutdown raises a spurious `RuntimeError: Event loop stopped
 before Future completed` — loop bookkeeping tripping over an exception-driven exit, not a real
-leak. A plain `with asyncio.Runner()` reintroduces that noise on exactly the Ctrl-C path velox most
+leak. A plain `with asyncio.Runner()` reintroduces that noise on exactly the Ctrl-C path voci most
 needs to exit cleanly.
 
 **`AdmissionGate` decides concurrency, `exclusive=`, and `solo` together, not as three layered
@@ -88,15 +88,15 @@ other test still waiting on the same gate for the rest of the run. Having nothin
 the window outright — where the previous `Condition`-based gate needed an `asyncio.shield` around
 its release to reach the same guarantee.
 
-**A test's `--timeout`/`@velox.timeout(...)` budget starts inside `_run_one`, after admission, not
-at dispatch.** Time spent waiting for `AdmissionGate.acquire` — behind a `@velox.solo` test, or
+**A test's `--timeout`/`@voci.timeout(...)` budget starts inside `_run_one`, after admission, not
+at dispatch.** Time spent waiting for `AdmissionGate.acquire` — behind a `@voci.solo` test, or
 behind another test holding the same `exclusive=` token — is not counted against it. Starting the
 clock at dispatch would turn "this test's setup/call/teardown took too long" and "this test waited
 behind a contended resource" into the same `TIMEOUT` outcome, though they point at unrelated fixes:
 raise the budget or find the blocking call, versus reduce contention or accept the wait.
 
 **A timed-out test's teardown is time-boxed too, not just a cancelled one's.** An ordinary test's
-teardown has no budget: velox can't tell a fixture that legitimately takes a while from one that
+teardown has no budget: voci can't tell a fixture that legitimately takes a while from one that
 has stopped making progress, and guessing wrong would fail working suites. A test whose
 `--timeout` just fired is the case where that guess is already made — the fixture the deadline
 landed on is the first suspect for hanging on the way out too, and its teardown runs while the
@@ -117,7 +117,7 @@ out over two threads and waits for both.
 and a run that keeps waiting for the tests already in flight is only as fast to stop as its
 slowest one — under concurrency that is routinely the whole point of the flag, spent waiting.
 `StopController` cancels every admitted test instead, and a cancelled test reports `CANCELLED`
-rather than `FAILED`: velox stopped it, so it never got to say anything about the code under
+rather than `FAILED`: voci stopped it, so it never got to say anything about the code under
 test, which is a different statement from "it works" and from "it doesn't". The exit code comes
 from what stopped the run — `--maxfail` implies the failures that reached the threshold, a Ctrl-C
 exits 2 — not from tallying cancellations. A test that has not started when the stop lands is
@@ -129,10 +129,10 @@ so cancellation is not the end of the test's envelope. But the thing a cancelled
 on is often the same thing its fixture will wait on, and an unbounded release would hand the run
 right back to whatever made it worth stopping. `DEFAULT_TEARDOWN_GRACE` splits the difference and
 says so on stderr when it runs out. Nothing bounds the call phase itself the same way: a test that
-swallows its cancellation cannot be taken off the loop, so velox names the tests still holding the
+swallows its cancellation cannot be taken off the loop, so voci names the tests still holding the
 run open and leaves the second Ctrl-C as the answer.
 
-**velox owns `SIGINT` for the duration of a run.** Left to Python's default handler a Ctrl-C
+**voci owns `SIGINT` for the duration of a run.** Left to Python's default handler a Ctrl-C
 raises `KeyboardInterrupt` wherever the main thread happens to be, which aborts the run mid-flight
 and throws away the report for everything that did finish — the most useful thing an interrupted
 run has. The handler installed here turns the first Ctrl-C into the same stop `--maxfail`

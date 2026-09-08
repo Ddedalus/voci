@@ -20,8 +20,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from ledger import flags
 from ledger.migrations import LATEST, migrate
@@ -34,12 +34,12 @@ from ledger.store import Store
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture(scope="session")
-def app_db(tmp: Annotated[velox.TmpPathFactory, Depends(velox.tmp_path_factory)]) -> Path:
+@voci.fixture(scope="session")
+def app_db(tmp: Annotated[voci.TmpPathFactory, Depends(voci.tmp_path_factory)]) -> Path:
     return tmp.mktemp("app-db") / "ledger.sqlite"
 
 
-@velox.fixture(scope="session")
+@voci.fixture(scope="session")
 async def migrated_store(path: Annotated[Path, Depends(app_db)]) -> AsyncIterator[Store]:
     """Built once for the whole run, under a single-flight guard.
 
@@ -76,8 +76,8 @@ async def migrated_store(path: Annotated[Path, Depends(app_db)]) -> AsyncIterato
         await asyncio.to_thread(store.truncate)
 
 
-@velox.fixture()
-def account(info: Annotated[velox.TestInfo, Depends(velox.test_info)]) -> str:
+@voci.fixture()
+def account(info: Annotated[voci.TestInfo, Depends(voci.test_info)]) -> str:
     """A per-test account namespace derived from the test id.
 
     This is the fixture that does the real work in this example. Isolating tests by *data* rather
@@ -87,7 +87,7 @@ def account(info: Annotated[velox.TestInfo, Depends(velox.test_info)]) -> str:
     return f"acct::{info.id}"
 
 
-@velox.fixture()
+@voci.fixture()
 async def ledger(store: Annotated[Store, Depends(migrated_store)]) -> LedgerService:
     return LedgerService(store)
 
@@ -97,16 +97,16 @@ async def ledger(store: Annotated[Store, Depends(migrated_store)]) -> LedgerServ
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture(exclusive=True)
+@voci.fixture(exclusive=True)
 async def migration_db(
-    tmp: Annotated[Path, Depends(velox.tmp_path)],
+    tmp: Annotated[Path, Depends(voci.tmp_path)],
 ) -> AsyncIterator[sqlite3.Connection]:
     """A database the migration tests are allowed to destroy.
 
     `exclusive=True` means "token = this fixture's name", i.e. `migration_db`. Every test whose
     graph reaches this fixture is serialised against every other such test — and runs concurrently
     with everything else in the suite, which is the difference between an exclusive token and
-    `@velox.solo`.
+    `@voci.solo`.
 
     Strictly, a fresh `tmp_path`-scoped file per test would need no token at all. It has one here
     because schema migration against a *shared* database is the case people actually have.
@@ -126,7 +126,7 @@ async def migration_db(
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture(exclusive=f"port-{WEBHOOK_PORT}")
+@voci.fixture(exclusive=f"port-{WEBHOOK_PORT}")
 async def receiver() -> AsyncIterator[Receiver]:
     """A real listening socket on a fixed port.
 
@@ -147,13 +147,13 @@ async def receiver() -> AsyncIterator[Receiver]:
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture()
+@voci.fixture()
 def feature_flags() -> Iterator[ModuleType]:
     """Save/restore around a test that mutates the global flag registry.
 
     The save/restore makes the mutation *reversible*; it does not make it *invisible*. Any test
-    using this must also be `@velox.solo`, because while it runs, every other test in flight would
-    see the flipped flag. A sync generator fixture — velox accepts all four shapes.
+    using this must also be `@voci.solo`, because while it runs, every other test in flight would
+    see the flipped flag. A sync generator fixture — voci accepts all four shapes.
     """
     saved = flags.snapshot()
     try:

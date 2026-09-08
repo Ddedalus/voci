@@ -19,7 +19,7 @@ class TestRecord:
     path: Path                   # relative to rootdir
     lineno: int                  # definition line, for editor links and ordering
     qualname: str
-    func: Callable               # the raw function; velox never wraps it
+    func: Callable               # the raw function; voci never wraps it
     params: Mapping[str, object] | None
     marks: MarkSet               # frozen: skip/skipif/xfail/tags/timeout/solo/isolated
     plan: ResolutionPlan         # from the DI graph — see 04
@@ -47,7 +47,7 @@ are sorted by name so the walk itself is deterministic before any sorting pass.
 **importlib only, one position, no alternatives** (R§3). For each file:
 
 1. Compute a unique module name from the path relative to rootdir:
-   `velox_tests.<dotted.relpath.without.suffix>` with non-identifier characters escaped.
+   `voci_tests.<dotted.relpath.without.suffix>` with non-identifier characters escaped.
    Path-derived names mean two `test_utils.py` files in different directories never collide, which
    is the entire content of pytest's `ImportPathMismatchError`.
 2. `importlib.util.spec_from_file_location` → `module_from_spec` → insert into `sys.modules` →
@@ -69,10 +69,10 @@ per-file or per-directory decision, and orthogonal to the module-naming scheme a
 projects, or anything living under `rootdir`, this is already true. For a package that lives
 outside `rootdir`'s own tree it is not, and the error message must say exactly that with the fix.
 
-**Second consequence:** because every test module imports under the synthetic `velox_tests.*`
+**Second consequence:** because every test module imports under the synthetic `voci_tests.*`
 name (step 1), *relative* imports between test modules (`from .conftest import x`,
-`from ..fixtures import y`) can never resolve — their parent package (`velox_tests`,
-`velox_tests.<dir>`, …) has no directory backing it, and the `rootdir` insertion doesn't change
+`from ..fixtures import y`) can never resolve — their parent package (`voci_tests`,
+`voci_tests.<dir>`, …) has no directory backing it, and the `rootdir` insertion doesn't change
 that. Sharing code between test modules must use an **absolute** import rooted at `rootdir`
 instead (`from tests.assertion.conftest import x`), which the insertion above does make work.
 Relative imports in test code are unsupported, full stop — not a gap to close later.
@@ -85,7 +85,7 @@ Per imported module, in module-definition order:
    (so imported helpers named `test_*` are not collected twice), plus `Test*` classes.
 2. Sort by `func.__code__.co_firstlineno` — definition order, not dict order, so a refactor that
    reorders imports doesn't reorder tests.
-3. Expand `@velox.parametrize` into one record per callspec. Parametrization is genuinely cheap in
+3. Expand `@voci.parametrize` into one record per callspec. Parametrization is genuinely cheap in
    pytest (~24 µs/item) and stays cheap here because the resolution plan is computed once per
    function and shared across callspecs (R§3).
 4. Read the injection plan from `__defaults__`/`__kwdefaults__` (no `inspect.signature`, no
@@ -116,11 +116,11 @@ From R§3, each of these is a decision, not an omission:
 ## 6. The persistent collection cache
 
 `.pytest_cache` does **not** cache collection — `--lf` re-collects everything and then filters
-(R§3). velox builds the index pytest never did.
+(R§3). voci builds the index pytest never did.
 
-**Store:** `.velox/collect.json` (or msgpack), mapping `relpath → {mtime_ns, size, ids: [...], lines: [...]}`.
+**Store:** `.voci/collect.json` (or msgpack), mapping `relpath → {mtime_ns, size, ids: [...], lines: [...]}`.
 Entries are validated by `(mtime_ns, size)`; a mismatch invalidates that file only. A version tag
-covers the velox version, the config keys that affect collection, and the Python version.
+covers the voci version, the config keys that affect collection, and the Python version.
 
 **Buys:**
 - `--lf` / `--ff` without importing unchanged files — the failure-first ordering that makes a red
@@ -135,11 +135,11 @@ hundred milliseconds; it can never change which tests run. That asymmetry is wha
 
 ## 7. Collection is always complete before dispatch
 
-**Decided:** velox collects the entire suite — walk, import, expand, validate — before dispatching
+**Decided:** voci collects the entire suite — walk, import, expand, validate — before dispatching
 the first test. No streaming collection, not in the MVP and not on the roadmap.
 
 The cost is bounded and small: importing the test modules is only ~8% of pytest's collection time
-(R§3), and velox has deleted the other 92%, so full collection on a 5000-test suite should land in
+(R§3), and voci has deleted the other 92%, so full collection on a 5000-test suite should land in
 the low hundreds of milliseconds — comparable to the loop startup it overlaps with anyway.
 
 What it buys is worth more than that latency:
@@ -152,7 +152,7 @@ What it buys is worth more than that latency:
 - the progress denominator is exact from the first frame, with or without the cache.
 
 The jest trade-off ("total count unknown until files load") is therefore **not** taken. That was a
-concession streaming demanded, and velox isn't streaming.
+concession streaming demanded, and voci isn't streaming.
 
 ## 8. MVP
 

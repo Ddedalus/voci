@@ -4,7 +4,7 @@
 proximity overrides, autouse name walks, `FixtureLookupError` — about 600 of `fixtures.py`'s 2598
 LOC, and most of the conceptual complexity users hate. It does **not** delete the hard ~700 LOC:
 scope-keyed caching with invalidation, teardown inversion, and async lifecycle. Any design needs
-those, velox will reinvent them, so they are specified here in detail.*
+those, voci will reinvent them, so they are specified here in detail.*
 
 ---
 
@@ -37,7 +37,7 @@ Cycles are detected during plan construction and reported with the full cycle pa
 ## 2. Static validation (before anything runs)
 
 This is the structural upgrade explicit DI buys: pytest can only discover these lazily, one failing
-test at a time (R§4). velox validates the whole graph once, at startup, and exits `4` with all
+test at a time (R§4). voci validates the whole graph once, at startup, and exits `4` with all
 errors listed rather than the first.
 
 | Check | Error |
@@ -69,7 +69,7 @@ docs must say so. (Q2: keep `module`, rename it `file`, or drop it.)
 ## 4. Instantiation: single-flight
 
 `FixtureDef.cached_result` in pytest is an unguarded read-modify-write that survives only because
-pytest is sequential (R§4). velox's replacement:
+pytest is sequential (R§4). voci's replacement:
 
 ```python
 async def get(self, key: CacheKey) -> Any:
@@ -100,7 +100,7 @@ async def get(self, key: CacheKey) -> Any:
 ## 5. Teardown: refcount, not a stack
 
 pytest's `SetupState` is a stack encoding "a fixture's lifetime is a contiguous run of adjacent
-tests", which is **false under concurrency** (R§4). velox:
+tests", which is **false under concurrency** (R§4). voci:
 
 - Every scope instance has a refcount, incremented on acquisition by a test and decremented when
   that test's teardown phase completes.
@@ -108,7 +108,7 @@ tests", which is **false under concurrency** (R§4). velox:
   down at end of run (an `--eager-teardown` mode that also refcounts session scope is roadmap; it
   would let a suite release its DB engine early, at the cost of possibly reconstructing it).
 - **Teardown inversion** is preserved: dependents unwind before dependencies. pytest achieves this
-  by registering a fixture's finalizer on each of its dependencies (R§4); velox achieves it
+  by registering a fixture's finalizer on each of its dependencies (R§4); voci achieves it
   structurally, by driving each scope instance through an `AsyncExitStack` and by the refcount
   ordering — a dependency's refcount cannot reach zero before its dependents' do, because a
   dependent holds a reference for its whole life.
@@ -141,7 +141,7 @@ therefore shielded from the requesting test's own timeout.
 ## 7. Why this is the head-to-head win
 
 xdist duplicates session fixtures per worker: `-n 4` means 4 schemas, 4 engines, and the documented
-workaround is a `FileLock` plus a marker file. velox's single process makes **one engine + N
+workaround is a `FileLock` plus a marker file. voci's single process makes **one engine + N
 concurrent tests** correct by construction (R§4). This belongs in the README, and the benchmark
 should show it: on the 5000-test suite, xdist `-n 4` was measured *slower* than serial, because 4×
 startup + 4× collection + IPC exceeded the parallelism win.

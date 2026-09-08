@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from ledger.service import LedgerService
 from tests.fixtures import account, ledger
@@ -51,7 +51,7 @@ async def _assert_balance_arithmetic(
     assert await svc.balance(acct) == expected
 
 
-# Each case is its own test, and each still gets its own `account`: `velox.test_info.id` includes
+# Each case is its own test, and each still gets its own `account`: `voci.test_info.id` includes
 # the function's own qualname, so distinct functions can't collide even though all four run at once.
 async def test_balance_arithmetic_single_deposit(
     svc: Annotated[LedgerService, Depends(ledger)],
@@ -118,7 +118,7 @@ async def test_transfer_is_permitted_to_overdraw_by_default(
     assert await svc.balance(source) == -1_000_000
 
 
-@velox.timeout(20)
+@voci.timeout(20)
 async def test_many_concurrent_appends(
     svc: Annotated[LedgerService, Depends(ledger)],
     acct: Annotated[str, Depends(account)],

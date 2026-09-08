@@ -2,13 +2,13 @@
 
 See [rationale.md](../rationale.md) for the index.
 
-**Flags default to `None`, not to their real defaults.** Layering CLI over `[tool.velox]` over the
+**Flags default to `None`, not to their real defaults.** Layering CLI over `[tool.voci]` over the
 built-in default requires distinguishing "the user typed `--concurrency`" from "argparse filled one
 in". A concrete argparse default erases that distinction and makes the config file's value
 unreachable whenever the two happen to match.
 
 **`main()` leaves no global state behind, on any exit path.** It installs the rewrite import hook,
-prepends `rootdir` to `sys.path`, and applies `[tool.velox] env` to `os.environ` — and undoes all
+prepends `rootdir` to `sys.path`, and applies `[tool.voci] env` to `os.environ` — and undoes all
 three in one `finally`, each restoring only what this call changed rather than resetting to a fixed
 state. `main()` is called repeatedly in-process (this package's own suite does it), so a missed
 restore leaks a stale `sys.path` entry shadowing a same-named package, or one suite's environment

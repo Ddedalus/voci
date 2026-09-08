@@ -1,6 +1,6 @@
 """The SQLAlchemy plumbing behind the `engine` and `session` fixtures.
 
-The suite runs on SQLite so that `uv sync && velox` is the whole setup — no server, no container.
+The suite runs on SQLite so that `uv sync && voci` is the whole setup — no server, no container.
 SQLite serialises writers, so it caps how much of the concurrency win reaches the storage layer;
 `url_for` is where a suite that cares about its wall clock would point somewhere else.
 """
@@ -22,7 +22,7 @@ from app.models import Base
 def url_for(directory: Path) -> str:
     """A SQLite URL for a database file under `directory`.
 
-    Postgres is the swap for a real suite — `"postgresql+asyncpg://velox:velox@localhost/velox_test"`,
+    Postgres is the swap for a real suite — `"postgresql+asyncpg://voci:voci@localhost/voci_test"`,
     once `asyncpg` is installed — and everything below works against either.
     """
     return f"sqlite+aiosqlite:///{directory / 'app.sqlite'}"

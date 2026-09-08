@@ -9,26 +9,26 @@ lint *args:
 fmt-check:
     uv run ruff format --check .
 
-# Type-check with pyrefly. velox-migrate has its own pyproject.toml, which pyrefly reads as a
+# Type-check with pyrefly. voci-migrate has its own pyproject.toml, which pyrefly reads as a
 # separate project and leaves out of the root one, so its sources are named explicitly.
 typecheck *args:
     uv run pyrefly check --progress-bar no "$@"
-    uv run pyrefly check --progress-bar no "$@" velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
+    uv run pyrefly check --progress-bar no "$@" voci-migrate/voci_migrate voci-migrate/scripts voci-migrate/tests
 
 # Run the test suite under the default interpreter (e.g. `just checks test -k cli`)
 test *args:
     uv run pytest "$@"
 
 # Measure examples/02-async-library under coverage.py, as CI's coverage job does: a real suite,
-# `@velox.isolated` tests included, run the way a user's project would run one.
+# `@voci.isolated` tests included, run the way a user's project would run one.
 coverage *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    # `--project` because the example is a project of its own, with no velox in its dependencies
+    # `--project` because the example is a project of its own, with no voci in its dependencies
     # -- the environment to run it from is this repo's.
     root="$PWD"
     cd examples/02-async-library
-    uv run --project "$root" coverage run --source=relay -m velox "$@"
+    uv run --project "$root" coverage run --source=relay -m voci "$@"
     uv run --project "$root" coverage report -m --fail-under=95
 
 # Run both suites under every supported interpreter (e.g. `just checks test-all -k annotated`).
@@ -54,8 +54,8 @@ test-all *args:
         # `--quiet` because a nested just would otherwise report a failing leg twice, once as its
         # own "recipe failed" line and once as the `✗` below; pytest's output already says what
         # went wrong.
-        leg "velox tests on $version"   just --quiet py run "$version" pytest "$@"
-        leg "migrate tests on $version" just --quiet py run "$version" pytest velox-migrate/tests -n auto "$@"
+        leg "voci tests on $version"   just --quiet py run "$version" pytest "$@"
+        leg "migrate tests on $version" just --quiet py run "$version" pytest voci-migrate/tests -n auto "$@"
     done
     exit "$status"
 

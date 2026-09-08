@@ -1,7 +1,7 @@
 """Injection declared as `db: Annotated[Session, Depends(db_fx)]` rather than as a default.
 
 Deliberately **without** `from __future__ import annotations`: the annotations written in this
-file are real objects, which is the path velox takes when it can. The other path — annotations
+file are real objects, which is the path voci takes when it can. The other path — annotations
 that arrive as source text, either from PEP 563 or from 3.14's lazy evaluation — is exercised
 against modules built by `_module` below, since whether a module stringifies its annotations is a
 property of its source that no test can set after the fact.
@@ -15,22 +15,22 @@ from typing import Annotated
 
 import pytest
 
-import velox
-from velox import Depends
-from velox._di.fixtures import DIError, Injection, _check_missing_injections, plan_of
+import voci
+from voci import Depends
+from voci._di.fixtures import DIError, Injection, _check_missing_injections, plan_of
 
 
-@velox.fixture()
+@voci.fixture()
 def alpha() -> int:
     return 1
 
 
-@velox.fixture()
+@voci.fixture()
 def beta() -> int:
     return 2
 
 
-#: Aliases are declared at module level because that is where velox can find one: an annotation
+#: Aliases are declared at module level because that is where voci can find one: an annotation
 #: that arrives as source text is resolved against module globals, so a `type` statement inside
 #: the function under test is reachable on 3.13 (where the annotation is an object) and not on
 #: 3.14 (where it is a string). The reference documents the same limit for the fixture itself.
@@ -43,12 +43,12 @@ type AlphaHandle = Alpha
 #: reachable from a stringified annotation.
 AlphaDep = Annotated[int, Depends(alpha)]
 
-#: A subscripted alias is the one shape `typing` does not flatten for velox: `get_type_hints`
+#: A subscripted alias is the one shape `typing` does not flatten for voci: `get_type_hints`
 #: hands back `AlphaRepo[int]` itself, so the metadata is reached by unwrapping the alias.
 type AlphaRepo[T] = Annotated[T, Depends(alpha)]
 
 
-def _module(source: str, name: str = "velox_annotated_probe") -> ModuleType:
+def _module(source: str, name: str = "voci_annotated_probe") -> ModuleType:
     """`source` compiled and executed as a real module, so its functions get a real
     `__globals__` — which is the only namespace a stringified annotation can be resolved in."""
     module = ModuleType(name)
@@ -60,11 +60,11 @@ def _module(source: str, name: str = "velox_annotated_probe") -> ModuleType:
 _DEPS = """
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 
-@velox.fixture()
+@voci.fixture()
 def db() -> int:
     return 1
 
@@ -82,7 +82,7 @@ def deps_module() -> Iterator[ModuleType]:
     An alias declared in another file is the shape FastAPI's own docs lead to, and it is only
     reachable from a consumer's annotation if the module holding it can be imported by name.
     """
-    module = _module(_DEPS, name="velox_annotated_deps")
+    module = _module(_DEPS, name="voci_annotated_deps")
     sys.modules[module.__name__] = module
     try:
         yield module
@@ -95,14 +95,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 if TYPE_CHECKING:
     from decimal import Decimal
 
 
-@velox.fixture()
+@voci.fixture()
 def db() -> int:
     return 1
 
@@ -118,7 +118,7 @@ MARKER = Depends(db)
 
 
 # --------------------------------------------------------------------------------------
-# The object path: annotations that are objects by the time velox looks
+# The object path: annotations that are objects by the time voci looks
 # --------------------------------------------------------------------------------------
 
 
@@ -130,7 +130,7 @@ def test_a_marker_in_metadata_injects() -> None:
 
 
 def test_a_fixture_can_declare_its_own_dependencies_the_same_way() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def child(db: Annotated[int, Depends(alpha)]) -> int:
         return db + 1
 
@@ -236,8 +236,8 @@ def test_an_alias_wrapped_in_annotated_carries_it() -> None:
 def test_an_alias_imported_from_another_module_carries_it(deps_module: ModuleType) -> None:
     """Where the reusable alias actually lives in a suite: its own module, imported."""
     module = _module(
-        "from velox_annotated_deps import DbDep\n\n\ndef probe(db: DbDep) -> int:\n    return db\n",
-        name="velox_annotated_consumer",
+        "from voci_annotated_deps import DbDep\n\n\ndef probe(db: DbDep) -> int:\n    return db\n",
+        name="voci_annotated_consumer",
     )
 
     assert plan_of(module.probe) == (
@@ -365,11 +365,11 @@ def test_a_stringified_alias_imported_from_another_module_still_injects(
     module object. Neither is evaluated -- both are walked by lookup and `getattr`."""
     module = _module(
         "from __future__ import annotations\n\n"
-        "import velox_annotated_deps\n"
-        "from velox_annotated_deps import DbDep\n\n\n"
+        "import voci_annotated_deps\n"
+        "from voci_annotated_deps import DbDep\n\n\n"
         "def bound(db: DbDep) -> int:\n    return db\n\n\n"
-        "def dotted(db: velox_annotated_deps.DbDep) -> int:\n    return db\n",
-        name="velox_annotated_consumer",
+        "def dotted(db: voci_annotated_deps.DbDep) -> int:\n    return db\n",
+        name="voci_annotated_consumer",
     )
 
     expected = (Injection(param="db", source=deps_module.db, keyword_only=False),)
@@ -380,13 +380,13 @@ def test_a_stringified_alias_imported_from_another_module_still_injects(
 def test_an_alias_imported_only_for_type_checking_is_not_found() -> None:
     """The limit of parse-don't-evaluate, and of any other approach: an alias a stringifying
     module never imports at run time cannot be resolved by anyone -- `get_type_hints` raises on
-    it rather than finding the marker. velox does not inject, and the parameter is then reported
+    it rather than finding the marker. voci does not inject, and the parameter is then reported
     as one nothing can supply, which is the loud half of the sharp edge."""
     module = _module(
         "from __future__ import annotations\n\n"
         "from typing import TYPE_CHECKING\n\n"
         "if TYPE_CHECKING:\n"
-        "    from velox_annotated_deps import DbDep\n\n\n"
+        "    from voci_annotated_deps import DbDep\n\n\n"
         "def probe(db: DbDep) -> int:\n    return db\n"
     )
 
@@ -424,11 +424,11 @@ def test_an_unrelated_unresolvable_annotation_does_not_stop_collection() -> None
 
 
 def test_a_metadata_element_that_is_not_a_marker_is_never_evaluated() -> None:
-    """velox compiles and evaluates exactly the `Depends(...)` calls it finds. Anything else in
+    """voci compiles and evaluates exactly the `Depends(...)` calls it finds. Anything else in
     metadata — here a call that would raise — is left as text."""
     module = _module(
         _STRINGIFIED + "\n\ndef boom() -> int:\n"
-        "    raise AssertionError('velox evaluated an annotation it should not have')\n\n\n"
+        "    raise AssertionError('voci evaluated an annotation it should not have')\n\n\n"
         "def probe(db: Annotated[int, boom()] = 0) -> int:\n    return db\n"
     )
 
@@ -442,7 +442,7 @@ def test_a_fixture_a_stringified_annotation_cannot_see_is_a_named_error() -> Non
     module = _module(
         _STRINGIFIED + "\n\n"
         "def build() -> object:\n"
-        "    local = velox.fixture()(lambda: 1)\n\n"
+        "    local = voci.fixture()(lambda: 1)\n\n"
         "    def probe(db: Annotated[int, Depends(local)]) -> int:\n"
         "        return db\n\n"
         "    return probe\n"
@@ -470,9 +470,9 @@ def test_both_names_can_arrive_under_an_alias() -> None:
     module = _module(
         "from __future__ import annotations\n\n"
         "from typing import Annotated as Ann\n\n"
-        "import velox\n"
-        "from velox import Depends as dep\n\n\n"
-        "@velox.fixture()\n"
+        "import voci\n"
+        "from voci import Depends as dep\n\n\n"
+        "@voci.fixture()\n"
         "def db() -> int:\n"
         "    return 1\n\n\n"
         "def probe(value: Ann[int, dep(db)] = 5) -> int:\n"
@@ -504,7 +504,7 @@ def test_a_module_getattr_that_raises_does_not_fail_collection() -> None:
         _STRINGIFIED + "\n\n"
         "class Lazy:\n"
         "    def __getattr__(self, name: str) -> object:\n"
-        "        raise RuntimeError('resolved an annotation velox has no interest in')\n\n\n"
+        "        raise RuntimeError('resolved an annotation voci has no interest in')\n\n\n"
         "lazy = Lazy()\n\n\n"
         "def probe(other: lazy.Thing, db: Annotated[int, Depends(db)]) -> int:\n"
         "    return db\n"
@@ -519,11 +519,11 @@ def test_annotated_imported_only_for_type_checking_still_reads() -> None:
     module = _module(
         "from __future__ import annotations\n\n"
         "from typing import TYPE_CHECKING\n\n"
-        "import velox\n"
-        "from velox import Depends\n\n"
+        "import voci\n"
+        "from voci import Depends\n\n"
         "if TYPE_CHECKING:\n"
         "    from typing import Annotated\n\n\n"
-        "@velox.fixture()\n"
+        "@voci.fixture()\n"
         "def db() -> int:\n"
         "    return 1\n\n\n"
         "def probe(value: Annotated[int, Depends(db)]) -> int:\n"
@@ -552,7 +552,7 @@ def test_an_injection_may_precede_a_parametrized_parameter() -> None:
 
 
 def test_a_parametrized_fixtures_param_still_reads_as_supplied() -> None:
-    @velox.fixture(params=[1, 2])
+    @voci.fixture(params=[1, 2])
     def cases(param: int, db: Annotated[int, Depends(alpha)]) -> int:
         return param + db
 

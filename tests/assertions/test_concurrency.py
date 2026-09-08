@@ -10,13 +10,13 @@ import threading
 from collections.abc import Callable
 from typing import cast
 
-from velox._assertions._vendor import util
-from velox._assertions.rewrite import Config, assertion_context
-from velox._assertions.state import CONTEXT_GLOBALS, assertion_state, get_config
+from voci._assertions._vendor import util
+from voci._assertions.rewrite import Config, assertion_context
+from voci._assertions.state import CONTEXT_GLOBALS, assertion_state, get_config
 
 
 def test_vendored_util_reads_through_the_contextvars() -> None:
-    """The vendored rewriter says `util._reprcompare`; that must reach velox's ContextVar."""
+    """The vendored rewriter says `util._reprcompare`; that must reach voci's ContextVar."""
     assert "_reprcompare" in CONTEXT_GLOBALS
     assert util._reprcompare is None
 

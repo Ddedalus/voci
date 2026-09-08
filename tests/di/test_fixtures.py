@@ -1,4 +1,4 @@
-"""Tests for velox._di.fixtures: injection scanning, cycle/scope validation, and `plan_for`."""
+"""Tests for voci._di.fixtures: injection scanning, cycle/scope validation, and `plan_for`."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from typing import Annotated, cast
 
 import pytest
 
-import velox
-from velox import Depends
-from velox._di.fixtures import (
+import voci
+from voci import Depends
+from voci._di.fixtures import (
     DIError,
     Injection,
     Scope,
@@ -22,13 +22,13 @@ from velox._di.fixtures import (
 )
 
 
-@velox.fixture()
+@voci.fixture()
 def alpha() -> int:
     return 1
 
 
 def test_ordinary_annotated_types_are_left_alone() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def fine(db: Annotated[int, "not a dependency"] = Depends(alpha)) -> int:
         return db
 
@@ -37,11 +37,11 @@ def test_ordinary_annotated_types_are_left_alone() -> None:
 
 
 def test_check_acyclic_detects_a_rigged_cycle() -> None:
-    """A single `@velox.fixture()` decoration can never build a cycle — a dependency must
+    """A single `@voci.fixture()` decoration can never build a cycle — a dependency must
     already exist as an object before it can be depended on — so the detector is exercised
     directly against a graph rigged to loop."""
-    a = velox.fixture()(lambda: 0)
-    b = velox.fixture()(lambda: 0)
+    a = voci.fixture()(lambda: 0)
+    b = voci.fixture()(lambda: 0)
     a._plan = (Injection(param="b", source=b, keyword_only=False),)
     b._plan = (Injection(param="a", source=a, keyword_only=False),)
 
@@ -51,17 +51,17 @@ def test_check_acyclic_detects_a_rigged_cycle() -> None:
 
 def test_check_acyclic_allows_a_diamond() -> None:
     """B and C both depending on D is not a cycle, just the same node reached twice."""
-    d = velox.fixture()(lambda: 0)
+    d = voci.fixture()(lambda: 0)
 
-    @velox.fixture()
+    @voci.fixture()
     def b(x: int = Depends(d)) -> int:
         return x
 
-    @velox.fixture()
+    @voci.fixture()
     def c(x: int = Depends(d)) -> int:
         return x
 
-    @velox.fixture()
+    @voci.fixture()
     def top(p: int = Depends(b), q: int = Depends(c)) -> int:
         return p + q
 
@@ -73,11 +73,11 @@ def test_check_acyclic_allows_a_diamond() -> None:
 
 
 def test_plan_for_orders_steps_dependency_before_dependent() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def c() -> str:
         return "c"
 
-    @velox.fixture()
+    @voci.fixture()
     def b(x: str = Depends(c)) -> str:
         return f"b+{x}"
 
@@ -96,15 +96,15 @@ def test_plan_for_deduplicates_a_diamond_into_one_step() -> None:
     """B and C both depending on D: D is built once, not twice, and `test_func`'s two distinct
     `Depends()` sites (`p`, `q`) both resolve to the same steps for `b`/`c`."""
 
-    @velox.fixture()
+    @voci.fixture()
     def d() -> str:
         return "d"
 
-    @velox.fixture()
+    @voci.fixture()
     def b(x: str = Depends(d)) -> str:
         return x
 
-    @velox.fixture()
+    @voci.fixture()
     def c(x: str = Depends(d)) -> str:
         return x
 
@@ -122,15 +122,15 @@ def test_plan_for_never_deduplicates_call_scope_even_in_a_diamond() -> None:
     """A `scope="call"` fixture reached by two paths gets two independent steps, unlike every
     other scope."""
 
-    @velox.fixture(scope="call")
+    @voci.fixture(scope="call")
     def d() -> object:
         return object()
 
-    @velox.fixture()
+    @voci.fixture()
     def b(x: object = Depends(d)) -> object:
         return x
 
-    @velox.fixture()
+    @voci.fixture()
     def c(x: object = Depends(d)) -> object:
         return x
 
@@ -150,11 +150,11 @@ def test_plan_for_rejects_a_wide_scope_fixture_depending_on_a_narrower_one(
 ) -> None:
     """Both offending fixture names appear in the error message."""
 
-    @velox.fixture(scope=cast("Scope", narrow_scope), name="narrow_fx")
+    @voci.fixture(scope=cast("Scope", narrow_scope), name="narrow_fx")
     def narrow() -> int:
         return 1
 
-    @velox.fixture(scope=cast("Scope", wide_scope), name="wide_fx")
+    @voci.fixture(scope=cast("Scope", wide_scope), name="wide_fx")
     def wide(x: int = Depends(narrow)) -> int:
         return x
 
@@ -186,13 +186,13 @@ def test_plan_for_on_a_function_with_no_dependencies_is_a_trivially_empty_plan()
     assert plan.root_args == ()
 
 
-# `implicit=` -- the fixtures a container declares with `velox.use(...)`, which get a step each
+# `implicit=` -- the fixtures a container declares with `voci.use(...)`, which get a step each
 # but bind to no parameter.
 # ------------------------------------------------------------------------------------------
 
 
 def test_implicit_fixtures_get_a_step_but_never_a_root_arg() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def side_effect() -> None:
         return None
 
@@ -209,11 +209,11 @@ def test_implicit_fixtures_are_built_before_the_tests_own_dependencies() -> None
     """Lowest `step_id`s, so `_di.setup` constructs them first and `_di.teardown`, walking
     `steps` backwards, releases them last."""
 
-    @velox.fixture()
+    @voci.fixture()
     def declared() -> str:
         return "declared"
 
-    @velox.fixture()
+    @voci.fixture()
     def asked_for() -> str:
         return "asked_for"
 
@@ -227,11 +227,11 @@ def test_implicit_fixtures_are_built_before_the_tests_own_dependencies() -> None
 
 
 def test_implicit_fixtures_apply_in_the_order_they_were_declared() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def first() -> int:
         return 1
 
-    @velox.fixture()
+    @voci.fixture()
     def second() -> int:
         return 2
 
@@ -247,7 +247,7 @@ def test_a_fixture_both_declared_and_depended_on_is_built_once_and_still_bound()
     """The `plan_for` memo covers implicit roots too, so declaring a fixture a test also wants
     the value of doesn't construct it twice."""
 
-    @velox.fixture()
+    @voci.fixture()
     def shared() -> str:
         return "shared"
 
@@ -261,11 +261,11 @@ def test_a_fixture_both_declared_and_depended_on_is_built_once_and_still_bound()
 
 
 def test_implicit_fixtures_pull_in_their_own_transitive_dependencies() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def leaf() -> str:
         return "leaf"
 
-    @velox.fixture()
+    @voci.fixture()
     def declared(x: str = Depends(leaf)) -> str:
         return x
 
@@ -281,11 +281,11 @@ def test_implicit_fixtures_pull_in_their_own_transitive_dependencies() -> None:
 def test_an_implicit_fixture_narrower_than_the_test_is_rejected() -> None:
     """Same scope-compatibility rule as a direct `Depends()` site, same error text."""
 
-    @velox.fixture(scope="call", name="narrow_fx")
+    @voci.fixture(scope="call", name="narrow_fx")
     def narrow() -> int:
         return 1
 
-    @velox.fixture(scope="session", name="wide_fx")
+    @voci.fixture(scope="session", name="wide_fx")
     def wide(x: int = Depends(narrow)) -> int:
         return x
 
@@ -297,7 +297,7 @@ def test_an_implicit_fixture_narrower_than_the_test_is_rejected() -> None:
 
 
 def test_an_implicit_fixtures_exclusive_token_reaches_the_admission_gate() -> None:
-    @velox.fixture(exclusive="database")
+    @voci.fixture(exclusive="database")
     def declared() -> None:
         return None
 
@@ -319,11 +319,11 @@ def test_exclusive_tokens_of_is_empty_with_no_exclusive_fixtures() -> None:
 
 
 def test_exclusive_tokens_of_collects_true_and_string_tokens() -> None:
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     def private() -> int:
         return 1
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     def shared() -> int:
         return 2
 
@@ -337,11 +337,11 @@ def test_exclusive_true_is_a_token_private_to_its_own_fixture() -> None:
     """Two different `exclusive=True` fixtures never share a token -- only two tests depending on
     the very same fixture object do."""
 
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     def res_a() -> int:
         return 1
 
-    @velox.fixture(exclusive=True)
+    @voci.fixture(exclusive=True)
     def res_b() -> int:
         return 2
 
@@ -357,11 +357,11 @@ def test_exclusive_true_is_a_token_private_to_its_own_fixture() -> None:
 
 
 def test_exclusive_string_token_is_shared_across_different_fixtures() -> None:
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     def conn_a() -> int:
         return 1
 
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     def conn_b() -> int:
         return 2
 
@@ -375,11 +375,11 @@ def test_exclusive_string_token_is_shared_across_different_fixtures() -> None:
 
 
 def test_exclusive_tokens_of_reaches_a_transitive_dependency() -> None:
-    @velox.fixture(exclusive="db")
+    @voci.fixture(exclusive="db")
     def db() -> int:
         return 1
 
-    @velox.fixture()
+    @voci.fixture()
     def wrapper(x: int = Depends(db)) -> int:
         return x
 
@@ -395,7 +395,7 @@ def test_fixture_with_a_missing_injection_is_rejected_at_decoration_time() -> No
     it via `Depends(...)`."""
     with pytest.raises(DIError, match="conn"):
 
-        @velox.fixture()
+        @voci.fixture()
         def needs_arg(conn: object) -> object:
             return conn
 
@@ -406,7 +406,7 @@ def test_depends_on_a_positional_only_parameter_is_rejected_at_decoration_time()
     at construction time."""
     with pytest.raises(DIError, match="x"):
 
-        @velox.fixture()
+        @voci.fixture()
         def outer(x: int = Depends(alpha), /) -> int:
             return x
 
@@ -458,7 +458,7 @@ def test_check_missing_injections_skips_self_only_in_positional_position() -> No
         _check_missing_injections(keyword_only_self, ())
 
 
-# `known_params` -- the names `@velox.parametrize` supplies, threaded through from `plan_for`.
+# `known_params` -- the names `@voci.parametrize` supplies, threaded through from `plan_for`.
 # ------------------------------------------------------------------------------------------
 
 
@@ -513,7 +513,7 @@ def test_known_params_on_a_positional_only_parameter_is_rejected() -> None:
 
 
 def test_a_known_param_matching_no_real_parameter_is_rejected() -> None:
-    """A typo'd `@velox.parametrize` argument name -- one that matches nothing in the
+    """A typo'd `@voci.parametrize` argument name -- one that matches nothing in the
     signature -- is caught here instead of surfacing as a confusing runtime `TypeError` once
     expansion tries to call the function with it."""
 
@@ -531,12 +531,12 @@ def test_a_known_param_matching_no_parameter_is_allowed_with_star_kwargs() -> No
     _check_missing_injections(t, (), known_params=frozenset({"anything"}))  # must not raise
 
 
-# `@velox.fixture(params=...)`: validation and id generation.
+# `@voci.fixture(params=...)`: validation and id generation.
 # ------------------------------------------------------------------------------------------
 
 
 def test_fixture_params_default_ids_use_the_literal_for_common_types() -> None:
-    @velox.fixture(params=["sqlite", "postgres"])
+    @voci.fixture(params=["sqlite", "postgres"])
     def backend(param: str) -> str:
         return param
 
@@ -545,7 +545,7 @@ def test_fixture_params_default_ids_use_the_literal_for_common_types() -> None:
 
 
 def test_fixture_params_explicit_ids_are_used_verbatim() -> None:
-    @velox.fixture(params=[1, 2], ids=["one", "two"])
+    @voci.fixture(params=[1, 2], ids=["one", "two"])
     def n(param: int) -> int:
         return param
 
@@ -553,7 +553,7 @@ def test_fixture_params_explicit_ids_are_used_verbatim() -> None:
 
 
 def test_fixture_params_ids_callable_falls_back_to_auto_id_on_none() -> None:
-    @velox.fixture(params=[1, "x"], ids=lambda v: f"custom-{v}" if isinstance(v, int) else None)
+    @voci.fixture(params=[1, "x"], ids=lambda v: f"custom-{v}" if isinstance(v, int) else None)
     def mixed(param: object) -> object:
         return param
 
@@ -565,7 +565,7 @@ def test_fixture_params_ids_are_deduped_on_collision() -> None:
     rename of the two colliding `1`s to `10`/`11` would collide with the third case's already-
     unique `"10"`, so both land past it instead."""
 
-    @velox.fixture(params=[1, 1, "10"])
+    @voci.fixture(params=[1, 1, "10"])
     def dup(param: object) -> object:
         return param
 
@@ -573,7 +573,7 @@ def test_fixture_params_ids_are_deduped_on_collision() -> None:
 
 
 def test_fixture_with_no_params_is_not_parametrized() -> None:
-    @velox.fixture()
+    @voci.fixture()
     def plain() -> int:
         return 1
 
@@ -584,7 +584,7 @@ def test_fixture_with_no_params_is_not_parametrized() -> None:
 def test_fixture_params_empty_is_rejected() -> None:
     with pytest.raises(ValueError, match="no values given"):
 
-        @velox.fixture(params=())
+        @voci.fixture(params=())
         def bad(param: object) -> object:
             return param
 
@@ -592,7 +592,7 @@ def test_fixture_params_empty_is_rejected() -> None:
 def test_fixture_ids_without_params_is_rejected() -> None:
     with pytest.raises(ValueError, match="ids="):
 
-        @velox.fixture(ids=["a"])
+        @voci.fixture(ids=["a"])
         def bad() -> int:
             return 1
 
@@ -600,7 +600,7 @@ def test_fixture_ids_without_params_is_rejected() -> None:
 def test_fixture_ids_length_mismatch_is_rejected() -> None:
     with pytest.raises(ValueError, match="id"):
 
-        @velox.fixture(params=[1, 2], ids=["only-one"])
+        @voci.fixture(params=[1, 2], ids=["only-one"])
         def bad(param: int) -> int:
             return param
 
@@ -608,7 +608,7 @@ def test_fixture_ids_length_mismatch_is_rejected() -> None:
 def test_fixture_missing_the_param_argument_is_rejected_at_decoration_time() -> None:
     with pytest.raises(DIError, match="param"):
 
-        @velox.fixture(params=[1, 2])
+        @voci.fixture(params=[1, 2])
         def bad(other: int) -> int:
             return other
 
@@ -616,7 +616,7 @@ def test_fixture_missing_the_param_argument_is_rejected_at_decoration_time() -> 
 def test_fixture_param_argument_cannot_also_be_depends_injected() -> None:
     with pytest.raises(DIError, match="param"):
 
-        @velox.fixture(params=[1, 2])
+        @voci.fixture(params=[1, 2])
         def bad(param: int = Depends(alpha)) -> int:
             return param
 
@@ -641,7 +641,7 @@ def test_plan_for_records_no_param_ancestors_without_any_parametrized_fixture() 
 
 
 def test_plan_for_records_the_fixtures_own_id_as_its_ancestor() -> None:
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def backend(param: str) -> str:
         return param
 
@@ -654,11 +654,11 @@ def test_plan_for_records_the_fixtures_own_id_as_its_ancestor() -> None:
 
 
 def test_plan_for_propagates_param_ancestors_to_a_dependent_fixture() -> None:
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def backend(param: str) -> str:
         return param
 
-    @velox.fixture()
+    @voci.fixture()
     def engine(b: str = Depends(backend)) -> str:
         return f"engine+{b}"
 
@@ -676,7 +676,7 @@ def test_plan_for_records_param_ancestors_reached_only_through_an_implicit_fixtu
     """A `params=` fixture a container declared still fans its tests out one case each, so it
     has to reach `ResolutionPlan.param_ancestors` the same way a directly-depended one does."""
 
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def backend(param: str) -> str:
         return param
 
@@ -700,7 +700,7 @@ def test_expand_cases_passes_through_the_same_plan_object_when_unparametrized() 
 
 
 def test_expand_cases_produces_one_plan_per_case() -> None:
-    @velox.fixture(params=["sqlite", "postgres"])
+    @voci.fixture(params=["sqlite", "postgres"])
     def backend(param: str) -> str:
         return param
 
@@ -718,11 +718,11 @@ def test_expand_cases_produces_one_plan_per_case() -> None:
 
 
 def test_expand_cases_propagates_the_chosen_case_key_to_a_dependent_step() -> None:
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def backend(param: str) -> str:
         return param
 
-    @velox.fixture()
+    @voci.fixture()
     def engine(b: str = Depends(backend)) -> str:
         return f"engine+{b}"
 
@@ -739,11 +739,11 @@ def test_expand_cases_propagates_the_chosen_case_key_to_a_dependent_step() -> No
 
 
 def test_expand_cases_cross_multiplies_two_independent_parametrized_fixtures() -> None:
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def left(param: str) -> str:
         return param
 
-    @velox.fixture(params=[1, 2])
+    @voci.fixture(params=[1, 2])
     def right(param: int) -> int:
         return param
 
@@ -760,15 +760,15 @@ def test_expand_cases_case_key_only_reflects_a_steps_actual_ancestors() -> None:
     """A step depending on only one of two independent parametrized fixtures must not fragment
     its cache key over the other one's cases too."""
 
-    @velox.fixture(params=["a", "b"])
+    @voci.fixture(params=["a", "b"])
     def left(param: str) -> str:
         return param
 
-    @velox.fixture(params=[1, 2])
+    @voci.fixture(params=[1, 2])
     def right(param: int) -> int:
         return param
 
-    @velox.fixture()
+    @voci.fixture()
     def left_only(x: str = Depends(left)) -> str:
         return x
 

@@ -1,4 +1,4 @@
-"""Tests for velox._collection.discovery: file matching, ignore rules, deterministic ordering."""
+"""Tests for voci._collection.discovery: file matching, ignore rules, deterministic ordering."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from _support import Project
 
-from velox._collection.discovery import discover_files
+from voci._collection.discovery import discover_files
 
 
 def _touch(path: Path) -> Path:
@@ -51,7 +51,7 @@ def test_an_ignore_entry_with_a_path_in_it_prunes_only_that_directory(tmp_path: 
 
 
 def test_an_ignore_path_matches_wherever_the_walk_starts(tmp_path: Path) -> None:
-    # velox walks from `rootdir/tests` when nothing names a path, so an entry written relative to
+    # voci walks from `rootdir/tests` when nothing names a path, so an entry written relative to
     # the rootdir still has to match a directory the walk only reaches from further in.
     _touch(tmp_path / "tests" / "mypy_cases" / "test_excluded.py")
     _touch(tmp_path / "tests" / "test_kept.py")
@@ -197,7 +197,7 @@ def test_overlapping_roots_do_not_double_collect(tmp_path: Path) -> None:
 
 
 def test_argument_order_does_not_change_the_result(tmp_path: Path) -> None:
-    """`velox b a` and `velox a b` must discover the same tests in the same order."""
+    """`voci b a` and `voci a b` must discover the same tests in the same order."""
     _touch(tmp_path / "a" / "test_a.py")
     _touch(tmp_path / "b" / "test_b.py")
 

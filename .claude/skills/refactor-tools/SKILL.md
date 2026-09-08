@@ -1,9 +1,9 @@
 ---
 name: refactor-tools
-description: AST-based justfile recipes for splitting objects out of a velox source file into their own module and repointing imports across the repo. Use when moving, splitting, or renaming top-level functions/classes/objects within velox/, or when asked to "move X out of Y" or "split this file".
+description: AST-based justfile recipes for splitting objects out of a voci source file into their own module and repointing imports across the repo. Use when moving, splitting, or renaming top-level functions/classes/objects within voci/, or when asked to "move X out of Y" or "split this file".
 ---
 
-# velox refactor tools
+# voci refactor tools
 
 `recipes/refactor.just` has AST-based recipes for splitting unrelated objects out of a file into
 their own module and repointing their imports. Run `just --list refactor` for the full recipe list.
@@ -28,7 +28,7 @@ for every rewrite — read it, don't trust it blindly (see sharp edge below).
 
 ## `just refactor rewire-module parent name new_parent new_name`
 
-For a consumer that does `from parent import name` (a whole submodule, e.g. `from velox import
+For a consumer that does `from parent import name` (a whole submodule, e.g. `from voci import
 _capture`) and uses `name.thing` throughout rather than importing specific names, repoints just
 that import at `from new_parent import new_name as name`, so every existing `name.thing` call
 site stays untouched. Same diff output as `rewire`.
@@ -38,7 +38,7 @@ site stays untouched. Same diff output as `rewire`.
 None of the three touch a moved object's docstring or `__all__` — add those by hand afterward,
 same as any other new module. `rewire`/`rewire-module` only follow `from x import y` clauses
 (single- or multi-line); dotted `import x` usage and generated files (like
-`velox/_assertions/_vendor/_compare_any.py`, whose stand-in import lives as a string literal in
+`voci/_assertions/_vendor/_compare_any.py`, whose stand-in import lives as a string literal in
 `scripts/vendor_assertion.py`) need a manual fix and a `just vendor update` re-run.
 
 ## Moving a whole file into a subpackage

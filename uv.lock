@@ -8,8 +8,8 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "velox-migrate",
-    "velox-test",
+    "voci",
+    "voci-migrate",
 ]
 
 [[package]]
@@ -874,18 +874,7 @@ wheels = [
 ]
 
 [[package]]
-name = "velox-migrate"
-version = "0.0.0"
-source = { editable = "velox-migrate" }
-dependencies = [
-    { name = "libcst" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "libcst", specifier = ">=1.9" }]
-
-[[package]]
-name = "velox-test"
+name = "voci"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -928,6 +917,17 @@ docs = [
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6" },
     { name = "zensical", specifier = "==0.0.56" },
 ]
+
+[[package]]
+name = "voci-migrate"
+version = "0.0.0"
+source = { editable = "voci-migrate" }
+dependencies = [
+    { name = "libcst" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "libcst", specifier = ">=1.9" }]
 
 [[package]]
 name = "watchdog"

@@ -3,6 +3,6 @@ revision = 1
 requires-python = ">=3.13"
 
 [[package]]
-name = "velox-example-async-library"
+name = "voci-example-async-library"
 version = "0.0.0"
 source = { virtual = "." }

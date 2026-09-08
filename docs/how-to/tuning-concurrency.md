@@ -4,7 +4,7 @@
 anything for a given suite is a question `--durations` answers, not a guess:
 
 ```console
-$ velox --durations 5
+$ voci --durations 5
 ...
 34 tests · 33 passed · 1 skipped · 0.15s wall (0.6x concurrency)
 ```
@@ -19,7 +19,7 @@ fast for scheduling to matter, or something is holding it to one test at a time 
 `--durations N` lists the N slowest tests at the end of the run — under concurrency, the slowest
 test is the floor the wall clock can't drop below, so it's the list to read before touching
 `--concurrency` at all. A test that patches a module or a class installs by mutating something
-every other running test can see, so velox schedules it to run alone and drains the suite around
+every other running test can see, so voci schedules it to run alone and drains the suite around
 it:
 
 ```python

@@ -4,11 +4,11 @@ See [rationale.md](../rationale.md) for the index.
 
 **A subprocess's data is merged into the parent's live measurement, not left on disk.** The
 alternative is coverage.py's usual answer for multiple processes: each writes its own
-`.coverage.<suffix>` file and the user runs `coverage combine` afterwards. velox declines it
-because the number of processes is an implementation detail of a *mark* — adding `@velox.isolated`
+`.coverage.<suffix>` file and the user runs `coverage combine` afterwards. voci declines it
+because the number of processes is an implementation detail of a *mark* — adding `@voci.isolated`
 to one test would change the command a project's CI has to run, and forgetting to would silently
 report that test's lines as unexecuted. `harvest` reads the child's data file the moment the child
-exits and updates the parent's `CoverageData` in place, so `coverage run -m velox` leaves exactly
+exits and updates the parent's `CoverageData` in place, so `coverage run -m voci` leaves exactly
 one data file however many isolated tests ran.
 
 **The child gets the parent's whole configuration, not a chosen subset of it.** `subprocess_env`
@@ -24,7 +24,7 @@ name starts with the one it handed out, which is what parallel mode's per-proces
 **A measurement problem is a note, never a test failure and never a warning.** Coverage data that
 can't be read back, and a coverage.py too old to carry its configuration into a subprocess, go to
 `run_suite`'s `note` — the same channel the loop watchdog uses. `warnings.warn` would have been
-the obvious choice and is the wrong one: velox's own warning shim honours the user's
-`filterwarnings`, so a project running with `["error"]` would have velox's diagnostic raised
+the obvious choice and is the wrong one: voci's own warning shim honours the user's
+`filterwarnings`, so a project running with `["error"]` would have voci's diagnostic raised
 inside `run_isolated`, out through the dispatch TaskGroup, and take the whole run down over a
 measurement detail. The test genuinely passed; only the accounting of it is missing.

@@ -1,6 +1,6 @@
-# velox
+# voci
 
-Two distributions in this uv workspace: `velox/` (the package) and `velox-migrate/` (pytest→velox
+Two distributions in this uv workspace: `voci/` (the package) and `voci-migrate/` (pytest→voci
 migration tooling).
 
 ## Tooling
@@ -8,7 +8,7 @@ uv, ruff, pyrefly, pytest, run via `justfile` (`just list`). Default to `just ch
 
 ## Python versions
 
-velox supports 3.13 and 3.14, and they differ where it matters (PEP 649 annotations, warning
+voci supports 3.13 and 3.14, and they differ where it matters (PEP 649 annotations, warning
 filters). `.python-version` pins the default — 3.14 — and everything (`just check`, `just checks
 test`, CI's non-matrix jobs) runs under it unless told otherwise.
 
@@ -30,7 +30,7 @@ alone is enough otherwise.
 ## Documentation
 
 User docs are built in `docs`.
-See the `velox-docs` skill for conventions on prose in code. 
+See the `voci-docs` skill for conventions on prose in code. 
 
 ## Workflows
 

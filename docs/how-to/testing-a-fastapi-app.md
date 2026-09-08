@@ -2,17 +2,17 @@
 
 FastAPI apps carry two pieces of mutable state on the app object itself —
 `dependency_overrides` and `state` — which is fine under pytest's one-test-at-a-time model and
-wrong under velox's, where sixteen tests may be reading and writing the same app at once.
-[`velox.fastapi.client`](../reference/fastapi.md) swaps both for `ContextVar`-backed proxies so
+wrong under voci's, where sixteen tests may be reading and writing the same app at once.
+[`voci.fastapi.client`](../reference/fastapi.md) swaps both for `ContextVar`-backed proxies so
 each concurrent test gets its own view, and layers it away when the `async with` exits.
 
 ```python
-@velox.fixture()
+@voci.fixture()
 async def api_client(
     session: AsyncSession = Depends(session),
     settings: Settings = Depends(settings),
 ) -> AsyncIterator[AsyncClient]:
-    async with velox_fastapi.client(
+    async with voci_fastapi.client(
         app,
         overrides={get_session: lambda: session},
         state={"settings": settings},
@@ -26,7 +26,7 @@ callable, the same shape as `app.dependency_overrides` itself, so `get_session` 
 `lambda: session` for the lifetime of this fixture and to nothing in particular for a test that
 never depended on `api_client`. `ASGITransport` sends no lifespan scope, so `app`'s own `lifespan`
 stays out of the way; a test that needs whatever startup builds should depend on
-`velox.fastapi.lifespan(app)` instead, which runs it once for the whole session.
+`voci.fastapi.lifespan(app)` instead, which runs it once for the whole session.
 
 ## Overriding one dependency for one test
 
@@ -34,17 +34,17 @@ stays out of the way; a test that needs whatever startup builds should depend on
 for a single dependency writes a sibling fixture rather than mutating the shared one:
 
 ```python
-@velox.fixture()
+@voci.fixture()
 def premium_settings() -> Settings:
     return Settings(database_url="unused", signup_bonus_cents=5_000, max_orders_per_user=2)
 
 
-@velox.fixture()
+@voci.fixture()
 async def premium_client(
     session: AsyncSession = Depends(session),
     settings: Settings = Depends(premium_settings),
 ) -> AsyncIterator[AsyncClient]:
-    async with velox_fastapi.client(
+    async with voci_fastapi.client(
         app,
         overrides={get_session: lambda: session},
         state={"settings": settings},

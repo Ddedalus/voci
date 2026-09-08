@@ -1,4 +1,4 @@
-# `_run/isolated.py` — the `@velox.isolated` subprocess tier
+# `_run/isolated.py` — the `@voci.isolated` subprocess tier
 
 See [rationale.md](../rationale.md) for the index.
 
@@ -6,7 +6,7 @@ See [rationale.md](../rationale.md) for the index.
 `TestRecord`'s `func` and `plan` are ordinary Python objects — closures, DI providers, imported
 modules — with no general JSON (or pickle-safe) representation, and forking the parent to clone
 them would inherit exactly the process-global state (signal handlers, loop policy, an open thread
-pool mid-run) `@velox.isolated` exists to escape. The subprocess is instead handed just a file path
+pool mid-run) `@voci.isolated` exists to escape. The subprocess is instead handed just a file path
 and a target test id, imports that one file fresh, and calls `_collect.collect` on it again —
 paying a real re-import cost per isolated test, deliberately, in exchange for a genuinely clean
 interpreter rather than a copy of a busy one.

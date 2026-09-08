@@ -1,4 +1,4 @@
-"""Tests for `velox._report.terminal.Reporter`: per-file scrollback blocks, end-of-run sections
+"""Tests for `voci._report.terminal.Reporter`: per-file scrollback blocks, end-of-run sections
 (failure details, short summary, unattributed output, the warnings summary,
 wall-vs-concurrency), and path elision --
 exercised directly against hand-built `TestResult`s and a `StringIO` stream.
@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from velox._collection.collect import Skipped
-from velox._collection.collect import TestRecord as Record
-from velox._di.fixtures import ResolutionPlan
-from velox._marks import marks_of
-from velox._report.terminal import Reporter, _elide_middle, _failure_reason
-from velox._run.run import Outcome
-from velox._run.run import TestResult as Result
-from velox._warnings import RecordedWarning
+from voci._collection.collect import Skipped
+from voci._collection.collect import TestRecord as Record
+from voci._di.fixtures import ResolutionPlan
+from voci._marks import marks_of
+from voci._report.terminal import Reporter, _elide_middle, _failure_reason
+from voci._run.run import Outcome
+from voci._run.run import TestResult as Result
+from voci._warnings import RecordedWarning
 
 _EMPTY_PLAN = ResolutionPlan(steps=(), root_args=())
 
@@ -209,7 +209,7 @@ def test_file_block_counts_its_skipped_tests_rather_than_listing_them() -> None:
 
 
 def test_file_block_counts_a_runtime_skip_alongside_a_marked_one() -> None:
-    """A `velox.Skipped` raised mid-run reaches `on_result` like any other result -- it's
+    """A `voci.Skipped` raised mid-run reaches `on_result` like any other result -- it's
     already in `results`, not a separate list -- so it folds into the same `(N skipped)`
     annotation a `skip` mark's does."""
     path = Path("tests/test_sample.py")
@@ -230,7 +230,7 @@ def test_file_block_counts_a_runtime_skip_alongside_a_marked_one() -> None:
 
 def test_a_file_whose_every_dispatched_test_skips_at_runtime_reads_as_skip_not_pass() -> None:
     """Unlike a mixed file (previous test), a file with results but none of them anything but
-    `velox.Skipped` has nothing to call `PASS`: it reads as `SKIP`, the same status a wholly
+    `voci.Skipped` has nothing to call `PASS`: it reads as `SKIP`, the same status a wholly
     collection-time-skipped file gets, and does not also repeat the count as `(N skipped)` --
     the status word has already said it."""
     path = Path("tests/test_sample.py")
@@ -660,7 +660,7 @@ def test_finish_counts_deselected_and_not_run_tests() -> None:
 
 
 def test_finish_with_zero_tests() -> None:
-    """The shape `velox` prints on an empty directory, or any run with nothing collected."""
+    """The shape `voci` prints on an empty directory, or any run with nothing collected."""
     reporter, stream = _reporter([])
 
     reporter.finish([], wall_clock=0.001)

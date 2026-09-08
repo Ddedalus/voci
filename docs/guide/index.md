@@ -1,17 +1,15 @@
 # Guide
 
-An ordered walkthrough of velox, one concept per page. Start here and read forward; each page
+An ordered walkthrough of voci, one concept per page. Start here and read forward; each page
 assumes the ones before it.
 
 ## Install
 
-velox needs Python 3.13 or newer. The core package has no dependencies.
+voci needs Python 3.13 or newer. The core package has no dependencies.
 
 ```bash
-uv pip install velox-test          # or: pip install velox-test
+uv pip install voci          # or: pip install voci
 ```
-
-The distribution is `velox-test`; the package you import is `velox`.
 
 ## Your first test
 
@@ -27,7 +25,7 @@ async def test_addition() -> None:
 Run the suite from the project root:
 
 ```bash
-velox
+voci
 ```
 
 ```console
@@ -37,7 +35,7 @@ PASS  tests/test_math.py                          1 test   Σ 0.00s
 1 test · 1 passed · 0.02s wall (0.0x concurrency)
 ```
 
-The first line names the `[tool.velox]` table the run picked up, or `none`. The `Σ` column is the
+The first line names the `[tool.voci]` table the run picked up, or `none`. The `Σ` column is the
 sum of every test's own duration in that file; the last line's wall time is how long the run
 actually took, and the multiplier is the ratio between the two. One instant test has nothing to
 overlap, so the multiplier only becomes interesting once the suite has tests that wait on
@@ -45,7 +43,7 @@ something.
 
 ## The shape of a suite
 
-A velox suite is ordinary Python modules. There is no `conftest.py` and no name-based lookup —
+A voci suite is ordinary Python modules. There is no `conftest.py` and no name-based lookup —
 anything shared is a function you import.
 
 ```
@@ -55,15 +53,15 @@ tests/
   test_orders.py
 ```
 
-A fixture is a function decorated with `@velox.fixture()`. A test — or another fixture — asks for
+A fixture is a function decorated with `@voci.fixture()`. A test — or another fixture — asks for
 one by naming `Depends(that_function)` in a parameter's `Annotated[...]` metadata:
 
 ```python
 # tests/fixtures.py
-import velox
+import voci
 
 
-@velox.fixture()
+@voci.fixture()
 def settings() -> Settings:
     return Settings(endpoint="https://hooks.test/v1", retries=3)
 
@@ -71,7 +69,7 @@ def settings() -> Settings:
 # tests/test_delivery.py
 from typing import Annotated
 
-from velox import Depends
+from voci import Depends
 
 from tests.fixtures import settings
 

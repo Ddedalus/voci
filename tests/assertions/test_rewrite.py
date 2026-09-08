@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from velox._assertions._vendor import rewrite as vendored
-from velox._assertions.rewrite import (
+from voci._assertions._vendor import rewrite as vendored
+from voci._assertions.rewrite import (
     Config,
     _discover_python_files,
     assertion_context,
@@ -146,7 +146,7 @@ def test_explicit_message_is_preserved(rewritten) -> None:
 
 
 def test_non_test_module_under_the_root_is_rewritten(rewritten) -> None:
-    """velox rewrites every module discovered under the test roots, not just `test_*.py`
+    """voci rewrites every module discovered under the test roots, not just `test_*.py`
     files and conftests -- so a helper module's own asserts explain themselves too."""
     mod = rewritten(
         "def helper_check(a, b):\n    assert a == b\n",
@@ -159,7 +159,7 @@ def test_non_test_module_under_the_root_is_rewritten(rewritten) -> None:
 
 def test_rewriter_temps_are_filtered_from_locals() -> None:
     """Without this, every failure shows a wall of `@py_assert*` bindings."""
-    from velox._assertions.rewrite import iter_user_locals, strip_rewriter_temps
+    from voci._assertions.rewrite import iter_user_locals, strip_rewriter_temps
 
     frame_locals = {
         "resp": object(),

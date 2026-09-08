@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from velox._assertions import rewrite as _rewrite
-from velox._assertions._vendor import rewrite as vendored
-from velox._assertions.rewrite import (
+from voci._assertions import rewrite as _rewrite
+from voci._assertions._vendor import rewrite as vendored
+from voci._assertions.rewrite import (
     ENV_CACHE_DIR,
     Config,
     install,
@@ -32,25 +32,25 @@ from ._support import imported_module
 
 class TestCacheKey:
     def test_tag_carries_the_rewriter_revision(self) -> None:
-        """A change to velox's vendored codegen must invalidate pycs, not just a CPython bump."""
+        """A change to voci's vendored codegen must invalidate pycs, not just a CPython bump."""
         assert sys.implementation.cache_tag in vendored.PYTEST_TAG
-        assert "velox" in vendored.PYTEST_TAG
+        assert "voci" in vendored.PYTEST_TAG
         assert "pytest" not in vendored.PYTEST_TAG
 
     def test_codegen_options_change_the_key(self) -> None:
-        default = vendored._velox_pyc_tail(Config())
-        with_hook = vendored._velox_pyc_tail(Config({"enable_assertion_pass_hook": True}))
+        default = vendored._voci_pyc_tail(Config())
+        with_hook = vendored._voci_pyc_tail(Config({"enable_assertion_pass_hook": True}))
         assert default != with_hook
 
     def test_non_codegen_options_do_not_change_the_key(self) -> None:
-        assert vendored._velox_pyc_tail(Config(verbosity=0)) == vendored._velox_pyc_tail(
+        assert vendored._voci_pyc_tail(Config(verbosity=0)) == vendored._voci_pyc_tail(
             Config(verbosity=2)
         )
 
     def test_every_declared_codegen_option_is_hashed(self) -> None:
-        base = vendored._velox_pyc_tail(Config())
-        for name in vendored.VELOX_CODEGEN_OPTIONS:
-            assert vendored._velox_pyc_tail(Config({name: "sentinel-value"})) != base
+        base = vendored._voci_pyc_tail(Config())
+        for name in vendored.VOCI_CODEGEN_OPTIONS:
+            assert vendored._voci_pyc_tail(Config({name: "sentinel-value"})) != base
 
 
 class TestPycWriting:
@@ -106,7 +106,7 @@ class TestCacheDirResolution:
         one avoids."""
         monkeypatch.delenv(ENV_CACHE_DIR, raising=False)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "platform-cache"))
-        assert resolve_cache_dir(rootdir=tmp_path) == tmp_path / ".velox_cache" / "rewrite"
+        assert resolve_cache_dir(rootdir=tmp_path) == tmp_path / ".voci_cache" / "rewrite"
 
     def test_platform_cache_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """No `rootdir` to hand (a direct library caller outside `cli.main`) falls back to the
@@ -114,7 +114,7 @@ class TestCacheDirResolution:
         monkeypatch.delenv(ENV_CACHE_DIR, raising=False)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
         monkeypatch.setattr(sys, "platform", "linux")
-        assert resolve_cache_dir() == tmp_path / "velox" / "rewrite"
+        assert resolve_cache_dir() == tmp_path / "voci" / "rewrite"
 
     def test_pycache_prefix_is_the_last_resort(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -125,10 +125,10 @@ class TestCacheDirResolution:
         monkeypatch.delenv("HOME", raising=False)
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setattr(sys, "pycache_prefix", str(tmp_path / "pycs"))
-        assert resolve_cache_dir() == tmp_path / "pycs" / "velox-rewrite"
+        assert resolve_cache_dir() == tmp_path / "pycs" / "voci-rewrite"
 
     def test_expanduser(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(ENV_CACHE_DIR, "~/velox-cache")
+        monkeypatch.setenv(ENV_CACHE_DIR, "~/voci-cache")
         assert "~" not in str(resolve_cache_dir())
 
 

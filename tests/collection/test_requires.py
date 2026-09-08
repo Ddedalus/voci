@@ -1,4 +1,4 @@
-"""Tests for velox._collection.requires: `velox.use(...)` and how collection reads it back."""
+"""Tests for voci._collection.requires: `voci.use(...)` and how collection reads it back."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from pathlib import Path
 import pytest
 from _support import Project
 
-import velox
-from velox._collection.collect import TestRecord as Record
-from velox._collection.collect import collect
-from velox._collection.requires import requires_of, use
+import voci
+from voci._collection.collect import TestRecord as Record
+from voci._collection.collect import collect
+from voci._collection.requires import requires_of, use
 
 _DECLARING_MODULE = """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def declared():
     return "declared"
 
-velox.use(declared)
+voci.use(declared)
 
 async def test_one():
     pass
@@ -51,14 +51,14 @@ def test_use_rejects_an_undecorated_function() -> None:
     def looks_like_a_fixture() -> int:
         return 1
 
-    with pytest.raises(TypeError, match=r"@velox\.fixture"):
+    with pytest.raises(TypeError, match=r"@voci\.fixture"):
         use(looks_like_a_fixture)  # type: ignore[arg-type]
 
 
 def test_use_inside_a_function_is_rejected_rather_than_silently_ignored() -> None:
     """A call there would run when the test runs, long after collection built its plan."""
 
-    @velox.fixture()
+    @voci.fixture()
     def anything() -> int:
         return 1
 
@@ -108,18 +108,18 @@ def test_repeated_calls_accumulate_in_source_order(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
         """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def first():
     return 1
 
-@velox.fixture()
+@voci.fixture()
 def second():
     return 2
 
-velox.use(first)
-velox.use(second)
+voci.use(first)
+voci.use(second)
 
 async def test_one():
     pass
@@ -135,19 +135,19 @@ def test_a_declared_fixture_is_built_before_the_tests_own_dependency(tmp_path: P
     path = _write(
         tmp_path / "test_sample.py",
         """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def declared():
     return "declared"
 
-@velox.fixture()
+@voci.fixture()
 def asked_for():
     return "asked_for"
 
-velox.use(declared)
+voci.use(declared)
 
-async def test_one(x=velox.Depends(asked_for)):
+async def test_one(x=voci.Depends(asked_for)):
     pass
 """,
     )
@@ -164,17 +164,17 @@ def test_a_malformed_declared_graph_is_one_error_for_the_file(tmp_path: Path) ->
     path = _write(
         tmp_path / "test_sample.py",
         """
-import velox
+import voci
 
-@velox.fixture(scope="function")
+@voci.fixture(scope="function")
 def narrow():
     return 1
 
-@velox.fixture(scope="session")
-def wide(x=velox.Depends(narrow)):
+@voci.fixture(scope="session")
+def wide(x=voci.Depends(narrow)):
     return x
 
-velox.use(wide)
+voci.use(wide)
 
 async def test_one():
     pass
@@ -195,18 +195,18 @@ async def test_three():
 
 
 def test_a_declaration_on_a_module_holding_no_tests_is_reported(tmp_path: Path) -> None:
-    """A `velox.use(...)` in a shared helper module is never read back, so the fixtures it names
+    """A `voci.use(...)` in a shared helper module is never read back, so the fixtures it names
     would silently never run."""
     _write(
         tmp_path / "shared_helpers.py",
         """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def declared():
     return 1
 
-velox.use(declared)
+voci.use(declared)
 """,
     )
     path = _write(
@@ -237,13 +237,13 @@ async def test_one():
 
 
 _DECLARING_PACKAGE = """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def from_package():
     return "from_package"
 
-velox.use(from_package)
+voci.use(from_package)
 """
 
 _PLAIN_TEST = "async def test_one():\n    pass\n"
@@ -277,13 +277,13 @@ def test_declarations_apply_outermost_first(tmp_path: Path) -> None:
     _write(
         tmp_path / "pkg" / "deep" / "__init__.py",
         """
-import velox
+import voci
 
-@velox.fixture()
+@voci.fixture()
 def from_subpackage():
     return "from_subpackage"
 
-velox.use(from_subpackage)
+voci.use(from_subpackage)
 """,
     )
     path = _write(tmp_path / "pkg" / "deep" / "test_sample.py", _DECLARING_MODULE)
@@ -337,9 +337,9 @@ def test_a_fixture_declared_by_both_a_package_and_a_module_gets_one_step(tmp_pat
     _write(
         tmp_path / "declarations.py",
         """
-import velox
+import voci
 
-@velox.fixture(scope="call")
+@voci.fixture(scope="call")
 def shared():
     return 1
 """,
@@ -349,10 +349,10 @@ import sys
 
 sys.path.insert(0, {str(tmp_path)!r})
 
-import velox
+import voci
 from declarations import shared
 
-velox.use(shared)
+voci.use(shared)
 """
     _write(tmp_path / "pkg" / "__init__.py", header)
     path = _write(
@@ -414,7 +414,7 @@ def test_the_walk_never_leaves_rootdir(tmp_path: Path) -> None:
 
 
 def test_a_relative_import_in_a_package_says_what_to_do_about_it(tmp_path: Path) -> None:
-    """velox imports by path, so the traceback names `velox_tests` — a package the suite never
+    """voci imports by path, so the traceback names `voci_tests` — a package the suite never
     wrote."""
     _write(tmp_path / "pkg" / "helpers.py", "value = 1\n")
     _write(tmp_path / "pkg" / "__init__.py", "from .helpers import value\n")
@@ -432,20 +432,20 @@ def test_a_package_is_not_left_in_sys_modules(tmp_path: Path) -> None:
 
     collect([path], rootdir=tmp_path)
 
-    assert "velox_tests.pkg.__init__" not in sys.modules
+    assert "voci_tests.pkg.__init__" not in sys.modules
 
 
 def test_a_declared_parametrized_fixture_fans_the_module_out_by_case(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "test_sample.py",
         """
-import velox
+import voci
 
-@velox.fixture(params=["sqlite", "postgres"])
+@voci.fixture(params=["sqlite", "postgres"])
 def backend(param):
     return param
 
-velox.use(backend)
+voci.use(backend)
 
 async def test_one():
     pass

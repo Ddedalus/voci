@@ -23,14 +23,14 @@ failure until a run collects it successfully. Where the path is a package `__ini
 below it is what gets replayed: discovery never yields an `__init__.py` as a test file, so an
 exact match on it matches nothing, and nothing under it was collected either. Narrowing the file
 set never narrows what counts as a *test module*, though: `collect` is told the whole discovered
-set alongside the slice it is collecting, so a `velox.use(...)` in a file `--lf` left out does not
+set alongside the slice it is collecting, so a `voci.use(...)` in a file `--lf` left out does not
 become a misplaced declaration the moment a collected file imports that module. The same asymmetry
 decides when the entry clears — collecting anything beneath a package is what imports it, so a
 failure the run did not report again is one the run fixed.
 
 **A run only overwrites what it settled, and absence is an answer.** Merging keeps every
 previously-failed id the run produced no result for and every previously-erroring path it did not
-collect. Without that, `velox -x --lf` would drop the run's remaining failures the moment
+collect. Without that, `voci -x --lf` would drop the run's remaining failures the moment
 `--maxfail` stopped it, and running one directory would erase the failures found in another — both
 of which turn `--lf` into a flag you cannot trust twice in a row. The converse matters just as
 much: a recorded id under a file collection read *without error* and did not produce names a test
@@ -50,12 +50,12 @@ than a second, looser rule: a package `__init__.py` counts as live only through 
 `__init__.py` chain that would import it, never through a namespace directory sitting under it.
 The filesystem half is read against `rootdir` rather than against this run's discovery, and the
 discovery half is scoped to the roots actually walked — and to directories those roots *contain*,
-not ones they sit inside — so neither `velox one/` nor `velox pkg/sub` concludes anything about
+not ones they sit inside — so neither `voci one/` nor `voci pkg/sub` concludes anything about
 what it only saw part of.
 
 The second is what may go in at all. `error_paths` records a collection error only on a path
 `settled_paths` could later answer for; anything else — `_misplaced_declarations` reporting a
-`velox.use(...)` in a module velox never collects, named absolutely outside `rootdir` and by a
+`voci.use(...)` in a module voci never collects, named absolutely outside `rootdir` and by a
 bare dotted module name with no `__file__` — is reported by every run that imports the module and
 not cached. One `settled_paths` call, read both ways round.
 
@@ -79,9 +79,9 @@ which reads as a suite that collected nothing rather than as the flag having not
 It says so instead. This is the one wedge left deliberately open: the entry is real, and only a
 run that reaches it can clear it.
 
-**Which `.velox_cache` a run reads is not the arguments' business.** rootdir fixes the spelling of
+**Which `.voci_cache` a run reads is not the arguments' business.** rootdir fixes the spelling of
 every test id, the `sys.path` entry, and the cache directory, so a rootdir derived from the
-arguments gives `velox tests/unit` a second cache in a second id namespace. That is worse than
+arguments gives `voci tests/unit` a second cache in a second id namespace. That is worse than
 two caches drifting apart: the second one starts *empty*, and an empty cache means "nothing
 recorded", which is exactly the state the paragraph above exists to distinguish from "your
 failures are all outside this selection". The loud exit `5` silently becomes a green exit `0`.
@@ -94,9 +94,9 @@ it is routinely somewhere a rootdir has no business being, a dotfiles repo at `$
 case that decided it.
 
 `sys.path` climbs with it, and that is the point rather than the cost. rootdir is the one directory
-velox puts on `sys.path`, so an argument-derived rootdir made the arguments decide which imports
-resolve: `velox` from the project root resolved the documented `from tests.fixtures import ...` and
-broke a bare `from helper import ...`, while `velox tests/` did the exact reverse. The same disease
+voci puts on `sys.path`, so an argument-derived rootdir made the arguments decide which imports
+resolve: `voci` from the project root resolved the documented `from tests.fixtures import ...` and
+broke a bare `from helper import ...`, while `voci tests/` did the exact reverse. The same disease
 as the two caches, in the half that decides whether a suite collects at all. Anchoring fixes both
 at once, and it fixes them in favour of what `docs/how-to/sharing-code-across-test-files.md`
 already documents — a module reached by its full dotted path from the rootdir. A suite importing a
@@ -104,11 +104,11 @@ sibling module by a bare name was relying on where its arguments happened to put
 now does not collect under a `pyproject.toml`; the doc says so.
 
 Rootdir is not the *selection*, though. Climbing to the project root would otherwise widen a bare
-`velox` run from inside `tests/unit` into the whole suite, so the built-in default tier
-(`cli._default_test_roots`) anchors at the current directory unless a `[tool.velox]` table fixed a
+`voci` run from inside `tests/unit` into the whole suite, so the built-in default tier
+(`cli._default_test_roots`) anchors at the current directory unless a `[tool.voci]` table fixed a
 rootdir deliberately — the two used to be the same directory and no longer are.
 
-**Two velox runs sharing one rootdir can still lose each other's failures, but only just.** `save`
+**Two voci runs sharing one rootdir can still lose each other's failures, but only just.** `save`
 is atomic against a torn *read* — a pid-suffixed temporary file replaced into place — but not
 against a lost *update*: both runs write a whole payload, so the second to finish wins. What
 decides how much that costs is which baseline the loser merged into. Merging into the one loaded

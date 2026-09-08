@@ -1,6 +1,6 @@
 # Built-in fixtures
 
-velox ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `tmp: Annotated[Path, Depends(velox.tmp_path)]`.
+voci ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `tmp: Annotated[Path, Depends(voci.tmp_path)]`.
 
 ## Temporary directories
 
@@ -8,15 +8,15 @@ Every directory these allocate lives under one root per run, a fresh numbered di
 platform temp directory that keeps the last three runs' contents for a post-mortem. The
 [`--basetemp`](cli.md) flag puts the root somewhere else.
 
-::: velox.tmp_path
+::: voci.tmp_path
     options:
       show_attribute_values: false
 
-::: velox.tmp_path_factory
+::: voci.tmp_path_factory
     options:
       show_attribute_values: false
 
-::: velox.TmpPathFactory
+::: voci.TmpPathFactory
     options:
       merge_init_into_class: false
       show_if_no_docstring: true
@@ -27,53 +27,53 @@ platform temp directory that keeps the last three runs' contents for a post-mort
 surface, for suites whose helpers call `.join`, `.strpath` or `.write` on the directory they are
 given. A test asking for both a `tmp_path` and a `tmpdir` gets the same directory under two types.
 
-::: velox.tmpdir
+::: voci.tmpdir
     options:
       show_attribute_values: false
 
-::: velox.tmpdir_factory
+::: voci.tmpdir_factory
     options:
       show_attribute_values: false
 
-::: velox.LegacyPath
+::: voci.LegacyPath
     options:
       merge_init_into_class: false
       show_if_no_docstring: true
 
-::: velox.LegacyTmpPathFactory
+::: voci.LegacyTmpPathFactory
     options:
       merge_init_into_class: false
       show_if_no_docstring: true
 
 ## Captured output
 
-::: velox.capture
+::: voci.capture
     options:
       show_attribute_values: false
 
-::: velox.Capture
+::: voci.Capture
     options:
       merge_init_into_class: false
       show_if_no_docstring: true
 
 ## Captured log records
 
-::: velox.log_records
+::: voci.log_records
     options:
       show_attribute_values: false
 
-::: velox.LogRecords
+::: voci.LogRecords
     options:
       merge_init_into_class: false
       show_if_no_docstring: true
 
 ## Test metadata
 
-::: velox.test_info
+::: voci.test_info
     options:
       show_attribute_values: false
 
-::: velox.TestInfo
+::: voci.TestInfo
     options:
       merge_init_into_class: false
       show_if_no_docstring: true

@@ -1,23 +1,23 @@
 # Fixtures
 
-A fixture is a function decorated with `@velox.fixture()`.
+A fixture is a function decorated with `@voci.fixture()`.
 A test or another fixture can request an instance of such fixture by naming `Depends(that_function)` on a parameter — in its `Annotated[...]` metadata, or in its default.
 
 The fixture `scope` decides how widely one instance is shared, from a fresh instance per `Depends` up to one for the whole suite.
 
-You can auto-use fixtures via `velox.use`, similar to how a dependency can be declared on a FastAPI router.
+You can auto-use fixtures via `voci.use`, similar to how a dependency can be declared on a FastAPI router.
 
-::: velox.fixture
+::: voci.fixture
 
-::: velox.Depends
+::: voci.Depends
 
-::: velox.Scope
+::: voci.Scope
 
-::: velox.use
+::: voci.use
 
 ## Where the injection is declared
 
-A parameter declares its injection in its `Annotated[...]` metadata, which is the form velox
+A parameter declares its injection in its `Annotated[...]` metadata, which is the form voci
 teaches and generates:
 
 ```python
@@ -28,7 +28,7 @@ Declaring one parameter both ways — metadata and default — is an error, nami
 when both name the same fixture.
 
 In metadata the parameter takes no default, so an injected parameter can precede a parameter that
-has none — one supplied by `@velox.parametrize`, say — and calling the test by hand takes an
+has none — one supplied by `@voci.parametrize`, say — and calling the test by hand takes an
 ordinary `Session` rather than a sentinel.
 
 An alias carries a marker as well as a signature does, written as a `type` statement or as a plain
@@ -48,14 +48,14 @@ async def test_balance(db: Db) -> None: ...
 A generic alias carries one too: `type Repo[T] = Annotated[T, Depends(repo_fx)]`, named on a
 parameter as `Repo[Account]`, injects `repo_fx`.
 
-velox parses the annotation rather than evaluating it, reading its source text with `ast` and
+voci parses the annotation rather than evaluating it, reading its source text with `ast` and
 evaluating only the `Depends(...)` calls it finds in metadata. The type half is never evaluated,
 so in a module with `from __future__ import annotations` — where Python does not evaluate it
 either — a type imported under `if TYPE_CHECKING:` is a fine thing to inject against.
 
-What velox does evaluate, it evaluates in the module's globals, which is where the fixture named
+What voci does evaluate, it evaluates in the module's globals, which is where the fixture named
 in `Depends(...)` and any alias carrying a marker have to be reachable: a fixture held in a local
-variable is not, and velox says so at collection, naming the parameter. An alias imported only
+variable is not, and voci says so at collection, naming the parameter. An alias imported only
 under `if TYPE_CHECKING:` is out of reach for the same reason, and the parameter naming it is
 reported as one nothing can supply.
 
@@ -74,14 +74,14 @@ flags a call in a parameter default and has to be told this one is fine:
 
 ```toml
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends"]
+extend-immutable-calls = ["voci.Depends"]
 ```
 
 `Annotated` metadata is not a default, so it never trips `B008` and needs no such entry.
 
 ## Typing an injected parameter
 
-`@velox.fixture()` gives a fixture its value type, unwrapping whatever the function yields, awaits
+`@voci.fixture()` gives a fixture its value type, unwrapping whatever the function yields, awaits
 or returns, so `Depends(db_fx)` is a `Session` wherever `db_fx` is a `Fixture[Session]`. The
 parameter that receives it takes its type from its own annotation, and type checkers disagree
 about what to do when there is none:
@@ -109,7 +109,7 @@ where the decorator has no say over the signature it is handed.
 
 A fixture declared `-> Iterator[X]` reads as one that yields an `X`, and its injection sites are
 typed `X`. A fixture that *returns* an iterator declares the same signature, so its sites are typed
-`X` too, while the value they are handed is the iterator — velox dispatches on whether the function
+`X` too, while the value they are handed is the iterator — voci dispatches on whether the function
 is a generator, not on its annotation. Where the iterator is the value, declare it as
 `Iterable[X]`: that is equally true of an iterator, and it is not one of the shapes
-`@velox.fixture()` unwraps.
+`@voci.fixture()` unwraps.

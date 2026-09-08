@@ -1,4 +1,4 @@
-"""Tests for velox._collection.parametrize: callspec expansion and id generation."""
+"""Tests for voci._collection.parametrize: callspec expansion and id generation."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import enum
 
 import pytest
 
-import velox
-from velox._collection.parametrize import cases_for, known_params_of
-from velox._marks import NO_MARKS, ParamSet, marks_of
+import voci
+from voci._collection.parametrize import cases_for, known_params_of
+from voci._marks import NO_MARKS, ParamSet, marks_of
 
 
 def test_known_params_of_is_the_union_of_every_paramsets_argnames() -> None:
@@ -142,9 +142,9 @@ def test_cases_for_leaves_an_unmarked_paramsets_cases_unmarked() -> None:
     assert case.marks == NO_MARKS
 
 
-@velox.skip("marked case")
+@voci.skip("marked case")
 def _skipped() -> None: ...
 
 
-@velox.tag("slow")
+@voci.tag("slow")
 def _tagged() -> None: ...

@@ -1,4 +1,4 @@
-"""Tests for velox._builtins.capture: Router/Sink attribution, logging, tmp_path, the
+"""Tests for voci._builtins.capture: Router/Sink attribution, logging, tmp_path, the
 context-propagating executor, and worker slots.
 """
 
@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 from _support import make_record as _record
 
-import velox
-from velox._builtins import capture as _capture
-from velox._di.fixtures import plan_for
-from velox._run.run import Outcome, run_suite
+import voci
+from voci._builtins import capture as _capture
+from voci._di.fixtures import plan_for
+from voci._run.run import Outcome, run_suite
 
 # ------------------------------------------------------------------------------------------
 # Sink / _CappedBuffer: size cap, head+tail truncation.
@@ -198,7 +198,7 @@ def test_capture_fixture_is_live_during_the_test_not_just_post_hoc() -> None:
     """`capture.out` reflects writes made *before* the read, mid-test — not a snapshot taken
     at some later point."""
 
-    async def test_func(cap: velox.Capture = velox.Depends(velox.capture)) -> None:
+    async def test_func(cap: voci.Capture = voci.Depends(voci.capture)) -> None:
         print("first")
         assert "first" in cap.out
         assert "second" not in cap.out
@@ -217,7 +217,7 @@ def test_run_suite_dispatches_two_concurrent_tests_without_cross_contaminating_c
     barrier = asyncio.Barrier(2)
 
     def make(label: str, other: str) -> Callable[..., object]:
-        async def test_func(cap: velox.Capture = velox.Depends(velox.capture)) -> None:
+        async def test_func(cap: voci.Capture = voci.Depends(voci.capture)) -> None:
             for i in range(15):
                 print(f"{label}-{i}")
                 order.append(label)
@@ -298,9 +298,9 @@ def test_run_suite_reports_stray_output_from_a_detached_thread_as_unattributed()
 
 
 def test_log_records_captures_structured_records_and_set_level_expands_visibility() -> None:
-    logger_name = "velox_test_capture_app"
+    logger_name = "voci_test_capture_app"
 
-    async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+    async def test_func(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
         logger = logging.getLogger(logger_name)
         logger.warning("warn-message")
         # DEBUG wouldn't be captured at all without raising this logger's own level first --
@@ -320,9 +320,9 @@ def test_log_records_captures_structured_records_and_set_level_expands_visibilit
 
 
 def test_log_records_text_formats_every_record() -> None:
-    logger_name = "velox_test_capture_text"
+    logger_name = "voci_test_capture_text"
 
-    async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+    async def test_func(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
         logger = logging.getLogger(logger_name)
         logger.warning("first")
         logger.error("second")
@@ -343,9 +343,9 @@ def test_log_records_text_formats_every_record() -> None:
 
 
 def test_log_records_clear_empties_the_live_container_not_a_snapshot() -> None:
-    logger_name = "velox_test_capture_clear"
+    logger_name = "voci_test_capture_clear"
 
-    async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+    async def test_func(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
         logger = logging.getLogger(logger_name)
         logger.warning("before")
         assert len(records.records) == 1
@@ -369,8 +369,8 @@ def test_log_records_are_isolated_between_concurrent_tests() -> None:
     barrier = asyncio.Barrier(2)
 
     def make(label: str, other: str) -> Callable[..., object]:
-        async def test_func(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
-            logger = logging.getLogger(f"velox_test_capture_{label}")
+        async def test_func(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
+            logger = logging.getLogger(f"voci_test_capture_{label}")
             for i in range(10):
                 logger.warning("%s-%d", label, i)
                 order.append(label)
@@ -403,10 +403,10 @@ def test_set_level_is_not_isolated_under_concurrency_a_siblings_level_can_starve
     """Logger levels are process-global (see `LogRecords.set_level`'s own docstring in
     `_builtins/fixtures.py`): a concurrent sibling lowering the same logger's level can make this
     test's own `set_level(DEBUG)` block capture nothing at all."""
-    logger_name = "velox_test_capture_hazard"
+    logger_name = "voci_test_capture_hazard"
     barrier = asyncio.Barrier(2)
 
-    async def test_loud(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+    async def test_loud(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
         with records.set_level(logging.DEBUG, logger=logger_name):
             await barrier.wait()  # cp1: DEBUG is set; let test_quiet overwrite it
             await barrier.wait()  # cp2: test_quiet's CRITICAL is now in effect
@@ -416,7 +416,7 @@ def test_set_level_is_not_isolated_under_concurrency_a_siblings_level_can_starve
         # record, even though this block's own `set_level(DEBUG)` call was never undone.
         assert records.messages == ()
 
-    async def test_quiet(records: velox.LogRecords = velox.Depends(velox.log_records)) -> None:
+    async def test_quiet(records: voci.LogRecords = voci.Depends(voci.log_records)) -> None:
         await barrier.wait()  # cp1
         with records.set_level(logging.CRITICAL, logger=logger_name):
             await barrier.wait()  # cp2
@@ -460,7 +460,7 @@ def test_run_suite_installs_a_context_propagating_default_executor() -> None:
     """`loop.run_in_executor(None, ...)` (the *default* executor, installed once per run by
     `run_all`) attributes its output to the calling test's sink."""
 
-    async def test_func(cap: velox.Capture = velox.Depends(velox.capture)) -> None:
+    async def test_func(cap: voci.Capture = voci.Depends(voci.capture)) -> None:
         loop = asyncio.get_running_loop()
 
         def blocking() -> None:
@@ -493,7 +493,7 @@ def test_test_info_worker_stays_within_concurrency_bound_under_real_dispatch() -
     concurrency = 4
     seen: list[int] = []
 
-    async def test_func(info: velox.TestInfo = velox.Depends(velox.test_info)) -> None:
+    async def test_func(info: voci.TestInfo = voci.Depends(voci.test_info)) -> None:
         seen.append(info.worker)
         assert 0 <= info.worker < concurrency
         await asyncio.sleep(0.01)
@@ -514,7 +514,7 @@ def test_test_info_worker_is_never_held_by_two_tests_at_once() -> None:
     concurrency = 4
     live: dict[int, str] = {}
 
-    async def test_func(info: velox.TestInfo = velox.Depends(velox.test_info)) -> None:
+    async def test_func(info: voci.TestInfo = voci.Depends(voci.test_info)) -> None:
         assert info.worker not in live, (
             f"worker {info.worker} already held by {live.get(info.worker)!r}"
         )
@@ -533,7 +533,7 @@ def test_test_info_worker_is_never_held_by_two_tests_at_once() -> None:
 
 
 def test_test_info_reports_tags_and_the_suite_wide_timeout() -> None:
-    async def test_func(info: velox.TestInfo = velox.Depends(velox.test_info)) -> None:
+    async def test_func(info: voci.TestInfo = voci.Depends(voci.test_info)) -> None:
         assert info.timeout == 5.0
         assert info.id.endswith("test_func")
 
@@ -583,11 +583,11 @@ def test_sanitize_test_id_truncates_very_long_ids_with_a_fresh_digest_suffix() -
 def test_tmp_path_is_unique_per_test_and_lives_under_basetemp(tmp_path: Path) -> None:
     paths: dict[str, Path] = {}
 
-    async def test_a(p: Path = velox.Depends(velox.tmp_path)) -> None:
+    async def test_a(p: Path = voci.Depends(voci.tmp_path)) -> None:
         paths["a"] = p
         assert p.is_dir()
 
-    async def test_b(p: Path = velox.Depends(velox.tmp_path)) -> None:
+    async def test_b(p: Path = voci.Depends(voci.tmp_path)) -> None:
         paths["b"] = p
         assert p.is_dir()
 
@@ -615,7 +615,7 @@ def test_tmp_path_factory_mktemp_numbers_by_construction(tmp_path: Path) -> None
     made: list[Path] = []
 
     async def test_func(
-        factory: velox.TmpPathFactory = velox.Depends(velox.tmp_path_factory),
+        factory: voci.TmpPathFactory = voci.Depends(voci.tmp_path_factory),
     ) -> None:
         made.append(factory.mktemp("data"))
         made.append(factory.mktemp("data"))
@@ -639,7 +639,7 @@ def test_tmpdir_wraps_the_same_directory_tmp_path_would(tmp_path: Path) -> None:
     seen: dict[str, object] = {}
 
     async def test_func(
-        d: velox.LegacyPath = velox.Depends(velox.tmpdir),
+        d: voci.LegacyPath = voci.Depends(voci.tmpdir),
     ) -> None:
         seen["dir"] = d
 
@@ -650,12 +650,12 @@ def test_tmpdir_wraps_the_same_directory_tmp_path_would(tmp_path: Path) -> None:
 
     assert result.outcome is Outcome.PASSED, result.failure
     d = seen["dir"]
-    assert isinstance(d, velox.LegacyPath)
+    assert isinstance(d, voci.LegacyPath)
     assert Path(d.strpath).is_dir()
 
 
 def test_legacy_path_join_strpath_and_division_match_pathlib(tmp_path: Path) -> None:
-    wrapped = velox.LegacyPath(tmp_path)
+    wrapped = voci.LegacyPath(tmp_path)
 
     assert wrapped.join("a", "b").strpath == str(tmp_path / "a" / "b")
     assert (wrapped / "a").strpath == str(tmp_path / "a")
@@ -664,20 +664,20 @@ def test_legacy_path_join_strpath_and_division_match_pathlib(tmp_path: Path) -> 
 
 
 def test_legacy_path_write_text_and_bytes(tmp_path: Path) -> None:
-    text_file = velox.LegacyPath(tmp_path / "a.txt")
+    text_file = voci.LegacyPath(tmp_path / "a.txt")
     text_file.write("hello")
     assert (tmp_path / "a.txt").read_text() == "hello"
 
-    binary_file = velox.LegacyPath(tmp_path / "nested" / "b.bin")
+    binary_file = voci.LegacyPath(tmp_path / "nested" / "b.bin")
     binary_file.write(b"\x00\x01", mode="wb", ensure=True)
     assert (tmp_path / "nested" / "b.bin").read_bytes() == b"\x00\x01"
 
     with pytest.raises(TypeError):
-        velox.LegacyPath(tmp_path / "c.txt").write(b"not text")
+        voci.LegacyPath(tmp_path / "c.txt").write(b"not text")
 
 
 def test_legacy_path_write_mode_a_appends_rather_than_overwrites(tmp_path: Path) -> None:
-    wrapped = velox.LegacyPath(tmp_path / "a.txt")
+    wrapped = voci.LegacyPath(tmp_path / "a.txt")
     wrapped.write("hello", mode="a")
     wrapped.write("world", mode="a")
     assert (tmp_path / "a.txt").read_text() == "helloworld"
@@ -686,16 +686,16 @@ def test_legacy_path_write_mode_a_appends_rather_than_overwrites(tmp_path: Path)
 def test_legacy_path_mkdir_creates_and_returns_the_named_subdirectory(tmp_path: Path) -> None:
     """`.mkdir` takes the name to create, `py.path.local`'s own shape -- not `Path.mkdir`'s
     `mode`/`parents`/`exist_ok`, which `LegacyPath` doesn't carry over."""
-    wrapped = velox.LegacyPath(tmp_path)
+    wrapped = voci.LegacyPath(tmp_path)
     sub = wrapped.mkdir("sub")
 
-    assert isinstance(sub, velox.LegacyPath)
+    assert isinstance(sub, voci.LegacyPath)
     assert sub.strpath == str(tmp_path / "sub")
     assert (tmp_path / "sub").is_dir()
 
 
 def test_legacy_path_falls_through_to_the_wrapped_path_for_a_shared_method(tmp_path: Path) -> None:
-    wrapped = velox.LegacyPath(tmp_path)
+    wrapped = voci.LegacyPath(tmp_path)
     assert wrapped.exists()
     with pytest.raises(AttributeError):
         wrapped.listdir()  # a py.path.local-only method, not implemented here
@@ -703,13 +703,13 @@ def test_legacy_path_falls_through_to_the_wrapped_path_for_a_shared_method(tmp_p
 
 def test_tmpdir_factory_mktemp_and_getbasetemp_return_legacy_path(tmp_path: Path) -> None:
     async def test_func(
-        factory: velox.LegacyTmpPathFactory = velox.Depends(velox.tmpdir_factory),
+        factory: voci.LegacyTmpPathFactory = voci.Depends(voci.tmpdir_factory),
     ) -> None:
         made = factory.mktemp("data")
-        assert isinstance(made, velox.LegacyPath)
+        assert isinstance(made, voci.LegacyPath)
         assert Path(made.strpath).is_dir()
         base = factory.getbasetemp()
-        assert isinstance(base, velox.LegacyPath)
+        assert isinstance(base, voci.LegacyPath)
 
     (result,) = run_suite(
         [_record(0, test_func, "test_func", plan=plan_for(test_func))],
@@ -723,8 +723,8 @@ def test_tmpdir_and_tmp_path_name_the_same_directory_for_one_test(tmp_path: Path
     seen: dict[str, object] = {}
 
     async def test_func(
-        p: Path = velox.Depends(velox.tmp_path),
-        d: velox.LegacyPath = velox.Depends(velox.tmpdir),
+        p: Path = voci.Depends(voci.tmp_path),
+        d: voci.LegacyPath = voci.Depends(voci.tmpdir),
     ) -> None:
         seen["p"] = p
         seen["d"] = d
@@ -744,8 +744,8 @@ def test_tmpdir_factory_and_tmp_path_factory_share_one_counter(tmp_path: Path) -
     made: list[Path] = []
 
     async def test_func(
-        factory: velox.TmpPathFactory = velox.Depends(velox.tmp_path_factory),
-        legacy: velox.LegacyTmpPathFactory = velox.Depends(velox.tmpdir_factory),
+        factory: voci.TmpPathFactory = voci.Depends(voci.tmp_path_factory),
+        legacy: voci.LegacyTmpPathFactory = voci.Depends(voci.tmpdir_factory),
     ) -> None:
         made.append(factory.mktemp("data"))
         made.append(Path(legacy.mktemp("data").strpath))
@@ -763,13 +763,13 @@ def test_basetemp_override_is_cleared_before_use_when_it_looks_like_a_previous_b
     tmp_path: Path,
 ) -> None:
     """A `--basetemp` override is cleared only when it already carries
-    `_capture.BASETEMP_MARKER_NAME`, i.e. one velox itself made on an earlier run."""
+    `_capture.BASETEMP_MARKER_NAME`, i.e. one voci itself made on an earlier run."""
     override = tmp_path / "reused"
     override.mkdir()
     (override / _capture.BASETEMP_MARKER_NAME).write_text("")
     (override / "stale.txt").write_text("leftover from a previous run")
 
-    async def test_func(p: Path = velox.Depends(velox.tmp_path)) -> None:
+    async def test_func(p: Path = voci.Depends(voci.tmp_path)) -> None:
         assert p.is_dir()
 
     (result,) = run_suite(
@@ -788,7 +788,7 @@ def test_basetemp_override_refuses_to_clear_a_directory_without_the_marker(tmp_p
     not_a_basetemp.mkdir()
     (not_a_basetemp / "important.txt").write_text("do not delete me")
 
-    with pytest.raises(ValueError, match="does not look like a previous velox basetemp"):
+    with pytest.raises(ValueError, match="does not look like a previous voci basetemp"):
         _capture.install(basetemp=not_a_basetemp)
 
     assert (not_a_basetemp / "important.txt").exists()
@@ -805,7 +805,7 @@ def _finished_run(parent: Path, *, retention: int = 2) -> Path:
 
 
 def test_basetemp_retention_keeps_only_the_last_few_previous_roots(tmp_path: Path) -> None:
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     roots = [_finished_run(parent) for _ in range(5)]
 
     remaining = sorted(p.name for p in parent.iterdir())
@@ -816,7 +816,7 @@ def test_basetemp_retention_keeps_only_the_last_few_previous_roots(tmp_path: Pat
 def test_basetemp_retention_spares_a_root_a_live_run_still_holds(tmp_path: Path) -> None:
     """The keep window counts runs, not liveness, so a long run's root falls out of it while
     the run is still writing there. Its lock is what keeps the sweep off it."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     live, _release = _capture._allocate_session_root(parent, retention=0)
     (live / "in-use.txt").write_text("written by a run that is still going")
 
@@ -830,7 +830,7 @@ def test_basetemp_retention_spares_a_root_a_live_run_still_holds(tmp_path: Path)
 def test_basetemp_retention_reclaims_a_root_whose_owner_died(tmp_path: Path) -> None:
     """A run killed before it could release its root leaves the lock behind. The recorded
     pid is what tells that apart from a run still in progress."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     abandoned, _release = _capture._allocate_session_root(parent, retention=0)
     finished = subprocess.Popen([sys.executable, "-c", ""])
     finished.wait()
@@ -844,7 +844,7 @@ def test_basetemp_retention_reclaims_a_root_whose_owner_died(tmp_path: Path) -> 
 def test_basetemp_retention_reclaims_an_old_root_whose_lock_names_nobody(tmp_path: Path) -> None:
     """A lock that no longer names a pid — truncated by the crash that abandoned it — leaves
     age as the only thing left to go on."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     abandoned, _release = _capture._allocate_session_root(parent, retention=0)
     lock = abandoned / _capture.SESSION_LOCK_NAME
     lock.write_text("")
@@ -860,7 +860,7 @@ def test_basetemp_retention_reclaims_an_old_root_whose_lock_names_nobody(tmp_pat
 def test_basetemp_retention_spares_a_live_root_however_old_its_lock_is(tmp_path: Path) -> None:
     """A lock is written once and never refreshed, so its age is how long its run has been
     going — never a reason to reclaim a root whose owner is right there."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     live, _release = _capture._allocate_session_root(parent, retention=0)
     lock = live / _capture.SESSION_LOCK_NAME
     ancient = time.time() - _capture.LOCK_STALE_AFTER - 1
@@ -874,7 +874,7 @@ def test_basetemp_retention_spares_a_live_root_however_old_its_lock_is(tmp_path:
 def test_allocation_sweeps_up_a_half_deleted_root(tmp_path: Path) -> None:
     """A root renamed for deletion by a run that was killed mid-sweep is nobody's to read
     back — the next allocation finishes the job."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     parent.mkdir()
     garbage = parent / "garbage-abc123"
     garbage.mkdir()
@@ -885,10 +885,10 @@ def test_allocation_sweeps_up_a_half_deleted_root(tmp_path: Path) -> None:
     assert not garbage.exists()
 
 
-def test_a_root_survives_another_velox_processs_retention_sweep(tmp_path: Path) -> None:
-    """The parent directory is shared by every velox running as this user, all of them
+def test_a_root_survives_another_voci_processs_retention_sweep(tmp_path: Path) -> None:
+    """The parent directory is shared by every voci running as this user, all of them
     sweeping it as they start."""
-    parent = tmp_path / "velox-of-someone"
+    parent = tmp_path / "voci-of-someone"
     live, _release = _capture._allocate_session_root(parent, retention=0)
     (live / "in-use.txt").write_text("written by the run in this process")
 
@@ -898,7 +898,7 @@ def test_a_root_survives_another_velox_processs_retention_sweep(tmp_path: Path) 
             "-c",
             "import sys\n"
             "from pathlib import Path\n"
-            "from velox._builtins import capture\n"
+            "from voci._builtins import capture\n"
             "parent = Path(sys.argv[1])\n"
             "[capture._allocate_session_root(parent, retention=0)[1]() for _ in range(4)]\n",
             str(parent),
@@ -917,7 +917,7 @@ def test_a_root_survives_another_velox_processs_retention_sweep(tmp_path: Path) 
 def test_require_test_context_raises_outside_a_tests_envelope() -> None:
     """Every provider that reads `current_test_context` runs only during `_di.setup`, which
     `dispatch_one` always calls with it already set -- constructed with no test dispatch in
-    progress, this is a velox internal error, not a user mistake."""
+    progress, this is a voci internal error, not a user mistake."""
     assert _capture.current_test_context.get() is None
     with pytest.raises(RuntimeError, match="outside any test's envelope"):
         _capture._require_test_context()
@@ -960,7 +960,7 @@ def test_install_holds_its_session_root_until_uninstall(
 ) -> None:
     """The run's artifacts outlive it — for a post-mortem, and for the retention window — so
     what `uninstall()` ends is the claim, not the directory."""
-    monkeypatch.setattr(_capture, "_basetemp_default_root", lambda: tmp_path / "velox-of-someone")
+    monkeypatch.setattr(_capture, "_basetemp_default_root", lambda: tmp_path / "voci-of-someone")
     try:
         setup = _capture.install()
         lock = setup.basetemp_root / _capture.SESSION_LOCK_NAME

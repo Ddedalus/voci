@@ -11,8 +11,8 @@ from typing import Annotated, assert_type
 
 from _support import run_async as run
 
-import velox
-from velox import (
+import voci
+from voci import (
     Capture,
     Depends,
     Fixture,
@@ -21,8 +21,8 @@ from velox import (
     LogRecords,
     TmpPathFactory,
 )
-from velox._di.fixtures import BuiltinContext
-from velox._di.runtime import _construct
+from voci._di.fixtures import BuiltinContext
+from voci._di.runtime import _construct
 
 _DUMMY_CTX = BuiltinContext(test_id="dummy::test", module_path="dummy.py")
 
@@ -32,33 +32,33 @@ class Session:
         return 1
 
 
-@velox.fixture()
+@voci.fixture()
 def plain() -> Session:
     return Session()
 
 
-@velox.fixture()
+@voci.fixture()
 def sync_generator() -> Iterator[Session]:
     yield Session()
 
 
-@velox.fixture()
+@voci.fixture()
 async def coroutine() -> Session:
     return Session()
 
 
-@velox.fixture()
+@voci.fixture()
 async def async_generator() -> AsyncIterator[Session]:
     yield Session()
 
 
-@velox.fixture()
+@voci.fixture()
 def iterator_valued() -> Iterator[Session]:
     """A fixture whose *value* is an iterator: it returns, it does not yield."""
     return iter([Session()])
 
 
-# The four shapes `@velox.fixture()`'s overloads unwrap.
+# The four shapes `@voci.fixture()`'s overloads unwrap.
 assert_type(plain, Fixture[Session])
 assert_type(sync_generator, Fixture[Session])
 assert_type(coroutine, Fixture[Session])
@@ -71,13 +71,13 @@ assert_type(async_generator, Fixture[Session])
 assert_type(iterator_valued, Fixture[Session])
 
 # Every built-in carries its own value type through to the injection site.
-assert_type(Depends(velox.tmp_path), Path)
-assert_type(Depends(velox.tmp_path_factory), TmpPathFactory)
-assert_type(Depends(velox.capture), Capture)
-assert_type(Depends(velox.log_records), LogRecords)
-assert_type(Depends(velox.test_info), velox.TestInfo)
-assert_type(Depends(velox.tmpdir), LegacyPath)
-assert_type(Depends(velox.tmpdir_factory), LegacyTmpPathFactory)
+assert_type(Depends(voci.tmp_path), Path)
+assert_type(Depends(voci.tmp_path_factory), TmpPathFactory)
+assert_type(Depends(voci.capture), Capture)
+assert_type(Depends(voci.log_records), LogRecords)
+assert_type(Depends(voci.test_info), voci.TestInfo)
+assert_type(Depends(voci.tmpdir), LegacyPath)
+assert_type(Depends(voci.tmpdir_factory), LegacyTmpPathFactory)
 
 
 # The annotated spelling. `Depends(...)` sits in metadata, where a checker asks nothing of its
@@ -97,7 +97,7 @@ def aliased_site(db: Db) -> None:
 
 
 def test_an_iterator_valued_fixture_hands_back_the_iterator() -> None:
-    """Constructed through the runtime, so what is pinned is the value velox hands the parameter
+    """Constructed through the runtime, so what is pinned is the value voci hands the parameter
     rather than what the function returns -- which is the half of the mismatch above that
     `assert_type` cannot see."""
 

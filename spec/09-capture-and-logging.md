@@ -2,7 +2,7 @@
 
 *Pytest's default capture is `os.dup2` on fds 1/2 into a shared temp file, with a single global slot
 and suspend/resume state asserts. That is **structurally impossible** under concurrency — the byte
-stream contains no attribution information, even in principle (R§7). velox routes by context
+stream contains no attribution information, even in principle (R§7). voci routes by context
 instead, and installs exactly once.*
 
 ---
@@ -40,17 +40,17 @@ strictly less code than pytest's add-and-remove-handlers-per-phase dance, and it
 construction (R§7).
 
 - Structured `LogRecord`s are retained per test (not just formatted text) for the `caplog`
-  equivalent, `velox.log_records`.
-- `velox.log_records.set_level(logging.DEBUG, logger="myapp")` is a context manager. **Logger levels
+  equivalent, `voci.log_records`.
+- `voci.log_records.set_level(logging.DEBUG, logger="myapp")` is a context manager. **Logger levels
   are process-global**, so raising a level affects concurrent tests: the effect is only that other
   tests may capture *more* records than they otherwise would, which is benign for assertions of the
   form "this record is present" and hazardous for "no records were emitted". Documented; a strict
   mode escalates `set_level` to solo (roadmap).
 - Formatting is applied at report time, not at emit time — cheaper, and lets `-v` change format
   after the fact. One consequence: unlike pytest's `LogCaptureHandler` (which calls `self.format
-  (record)` in `emit`, setting `record.message` as a side effect), velox's handler never formats a
-  record onto a stream, so a raw `LogRecord` off `velox.log_records.records` has no `.message`
-  attribute set. Use `velox.log_records.messages` (`record.getMessage()`, already applied) for
+  (record)` in `emit`, setting `record.message` as a side effect), voci's handler never formats a
+  record onto a stream, so a raw `LogRecord` off `voci.log_records.records` has no `.message`
+  attribute set. Use `voci.log_records.messages` (`record.getMessage()`, already applied) for
   text; `.records` is for level/name/exc_info and similar structured fields.
 
 ## 3. Threads
@@ -62,9 +62,9 @@ The attribution story, precisely (R§7):
 | `await` anything | Yes | Same task, same context |
 | Task spawned in the test's `TaskGroup` | Yes | Context inherited at task creation |
 | `asyncio.to_thread(...)` | Yes | Stdlib does `copy_context().run` by design |
-| `loop.run_in_executor(None, ...)` | **Yes** | velox installs a **context-propagating default executor**: `loop.set_default_executor(...)` with a `submit` that wraps the callable in `ctx.run`. Correct because `run_in_executor` is invoked during the awaiting task's step, so submit-time context *is* the test's. |
+| `loop.run_in_executor(None, ...)` | **Yes** | voci installs a **context-propagating default executor**: `loop.set_default_executor(...)` with a `submit` that wraps the callable in `ctx.run`. Correct because `run_in_executor` is invoked during the awaiting task's step, so submit-time context *is* the test's. |
 | SQLAlchemy's greenlet bridge | Yes | Same thread, same context |
-| User-created `ThreadPoolExecutor` | No | velox never sees the submit |
+| User-created `ThreadPoolExecutor` | No | voci never sees the submit |
 | Raw `threading.Thread` | No | Same |
 | Direct fd writes from C extensions / subprocesses | No | Bypasses `sys.stdout` entirely |
 
@@ -82,7 +82,7 @@ Allocate deterministically: `basetemp/<sanitized-test-id>`. **Uniqueness by cons
 pytest's scan-and-retry numbering (`test_foo0`, `test_foo1`, …) is a serial-era artifact and a race
 under concurrency (R§7). Keep the parts that are good:
 
-- a numbered session root (`/tmp/velox-of-<user>/velox-<n>/`),
+- a numbered session root (`/tmp/voci-of-<user>/voci-<n>/`),
 - a retention policy (`basetemp_retention`, default 3 previous roots),
 - `--basetemp` to override, with the documented "this directory is cleared" warning.
 
@@ -114,7 +114,7 @@ handler with structured record retention; the context-propagating default execut
 ## 9. Open questions
 
 - **Q4** — Unattributable fd-level output: tee it into a session-level section (proposed) or detect
-  and fail? Teeing loses nothing and keeps velox usable with C extensions; failing would be more
+  and fail? Teeing loses nothing and keeps voci usable with C extensions; failing would be more
   honest about "we cannot attribute this" but breaks common libraries for no gain.
 - **Q19** — Should captured output for *passing* tests be retained under `--report-json`? It makes
   the report complete but unbounded. Proposed: drop by default, `--capture-retain=all` to keep.

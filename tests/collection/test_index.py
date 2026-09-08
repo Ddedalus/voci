@@ -1,4 +1,4 @@
-"""Tests for `velox._collection.index`: what a real collection is allowed to enter into it, and
+"""Tests for `voci._collection.index`: what a real collection is allowed to enter into it, and
 what a later `--collect-only` is allowed to read back out of it without importing anything.
 """
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 from _support import make_record
 
-from velox._cache import CACHE_DIR_NAME
-from velox._collection import index
-from velox._collection.collect import CollectionError, CollectionResult
+from voci._cache import CACHE_DIR_NAME
+from voci._collection import index
+from voci._collection.collect import CollectionError, CollectionResult
 
 
 def _stub() -> None:

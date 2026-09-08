@@ -9,7 +9,7 @@ serve *args:
 build *args:
     uv run zensical build "$@"
 
-# Regenerate docs/reference/cli.md from `velox --help` (`just docs cli --check` to verify only)
+# Regenerate docs/reference/cli.md from `voci --help` (`just docs cli --check` to verify only)
 cli *args:
     uv run python scripts/gen_cli_reference.py "$@"
 
@@ -19,7 +19,7 @@ matrix *args:
 
 # Verify the site builds and that the generated pages still match their sources. Builds clean:
 # Zensical's incremental cache keys on Markdown content, so a reference page whose only input
-# changed -- a docstring in velox/ -- would otherwise be served from the previous render.
+# changed -- a docstring in voci/ -- would otherwise be served from the previous render.
 check:
     uv run python scripts/gen_cli_reference.py --check
     uv run python scripts/gen_support_matrix.py --check

@@ -1,14 +1,14 @@
 [project]
-name = "velox-example-shared-resources"
+name = "voci-example-shared-resources"
 version = "0.0.0"
 requires-python = ">=3.13"
 
-[tool.velox]
+[tool.voci]
 testpaths = ["tests"]
 concurrency = 32
 timeout = 60
 # An unrecognized key here is an error, not a warning -- a typo'd config key that silently does
-# nothing is a footgun velox doesn't have to have.
+# nothing is a footgun voci doesn't have to have.
 
 [tool.ruff]
 line-length = 100

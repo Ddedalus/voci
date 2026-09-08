@@ -12,12 +12,12 @@ is O(installed plugins) whether used or not (R§3).
 ## 1. Invocation
 
 ```
-velox [PATHS...] [options]
+voci [PATHS...] [options]
 ```
 
 `PATHS` are files, directories, or test ids (`tests/api/test_users.py::test_create[admin]`).
-Default: the `testpaths` from config, else the rootdir. There is one entry point (`velox`) and
-`python -m velox` as an alias.
+Default: the `testpaths` from config, else the rootdir. There is one entry point (`voci`) and
+`python -m voci` as an alias.
 
 ## 2. Options
 
@@ -29,7 +29,7 @@ reserved and the codegen can plan for it.
 | Option | Meaning |
 |---|---|
 | `-k EXPR` | Keyword expression over test id (pytest grammar: `and`/`or`/`not`, substring terms). |
-| `-m EXPR` | Tag expression over `@velox.tag` values (same grammar). |
+| `-m EXPR` | Tag expression over `@voci.tag` values (same grammar). |
 | `--deselect ID` | Repeatable; exact id or path prefix. |
 | `--lf` / `--ff` † | Last-failed / failed-first, backed by the collection cache ([03](03-discovery-and-collection.md)). |
 
@@ -38,11 +38,11 @@ reserved and the codegen can plan for it.
 | Option | Default | Meaning |
 |---|---|---|
 | `--concurrency N` | `16` | Max tests in flight. `1` = fully serial (the first debugging step). |
-| `--timeout SECONDS` | `300` | Per-test budget; `@velox.timeout` overrides. `0` disables. |
+| `--timeout SECONDS` | `300` | Per-test budget; `@voci.timeout` overrides. `0` disables. |
 | `-x`, `--maxfail N` | off | Stop dispatching after N failures; in-flight tests are cancelled and reported `interrupted` ([06](06-scheduling-and-determinism.md)). |
 | `--seed N` | `0` | Seeds scheduler tiebreaks. Physical order only; output is unaffected (I2). |
 | `--serial` | off | Alias for `--concurrency=1`, plus enables the serial-only features (real fd capture, per-test warning filters). |
-| `--isolated-all` † | off | Run every test in a subprocess. The escape hatch for a suite velox is diagnosing. |
+| `--isolated-all` † | off | Run every test in a subprocess. The escape hatch for a suite voci is diagnosing. |
 | `--loop {auto,asyncio,uvloop}` | `auto` | `auto` = uvloop if importable. |
 
 **Assertions**
@@ -75,15 +75,15 @@ reserved and the codegen can plan for it.
 
 ## 3. Configuration file
 
-One file, `pyproject.toml`, table `[tool.velox]`. No `velox.ini`, no `setup.cfg`, no per-directory
+One file, `pyproject.toml`, table `[tool.voci]`. No `voci.ini`, no `setup.cfg`, no per-directory
 config, no config inheritance. Rootdir = the directory containing the `pyproject.toml` that declares
-`[tool.velox]`, searched upward from the common ancestor of `PATHS`; if none is found, the common
+`[tool.voci]`, searched upward from the common ancestor of `PATHS`; if none is found, the common
 ancestor itself is the rootdir and defaults apply.
 
 > Review note: pay attention to not cause carnage when traversing the path up to root. Traversal should stop at git root.
 
 ```toml
-[tool.velox]
+[tool.voci]
 testpaths = ["tests"]
 concurrency = 16
 timeout = 300
@@ -93,9 +93,9 @@ env = { ENVIRONMENT = "test" }
 watchdog_threshold = 1.0
 ```
 
-Precedence: **CLI > environment (`VELOX_*`) > `[tool.velox]` > built-in defaults.** Every option has
-exactly one name in all three places (`--concurrency` / `VELOX_CONCURRENCY` / `concurrency`).
-Unknown keys in `[tool.velox]` are an error, not a warning.
+Precedence: **CLI > environment (`VOCI_*`) > `[tool.voci]` > built-in defaults.** Every option has
+exactly one name in all three places (`--concurrency` / `VOCI_CONCURRENCY` / `concurrency`).
+Unknown keys in `[tool.voci]` are an error, not a warning.
 
 ## 4. Exit codes
 
@@ -111,7 +111,7 @@ Adopted verbatim from pytest, because every CI script branches on them (R§5):
 | `5` | No tests collected. |
 
 Static DI validation failures ([04](04-dependency-injection.md)) and import errors during collection
-exit `3` if they are velox's fault and `1` if they are the suite's — an unimportable test module is
+exit `3` if they are voci's fault and `1` if they are the suite's — an unimportable test module is
 reported as a **collection error** attributed to that file, and the rest of the suite still runs.
 `--strict-collect` † makes any collection error exit `2` immediately.
 
@@ -119,21 +119,21 @@ reported as a **collection error** attributed to that file, and the rest of the 
 
 ## 5. Environment interaction
 
-- **Reads:** `NO_COLOR`, `FORCE_COLOR`, `CI`, `VELOX_*`, `PYTHONHASHSEED` (recorded in the report
+- **Reads:** `NO_COLOR`, `FORCE_COLOR`, `CI`, `VOCI_*`, `PYTHONHASHSEED` (recorded in the report
   header for reproducibility), `TERM`.
-- **Writes:** `VELOX_TEST_ID` is *not* set — pytest's `PYTEST_CURRENT_TEST` is meaningless with N
+- **Writes:** `VOCI_TEST_ID` is *not* set — pytest's `PYTEST_CURRENT_TEST` is meaningless with N
   tests in flight. The concurrent replacement is the watchdog's in-flight file
   ([11](11-runtime-safety.md)). `env` from config is applied before the first test module import.
 - **Touches `sys.path` exactly once**: `rootdir` (spec/02 §3) is prepended to `sys.path[0]` at
   startup, before the first test module import, and removed again when the run ends — one
   predictable insertion, not pytest's per-conftest-directory games (spec/00 §11 "Fixture import
   path"). Collection's own import mechanism is unaffected: modules still import under path-derived
-  `velox_tests.*` names via importlib, not `rootdir`-relative dotted names (R§3), so `Package`,
+  `voci_tests.*` names via importlib, not `rootdir`-relative dotted names (R§3), so `Package`,
   `ImportPathMismatchError`, and the `__init__.py` requirement stay deleted. What the insertion
   buys is plain **absolute** imports rooted at `rootdir` inside test code — `from tests.fixtures
   import api_client`, `from relay.cache import FakeClock` — resolving via ordinary PEP 420
   namespace-package lookup, no `__init__.py` needed. It does not make *relative* imports between
-  test modules work (spec/00 §11): those resolve against the synthetic `velox_tests.*` package
+  test modules work (spec/00 §11): those resolve against the synthetic `voci_tests.*` package
   name, which has no real directory backing it, and are unsupported by design. Code under test
   that isn't on `rootdir`'s own tree still needs installing (`uv pip install -e .`) or otherwise
   putting on the path — the insertion only ever adds `rootdir` itself.
@@ -167,12 +167,12 @@ tooling are imported on first use, never at startup.
 
 Selection (`-k`, `-m`, `--deselect`, paths and ids), `--concurrency`, `--timeout`, `-x/--maxfail`,
 `--seed`, `--serial`, `--assert`, `--rewrite-cache`, `-v/-q`, `-s`, `--durations`, `--color`,
-`--collect-only`, watchdog options, `[tool.velox]` with the keys above, all six exit codes.
+`--collect-only`, watchdog options, `[tool.voci]` with the keys above, all six exit codes.
 
 ## 8. Roadmap
 
 `--lf`/`--ff` (needs the collection cache), `--junit-xml`, `--report-json`, `--co-json`,
-`--stream-failures`, `--isolated-all`, `--strict-collect`, shell completion, and a `velox migrate`
+`--stream-failures`, `--isolated-all`, `--strict-collect`, shell completion, and a `voci migrate`
 subcommand ([12](12-migration.md)).
 
 ## 9. Open questions

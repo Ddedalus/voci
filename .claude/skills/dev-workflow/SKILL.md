@@ -3,7 +3,7 @@ name: dev-workflow
 description: top-level agent must always load this to pick commit workflow
 ---
 
-# velox dev workflow
+# voci dev workflow
 
 We're working alone locally: there is no human code review, just fast AI iteration. Pick the workflow below for the task at hand.
 
@@ -16,8 +16,8 @@ including main. Also use this for CI or test fixes where the job is reasonably s
 
 When asked to do work on a feature or larger refactor:
 1. Create the worktree as a sibling of the repo, not with `EnterWorktree`'s default
-   `.claude/worktrees/` placement: `git worktree add ../velox-wt-<name> -b <branch>`, then
-   `EnterWorktree(path: "/home/hubert/velox-wt-<name>")` to attach the session to it. Reason:
+   `.claude/worktrees/` placement: `git worktree add ../voci-wt-<name> -b <branch>`, then
+   `EnterWorktree(path: "/home/hubert/voci-wt-<name>")` to attach the session to it. Reason:
    `.git/info/exclude` hides `**/.claude/worktrees/` from git status, and pyrefly honors that same
    file when resolving `project-includes` globs, so `just checks typecheck`'s first command finds
    zero files and fails for any worktree placed there. A sibling directory doesn't match that
@@ -29,7 +29,7 @@ When asked to do work on a feature or larger refactor:
 5. Clean up docs, roadmap, etc.
 6. Merge into main. Delete the worktree — since it was entered via `EnterWorktree(path:...)`
    rather than created by it, `ExitWorktree(action: "remove")` will refuse; instead
-   `ExitWorktree(action: "keep")` then `git worktree remove ../velox-wt-<name>` and
+   `ExitWorktree(action: "keep")` then `git worktree remove ../voci-wt-<name>` and
    `git branch -D <branch>` from the main checkout.
 
 If **material** uncertainty exists after plan or implementation, explain and only merge once

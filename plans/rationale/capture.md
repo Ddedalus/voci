@@ -10,11 +10,11 @@ here — closing it means making a test's background tasks part of its envelope,
 scheduling change. When someone reports a missing log line, look for an orphaned task before
 suspecting capture.
 
-**The retention sweep asks who is alive, not who is newest.** Every velox on a machine allocates
+**The retention sweep asks who is alive, not who is newest.** Every voci on a machine allocates
 its session root under one directory per user, and sweeps that directory as it starts. Numbering
 alone can't say which roots are free to delete: the keep window counts runs, so three runs started
 elsewhere are enough to push a live root out of it, and deleting it takes that run's `tmp_path`
-directories — and an `@velox.isolated` test's config file — with it. Every root therefore carries a
+directories — and an `@voci.isolated` test's config file — with it. Every root therefore carries a
 lock naming the process holding it, and a root whose owner still answers is spared however old it
 is. The pid is the primary signal because it settles both directions immediately; `LOCK_STALE_AFTER`
 is only for the cases where the pid can't be probed at all — the machine rebooted, or the platform

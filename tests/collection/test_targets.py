@@ -1,4 +1,4 @@
-"""Tests for velox._collection.targets: parsing `path.py::test_name` arguments and deciding
+"""Tests for voci._collection.targets: parsing `path.py::test_name` arguments and deciding
 which collected tests they select."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from velox._collection.targets import IdSelection, parse_target
+from voci._collection.targets import IdSelection, parse_target
 
 
 def test_a_plain_path_has_no_selector() -> None:
@@ -69,7 +69,7 @@ def test_a_file_no_selector_names_is_unconstrained(tmp_path: Path) -> None:
 
 
 def test_a_directory_argument_unconstrains_the_files_under_it(tmp_path: Path) -> None:
-    """`velox tests/ tests/test_users.py::test_create` asks for all of tests/, which includes
+    """`voci tests/ tests/test_users.py::test_create` asks for all of tests/, which includes
     every test of the file the selector names."""
     directory = tmp_path / "tests"
     path = directory / "test_users.py"
