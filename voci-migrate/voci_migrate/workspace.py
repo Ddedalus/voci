@@ -29,8 +29,12 @@ from voci_migrate.verify.runners import _tail
 #: suite now lives somewhere else -- is a commit here, never on `source`'s own branches.
 RELOCATION_BRANCH = "voci-migrate/relocation"
 
+#: This tool's own state directory inside `dest`, holding `BASELINE_DIR` among other things --
+#: everywhere `snapshot_baseline` must not recurse into, and the baseline pytest run right after it
+#: must not collect back out of.
+TOOL_STATE_DIR = ".voci-migrate"
 #: Where `convert --write` snapshots `dest`, relative to `dest` itself.
-BASELINE_DIR = Path(".voci-migrate") / "baseline"
+BASELINE_DIR = Path(TOOL_STATE_DIR) / "baseline"
 TREE_DIR = "tree"
 OUTCOMES_NAME = "pytest-outcomes.json"
 _MARKER_NAME = "scaffold.json"
@@ -39,6 +43,7 @@ __all__ = [
     "BASELINE_DIR",
     "OUTCOMES_NAME",
     "RELOCATION_BRANCH",
+    "TOOL_STATE_DIR",
     "TREE_DIR",
     "ScaffoldResult",
     "WorkspaceError",
@@ -135,7 +140,7 @@ def snapshot_baseline(root: Path) -> Path:
     shutil.rmtree(tree, ignore_errors=True)
     tree.mkdir(parents=True)
 
-    tool_state = (root / ".voci-migrate").resolve()
+    tool_state = (root / TOOL_STATE_DIR).resolve()
     for entry in root.iterdir():
         if entry.resolve() == tool_state:
             continue

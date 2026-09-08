@@ -449,7 +449,15 @@ def _record_baseline(root: Path, passthrough: list[str]) -> str | None:
     baseline = workspace.snapshot_baseline(root)
     try:
         recorded = verify.run_pytest(
-            root, out=baseline / workspace.OUTCOMES_NAME, paths=[], extra=passthrough
+            root,
+            out=baseline / workspace.OUTCOMES_NAME,
+            paths=[],
+            # `snapshot_baseline` just copied the whole tree in under here, so this run has to
+            # skip back over it itself rather than lean on pytest's default `norecursedirs`, which
+            # a suite that sets its own (dropping the `.*` wildcard, as marshmallow's does)
+            # doesn't apply -- pytest walks into the snapshot's copy of the suite too and collects
+            # the same module twice, from two different paths.
+            extra=[f"--ignore={workspace.TOOL_STATE_DIR}", *passthrough],
         )
     except verify.RunnerError as exc:
         print(

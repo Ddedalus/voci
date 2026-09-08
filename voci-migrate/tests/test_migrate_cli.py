@@ -257,6 +257,30 @@ def test_converting_with_write_records_a_pytest_baseline_first(
     ) == before_conftest
 
 
+def test_converting_with_write_records_a_baseline_under_a_suites_own_norecursedirs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A suite that sets its own `norecursedirs` (marshmallow does) replaces pytest's default
+    # rather than extending it, dropping the `.*` wildcard that would otherwise skip back over
+    # `.voci-migrate/baseline/tree` -- the snapshot `_record_baseline` just copied the whole suite
+    # into. Left alone, pytest walks into that copy too and collects `test_top.py` from both
+    # paths, raising `ImportPathMismatchError` and aborting the baseline recording.
+    suite = _copy_of_showcase(tmp_path, "suite")
+    ini = suite / "pytest.ini"
+    ini.write_text(
+        ini.read_text(encoding="utf-8") + "norecursedirs = .tox venv\n", encoding="utf-8"
+    )
+
+    code = cli.main(["convert", "-d", str(DUMP), "-r", str(suite), "--write"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "recorded" in out and "pytest outcome" in out
+    baseline = suite / workspace.BASELINE_DIR
+    outcomes = json.loads((baseline / workspace.OUTCOMES_NAME).read_text(encoding="utf-8"))
+    assert outcomes["exit_status"] == 0
+
+
 def test_converting_with_write_and_nothing_to_change_skips_the_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
