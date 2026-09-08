@@ -35,19 +35,19 @@ original run had none. Neither was fixed here — out of scope for a rename.
 Not a rename — `voci` is a brand-new PyPI project, since PyPI has no rename operation and the
 distribution name is changing (`velox-test` → `voci`, not `velox-test` → `voci-test`).
 
-- Nothing to publish yet if `velox-test` was never actually released (no git tags, no
-  `gh release list` output as of this plan — check again before assuming, in case a release
-  happened outside this checkout's view).
-- When the first release does happen: register PyPI trusted publishing (OIDC) for the new `voci`
-  project from scratch — owner `Ddedalus`, repo `voci`, workflow `release.yml`, environment
-  `pypi`. `release.yml`'s `environment.url` already points at `pypi.org/project/voci/`; the
-  trusted-publisher registration is a PyPI-side setting that doesn't exist until someone creates
-  it there, unrelated to anything in this repo.
-- `voci-migrate` has no PyPI publish job today (`release.yml` only builds/publishes the root
-  package) — nothing to register for `voci-migrate` until that changes.
-- The old `velox-test` PyPI project, if anything was ever pushed to it, is simply abandoned; PyPI
-  doesn't support deleting or redirecting a project, so there's no cleanup action beyond deciding
-  whether to yank any releases on it (only relevant if it was ever actually published to).
+Done (2026-09-08): trusted publishing registered for `voci` (owner `Ddedalus`, repo `voci`,
+workflow `release.yml`, environment `pypi`); `release.yml` now also builds/publishes
+`voci-migrate` (tag prefix `migrate-v` vs. `v`) through a second environment, `pypi-migrate` —
+PyPI ties each (repo, workflow, environment) triple to one project, so the two packages need
+separate environments even sharing one workflow file. `voci-migrate/pyproject.toml` gained
+hatch-vcs dynamic versioning to match.
+
+Still open: register `pypi-migrate` as a trusted publisher for the `voci-migrate` project on PyPI
+(same repo/workflow, environment `pypi-migrate`) and create that environment in the GitHub repo's
+settings — both are PyPI/GitHub-side settings, not part of this repo's diff. First actual releases
+(tag `vX.Y.Z` / `migrate-vX.Y.Z` + GitHub Release) still pending too.
+
+`velox-test` was never pushed to PyPI, so there's nothing to clean up or yank there.
 
 ### 9. Outside the repo (not part of the merged diff, do separately/manually)
 

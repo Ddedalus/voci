@@ -920,7 +920,6 @@ docs = [
 
 [[package]]
 name = "voci-migrate"
-version = "0.0.0"
 source = { editable = "voci-migrate" }
 dependencies = [
     { name = "libcst" },

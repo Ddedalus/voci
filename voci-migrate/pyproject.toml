@@ -1,6 +1,6 @@
 [project]
 name = "voci-migrate"
-version = "0.0.0"
+dynamic = ["version"]
 description = "Migrate a pytest suite to voci."
 requires-python = ">=3.13"
 dependencies = [
@@ -11,8 +11,18 @@ dependencies = [
 voci-migrate = "voci_migrate.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version comes from the git tag, written by hatch-vcs. `tag-pattern` scopes it to this package's
+# own `migrate-vX.Y.Z` tags (release.yml's build-voci-migrate job) rather than the root voci
+# package's `vX.Y.Z` ones -- both are tags in the same repo, and the two packages release
+# independently. `fallback-version` covers builds with no reachable matching tag yet (fresh clone
+# before the first voci-migrate release, or a shallow/tagless checkout).
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "^migrate-v(?P<version>.*)$"
+fallback-version = "0.0.0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voci_migrate"]
