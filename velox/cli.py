@@ -624,7 +624,7 @@ class _PreparedRun:
     maxfail: int | None
 
 
-def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | None]:
+def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | None]:  # noqa: C901
     """Resolve `args` into everything `main`'s execute phase needs, or the first usage
     error found along the way -- unprefixed, like `_parse_filters`'s, since `main` is
     what knows to prefix every one of these the same way.
@@ -971,7 +971,7 @@ def _installed_session(
                 os.environ[key] = prev_value
 
 
-def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
+def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:  # noqa: C901
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
     # test module) all happen before a single test runs, and a run that spends its time

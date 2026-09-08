@@ -314,7 +314,7 @@ def _bindings(text: str) -> Iterator[tuple[ast.stmt, str]]:
     yield from _bound_in(tree.body)
 
 
-def _bound_in(body: Sequence[ast.stmt]) -> Iterator[tuple[ast.stmt, str]]:
+def _bound_in(body: Sequence[ast.stmt]) -> Iterator[tuple[ast.stmt, str]]:  # noqa: C901
     """The bindings in `body`, reaching into the blocks a module puts imports inside.
 
     An import written under `try:` or `if TYPE_CHECKING:` binds its name at module level like any

@@ -89,8 +89,17 @@ def missing(
     and class bodies can ever resolve to a line. That is a real blind spot, already the kind
     `matrix.CONSTRUCTS`'s `detected=False` rows exist for, not an omission this can report on.
     """
-    found: list[Unclassified] = []
+    found = _missing_fixtures(ground_truth, reach, defined)
+    missing_classes, class_found = _missing_classes(ground_truth, reach, defined)
+    found += class_found
+    found += _missing_tests(ground_truth, defined, missing_classes)
+    return unclassified_ordered(found)
 
+
+def _missing_fixtures(
+    ground_truth: GroundTruth, reach: Reach, defined: dict[str, Defined]
+) -> list[Unclassified]:
+    found: list[Unclassified] = []
     for fixture in ground_truth.fixture_defs.values():
         file, qualname = fixture.func.file, fixture.func.qualname
         if (
@@ -110,8 +119,14 @@ def missing(
                     tests=reach.tests_at(file, qualname),
                 )
             )
+    return found
 
+
+def _missing_classes(
+    ground_truth: GroundTruth, reach: Reach, defined: dict[str, Defined]
+) -> tuple[set[tuple[str, str]], list[Unclassified]]:
     missing_classes: set[tuple[str, str]] = set()
+    found: list[Unclassified] = []
     for item in ground_truth.items:
         if item.cls is None or item.path is None or item.path not in defined:
             continue
@@ -127,7 +142,13 @@ def missing(
                 tests=reach.tests_at(item.path, item.cls),
             )
         )
+    return missing_classes, found
 
+
+def _missing_tests(
+    ground_truth: GroundTruth, defined: dict[str, Defined], missing_classes: set[tuple[str, str]]
+) -> list[Unclassified]:
+    found: list[Unclassified] = []
     for item in ground_truth.items:
         if item.path is None or item.path not in defined:
             continue
@@ -145,8 +166,7 @@ def missing(
                     tests=(item.nodeid,),
                 )
             )
-
-    return unclassified_ordered(found)
+    return found
 
 
 def _dynamic(qualname: str) -> bool:

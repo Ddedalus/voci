@@ -85,13 +85,14 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle
-    "F",   # pyflakes
-    "I",   # isort
-    "UP",  # pyupgrade
-    "B",   # bugbear
-    "SIM", # flake8-simplify
-    "RUF", # ruff-specific
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+    "C901", # mccabe complexity
 ]
 
 # `Depends(...)` sitting in a parameter default (spec/01 §3's whole wiring syntax) is exactly the

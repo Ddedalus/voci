@@ -52,7 +52,7 @@ class Patching:
 NO_PATCHING = Patching(targets=(), positional_args=0)
 
 
-def patching_of(func: Callable[..., Any]) -> Patching:
+def patching_of(func: Callable[..., Any]) -> Patching:  # noqa: C901
     """The `unittest.mock` patching decorating `func`, or `NO_PATCHING`. Never raises.
 
     Nothing can be patching when `unittest.mock` was never imported, which is the whole cost
