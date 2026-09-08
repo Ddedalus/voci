@@ -237,9 +237,7 @@ def _declared(module: cst.Module) -> frozenset[str]:
 def _is_use(expression: cst.BaseExpression) -> bool:
     """Whether `expression` is a `voci.use(...)` call, spelled as this module writes one."""
     match expression:
-        case cst.Call(
-            func=cst.Attribute(value=cst.Name(value="voci"), attr=cst.Name(value="use"))
-        ):
+        case cst.Call(func=cst.Attribute(value=cst.Name(value="voci"), attr=cst.Name(value="use"))):
             return True
         case _:
             return False

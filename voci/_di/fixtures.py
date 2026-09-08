@@ -135,8 +135,7 @@ def Depends[T](dependency: Fixture[T], /) -> T:
     """
     if not isinstance(dependency, Fixture):
         raise TypeError(
-            f"Depends() requires a Fixture object, built with @voci.fixture() -- got "
-            f"{dependency!r}"
+            f"Depends() requires a Fixture object, built with @voci.fixture() -- got {dependency!r}"
         )
     return cast(T, Dependency(dependency))
 

@@ -553,8 +553,7 @@ def test_main_restores_tool_voci_env_after_the_run(
     monkeypatch.setenv("VOCI_CONFIG_PREEXISTING", "original")
     monkeypatch.delenv("VOCI_CONFIG_NEW", raising=False)
     chdir_project.write_pyproject(
-        "[tool.voci]\n"
-        "env = { VOCI_CONFIG_PREEXISTING = 'overridden', VOCI_CONFIG_NEW = 'added' }\n"
+        "[tool.voci]\nenv = { VOCI_CONFIG_PREEXISTING = 'overridden', VOCI_CONFIG_NEW = 'added' }\n"
     )
     chdir_project.write_passing_test()
 

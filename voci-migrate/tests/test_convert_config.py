@@ -113,9 +113,7 @@ def test_the_resolved_configuration_is_not_mistaken_for_what_the_suite_wrote(
     assert translation.table == BARE
 
 
-def test_the_settings_voci_has_a_key_for_are_carried(
-    fixtures: GroundTruth, tmp_path: Path
-) -> None:
+def test_the_settings_voci_has_a_key_for_are_carried(fixtures: GroundTruth, tmp_path: Path) -> None:
     ground_truth = wrote(
         fixtures,
         tmp_path,
