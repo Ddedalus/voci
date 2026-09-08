@@ -6,14 +6,6 @@ This page is the work ledger. Stuff that already exists is: a) in `README.md`, b
 
 ## Bugs and workspace issues - top priority
 
-**`voci-migrate convert --write`'s baseline recording breaks on a suite with its own
-`norecursedirs`.** Snapshots into `root/.voci-migrate/baseline/tree` and reruns pytest over
-`root` relying on pytest's default `.*` exclusion to skip back over it; a suite that sets its own
-`norecursedirs` (marshmallow does) drops that default and collects the snapshot's `tests` package
-too, raising `ImportPathMismatchError` and aborting the whole conversion. Found 2026-09-08 by the
-marshmallow smoke test, confirmed present on `main` before the velox→voci rename too. Detail and a
-workaround in `plans/migration-findings.md`'s 2026-09-08 addendum.
-
 **15 `VOCI-TODO[VC114]` markers appear on marshmallow where the original migration run had none.**
 Same file, drift since `plans/migration-findings.md`'s original numbers — not investigated.
 

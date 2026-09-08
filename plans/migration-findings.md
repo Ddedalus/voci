@@ -147,7 +147,9 @@ is a rename regression:
   paths — `_pytest.pathlib.ImportPathMismatchError`, baseline recording aborts, `convert --write`
   refuses to touch the tree. Worked around here with `convert --write -- --ignore=.voci-migrate`;
   the real fix is snapshotting outside `root` (or passing `--ignore` unconditionally) so the
-  baseline survives suites that don't lean on pytest's default excludes.
+  baseline survives suites that don't lean on pytest's default excludes. **Fixed 2026-09-08:**
+  `_record_baseline` now passes `--ignore=.voci-migrate` unconditionally, ahead of the suite's own
+  config and any passthrough args.
 - **15 `VOCI-TODO[VC114]` markers now appear where the original run had none** (four files:
   `test_decorators.py`, `test_deserialization.py`, `test_fields.py`, `test_serialization.py`), all
   the same row — parametrize calls without attributable ids. Not investigated further; flagged here
