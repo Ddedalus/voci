@@ -542,63 +542,75 @@ class _Scanner(cst.CSTVisitor):
     def _pytest_call(self, node: cst.Call, names: frozenset[str]) -> None:
         positional = _positional(node)
         if "pytest.raises" in names:
-            entered = isinstance(self.get_metadata(ParentNodeProvider, node, None), cst.WithItem)
-            if not entered and len(positional) < 2:
-                self._report(
-                    "VX210",
-                    node,
-                    "`pytest.raises` is neither entered by a `with` nor called with a second "
-                    "positional argument for it to call, so its result is being stashed for "
-                    "later.",
-                )
-            elif not entered and len(positional) >= 2 and _keyword(node, "match") is not None:
-                self._report(
-                    "VX210",
-                    node,
-                    "`pytest.raises` is called with `match=` and a callable to call: pytest "
-                    "forwards `match` to the callable there, but `velox.raises` always "
-                    "intercepts it to match the exception.",
-                )
-            if positional and self._names(positional[0].value) & _CANCELLED:
-                self._report(
-                    "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."
-                )
+            self._raises_call(node, positional)
         elif "pytest.approx" in names and positional:
-            found = self._approx_kind(positional[0].value)
-            if found is not None:
-                code, message = found
-                self._report(code, node, message)
+            self._approx_call(node, positional)
         elif "pytest.param" in names:
-            marks = _keyword(node, "marks")
-            if marks is not None:
-                self._report(
-                    "VX102",
-                    node,
-                    f"`pytest.param` puts `{_render(marks.value)}` on one case.",
-                )
+            self._param_call(node)
         elif "pytest.mark.skipif" in names:
-            condition = _condition(node, positional)
-            if isinstance(condition, cst.SimpleString | cst.ConcatenatedString):
-                self._report(
-                    "VX103",
-                    node,
-                    f"`@pytest.mark.skipif` is given the string condition `{_render(condition)}`.",
-                )
+            self._skipif_call(node, positional)
         elif "pytest.mark.xfail" in names:
-            condition = _condition(node, positional)
-            if condition is not None:
-                self._report(
-                    "VX105",
-                    node,
-                    f"`@pytest.mark.xfail` expects a failure only when `{_render(condition)}`.",
-                )
-            run = _keyword(node, "run")
-            if run is not None and _is_false(run.value):
-                self._report(
-                    "VX106",
-                    node,
-                    "`@pytest.mark.xfail(run=False)` expects a failure without running the test.",
-                )
+            self._xfail_call(node, positional)
+
+    def _raises_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        entered = isinstance(self.get_metadata(ParentNodeProvider, node, None), cst.WithItem)
+        if not entered and len(positional) < 2:
+            self._report(
+                "VX210",
+                node,
+                "`pytest.raises` is neither entered by a `with` nor called with a second "
+                "positional argument for it to call, so its result is being stashed for later.",
+            )
+        elif not entered and len(positional) >= 2 and _keyword(node, "match") is not None:
+            self._report(
+                "VX210",
+                node,
+                "`pytest.raises` is called with `match=` and a callable to call: pytest forwards "
+                "`match` to the callable there, but `velox.raises` always intercepts it to match "
+                "the exception.",
+            )
+        if positional and self._names(positional[0].value) & _CANCELLED:
+            self._report(
+                "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."
+            )
+
+    def _approx_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        found = self._approx_kind(positional[0].value)
+        if found is not None:
+            code, message = found
+            self._report(code, node, message)
+
+    def _param_call(self, node: cst.Call) -> None:
+        marks = _keyword(node, "marks")
+        if marks is not None:
+            self._report(
+                "VX102", node, f"`pytest.param` puts `{_render(marks.value)}` on one case."
+            )
+
+    def _skipif_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        condition = _condition(node, positional)
+        if isinstance(condition, cst.SimpleString | cst.ConcatenatedString):
+            self._report(
+                "VX103",
+                node,
+                f"`@pytest.mark.skipif` is given the string condition `{_render(condition)}`.",
+            )
+
+    def _xfail_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        condition = _condition(node, positional)
+        if condition is not None:
+            self._report(
+                "VX105",
+                node,
+                f"`@pytest.mark.xfail` expects a failure only when `{_render(condition)}`.",
+            )
+        run = _keyword(node, "run")
+        if run is not None and _is_false(run.value):
+            self._report(
+                "VX106",
+                node,
+                "`@pytest.mark.xfail(run=False)` expects a failure without running the test.",
+            )
 
     def _approx_kind(self, argument: cst.BaseExpression) -> tuple[str, str] | None:
         """The code and message for why `pytest.approx(argument)` will not convert to

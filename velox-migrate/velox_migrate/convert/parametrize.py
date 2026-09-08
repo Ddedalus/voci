@@ -321,6 +321,20 @@ def _uncarriable(
     same way from.
     """
     name = fixture.argname
+    return (
+        _uncarriable_definition(name, fixture, ground_truth, translatable)
+        or _uncarriable_shape(name, uses)
+        or _uncarriable_reach(name, fixture, ground_truth, uses)
+    )
+
+
+def _uncarriable_definition(
+    name: str,
+    fixture: FixtureDef,
+    ground_truth: GroundTruth,
+    translatable: Mapping[str, FixtureDef],
+) -> str | None:
+    """Whether `name` itself, independent of any call site, is even a candidate for `params=`."""
     if fixture.key not in translatable:
         return f"`{name}` is not a fixture this conversion writes an object for"
     if len(ground_truth.fixture_registry.get(name, ())) != 1:
@@ -329,6 +343,11 @@ def _uncarriable(
         return f"`{name}` already has cases of its own"
     if fixture.autouse:
         return f"`{name}` is autouse, so no test names the case it wants"
+    return None
+
+
+def _uncarriable_shape(name: str, uses: Sequence[_Use]) -> str | None:
+    """Whether `name`'s call sites agree on one shape of values `params=` could hold."""
     first = uses[0].axis
     if len(first.argnames) != 1:
         return f"`{name}` is parametrized together with `{'`, `'.join(first.argnames[1:])}`"
@@ -346,6 +365,13 @@ def _uncarriable(
             )
     if any(literal(row[0]) is None for row in first.values):
         return f"a value `{name}` is given has no literal spelling"
+    return None
+
+
+def _uncarriable_reach(
+    name: str, fixture: FixtureDef, ground_truth: GroundTruth, uses: Sequence[_Use]
+) -> str | None:
+    """Whether every test reaching `name` also parametrizes it, so none would gain its cases."""
     reached = {
         item.nodeid
         for item in ground_truth.items

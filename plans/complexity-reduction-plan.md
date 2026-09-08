@@ -20,32 +20,33 @@ split is proposed here — each PR below simplifies functions in place.
   sub-decision (`_propagate_edges`/`_propagate_deps`/`_needs_request`,
   `_consumers_from_tests`/`_consumers_from_fixtures`/`_consumers_from_copies`/`_add_requested`).
   Both under 10; no behavior change.
+- PR 3 — `audit/sources.py`'s `_pytest_call`, `audit/completeness.py`'s `missing`, and
+  `convert/parametrize.py`'s `_uncarriable` each split as scoped below; no behavior change. The
+  `C901` gate is on. Turning it on also surfaced 10 violations this plan's original sweep had
+  missed (2 more in `velox-migrate`, plus — contrary to this doc's original claim that `velox/`
+  was clean — 8 in `velox/` itself); each is `# noqa: C901`'d at its definition rather than fixed
+  here, tracked as [PR 4](#pr-4-the-10-violations-pr-3-found-and-noqad).
 
 ---
 
-## PR 3 — small remaining spots, then turn on the `C901` gate
+## PR 4 — the 10 violations PR 3 found and noqa'd
 
-Three independent, small items — batched into one PR because none is worth its own review round:
+Each was `# noqa: C901`'d in place rather than fixed in PR 3, to keep that PR's review small and
+because several of these are real refactors, not small splits. The gate is already on, so nothing
+new can regress silently in the meantime — this PR is about paying down what's grandfathered.
 
-- [audit/sources.py:455](../velox-migrate/velox_migrate/audit/sources.py#L455) `_pytest_call`
-  (14 > 10) — one dispatch method on `_Scanner` (otherwise a well-organized visitor; leave the
-  rest of the class alone) covering every recognized `pytest.*` call shape. Split by the API
-  being recognized (`pytest.raises`, `pytest.warns`, `pytest.approx`, etc.), same pattern as the
-  file's other `_xxx_call` helpers.
-- [audit/completeness.py:82](../velox-migrate/velox_migrate/audit/completeness.py#L82) `missing`
-  (11 > 10).
-- [convert/parametrize.py:310](../velox-migrate/velox_migrate/convert/parametrize.py#L310)
-  `_uncarriable` (13 > 10).
+- `velox-migrate/velox_migrate/convert/specialize.py` `_bound_in` (11 > 10)
+- `velox-migrate/velox_migrate/matrix.py` `_validate` (14 > 10)
+- `velox/_collection/collect.py` `collect` (19 > 10)
+- `velox/_di/runtime.py` `_construct` (14 > 10)
+- `velox/_mocking.py` `patching_of` (11 > 10)
+- `velox/_report/terminal.py` `TerminalReporter.finish` (11 > 10)
+- `velox/_run/run.py` `_run_one` (31 > 10) and `run_suite` (40 > 10) — the two largest by far;
+  likely each need their own PR rather than sharing one with the rest of this list.
+- `velox/cli.py` `_prepare_run` (21 > 10) and `main` (28 > 10)
 
-Regression nets: `test_audit_sources.py`, `test_audit_completeness.py`,
-`test_convert_parametrize.py` respectively.
-
-Once all three are under threshold, add `"C901"` to `[tool.ruff.lint].select` in `pyproject.toml`
-(default max-complexity is 10, matching what this whole plan was measured against) so a future
-regression here shows up in `just check` instead of needing another ad-hoc sweep.
-
-Verify: `just checks test`, then `just check` (confirm the new `C901` select passes clean before
-committing it).
+Regression nets: whichever suite each file's own tests live under (`velox-migrate/tests/` for the
+first two, `tests/` for the rest).
 
 ---
 

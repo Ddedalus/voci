@@ -269,7 +269,7 @@ def _cases_carry_tags(marks: Marks) -> bool:
     )
 
 
-def collect(
+def collect(  # noqa: C901
     files: Iterable[Path],
     *,
     rootdir: Path,
