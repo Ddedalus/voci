@@ -8,15 +8,31 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from _support import Project
+from _support import make_record as _record
 
 from velox import __version__
+from velox._assertions import rewrite as _rewrite
+from velox._cache import LastRun
 from velox._collection import collect as _collect_module
 from velox._collection import discovery as _discovery
-from velox.cli import _default_test_roots, _friendly_path, _watch_scope, build_parser, main
+from velox._collection.collect import CollectionError, CollectionResult
+from velox._config import Config
+from velox._run.run import Outcome
+from velox._run.run import TestResult as Result
+from velox.cli import (
+    _default_test_roots,
+    _friendly_path,
+    _installed_session,
+    _settle,
+    _watch_scope,
+    build_parser,
+    main,
+)
 
 
 def _lines_starting_with(out: str, *prefixes: str, exclude_summary: bool = True) -> list[str]:
@@ -2773,3 +2789,261 @@ def test_watch_scope_never_raises_on_a_broken_config(chdir_project: Project) -> 
 
     assert roots  # doesn't raise, and settles on something rather than nothing
     assert ignore_dirs == _discovery.DEFAULT_IGNORE_DIRS
+
+
+# ------------------------------------------------------------------------------------------
+# _settle: what a run may write back to the failure cache, pinned directly rather than
+# through a real run -- see plans/cli-main-decomposition-plan.md.
+# ------------------------------------------------------------------------------------------
+
+
+def _settle_stub() -> None:
+    """Stands in for a collected test function; nothing here calls it."""
+
+
+def _found(
+    records: Sequence[_collect_module.TestRecord] = (),
+    *,
+    errors: Sequence[CollectionError] = (),
+) -> CollectionResult:
+    return CollectionResult(records=list(records), errors=list(errors), skipped=[])
+
+
+def test_settle_carries_forward_a_cancelled_tests_recorded_failure(tmp_path: Path) -> None:
+    """A CANCELLED result never got to say anything about the code under test -- exactly the
+    stop --lf exists to iterate through (--maxfail, or a Ctrl-C) -- so it must not clear the
+    failure the previous run recorded for the same test."""
+    test_a = tmp_path / "test_a.py"
+    test_a.write_text("async def test_x():\n    pass\n")
+    found = _found([_record(0, _settle_stub, "test_x", path=Path("test_a.py"))])
+    result = Result(
+        id="test_a.py::test_x",
+        index=0,
+        outcome=Outcome.CANCELLED,
+        duration=0.0,
+        failure=None,
+        failure_summary=None,
+    )
+
+    settled = _settle(
+        [result],
+        found,
+        found,
+        files=[test_a],
+        discovered=[test_a],
+        last_run=LastRun(failed=("test_a.py::test_x",)),
+        roots=[tmp_path],
+        rootdir=tmp_path,
+    )
+
+    assert settled.failed == ("test_a.py::test_x",)
+
+
+def test_settle_drops_a_vanished_tests_recorded_failure(tmp_path: Path) -> None:
+    """A recorded failure whose test no longer exists in a file this run fully read --
+    renamed or deleted -- is settled by its absence: nothing else would ever take it out of
+    the cache."""
+    test_a = tmp_path / "test_a.py"
+    test_a.write_text("async def test_new():\n    pass\n")
+    found = _found([_record(0, _settle_stub, "test_new", path=Path("test_a.py"))])
+    result = Result(
+        id="test_a.py::test_new",
+        index=0,
+        outcome=Outcome.PASSED,
+        duration=0.0,
+        failure=None,
+        failure_summary=None,
+    )
+
+    settled = _settle(
+        [result],
+        found,
+        found,
+        files=[test_a],
+        discovered=[test_a],
+        last_run=LastRun(failed=("test_a.py::test_old",)),
+        roots=[tmp_path],
+        rootdir=tmp_path,
+    )
+
+    assert settled.failed == ()
+
+
+def test_settle_leaves_an_unattempted_files_recorded_failure_alone(tmp_path: Path) -> None:
+    """A `--lf` run narrows `files` to the files a recorded failure names, but `discovered`
+    (collection's own full walk) still spans the whole suite -- a recorded failure under a
+    file this run never attempted must survive, exactly like a run over one directory leaving
+    the rest of the suite's failures recorded."""
+    test_a = tmp_path / "test_a.py"
+    test_a.write_text("async def test_x():\n    pass\n")
+    test_b = tmp_path / "test_b.py"
+    test_b.write_text("async def test_y():\n    pass\n")
+    found = _found([_record(0, _settle_stub, "test_x", path=Path("test_a.py"))])
+    result = Result(
+        id="test_a.py::test_x",
+        index=0,
+        outcome=Outcome.PASSED,
+        duration=0.0,
+        failure=None,
+        failure_summary=None,
+    )
+
+    settled = _settle(
+        [result],
+        found,
+        found,
+        files=[test_a],  # narrowed by --lf to the file holding a recorded failure
+        discovered=[test_a, test_b],
+        last_run=LastRun(failed=("test_a.py::test_x", "test_b.py::test_y")),
+        roots=[tmp_path],
+        rootdir=tmp_path,
+    )
+
+    assert settled.failed == ("test_b.py::test_y",)
+
+
+def test_settle_keeps_a_still_broken_files_error_recorded(tmp_path: Path) -> None:
+    """A file that fails to collect again this run is exactly as unresolved as before --
+    dropping it from `error_files` would leave a `--lf` replay unable to find it again."""
+    test_b = tmp_path / "test_b.py"
+    test_b.write_text("raise RuntimeError('still broken')\n")
+    found = _found(errors=[CollectionError(path=Path("test_b.py"), message="boom")])
+
+    settled = _settle(
+        [],
+        found,
+        found,
+        files=[test_b],
+        discovered=[test_b],
+        last_run=LastRun(error_files=("test_b.py",)),
+        roots=[tmp_path],
+        rootdir=tmp_path,
+    )
+
+    assert settled.error_files == ("test_b.py",)
+
+
+# ------------------------------------------------------------------------------------------
+# _installed_session: env/sys.path/hook/warnings install, and its guaranteed teardown --
+# mocked rather than reasoned through main() end to end, per the same plan.
+# ------------------------------------------------------------------------------------------
+
+
+def test_installed_session_installs_and_tears_down_every_piece(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(rootdir=tmp_path, env={"VELOX_TEST_VAR": "1"})
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    monkeypatch.delenv("VELOX_TEST_VAR", raising=False)
+    calls: list[str] = []
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: calls.append("install"))
+    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr(
+        "velox.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
+    )
+    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+
+    with _installed_session(config, [tmp_path], setup, ()) as problem:
+        assert problem is None
+        assert str(tmp_path) in sys.path
+        assert os.environ["VELOX_TEST_VAR"] == "1"
+        assert calls == ["install", "warn_install"]
+
+    assert calls == ["install", "warn_install", "uninstall", "warn_uninstall"]
+    assert str(tmp_path) not in sys.path
+    assert "VELOX_TEST_VAR" not in os.environ
+
+
+def test_installed_session_leaves_an_enclosing_calls_installs_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_rewrite.install`/`_warnings.install` are both documented no-ops when an enclosing
+    call already installed them -- a nested `main()` must not tear down state it didn't put
+    there."""
+    config = Config(rootdir=tmp_path)
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    calls: list[str] = []
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: object())
+    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: None)
+    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("velox.cli._warnings.install", lambda *a, **k: False)
+    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+
+    with _installed_session(config, [tmp_path], setup, ()):
+        pass
+
+    assert calls == []
+
+
+def test_installed_session_tears_down_on_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(rootdir=tmp_path)
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    calls: list[str] = []
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: None)
+    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("velox.cli._warnings.install", lambda *a, **k: True)
+    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        _installed_session(config, [tmp_path], setup, ()),
+    ):
+        raise RuntimeError("boom")
+
+    assert calls == ["uninstall", "warn_uninstall"]
+    assert str(tmp_path) not in sys.path
+
+
+def test_installed_session_restores_env_and_sys_path_when_the_hook_probe_itself_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_rewrite.installed_hook()` runs after `os.environ`/`sys.path` are already mutated, so
+    it has to be inside the same try/finally that unwinds them -- not before it, where a raise
+    here would leave both permanently changed for the rest of the process."""
+    config = Config(rootdir=tmp_path, env={"VELOX_TEST_VAR": "1"})
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    monkeypatch.delenv("VELOX_TEST_VAR", raising=False)
+
+    def _boom() -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", _boom)
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        _installed_session(config, [tmp_path], setup, ()),
+    ):
+        pass
+
+    assert str(tmp_path) not in sys.path
+    assert "VELOX_TEST_VAR" not in os.environ
+
+
+def test_installed_session_yields_a_filter_usage_error_and_skips_warnings_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolving a filter's category can import the module holding it, which must go through
+    the rewrite hook like any other test-adjacent import -- so the hook installs before the
+    filters are resolved, and stays installed (this call's own) for the caller to see the
+    usage error and bail out through. The warnings shim never goes live for a run that never
+    gets to run anything."""
+    config = Config(rootdir=tmp_path)
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    calls: list[str] = []
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: calls.append("install"))
+    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr(
+        "velox.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
+    )
+    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+
+    with _installed_session(config, [tmp_path], setup, ("a:b:c:d:e:f",)) as problem:
+        assert problem is not None
+        assert "too many fields" in problem
+
+    assert calls == ["install", "uninstall"]
