@@ -11,26 +11,13 @@ split is proposed here — each PR below simplifies functions in place.
 `C901` is not currently in `pyproject.toml`'s `[tool.ruff.lint].select`, so none of this trips
 `just check` today. The last PR below turns the gate on.
 
+## Done
+
+- PR 1 — `convert/rules/marks.py`'s `_MarkPass` split into smaller per-mark helpers (`translate`,
+  `_xfail`, `_parametrize`, and `_unwrap` — the sweep found `_unwrap` over threshold too, not
+  named in the original PR 1 scope below). All four under 10; no behavior change.
+
 ---
-
-## PR 1 — `convert/rules/marks.py`: break up `_MarkPass`
-
-[convert/rules/marks.py:86-704](../velox-migrate/velox_migrate/convert/rules/marks.py#L86-L704)
-is one 618-line class holding the translate-this-mark logic for every `pytest.mark.*` kind.
-Three of its methods are the worst complexity offenders in the whole codebase:
-
-- `translate` (11 > 10) — the `mark.name ==` dispatch chain
-- `_xfail` (13 > 10)
-- `_parametrize` (13 > 10)
-
-Work: pull each mark kind's translation logic (already delimited by `# --- xxx ---` comment
-banners in the file) into smaller named helpers so no single method's branching covers more than
-one mark shape at a time. Keep `_MarkPass` as the shared home for `mark_of`/`translate` dispatch;
-the per-mark bodies are the ones to shrink. No behavior change — `velox-migrate/tests/
-test_convert_rules.py` (2407 lines, already exercises every mark kind) is the regression net; add
-cases there only if the split reveals a branch it doesn't already cover.
-
-Verify: `just checks test` for velox-migrate, then `just check`.
 
 ## PR 2 — `convert/plan.py`: simplify the fixture-propagation pair
 
