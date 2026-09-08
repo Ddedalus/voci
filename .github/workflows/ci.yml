@@ -101,6 +101,65 @@ jobs:
       - run: uv run --project ../.. coverage run --source=relay -m voci
       - run: uv run --project ../.. coverage report -m --fail-under=95
 
+  test-coverage:
+    # Test coverage of voci's own suite, feeding the README badge -- distinct from `coverage`
+    # above, which measures voci's coverage *feature*, not its own line coverage. main only: a
+    # full instrumented run on every PR push is more than the badge is worth, and the badge
+    # reflects main regardless.
+    name: Test coverage (badge)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages
+      # tests/run/test_coverage.py exercises voci's own coverage-subprocess plumbing against a
+      # live Coverage object it expects to control -- some of its cases assert nothing is
+      # measuring in the ambient environment, others juggle their own data files. Both premises
+      # break when the whole suite is itself run under `coverage run`, so this job (only this
+      # job; the `test` job above runs the module normally) excludes it.
+      - run: uv run coverage run --source=voci -m pytest --ignore=tests/run/test_coverage.py
+      - run: uv run coverage run --source=voci_migrate -a -m pytest voci-migrate/tests
+      - run: uv run coverage report -m
+      # Published to an orphan `badges` branch that `on.push` above never matches, built straight
+      # from git's plumbing rather than a checkout: no working tree to dirty, no commit landing on
+      # main, and nothing for this workflow to re-trigger on -- no `[skip ci]` needed either.
+      - name: Publish badge
+        run: |
+          pct=$(uv run coverage report --format=total)
+          color=red
+          if [ "$pct" -ge 90 ]; then color=brightgreen
+          elif [ "$pct" -ge 75 ]; then color=green
+          elif [ "$pct" -ge 60 ]; then color=yellow
+          fi
+          json=$(printf '{"schemaVersion": 1, "label": "coverage", "message": "%s%%", "color": "%s"}\n' "$pct" "$color")
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin badges:refs/remotes/origin/badges 2>/dev/null || true
+
+          blob=$(echo "$json" | git hash-object -w --stdin)
+          tree=$(printf '100644 blob %s\tcoverage.json\n' "$blob" | git mktree)
+          parent=$(git rev-parse -q --verify origin/badges) || true
+
+          if [ -n "$parent" ] && [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
+            echo "badge unchanged"
+            exit 0
+          fi
+
+          if [ -n "$parent" ]; then
+            commit=$(git commit-tree -p "$parent" -m "Update coverage badge" "$tree")
+          else
+            commit=$(git commit-tree -m "Update coverage badge" "$tree")
+          fi
+          git push origin "$commit:refs/heads/badges"
+
   corpus-check:
     name: Corpus check (voci-migrate)
     runs-on: ubuntu-latest
