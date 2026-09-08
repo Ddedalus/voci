@@ -1,12 +1,12 @@
 name: Release
 
-# Publish to PyPI when a GitHub Release is published. Which package gets built is decided by the
-# release tag's prefix: `vX.Y.Z` releases voci, `migrate-vX.Y.Z` releases voci-migrate -- both
-# packages' versions are derived from that same tag by hatch-vcs (root pyproject.toml and
-# voci-migrate/pyproject.toml's [tool.hatch.version], respectively).
+# Publish to PyPI when a GitHub Release is published. One tag (`vX.Y.Z`) and one Release covers
+# both packages -- they're tested and released together, so both build/publish jobs always run,
+# and both packages' versions are derived from that same tag by hatch-vcs (root pyproject.toml
+# and voci-migrate/pyproject.toml's [tool.hatch.version]).
 #
 # The two publish jobs use different `environment` names (`pypi` / `pypi-migrate`) even though
-# they share this one workflow file: PyPI's trusted-publisher registration is keyed on
+# they share this one workflow file and tag: PyPI's trusted-publisher registration is keyed on
 # (repository, workflow filename, environment) and ties that triple to exactly one PyPI project,
 # so voci and voci-migrate need distinct environments to each register their own.
 on:
@@ -38,7 +38,6 @@ jobs:
   build-voci:
     name: Build voci
     needs: test
-    if: ${{ !startsWith(github.ref_name, 'migrate-v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +66,6 @@ jobs:
   build-voci-migrate:
     name: Build voci-migrate
     needs: test
-    if: ${{ startsWith(github.ref_name, 'migrate-v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,11 +79,11 @@ jobs:
 
       - name: Verify built version matches release tag
         run: |
-          tag="${GITHUB_REF_NAME#migrate-v}"
+          tag="${GITHUB_REF_NAME#v}"
           wheel="$(ls dist/*.whl)"
           built="$(basename "$wheel" | cut -d- -f2)"
           if [ "$built" != "$tag" ]; then
-            echo "::error::Built version '$built' (from $wheel) does not match release tag 'migrate-v$tag'"
+            echo "::error::Built version '$built' (from $wheel) does not match release tag 'v$tag'"
             exit 1
           fi
       - uses: actions/upload-artifact@v4

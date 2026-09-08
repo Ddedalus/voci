@@ -14,15 +14,18 @@ voci-migrate = "voci_migrate.cli:main"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-# Version comes from the git tag, written by hatch-vcs. `tag-pattern` scopes it to this package's
-# own `migrate-vX.Y.Z` tags (release.yml's build-voci-migrate job) rather than the root voci
-# package's `vX.Y.Z` ones -- both are tags in the same repo, and the two packages release
-# independently. `fallback-version` covers builds with no reachable matching tag yet (fresh clone
-# before the first voci-migrate release, or a shallow/tagless checkout).
+# Version comes from the same `vX.Y.Z` git tag as the root voci package (see its own
+# [tool.hatch.version] comment) -- the two packages release together under one tag/one GitHub
+# Release, so no separate tag-pattern is needed here. `root` points at the actual repo root: this
+# pyproject.toml lives a directory below it, and hatch-vcs/setuptools-scm otherwise looks for a
+# `.git` next to this file, finds none, and silently settles for `fallback-version` instead of
+# erroring -- easy to miss since `uv build --package voci-migrate` still succeeds either way.
+# `fallback-version` covers builds with no reachable tag yet (fresh clone before the first
+# release, or a shallow/tagless checkout).
 [tool.hatch.version]
 source = "vcs"
-tag-pattern = "^migrate-v(?P<version>.*)$"
 fallback-version = "0.0.0"
+raw-options = { root = ".." }
 
 [tool.hatch.build.targets.wheel]
 packages = ["voci_migrate"]

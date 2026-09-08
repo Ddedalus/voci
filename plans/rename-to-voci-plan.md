@@ -37,15 +37,18 @@ distribution name is changing (`velox-test` → `voci`, not `velox-test` → `vo
 
 Done (2026-09-08): trusted publishing registered for `voci` (owner `Ddedalus`, repo `voci`,
 workflow `release.yml`, environment `pypi`); `release.yml` now also builds/publishes
-`voci-migrate` (tag prefix `migrate-v` vs. `v`) through a second environment, `pypi-migrate` —
+`voci-migrate` on the same `vX.Y.Z` tag/Release, through a second environment, `pypi-migrate` —
 PyPI ties each (repo, workflow, environment) triple to one project, so the two packages need
-separate environments even sharing one workflow file. `voci-migrate/pyproject.toml` gained
-hatch-vcs dynamic versioning to match.
+separate environments even sharing one workflow file and tag. One tag rather than two per-package
+tags: they're tested and released together, and a second GitHub Release object per version was
+judged more confusing than useful. `voci-migrate/pyproject.toml` gained hatch-vcs dynamic
+versioning off that same tag to match.
 
 Still open: register `pypi-migrate` as a trusted publisher for the `voci-migrate` project on PyPI
 (same repo/workflow, environment `pypi-migrate`) and create that environment in the GitHub repo's
-settings — both are PyPI/GitHub-side settings, not part of this repo's diff. First actual releases
-(tag `vX.Y.Z` / `migrate-vX.Y.Z` + GitHub Release) still pending too.
+settings, with the same `v*` tag pattern as `pypi` — both are PyPI/GitHub-side settings, not part
+of this repo's diff. First actual release (tag `vX.Y.Z` + GitHub Release, publishing both
+packages) still pending too.
 
 `velox-test` was never pushed to PyPI, so there's nothing to clean up or yank there.
 
