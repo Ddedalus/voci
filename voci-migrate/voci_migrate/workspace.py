@@ -212,7 +212,7 @@ def _rebase_in_progress(scratch: Path) -> bool:
 
 
 def _export(scratch: Path, dest: Path, *, source: Path, branch: str) -> None:
-    marker = dest / ".voci-migrate" / _MARKER_NAME
+    marker = dest / TOOL_STATE_DIR / _MARKER_NAME
     if dest.exists():
         if any(dest.iterdir()) and not marker.is_file():
             raise WorkspaceError(
@@ -224,7 +224,7 @@ def _export(scratch: Path, dest: Path, *, source: Path, branch: str) -> None:
         # snapshotted there, which a re-scaffold (to pick up a new prefactor or fixup) must not
         # destroy.
         for entry in dest.iterdir():
-            if entry.name == ".voci-migrate":
+            if entry.name == TOOL_STATE_DIR:
                 continue
             shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
     else:
