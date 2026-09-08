@@ -28,7 +28,7 @@ from velox_migrate.convert.layout import Import, Layout
 from velox_migrate.convert.parametrize import Carried, Decision
 from velox_migrate.convert.rules import Context
 from velox_migrate.convert.specialize import Specialization
-from velox_migrate.model import REQUEST, FixtureDef, GroundTruth, Item
+from velox_migrate.model import REQUEST, Dependency, FixtureDef, GroundTruth, Item
 
 # Codes a later phase of the tool converts, which behave exactly as a refusal while they are
 # listed: the construct is real, the translation is not written, and the source says so. A code
@@ -860,6 +860,28 @@ def _propagate(
     carried: Mapping[str, Carried] = {},
 ) -> set[str]:
     """Grow `blocked` until every fixture depending on a blocked one is blocked too."""
+    edges = _propagate_edges(ground_truth, translatable, blocked, bodies, carried)
+    changed = True
+    while changed:
+        changed = False
+        for key, requested in edges.items():
+            if key in blocked:
+                continue
+            if _unnameable(ground_truth, requested, translatable, blocked):
+                blocked.add(key)
+                changed = True
+    return blocked
+
+
+def _propagate_edges(
+    ground_truth: GroundTruth,
+    translatable: Mapping[str, FixtureDef],
+    blocked: set[str],
+    bodies: Mapping[tuple[str, str], Body],
+    carried: Mapping[str, Carried],
+) -> dict[str, set[str]]:
+    """Every translatable fixture's own dependencies, blocking outright the ones that name an
+    unresolvable dependency or read `request` with nothing here to give it a counterpart."""
     edges: dict[str, set[str]] = {}
     for item in ground_truth.items:
         for fixture, deps in item.edges():
@@ -874,33 +896,34 @@ def _propagate(
                 # A name a body asked for is a dependency like any other, so a refusal reaches
                 # this fixture through it exactly as it does through a parameter.
                 requested |= {key for _, key in body.requested}
-            for edge in deps:
-                if edge.fixture is not None:
-                    requested.add(edge.fixture.key)
-                elif edge.name != REQUEST:
-                    # A name the dump cannot resolve is a dependency nothing can name.
-                    blocked.add(fixture.key)
-            if (
-                REQUEST in fixture.argnames
-                and not fixture.is_parametrized
-                and fixture.key not in carried
-                and body is None
-            ):
-                # `request` has no counterpart except as a parametrized fixture's own case —
-                # whether the cases are the fixture's own or an indirect mark's — or where the
-                # scan accounted for every use of it and the rewrite takes them all away.
+            _propagate_deps(fixture, deps, requested, blocked)
+            if _needs_request(fixture, carried, body):
                 blocked.add(fixture.key)
+    return edges
 
-    changed = True
-    while changed:
-        changed = False
-        for key, requested in edges.items():
-            if key in blocked:
-                continue
-            if _unnameable(ground_truth, requested, translatable, blocked):
-                blocked.add(key)
-                changed = True
-    return blocked
+
+def _propagate_deps(
+    fixture: FixtureDef, deps: Sequence[Dependency], requested: set[str], blocked: set[str]
+) -> None:
+    """`requested` grown with `fixture`'s named dependencies, blocking `fixture` outright when one
+    of them is a name the dump could not resolve."""
+    for edge in deps:
+        if edge.fixture is not None:
+            requested.add(edge.fixture.key)
+        elif edge.name != REQUEST:
+            # A name the dump cannot resolve is a dependency nothing can name.
+            blocked.add(fixture.key)
+
+
+def _needs_request(fixture: FixtureDef, carried: Mapping[str, Carried], body: Body | None) -> bool:
+    """Whether `fixture` reads `request` with nothing here to give it a counterpart -- neither a
+    parametrized case of its own nor a body that already accounts for every use."""
+    return (
+        REQUEST in fixture.argnames
+        and not fixture.is_parametrized
+        and fixture.key not in carried
+        and body is None
+    )
 
 
 def _unnameable(
@@ -992,6 +1015,20 @@ def _consumers(
         consumers.setdefault(declaration.container, set()).update(
             special.redirect(declaration.container, key) for key in declaration.keys
         )
+    _consumers_from_tests(consumers, converting, items, bodies, special)
+    _consumers_from_fixtures(consumers, ground_truth, converting, bodies, special)
+    _consumers_from_copies(consumers, ground_truth, converting, bodies, special)
+    return consumers
+
+
+def _consumers_from_tests(
+    consumers: dict[str, set[str]],
+    converting: Mapping[str, FixtureDef],
+    items: Mapping[tuple[str, str], tuple[Item, ...]],
+    bodies: Mapping[tuple[str, str], Body],
+    special: Specialization,
+) -> None:
+    """`consumers` grown with what each test file's own cases name."""
     for (path, qualname), cases in items.items():
         wanted = consumers.setdefault(path, set())
         node = _node_of(path, qualname)
@@ -1000,12 +1037,17 @@ def _consumers(
             resolved = item.resolve(name)
             if resolved is not None and resolved.key in converting:
                 wanted.add(special.redirect(node, resolved.key))
-        body = _body_of_item(bodies, item)
-        if body is not None:
-            wanted |= {
-                special.redirect(node, key) for _, key in body.requested if key in converting
-            }
+        _add_requested(wanted, _body_of_item(bodies, item), node, converting, special)
 
+
+def _consumers_from_fixtures(
+    consumers: dict[str, set[str]],
+    ground_truth: GroundTruth,
+    converting: Mapping[str, FixtureDef],
+    bodies: Mapping[tuple[str, str], Body],
+    special: Specialization,
+) -> None:
+    """`consumers` grown with what each converting fixture's own factory names."""
     for fixture in converting.values():
         source = layout.owning_file(fixture)
         if source is None:
@@ -1013,31 +1055,54 @@ def _consumers(
         module = layout.home_module(source)
         wanted = consumers.setdefault(module, set())
         node = fixture.visibility
-        for edge in _resolved_at(ground_truth, fixture, node).values():
-            if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(node, edge.key))
-        body = _body_of(bodies, fixture)
-        if body is not None:
-            wanted |= {
-                special.redirect(node, key) for _, key in body.requested if key in converting
-            }
+        _add_resolved(wanted, ground_truth, fixture, node, converting, special)
+        _add_requested(wanted, _body_of(bodies, fixture), node, converting, special)
 
+
+def _consumers_from_copies(
+    consumers: dict[str, set[str]],
+    ground_truth: GroundTruth,
+    converting: Mapping[str, FixtureDef],
+    bodies: Mapping[tuple[str, str], Body],
+    special: Specialization,
+) -> None:
+    """`consumers` grown with what each specialized copy's origin names, redirected from the
+    copy's own node -- not the origin's visibility, since that's what `_work` writes `Depends()`
+    from."""
     for copy in special.copies.values():
         wanted = consumers.setdefault(copy.module, set())
         origin = ground_truth.fixture_defs[copy.origin]
-        # Redirected from the node the copy was specialized for, which is what `_work` writes its
-        # `Depends()` from: asking from the module instead would name the originals here and the
-        # copies there, and the module would import something nothing in it reads.
-        for edge in _resolved_at(ground_truth, origin, copy.node).values():
-            if edge is not None and edge.key in converting:
-                wanted.add(special.redirect(copy.node, edge.key))
+        _add_resolved(wanted, ground_truth, origin, copy.node, converting, special)
         # A copy is the original's source, so it names everything the original's body named too.
-        body = _body_of(bodies, origin)
-        if body is not None:
-            wanted |= {
-                special.redirect(copy.node, key) for _, key in body.requested if key in converting
-            }
-    return consumers
+        _add_requested(wanted, _body_of(bodies, origin), copy.node, converting, special)
+
+
+def _add_resolved(
+    wanted: set[str],
+    ground_truth: GroundTruth,
+    fixture: FixtureDef,
+    node: str,
+    converting: Mapping[str, FixtureDef],
+    special: Specialization,
+) -> None:
+    """`wanted` grown with the keys `fixture` resolves at `node`, redirected the way `node` sees
+    them."""
+    for edge in _resolved_at(ground_truth, fixture, node).values():
+        if edge is not None and edge.key in converting:
+            wanted.add(special.redirect(node, edge.key))
+
+
+def _add_requested(
+    wanted: set[str],
+    body: Body | None,
+    node: str,
+    converting: Mapping[str, FixtureDef],
+    special: Specialization,
+) -> None:
+    """`wanted` grown with the keys `body` names by request, redirected the way `node` sees them."""
+    if body is None:
+        return
+    wanted |= {special.redirect(node, key) for _, key in body.requested if key in converting}
 
 
 def _work(

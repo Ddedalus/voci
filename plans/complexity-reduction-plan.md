@@ -16,26 +16,12 @@ split is proposed here — each PR below simplifies functions in place.
 - PR 1 — `convert/rules/marks.py`'s `_MarkPass` split into smaller per-mark helpers (`translate`,
   `_xfail`, `_parametrize`, and `_unwrap` — the sweep found `_unwrap` over threshold too, not
   named in the original PR 1 scope below). All four under 10; no behavior change.
+- PR 2 — `convert/plan.py`'s `_propagate` and `_consumers` each split into one helper per
+  sub-decision (`_propagate_edges`/`_propagate_deps`/`_needs_request`,
+  `_consumers_from_tests`/`_consumers_from_fixtures`/`_consumers_from_copies`/`_add_requested`).
+  Both under 10; no behavior change.
 
 ---
-
-## PR 2 — `convert/plan.py`: simplify the fixture-propagation pair
-
-[convert/plan.py:855](../velox-migrate/velox_migrate/convert/plan.py#L855) `_propagate` (13 > 10)
-and [convert/plan.py:981](../velox-migrate/velox_migrate/convert/plan.py#L981) `_consumers`
-(15 > 10) are the two most complex functions in the fixture-graph planning module. Unlike PR 1
-these aren't one class — they're free functions the module already keeps small elsewhere, so the
-fix is standard extract-helper-function work: name the sub-decisions each one currently inlines
-(e.g. whatever `_consumers` branches on 15 ways) and pull them out.
-
-Read `_propagate` and `_consumers` fresh before starting — this plan doesn't prescribe the split,
-since the right seams depend on what the two functions are actually branching on.
-
-Regression net: `velox-migrate/tests/test_convert_rules.py` and `test_convert.py` both exercise
-`plan.build()`; confirm which cases actually reach `_propagate`/`_consumers` before relying on
-them, and add direct cases if the existing coverage turns out to be indirect only.
-
-Verify: `just checks test` for velox-migrate, then `just check`.
 
 ## PR 3 — small remaining spots, then turn on the `C901` gate
 
