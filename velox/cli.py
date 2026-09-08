@@ -924,14 +924,21 @@ def _installed_session(
     if sys_path_inserted:
         sys.path.insert(0, rootdir_str)
 
-    hook_already_installed = _rewrite.installed_hook() is not None
+    # Set here, not just inside the try below: if _rewrite.installed_hook() itself raised, the
+    # finally's `if not hook_already_installed:` would otherwise hit an unbound name. False is
+    # also the safer fallback value -- it makes finally attempt an uninstall(), not skip one.
+    hook_already_installed = False
     warnings_installed = False
     try:
+        # Must be installed before any test module is imported below -- a module already in
+        # sys.modules can't retroactively be rewritten.
+        #
         # Known cost, not fixed here: install walks every .py under roots for its own file list,
         # and discover_files (in the caller, after this yields) walks the same roots again for
         # test files specifically -- two full traversals per run. They want different filters
         # (all .py vs test_*.py/*_test.py), so unifying them means changing install's signature
         # to accept a pre-discovered file list.
+        hook_already_installed = _rewrite.installed_hook() is not None
         _rewrite.install(roots, setup=setup, warn=False)
         problem, session_filters = _parse_filters(config, filterwarnings)
         if problem is None:

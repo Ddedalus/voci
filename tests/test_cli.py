@@ -2998,6 +2998,31 @@ def test_installed_session_tears_down_on_an_exception(
     assert str(tmp_path) not in sys.path
 
 
+def test_installed_session_restores_env_and_sys_path_when_the_hook_probe_itself_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_rewrite.installed_hook()` runs after `os.environ`/`sys.path` are already mutated, so
+    it has to be inside the same try/finally that unwinds them -- not before it, where a raise
+    here would leave both permanently changed for the rest of the process."""
+    config = Config(rootdir=tmp_path, env={"VELOX_TEST_VAR": "1"})
+    setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
+    monkeypatch.delenv("VELOX_TEST_VAR", raising=False)
+
+    def _boom() -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("velox.cli._rewrite.installed_hook", _boom)
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        _installed_session(config, [tmp_path], setup, ()),
+    ):
+        pass
+
+    assert str(tmp_path) not in sys.path
+    assert "VELOX_TEST_VAR" not in os.environ
+
+
 def test_installed_session_yields_a_filter_usage_error_and_skips_warnings_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
