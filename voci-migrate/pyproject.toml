@@ -3,7 +3,7 @@ name = "voci-migrate"
 dynamic = ["version"]
 description = "Migrate a pytest suite to voci."
 license = "MIT"
-license-files = ["../LICENSE"]
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 authors = [{ name = "Ddedalus", email = "11913250+Ddedalus@users.noreply.github.com" }]
 keywords = ["testing", "pytest", "voci", "codemod", "migration"]
