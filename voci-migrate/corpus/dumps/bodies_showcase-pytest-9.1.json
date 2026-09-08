@@ -5,7 +5,7 @@
   "sys_platform": "linux",
   "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
   "machine": "x86_64",
-  "python_version": "3.13.14",
+  "python_version": "3.14.7",
   "python_implementation": "CPython"
  },
  "rootpath": ".",

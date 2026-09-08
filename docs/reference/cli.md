@@ -55,11 +55,11 @@ suite, which is also what it does on a first run and after one that went green.
 ```console
 $ voci --help
 usage: voci [-h] [--version] [-k EXPR] [-m EXPR] [--lf] [--ff] [--watch]
-             [--assert {rewrite,plain}] [--rewrite-cache DIR] [--concurrency N]
-             [--timeout SECONDS] [--loop-watchdog SECONDS] [--capture no] [-s] [--serial]
-             [--maxfail N] [-x] [-v] [-q] [--durations N] [-W SPEC] [--collect-only]
-             [--co-json] [--report-json PATH] [--basetemp DIR]
-             [paths ...]
+            [--assert {rewrite,plain}] [--rewrite-cache DIR] [--concurrency N]
+            [--timeout SECONDS] [--loop-watchdog SECONDS] [--capture no] [-s] [--serial]
+            [--maxfail N] [-x] [-v] [-q] [--durations N] [-W SPEC] [--collect-only]
+            [--co-json] [--report-json PATH] [--basetemp DIR]
+            [paths ...]
 ```
 
 ## Positional arguments
@@ -121,9 +121,9 @@ rewrite.
 
 ### `--rewrite-cache DIR`
 
-Where rewritten .pyc files go. Defaults to a platform cache dir, or $VOCI\_REWRITE\_CACHE if set.
-If it is unwritable, voci warns and falls back to --assert=plain rather than silently paying the
-cold-import cost.
+Where rewritten .pyc files go. Defaults to a platform cache dir, or $VOCI\_REWRITE\_CACHE if set. If
+it is unwritable, voci warns and falls back to --assert=plain rather than silently paying the cold-
+import cost.
 
 ### `--concurrency N`
 
