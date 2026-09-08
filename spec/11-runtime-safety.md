@@ -37,7 +37,7 @@ inside the loop, because the loop is what's frozen.
 just a test bug. That is worth saying in the README.
 
 **Crash forensics.** The same thread writes the current in-flight set to
-`.velox/in-flight.json` on each check. This is the concurrent replacement for `PYTEST_CURRENT_TEST`
+`.voci/in-flight.json` on each check. This is the concurrent replacement for `PYTEST_CURRENT_TEST`
 (which is meaningless with N tests running): after a hard crash or an OOM kill, that file says what
 was running.
 
@@ -103,10 +103,10 @@ does: it is `sys.monitoring`-based on modern CPython, and single-process concurr
 — unlike xdist, which needs `--cov-append` plus a combine step.
 
 Requirements:
-- `coverage run -m velox` works with no velox-side special-casing. **Verified in CI from the first
+- `coverage run -m voci` works with no voci-side special-casing. **Verified in CI from the first
   prototype**, not at the end.
 - `--isolated` subprocesses must inherit coverage (`COVERAGE_PROCESS_START` + the subprocess hook) —
-  this is the one place velox has to do something, and it is on the roadmap with the isolated tier.
+  this is the one place voci has to do something, and it is on the roadmap with the isolated tier.
 - Document that no `--cov-append`/`combine` dance is needed. That is another head-to-head win worth
   stating.
 
@@ -122,7 +122,7 @@ point is not to foreclose it.
 Watchdog (thread, heartbeat, stall report, in-flight file); full Ctrl-C/SIGTERM choreography with
 shielded teardown and the double-Ctrl-C hard exit; global warning collection with attribution and
 the loud "filters not applied" notice; `sys.unraisablehook` and the loop exception handler; a
-CI job proving `coverage run -m velox` works.
+CI job proving `coverage run -m voci` works.
 
 ## 8. Roadmap
 
@@ -133,7 +133,7 @@ CI job proving `coverage run -m velox` works.
 - SIGQUIT dump on all platforms that have it; a `--dump-on-stall` flag that writes the full stack
   dump to a file.
 - Per-test warning filters becoming real once 3.14 is the floor.
-- A `velox doctor` command: checks rewrite-cache writability, uvloop availability, loop-blocking
+- A `voci doctor` command: checks rewrite-cache writability, uvloop availability, loop-blocking
   library imports (`requests`, `psycopg2`, sync `redis`) present in the test environment, and prints
   the concurrency-readiness verdict.
 
@@ -146,5 +146,5 @@ CI job proving `coverage run -m velox` works.
 - **Q23** — Watchdog threshold of 1.0 s: too tight for suites doing legitimate CPU work in sync
   tests (which run in the executor and so *don't* block the loop — but a big `json.loads` in an
   async test does). Proposed: 1.0 s, with the stall report explaining how to raise it.
-- **Q24** — Should velox refuse to start if a known-blocking library is imported in the test
-  environment? No — far too blunt. That belongs in `velox doctor` as advice.
+- **Q24** — Should voci refuse to start if a known-blocking library is imported in the test
+  environment? No — far too blunt. That belongs in `voci doctor` as advice.

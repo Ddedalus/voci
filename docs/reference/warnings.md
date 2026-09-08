@@ -40,7 +40,7 @@ Warnings no filter matches are reported.
 ## Where filters come from
 
 ```toml
-[tool.velox]
+[tool.voci]
 filterwarnings = [
     "error::DeprecationWarning",
     "ignore:pkg_resources is deprecated:UserWarning",
@@ -48,36 +48,36 @@ filterwarnings = [
 ```
 
 ```console
-$ velox -W error::DeprecationWarning -W ignore::ResourceWarning
+$ voci -W error::DeprecationWarning -W ignore::ResourceWarning
 ```
 
 ```python
-@velox.filterwarnings("error::DeprecationWarning")
+@voci.filterwarnings("error::DeprecationWarning")
 async def test_no_deprecated_calls(): ...
 ```
 
 The last filter to match a warning is the one that decides it. The three tiers are laid out in that
-order — `[tool.velox] filterwarnings` first, then every `-W`, then the marks on the test that raised
+order — `[tool.voci] filterwarnings` first, then every `-W`, then the marks on the test that raised
 the warning — so a mark overrides a `-W`, which overrides the config file, and within one tier a
-later entry overrides an earlier one. Stacked `@velox.filterwarnings` decorators follow the same
+later entry overrides an earlier one. Stacked `@voci.filterwarnings` decorators follow the same
 rule, with the outermost winning.
 
 A mark's filters govern only the test that carries them, whatever else is running at the same time:
 
 ```python
-@velox.filterwarnings("ignore::DeprecationWarning")
+@voci.filterwarnings("ignore::DeprecationWarning")
 async def test_calls_the_old_api():
     """This test's `ignore` reaches this test alone -- a sibling dispatched alongside it still
     reports the same warning."""
     old_api()
 ```
 
-::: velox.filterwarnings
+::: voci.filterwarnings
 
 ## Asserting that something warns
 
 `warnings.catch_warnings()` replaces the process-wide `warnings.filters` list and
 `warnings.showwarning` for as long as it is open, so a test that enters it changes what every test
 running alongside it sees. Reach for a filter instead where one will do, and keep any
-`catch_warnings()` block a test does need under [`@velox.solo`](marks.md), which holds the whole
+`catch_warnings()` block a test does need under [`@voci.solo`](marks.md), which holds the whole
 suite while that test runs.

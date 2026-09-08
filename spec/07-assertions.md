@@ -18,12 +18,12 @@ tests that cover this feature, which are the real asset.*
 | PEP 657 caret fallback | ~50 | fresh |
 | **Total** | **~2.1–2.4k** | |
 
-Vendored under `velox/_vendor/assertion/`, with the upstream pytest commit hash recorded in a
+Vendored under `voci/_vendor/assertion/`, with the upstream pytest commit hash recorded in a
 `VENDOR.md` alongside the diff we apply. Re-vendoring is a deliberate act, not a tracked upstream
 (risk 5 in [00](00-overview.md)).
 
 The applicable upstream tests are ported alongside, with the pytest-specific harness swapped for
-velox's. This is the single highest-leverage thing in the vendoring decision.
+voci's. This is the single highest-leverage thing in the vendoring decision.
 
 ## 2. Mechanism (for readers who won't read pytest's source)
 
@@ -60,8 +60,8 @@ concurrency-safe: every temp is a frame-local (R§2).
 ### 4.2 Cache and identity hygiene
 
 - Change the injected helper-module name (`rewrite.py:719` hardcodes `"_pytest.assertion.rewrite"`
-  into generated pycs) to velox's own.
-- Put a **velox rewriter version** in the pyc tag, alongside the Python magic number.
+  into generated pycs) to voci's own.
+- Put a **voci rewriter version** in the pyc tag, alongside the Python magic number.
 - **Include every codegen-affecting option in the pyc cache key.** pytest's
   `enable_assertion_pass_hook` is a documented footgun precisely for not being in it.
 - Key the temp-pyc filename on `(pid, thread)`, not pid alone.
@@ -83,16 +83,16 @@ This also makes `--assert=plain` a usable mode rather than a punishment.
 
 ## 5. Cold-start guarantee
 
-velox will be benchmarked cold in CI containers. **Never silently pay 4.6× per run** (R§2):
+voci will be benchmarked cold in CI containers. **Never silently pay 4.6× per run** (R§2):
 
-1. Resolve the rewrite cache dir: `--rewrite-cache`, else `VELOX_REWRITE_CACHE`, else a
-   platform cache dir, else `sys.pycache_prefix` into a velox-owned directory.
+1. Resolve the rewrite cache dir: `--rewrite-cache`, else `VOCI_REWRITE_CACHE`, else a
+   platform cache dir, else `sys.pycache_prefix` into a voci-owned directory.
 2. Probe writability once at startup (create + delete a marker).
 3. If unwritable: **warn on stderr, naming the path**, and fall back to `--assert=plain` with the
    PEP 657 floor. Record the fallback in the report header so the benchmark story is not silently
    corrupted.
 
-A CI job in velox's own repo asserts the cold/warm ratio stays within budget.
+A CI job in voci's own repo asserts the cold/warm ratio stays within budget.
 
 ## 6. Small things easy to miss
 
@@ -115,7 +115,7 @@ A CI job in velox's own repo asserts the cold/warm ratio stays within budget.
 ## 8. MVP
 
 Vendored `rewrite.py` + `saferepr` + shim with the three fixes; the comparison-diff explanation
-engine; the PEP 657 floor; the cache-writability probe and fallback; `velox.raises`, `velox.approx`;
+engine; the PEP 657 floor; the cache-writability probe and fallback; `voci.raises`, `voci.approx`;
 ported upstream tests.
 
 ## 9. Roadmap
@@ -131,27 +131,27 @@ ported upstream tests.
 
 ## 10. Resolved questions
 
-- **Q16** — Does velox rewrite *fixture* modules (`tests/fixtures.py`) by default? They are not
+- **Q16** — Does voci rewrite *fixture* modules (`tests/fixtures.py`) by default? They are not
   named `test_*`, but assertions in fixtures are common and the PEP 657 floor is a weaker
   experience. **Resolved as proposed:** rewrite any module under the discovered test roots.
-  Implemented at zero cost to the vendored code — velox hands the rewriter a `Session` whose
+  Implemented at zero cost to the vendored code — voci hands the rewriter a `Session` whose
   `_initialpaths` is every discovered `.py` file, and upstream's existing `isinitpath` check
-  and early-bailout basename set do the rest (`velox/_rewrite.py`, `_DiscoveredPaths`).
-- **Q17** — Should the vendored code be reformatted to velox's style (ruff) or kept byte-identical
+  and early-bailout basename set do the rest (`voci/_rewrite.py`, `_DiscoveredPaths`).
+- **Q17** — Should the vendored code be reformatted to voci's style (ruff) or kept byte-identical
   to upstream for diffability? **Resolved as proposed:** byte-identical, with `# ruff: noqa` and
-  `# fmt: off` headers, and `velox/_vendor` excluded from ruff and pyrefly entirely. Re-vendoring
+  `# fmt: off` headers, and `voci/_vendor` excluded from ruff and pyrefly entirely. Re-vendoring
   is `scripts/vendor_assertion.py`, which records every edit and fails loudly when one stops
   applying; `--check` guards the tree in CI.
 
 ## 11. Implementation notes
 
-Landed as: `velox/_vendor/assertion/` (generated, plus the hand-written `_shim.py`),
-`velox/_assertion_state.py` (§4.1), `velox/_rewrite.py` (installation, cache, explanation hook),
-`velox/_pep657.py` (§4.3), `scripts/vendor_assertion.py`, `scripts/bench_cold_start.py` (§5).
+Landed as: `voci/_vendor/assertion/` (generated, plus the hand-written `_shim.py`),
+`voci/_assertion_state.py` (§4.1), `voci/_rewrite.py` (installation, cache, explanation hook),
+`voci/_pep657.py` (§4.3), `scripts/vendor_assertion.py`, `scripts/bench_cold_start.py` (§5).
 
 The vendoring came to **22 recorded edits across 62 upstream lines**, plus mechanical import
 rewrites — consistent with the research's 30-line estimate for `rewrite.py` alone once the
-explanation engine and the three fixes are included. `velox/_vendor/VENDOR.md` is generated and
+explanation engine and the three fixes are included. `voci/_vendor/VENDOR.md` is generated and
 lists every edit with its rationale.
 
 Measured on the implementation (`just bench cold-start`): cold rewrite **6.4x** a plain compile

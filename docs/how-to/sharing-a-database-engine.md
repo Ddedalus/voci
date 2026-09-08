@@ -6,9 +6,9 @@ session-scoped engine, and a function-scoped session wrapped in a transaction th
 back.
 
 ```python
-@velox.fixture(scope="session")
+@voci.fixture(scope="session")
 async def engine(
-    tmp: velox.TmpPathFactory = Depends(velox.tmp_path_factory),
+    tmp: voci.TmpPathFactory = Depends(voci.tmp_path_factory),
 ) -> AsyncIterator[AsyncEngine]:
     """One engine for the entire run, shared by every concurrent test.
 
@@ -19,7 +19,7 @@ async def engine(
         yield e
 
 
-@velox.fixture()
+@voci.fixture()
 async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
     """A real session inside a transaction that is always rolled back.
 
@@ -31,10 +31,10 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
 ```
 
 `scope="session"` is what makes `engine` a run-wide singleton rather than a per-test one; every
-other fixture scope in velox is per-test. Depending on it from `session` is enough to reach it —
+other fixture scope in voci is per-test. Depending on it from `session` is enough to reach it —
 nothing about the dependent fixture needs to know its dependency is shared.
 
-The rollback itself is ordinary SQLAlchemy, not a velox mechanism: `session` opens a connection,
+The rollback itself is ordinary SQLAlchemy, not a voci mechanism: `session` opens a connection,
 begins a transaction, and hands the test a session bound to it. Whatever the test does — insert,
 update, even `commit()`, since the session joins through a SAVEPOINT — is undone by
 `trans.rollback()` when the fixture's `async with` exits, pass or fail.
@@ -56,7 +56,7 @@ async def transaction(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 On SQLite specifically, the driver's own autocommit heuristics fight the rollback unless you take
 over `BEGIN` yourself — two `sqlalchemy.event` listeners on connect and on begin, applied once when
 the engine is built. A suite on Postgres or another server-backed database doesn't need them; they
-exist here because SQLite is what needs no server to `uv sync && velox`.
+exist here because SQLite is what needs no server to `uv sync && voci`.
 
 The full fixtures, plus the SQLAlchemy plumbing behind them, are in
 `examples/01-fastapi-crud/tests/fixtures.py` and `examples/01-fastapi-crud/tests/database.py`.

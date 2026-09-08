@@ -3,7 +3,7 @@
 # its default, and no config file ends up inside the published tree.
 
 [project]
-site_name = "velox"
+site_name = "voci"
 site_description = "A concurrent test runner for async Python."
 
 # A link to a page that doesn't exist, or to an anchor that doesn't, fails the build rather than
@@ -43,8 +43,8 @@ language = "en"
 # Both paths are relative to `docs/`, and the files under `docs/static/` are copied through to
 # the built site as-is. The SVG scales to whatever size the header gives it; the PNG is there for
 # the favicon, which browsers are less uniform about accepting as SVG.
-logo = "static/velox-logo-2.svg"
-favicon = "static/velox-logo-2.png"
+logo = "static/voci-logo-2.svg"
+favicon = "static/voci-logo-2.png"
 # A section's `index.md` is the section itself, so "Guide" in the nav opens `guide/index.md`
 # rather than expanding to a lone child of the same name.
 features = ["navigation.indexes"]
@@ -71,13 +71,13 @@ toggle.name = "Switch to system preference"
 # Reference pages are rendered from the source by mkdocstrings, which Zensical loads as a
 # Markdown extension rather than a MkDocs plugin -- the table below is what it reads.
 [project.plugins.mkdocstrings.handlers.python]
-# The repo root, so `velox` and `velox.fastapi` resolve from the checkout being documented rather
+# The repo root, so `voci` and `voci.fastapi` resolve from the checkout being documented rather
 # than from whatever copy happens to be installed.
 paths = ["."]
 
 [project.plugins.mkdocstrings.handlers.python.options]
 docstring_style = "sphinx"
-# `velox/__init__.py` is the public surface; anything underscore-prefixed reached through it is
+# `voci/__init__.py` is the public surface; anything underscore-prefixed reached through it is
 # private and stays out of the rendered page.
 filters = ["!^_"]
 merge_init_into_class = true

@@ -1,4 +1,4 @@
-"""Tests for velox._run.safety: the loop watchdog, un-awaited coroutine collection, the
+"""Tests for voci._run.safety: the loop watchdog, un-awaited coroutine collection, the
 call-phase misuse messages, and naming a sync test stuck in a worker thread."""
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import pytest
 from _support import make_record as _record
 from _support import run_async
 
-from velox import _warnings
-from velox._run import safety
+from voci import _warnings
+from voci._run import safety
 
 
 @pytest.fixture

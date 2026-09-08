@@ -1,6 +1,6 @@
 """User endpoints.
 
-The baseline shape of a velox test: an `async def`, dependencies as parameter defaults, a plain
+The baseline shape of a voci test: an `async def`, dependencies as parameter defaults, a plain
 `assert`.
 """
 
@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import velox
+import voci
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from velox import Depends
+from voci import Depends
 
 from app.models import User
 from tests.fixtures import alice, api_client, session
@@ -24,7 +24,7 @@ async def test_health(client: Annotated[AsyncClient, Depends(api_client)]) -> No
     assert response.json() == {"status": "ok"}
 
 
-@velox.parametrize(
+@voci.parametrize(
     "email",
     ["bob@example.com", "carol+tag@example.com", "dave@sub.example.com"],
     ids=["bob", "tag-in-local-part", "subdomain"],
@@ -71,8 +71,8 @@ async def test_create_user_writes_a_row(
     assert row.credit_cents == 0
 
 
-@velox.tag("slow")
-@velox.timeout(30)
+@voci.tag("slow")
+@voci.timeout(30)
 async def test_bulk_signup(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     for i in range(200):
         response = await client.post("/users", json={"email": f"user{i}@example.com"})
@@ -82,7 +82,7 @@ async def test_bulk_signup(client: Annotated[AsyncClient, Depends(api_client)]) 
     assert listing.status_code == 200
 
 
-@velox.skip("pagination is not implemented yet (GET /users has no route -- 405, not 200)")
+@voci.skip("pagination is not implemented yet (GET /users has no route -- 405, not 200)")
 async def test_list_users_is_paginated(client: Annotated[AsyncClient, Depends(api_client)]) -> None:
     response = await client.get("/users?limit=10")
     assert response.status_code == 200
@@ -91,7 +91,7 @@ async def test_list_users_is_paginated(client: Annotated[AsyncClient, Depends(ap
 REQUEST_ID_MIDDLEWARE_ENABLED = False
 
 
-@velox.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
+@voci.skipif(not REQUEST_ID_MIDDLEWARE_ENABLED, reason="middleware is behind a feature flag")
 async def test_response_carries_request_id(
     client: Annotated[AsyncClient, Depends(api_client)],
 ) -> None:

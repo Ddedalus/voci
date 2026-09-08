@@ -1,4 +1,4 @@
-"""Tests for `velox._collection.lastfailed`: which files `--lf` bothers importing, and what
+"""Tests for `voci._collection.lastfailed`: which files `--lf` bothers importing, and what
 `--lf`/`--ff` do to the records collection produced.
 """
 
@@ -8,9 +8,9 @@ from pathlib import Path
 
 from _support import make_record
 
-from velox._cache import NOTHING_RECORDED, LastRun
-from velox._collection import lastfailed
-from velox._collection.collect import CollectionError, CollectionResult, Skipped
+from voci._cache import NOTHING_RECORDED, LastRun
+from voci._collection import lastfailed
+from voci._collection.collect import CollectionError, CollectionResult, Skipped
 
 
 def _stub() -> None:
@@ -270,14 +270,14 @@ def test_dead_paths_leaves_a_package_a_discovered_file_still_reaches(tmp_path: P
 
 
 def test_dead_paths_leaves_a_package_outside_the_roots_walked(tmp_path: Path) -> None:
-    """`velox one/` looked in one directory and must not conclude anything about another."""
+    """`voci one/` looked in one directory and must not conclude anything about another."""
     _package(tmp_path, "two/pkg/__init__.py", "one/test_a.py")
     last_run = LastRun(error_files=("two/pkg/__init__.py",))
     assert _dead(last_run, tmp_path, {"one/test_a.py"}, roots=[tmp_path / "one"]) == set()
 
 
 def test_dead_paths_leaves_a_package_only_partly_walked(tmp_path: Path) -> None:
-    """`velox pkg/sub` looked inside the package, not at it: what the rest of `pkg/` holds is
+    """`voci pkg/sub` looked inside the package, not at it: what the rest of `pkg/` holds is
     exactly what this run did not find out."""
     _package(tmp_path, "pkg/__init__.py", "pkg/sub/test_x.py")
     last_run = LastRun(error_files=("pkg/__init__.py",))
@@ -299,7 +299,7 @@ def test_settled_paths_leaves_a_package_no_file_was_collected_under(tmp_path: Pa
 
 def test_settled_paths_stops_at_a_directory_without_an_init(tmp_path: Path) -> None:
     """Collection imports a package by walking an unbroken `__init__.py` chain up from the file.
-    A namespace directory ends that walk, so `velox pkg/sub` never imports `pkg/__init__.py` and
+    A namespace directory ends that walk, so `voci pkg/sub` never imports `pkg/__init__.py` and
     has no business clearing a recorded failure to import it."""
     _package(tmp_path, "pkg/__init__.py", "pkg/sub/test_a.py")
     assert lastfailed.settled_paths({"pkg/sub/test_a.py"}, rootdir=tmp_path) == {
@@ -312,7 +312,7 @@ def test_error_paths_keeps_an_error_on_a_path_the_run_answers_for() -> None:
     assert lastfailed.error_paths([error], answered={"test_a.py"}) == {"test_a.py"}
 
 
-def test_error_paths_drops_an_error_on_a_module_velox_never_collects() -> None:
+def test_error_paths_drops_an_error_on_a_module_voci_never_collects() -> None:
     """`_misplaced_declarations` reports a helper module under `rootdir` that discovery does not
     hand back, so nothing would ever settle the entry."""
     error = CollectionError(path=Path("helper.py"), message="boom")

@@ -6,19 +6,19 @@ import asyncio
 from types import ModuleType
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from ledger.service import LedgerService
 from tests.fixtures import account, feature_flags, ledger
 
 # --------------------------------------------------------------------------------------
-# @velox.solo — for state with no per-task view
+# @voci.solo — for state with no per-task view
 # --------------------------------------------------------------------------------------
 
 
-@velox.solo
-@velox.skip(
+@voci.solo
+@voci.skip(
     "would race test_ledger.py::test_transfer_is_permitted_to_overdraw_by_default, which "
     "depends on strict_transfers staying off"
 )
@@ -27,27 +27,27 @@ async def test_strict_transfers_rejects_overdraft(
     svc: Annotated[LedgerService, Depends(ledger)],
     acct: Annotated[str, Depends(account)],
 ) -> None:
-    """Nothing is mocked here — the reason for `@velox.solo` is a module-level dict read at call
+    """Nothing is mocked here — the reason for `@voci.solo` is a module-level dict read at call
     time, and no mocking library would change that.
 
     `test_ledger.py` has a test asserting that overdrafts *are* allowed by default; while this one
-    runs, that test must not be in flight — see the `@velox.skip` reason above.
+    runs, that test must not be in flight — see the `@voci.skip` reason above.
     """
     flags.set_enabled("strict_transfers", True)
     source, target = f"{acct}::a", f"{acct}::b"
     await svc.append(source, 100)
 
-    with velox.raises(ValueError, match="insufficient balance"):
+    with voci.raises(ValueError, match="insufficient balance"):
         await svc.transfer(source, target, 500)
 
 
-@velox.solo
+@voci.solo
 async def test_audit_flag_is_restored_afterwards(
     flags: Annotated[ModuleType, Depends(feature_flags)],
 ) -> None:
     """`feature_flags` snapshots and restores, so the mutation is reversible.
 
-    Reversible is not the same as invisible, which is why `@velox.solo` is the correct mark either
+    Reversible is not the same as invisible, which is why `@voci.solo` is the correct mark either
     way. This one runs live rather than skipped: nothing else in this suite reads
     `audit_every_write`, unlike the flag `test_strict_transfers_rejects_overdraft` flips.
     """
@@ -78,7 +78,7 @@ async def test_blocking_call_stalls_the_loop(
     assert blocking == correct == 999
 
 
-@velox.timeout(2)
+@voci.timeout(2)
 async def test_a_hang_is_reported_as_a_timeout_not_a_failure() -> None:
     """`asyncio.timeout` wraps the whole envelope — setup, call, and teardown.
 

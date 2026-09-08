@@ -1,4 +1,4 @@
-"""Tests for velox._run.coverage: carrying a `coverage run` into `@velox.isolated`
+"""Tests for voci._run.coverage: carrying a `coverage run` into `@voci.isolated`
 subprocesses and back.
 
 The unit tests stand a `Coverage` instance in for the one a real `coverage run` would have
@@ -6,7 +6,7 @@ started (constructed, never started -- starting a second one inside this suite w
 suite itself), and go through the same public entry points coverage.py's own subprocess support
 uses: a serialized config read back through `Coverage(config_file=":data:...")`, exactly as
 `coverage.process_startup` reads what `subprocess_env` writes. The last test is the real thing
-end to end: `coverage run -m velox` over a project whose only caller of one function is an
+end to end: `coverage run -m voci` over a project whose only caller of one function is an
 isolated test.
 """
 
@@ -20,7 +20,7 @@ import coverage
 import pytest
 from _support import Project
 
-from velox._run import coverage as _coverage
+from voci._run import coverage as _coverage
 
 #: The prefix `Coverage.__init__` reads a serialized config back through, rather than as a path
 #: to a file on disk. Spelled out here because it is what `subprocess_env`'s output is *for*.
@@ -29,7 +29,7 @@ _DATA_PREFIX = ":data:"
 
 def _parent(tmp_path: Path, **kwargs: object) -> coverage.Coverage:
     """A `Coverage` standing in for the one measuring the parent run. `config_file=False` keeps
-    velox's own `pyproject.toml` out of it, so these tests read what they set and nothing else.
+    voci's own `pyproject.toml` out of it, so these tests read what they set and nothing else.
     """
     return coverage.Coverage(config_file=False, data_file=str(tmp_path / "parent"), **kwargs)  # type: ignore[bad-argument-type]
 
@@ -212,7 +212,7 @@ def test_harvest_reports_unreadable_data_rather_than_failing_the_test(
 
 def test_coverage_run_measures_lines_only_an_isolated_test_reaches(project: Project) -> None:
     """End to end, the requirement the rest of this module exists for: one `coverage run -m
-    velox`, one data file, and the lines executed inside a `@velox.isolated` subprocess are in
+    voci`, one data file, and the lines executed inside a `@voci.isolated` subprocess are in
     it -- no `--cov-append`, no `coverage combine`.
     """
     project.write(
@@ -228,22 +228,22 @@ def test_coverage_run_measures_lines_only_an_isolated_test_reaches(project: Proj
         "def never_called() -> str:\n"
         "    return 'never'\n",
     )
-    project.write("pyproject.toml", '[tool.velox]\ntestpaths = ["tests"]\n')
+    project.write("pyproject.toml", '[tool.voci]\ntestpaths = ["tests"]\n')
     project.write(
         "tests/test_both.py",
-        "import velox\n"
+        "import voci\n"
         "from lib import in_process, only_isolated\n"
         "\n"
         "async def test_here():\n"
         "    assert in_process() == 'in-process'\n"
         "\n"
-        "@velox.isolated\n"
+        "@voci.isolated\n"
         "async def test_over_there():\n"
         "    assert only_isolated() == 'isolated'\n",
     )
 
     completed = subprocess.run(
-        [sys.executable, "-m", "coverage", "run", "--source=lib", "-m", "velox"],
+        [sys.executable, "-m", "coverage", "run", "--source=lib", "-m", "voci"],
         cwd=project.root,
         capture_output=True,
         text=True,

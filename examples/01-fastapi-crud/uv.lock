@@ -334,7 +334,7 @@ wheels = [
 ]
 
 [[package]]
-name = "velox-example-fastapi-crud"
+name = "voci-example-fastapi-crud"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
@@ -343,7 +343,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic", extra = ["email"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "velox-test" },
+    { name = "voci-test" },
 ]
 
 [package.metadata]
@@ -353,11 +353,11 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.9" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
-    { name = "velox-test", editable = "../../" },
+    { name = "voci-test", editable = "../../" },
 ]
 
 [[package]]
-name = "velox-test"
+name = "voci-test"
 source = { editable = "../../" }
 
 [package.metadata]

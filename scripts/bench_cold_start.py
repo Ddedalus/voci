@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assert the assertion-rewrite cold/warm ratio stays within budget (spec/07 §5).
 
-velox is benchmarked cold in CI containers, and the whole cold-start argument rests on two
+voci is benchmarked cold in CI containers, and the whole cold-start argument rests on two
 measured numbers (R§2): rewriting costs ~4.6x a plain compile, and loading the cached pyc is
 ~154x faster than that. If the cache ever stops being load-bearing — a botched cache key, a
 probe that silently fails, a codegen change that inflates the AST pass — every run quietly
@@ -27,8 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from velox._assertions._vendor import rewrite as vendored  # noqa: E402
-from velox._assertions._vendor._shim import Config  # noqa: E402
+from voci._assertions._vendor import rewrite as vendored  # noqa: E402
+from voci._assertions._vendor._shim import Config  # noqa: E402
 
 #: Warm load must be at least this many times faster than a cold rewrite. Measured at ~154x;
 #: an order of magnitude of headroom, because the claim being defended is "the cache is
@@ -107,7 +107,7 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=REPEATS)
     args = parser.parse_args()
 
-    tmp = Path(tempfile.mkdtemp(prefix="velox-bench-"))
+    tmp = Path(tempfile.mkdtemp(prefix="voci-bench-"))
     try:
         path = tmp / "test_generated.py"
         source = _generate(path, args.asserts)

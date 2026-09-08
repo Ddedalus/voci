@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-vendor pytest's assertion subsystem into `velox/_assertions/_vendor/`.
+"""Re-vendor pytest's assertion subsystem into `voci/_assertions/_vendor/`.
 
 Run this, not a manual copy. Re-vendoring is a deliberate act (spec/07 §1), and the whole
 argument for vendoring rather than reimplementing is that the diff stays small and mechanical:
@@ -8,7 +8,7 @@ this script *is* the coupling-point list, and it fails loudly when an edit no lo
     uv run python scripts/vendor_assertion.py
 
 Reads `oss/pytest/` (the submodule), writes the vendored tree plus
-`velox/_assertions/_vendor/VENDOR.md`.
+`voci/_assertions/_vendor/VENDOR.md`.
 Vendored files are kept byte-identical to upstream apart from the edits recorded here
 (spec/07 Q17), so `diff` against a fresh pytest checkout stays readable.
 """
@@ -25,14 +25,14 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PYTEST_SRC = REPO / "oss" / "pytest" / "src" / "_pytest"
-DST = REPO / "velox" / "_assertions" / "_vendor"
-VENDOR_MD = REPO / "velox" / "_assertions" / "VENDOR.md"
+DST = REPO / "voci" / "_assertions" / "_vendor"
+VENDOR_MD = REPO / "voci" / "_assertions" / "VENDOR.md"
 
-VENDOR_PKG = "velox._assertions._vendor"
+VENDOR_PKG = "voci._assertions._vendor"
 
 # Upstream file -> vendored module name. `_pytest/assertion/__init__.py` is deliberately absent:
-# it is pytest's plugin glue (hooks, config wiring), which velox replaces with
-# `velox/_assertions/rewrite.py`.
+# it is pytest's plugin glue (hooks, config wiring), which voci replaces with
+# `voci/_assertions/rewrite.py`.
 FILES = {
     "assertion/rewrite.py": "rewrite.py",
     "assertion/util.py": "util.py",
@@ -50,7 +50,7 @@ FILES = {
 }
 
 # Every `_pytest.*` module the vendored files import, and where it resolves to here. Modules
-# mapped to `_shim` are the ones velox reimplements in ~130 LOC rather than vendoring.
+# mapped to `_shim` are the ones voci reimplements in ~130 LOC rather than vendoring.
 MODULE_MAP = {
     "_pytest._io.saferepr": f"{VENDOR_PKG}.saferepr",
     "_pytest._io.pprint": f"{VENDOR_PKG}._pprint",
@@ -162,7 +162,7 @@ def build_edits(v: Vendorer) -> None:
     v.edit(
         "rewrite.py",
         "TYPE_CHECKING: AssertionState from the shim",
-        "velox does not vendor pytest's assertion plugin glue",
+        "voci does not vendor pytest's assertion plugin glue",
         "if TYPE_CHECKING:\n    from _pytest.assertion import AssertionState",
         f"if TYPE_CHECKING:\n    from {VENDOR_PKG}._shim import AssertionState",
     )
@@ -171,20 +171,20 @@ def build_edits(v: Vendorer) -> None:
     v.edit(
         "rewrite.py",
         "injected helper-module name",
-        "upstream bakes '_pytest.assertion.rewrite' into every generated pyc; a velox pyc "
+        "upstream bakes '_pytest.assertion.rewrite' into every generated pyc; a voci pyc "
         "that imports pytest's rewriter at exec time would be both wrong and a hidden dep",
         '                "_pytest.assertion.rewrite",',
         f'                "{VENDOR_PKG}.rewrite",',
     )
     v.edit(
         "rewrite.py",
-        "pyc tag carries a velox rewriter revision",
-        "so a change to velox's vendored codegen invalidates stale pycs, not just a CPython "
+        "pyc tag carries a voci rewriter revision",
+        "so a change to voci's vendored codegen invalidates stale pycs, not just a CPython "
         "magic-number bump",
         "# pytest caches rewritten pycs in pycache dirs\n"
         'PYTEST_TAG = f"{sys.implementation.cache_tag}-pytest-{version}"',
-        "# velox caches rewritten pycs in its own cache dir (see get_cache_dir below).\n"
-        "# `version` comes from the shim and embeds VELOX_REWRITER_REVISION (spec/07 §4.2).\n"
+        "# voci caches rewritten pycs in its own cache dir (see get_cache_dir below).\n"
+        "# `version` comes from the shim and embeds VOCI_REWRITER_REVISION (spec/07 §4.2).\n"
         'PYTEST_TAG = f"{sys.implementation.cache_tag}-{version}"',
     )
     v.edit(
@@ -193,9 +193,9 @@ def build_edits(v: Vendorer) -> None:
         "pytest's enable_assertion_pass_hook is a documented footgun precisely because it "
         "changes codegen but not the cache key (spec/07 §4.2)",
         "        self.session: Session | None = None\n",
-        "        # velox: every option that changes generated code must be in the cache key,\n"
+        "        # voci: every option that changes generated code must be in the cache key,\n"
         "        # or a flag flip silently reuses pycs built under the old codegen.\n"
-        "        self._pyc_tail = _velox_pyc_tail(config)\n"
+        "        self._pyc_tail = _voci_pyc_tail(config)\n"
         "        self.session: Session | None = None\n",
     )
     v.edit(
@@ -208,7 +208,7 @@ def build_edits(v: Vendorer) -> None:
     v.edit(
         "rewrite.py",
         "temp pyc keyed on (pid, thread)",
-        "velox runs tests concurrently in one process; two threads importing different test "
+        "voci runs tests concurrently in one process; two threads importing different test "
         "modules would otherwise race on the same temp file name (spec/07 §4.2)",
         '    proc_pyc = f"{pyc}.{os.getpid()}"',
         '    proc_pyc = f"{pyc}.{os.getpid()}.{threading.get_ident()}"',
@@ -223,7 +223,7 @@ def build_edits(v: Vendorer) -> None:
         "        # which might result in infinite recursion (#3506)\n"
         "        self._writing_pyc = False\n",
         "        # Guard against rewriting a pyc while already writing one, which would recurse\n"
-        "        # (#3506). velox: thread-local, because the guard is per-call-stack, plus a real\n"
+        "        # (#3506). voci: thread-local, because the guard is per-call-stack, plus a real\n"
         "        # lock so concurrent writers serialise instead of interleaving.\n"
         "        self._writing_pyc = threading.local()\n"
         "        self._pyc_write_lock = threading.Lock()\n",
@@ -253,11 +253,11 @@ def build_edits(v: Vendorer) -> None:
     )
     v.edit(
         "rewrite.py",
-        "get_cache_dir honours velox's resolved cache root",
-        "velox resolves and probes one cache root at startup (spec/07 §5) rather than "
+        "get_cache_dir honours voci's resolved cache root",
+        "voci resolves and probes one cache root at startup (spec/07 §5) rather than "
         "scattering pycs into every source tree",
         "    if sys.pycache_prefix:",
-        "    root = _velox_cache_root\n"
+        "    root = _voci_cache_root\n"
         "    if root is not None:\n"
         "        return root / Path(*file_path.parts[1:-1])\n"
         "    if sys.pycache_prefix:",
@@ -267,7 +267,7 @@ def build_edits(v: Vendorer) -> None:
     v.edit(
         "rewrite.py",
         "_warn_already_imported without pytest's config-time warning plumbing",
-        "issue_config_time_warning is pytest plugin machinery velox does not have",
+        "issue_config_time_warning is pytest plugin machinery voci does not have",
         "        from _pytest.warning_types import PytestAssertRewriteWarning\n\n"
         "        self.config.issue_config_time_warning(\n"
         "            PytestAssertRewriteWarning(\n"
@@ -278,7 +278,7 @@ def build_edits(v: Vendorer) -> None:
         "        import warnings\n\n"
         "        warnings.warn(\n"
         '            f"Module already imported so cannot be rewritten; {name}",\n'
-        "            VeloxAssertRewriteWarning,\n"
+        "            VociAssertRewriteWarning,\n"
         "            stacklevel=5,\n"
         "        )",
     )
@@ -297,25 +297,25 @@ def build_edits(v: Vendorer) -> None:
         "                PytestAssertRewriteWarning(\n"
         '                    "assertion is always true, perhaps remove parentheses?"\n'
         "                ),",
-        "                VeloxAssertRewriteWarning(\n"
+        "                VociAssertRewriteWarning(\n"
         '                    "assertion is always true, perhaps remove parentheses?"\n'
         "                ),",
     )
 
-    # --------------------------------------------------------- rewrite.py: fresh velox block
+    # --------------------------------------------------------- rewrite.py: fresh voci block
     v.edit(
         "rewrite.py",
-        "velox support block (cache root, pyc tail, warning type)",
+        "voci support block (cache root, pyc tail, warning type)",
         "fresh code, appended near the top so the rest of the file can reference it",
         "# Special marker that denotes we have just left a scope definition\n",
-        VELOX_BLOCK + "\n# Special marker that denotes we have just left a scope definition\n",
+        VOCI_BLOCK + "\n# Special marker that denotes we have just left a scope definition\n",
     )
 
-    # ---------------------------------------------------------- _compare_any.py: velox.approx
+    # ---------------------------------------------------------- _compare_any.py: voci.approx
     v.edit(
         "_compare_any.py",
-        "velox's Approx, with an optional _repr_compare",
-        "velox ships its own approx (spec/07 §8); the MVP one is scalars-only and has no "
+        "voci's Approx, with an optional _repr_compare",
+        "voci ships its own approx (spec/07 §8); the MVP one is scalars-only and has no "
         "detailed diff to offer, so the summary line has to stand on its own",
         "        from _pytest.approx import Approx\n"
         "\n"
@@ -324,21 +324,21 @@ def build_edits(v: Vendorer) -> None:
         "            yield from right._repr_compare(left)\n"
         "        elif isinstance(left, Approx):\n"
         "            yield from left._repr_compare(right)\n",
-        "        from velox._assertions.approx import Approx\n"
+        "        from voci._assertions.approx import Approx\n"
         "\n"
         "        # Although the common order should be obtained == approx(...), allow both ways.\n"
-        "        # velox: _repr_compare is optional; a scalar approx has no diff worth showing.\n"
+        "        # voci: _repr_compare is optional; a scalar approx has no diff worth showing.\n"
         "        if isinstance(right, Approx):\n"
-        "            yield from _velox_approx_compare(right, left)\n"
+        "            yield from _voci_approx_compare(right, left)\n"
         "        elif isinstance(left, Approx):\n"
-        "            yield from _velox_approx_compare(left, right)\n",
+        "            yield from _voci_approx_compare(left, right)\n",
     )
     v.edit(
         "_compare_any.py",
-        "_velox_approx_compare helper",
+        "_voci_approx_compare helper",
         "fresh, so the branch above stays readable",
         "def _compare_eq_any(\n",
-        "def _velox_approx_compare(approx: object, other: object) -> Iterator[str]:\n"
+        "def _voci_approx_compare(approx: object, other: object) -> Iterator[str]:\n"
         '    """Detailed lines for an approx comparison, if this Approx can produce any."""\n'
         '    repr_compare = getattr(approx, "_repr_compare", None)\n'
         "    if repr_compare is None:\n"
@@ -386,40 +386,40 @@ def build_edits(v: Vendorer) -> None:
     )
     v.edit(
         "util.py",
-        "velox naming in the repr-failure message",
+        "voci naming in the repr-failure message",
         "the string is user-visible; it should not say 'pytest_assertion plugin'",
         '            f"(pytest_assertion plugin: representation of details failed: {repr_crash}."',
-        '            f"(velox: representation of details failed: {repr_crash}."',
+        '            f"(voci: representation of details failed: {repr_crash}."',
     )
 
 
 # Fresh code inserted into rewrite.py. Kept as one labelled block so the upstream diff stays
 # one hunk rather than being sprinkled through the file.
-VELOX_BLOCK = '''
-# --------------------------------------------------------------------------- velox additions
-class VeloxAssertRewriteWarning(UserWarning):
+VOCI_BLOCK = '''
+# --------------------------------------------------------------------------- voci additions
+class VociAssertRewriteWarning(UserWarning):
     """Warned when a module could not be rewritten, or an assert looks always-true."""
 
 
-#: Set by velox._assertions.rewrite once the cache root has been resolved and probed (spec/07 §5).
+#: Set by voci._assertions.rewrite once the cache root has been resolved and probed (spec/07 §5).
 #: None means "fall back to sys.pycache_prefix / __pycache__", i.e. upstream behaviour.
-_velox_cache_root: Path | None = None
+_voci_cache_root: Path | None = None
 
 #: Config options that change generated code, and so must be part of the pyc cache key.
 #: Adding a codegen flag without adding it here is exactly pytest's documented footgun.
-VELOX_CODEGEN_OPTIONS = ("enable_assertion_pass_hook",)
+VOCI_CODEGEN_OPTIONS = ("enable_assertion_pass_hook",)
 
 
 def set_cache_root(root: Path | None) -> None:
     """Point the pyc cache at `root`, or back at upstream behaviour with None."""
-    global _velox_cache_root
-    _velox_cache_root = root
+    global _voci_cache_root
+    _voci_cache_root = root
 
 
-def _velox_pyc_tail(config: Config) -> str:
+def _voci_pyc_tail(config: Config) -> str:
     """The pyc filename suffix for `config`, keyed on every codegen-affecting option."""
     parts = []
-    for name in VELOX_CODEGEN_OPTIONS:
+    for name in VOCI_CODEGEN_OPTIONS:
         try:
             value = config.getini(name)
         except (ValueError, KeyError):
@@ -432,18 +432,18 @@ def _velox_pyc_tail(config: Config) -> str:
 '''
 
 UTIL_CONTEXTVAR_BLOCK = """\
-# velox: upstream these were plain module globals that pytest save/restored around each test
-# item — the one genuine concurrency blocker in this subsystem, since velox runs tests as
+# voci: upstream these were plain module globals that pytest save/restored around each test
+# item — the one genuine concurrency blocker in this subsystem, since voci runs tests as
 # concurrent asyncio tasks sharing a process (spec/07 §4.1). They are ContextVars now, read
 # through a PEP 562 module __getattr__ so the vendored rewriter's `util._reprcompare` lookups
 # are untouched. Do NOT assign to these names: a real global would shadow __getattr__ and
-# silently restore the old, unsafe behaviour. Use velox._assertions.state instead.
-from velox._assertions.state import CONTEXT_GLOBALS as _velox_context_globals
+# silently restore the old, unsafe behaviour. Use voci._assertions.state instead.
+from voci._assertions.state import CONTEXT_GLOBALS as _voci_context_globals
 
 
 def __getattr__(name: str) -> object:
     try:
-        var = _velox_context_globals[name]
+        var = _voci_context_globals[name]
     except KeyError:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
     return var.get()
@@ -568,8 +568,8 @@ def render_vendor_md(v: Vendorer, commit: str, generated: dict[str, str]) -> str
         lines.append(f"| `{out_name}` | `_pytest/{rel}` | {n} |")
     lines += [
         "",
-        "Not vendored: `_pytest/assertion/__init__.py` (pytest's plugin glue). velox's equivalent",
-        "is `velox/_assertions/rewrite.py`. Everything pytest-specific those files imported is",
+        "Not vendored: `_pytest/assertion/__init__.py` (pytest's plugin glue). voci's equivalent",
+        "is `voci/_assertions/rewrite.py`. Everything pytest-specific those files imported is",
         "replaced by",
         f"`{DST.relative_to(REPO)}/_shim.py` (~130 LOC, hand-written).",
         "",

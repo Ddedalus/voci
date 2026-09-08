@@ -52,11 +52,11 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages
       - run: uv run pyrefly check
-      - run: uv run pyrefly check --progress-bar no velox-migrate/velox_migrate velox-migrate/scripts velox-migrate/tests
+      - run: uv run pyrefly check --progress-bar no voci-migrate/voci_migrate voci-migrate/scripts voci-migrate/tests
 
   test:
     # Both supported interpreters, because they disagree about annotations: 3.14 computes them
-    # lazily (PEP 649) and hands `velox._di.fixtures` source text where 3.13 hands it objects,
+    # lazily (PEP 649) and hands `voci._di.fixtures` source text where 3.13 hands it objects,
     # so each version exercises a different half of the injection scan. `recipes/py.just`'s
     # `supported` is the same list for local runs, and has to be edited alongside both matrices
     # here -- this workflow calls uv directly, so it can't read the list from just.
@@ -77,12 +77,12 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages
       - run: uv run pytest
-      - run: uv run pytest velox-migrate/tests
+      - run: uv run pytest voci-migrate/tests
 
   coverage:
-    # A real suite measured the way a user's project measures one: `coverage run -m velox`, over
-    # an example that includes `@velox.isolated` tests, with no combine step in between.
-    name: Coverage (coverage run -m velox)
+    # A real suite measured the way a user's project measures one: `coverage run -m voci`, over
+    # an example that includes `@voci.isolated` tests, with no combine step in between.
+    name: Coverage (coverage run -m voci)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -96,13 +96,13 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages
         working-directory: .
-      # `--project` because the example is a project of its own, with no velox in its
+      # `--project` because the example is a project of its own, with no voci in its
       # dependencies -- the environment to run it from is the repository's.
-      - run: uv run --project ../.. coverage run --source=relay -m velox
+      - run: uv run --project ../.. coverage run --source=relay -m voci
       - run: uv run --project ../.. coverage report -m --fail-under=95
 
   corpus-check:
-    name: Corpus check (velox-migrate)
+    name: Corpus check (voci-migrate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages
-      - run: uv run python velox-migrate/scripts/refresh_corpus_dumps.py --check
+      - run: uv run python voci-migrate/scripts/refresh_corpus_dumps.py --check
 
   vendor-check:
     name: Vendor check (pytest submodule)

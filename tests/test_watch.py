@@ -1,4 +1,4 @@
-"""Tests for `velox._watch`: the `--watch` poll loop, driven by a fake `sleep` and a stub
+"""Tests for `voci._watch`: the `--watch` poll loop, driven by a fake `sleep` and a stub
 `run_once` instead of real time or a real subprocess -- see each test's own docstring for what
 its fake `sleep` is standing in for.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from velox import _watch
+from voci import _watch
 
 
 def _run_once_recording(

@@ -1,0 +1,90 @@
+"""voci: a fast, concurrent test runner for fully-async Python codebases.
+
+This is the whole public surface — everything else is private and may move. It exports
+dependency injection (`fixture`, `Depends`, `Scope`, `use`), marks for selecting and shaping tests
+(`skip`, `xfail`, `parametrize`, `tag`, `filterwarnings`, ...), runtime skip/fail signals
+(`Skipped`, `Failed`), built-in fixtures (`tmp_path`, `capture`, `log_records`, `test_info`),
+and assertion helpers (`raises`, `approx`).
+"""
+
+# First, and before the imports below: on a platform that can't report its own process
+# start time, `PROCESS_START` falls back to the instant this line runs, and the cost of
+# importing the rest of the package should land inside a reported run, not before it.
+from voci import _wallclock as _wallclock
+from voci._assertions.approx import Approx, approx
+from voci._assertions.raises import ExceptionInfo, raises
+from voci._builtins.fixtures import (
+    Capture,
+    LegacyPath,
+    LegacyTmpPathFactory,
+    LogRecords,
+    TestInfo,
+    TmpPathFactory,
+    capture,
+    log_records,
+    test_info,
+    tmp_path,
+    tmp_path_factory,
+    tmpdir,
+    tmpdir_factory,
+)
+from voci._collection.requires import use
+from voci._di.fixtures import Depends, Fixture, Scope, fixture
+from voci._marks import (
+    MarkDecorator,
+    ParamCase,
+    case,
+    filterwarnings,
+    isolated,
+    parametrize,
+    skip,
+    skipif,
+    solo,
+    tag,
+    timeout,
+    xfail,
+)
+from voci._outcomes import Failed, Skipped
+from voci._version import __version__
+
+# Grouped by purpose above (DI, marks, built-in fixtures, assertions) but sorted alphabetically
+# here. Everything capitalized is a type you may need to name in an annotation.
+__all__ = [
+    "Approx",
+    "Capture",
+    "Depends",
+    "ExceptionInfo",
+    "Failed",
+    "Fixture",
+    "LegacyPath",
+    "LegacyTmpPathFactory",
+    "LogRecords",
+    "MarkDecorator",
+    "ParamCase",
+    "Scope",
+    "Skipped",
+    "TestInfo",
+    "TmpPathFactory",
+    "__version__",
+    "approx",
+    "capture",
+    "case",
+    "filterwarnings",
+    "fixture",
+    "isolated",
+    "log_records",
+    "parametrize",
+    "raises",
+    "skip",
+    "skipif",
+    "solo",
+    "tag",
+    "test_info",
+    "timeout",
+    "tmp_path",
+    "tmp_path_factory",
+    "tmpdir",
+    "tmpdir_factory",
+    "use",
+    "xfail",
+]

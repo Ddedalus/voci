@@ -26,7 +26,7 @@ what "failed" means, and a reader with two lines of counts in front of them has 
 one is the answer.
 
 **Zero counts are left out.** A category prints only when it has something to report, so a clean
-run's totals carry the four or five numbers that describe it rather than every bucket velox knows
+run's totals carry the four or five numbers that describe it rather than every bucket voci knows
 about. What survives is the line's real job: the totals a reader checks at a glance, and — on a run
 with failures — a line above it holding nothing but what went wrong.
 

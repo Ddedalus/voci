@@ -49,7 +49,7 @@ Four isolation mechanisms replace process isolation (R§5):
 3. **Transactional DB isolation as the documented default** — SAVEPOINT-per-test rollback, or a
    connection-per-test on the shared engine. This is a docs-and-recipes deliverable, not code, but
    it is load-bearing for the whole model and belongs in the reference stack guide.
-4. **`@velox.isolated`** → run in a subprocess on a fresh loop, for tests touching signals, loop
+4. **`@voci.isolated`** → run in a subprocess on a fresh loop, for tests touching signals, loop
    policy, `chdir`, C-level patching, or other process globals. The documented answer to "my test is
    weird", instead of degrading everyone else's model.
 
@@ -73,7 +73,7 @@ Gantt view) possible later.
 ## 4. Outcomes
 
 A real enum, not pytest's `hasattr(report, "wasxfail")` hack (checked in five files, purely for
-plugin back-compat velox doesn't owe) — R§5:
+plugin back-compat voci doesn't owe) — R§5:
 
 ```
 passed | failed | error | skipped | xfailed | xpassed | interrupted | timeout
@@ -84,7 +84,7 @@ passed | failed | error | skipped | xfailed | xpassed | interrupted | timeout
 | `passed` | Call succeeded | 0 |
 | `failed` | Call raised (incl. `AssertionError`) | 1 |
 | `error` | Setup or teardown raised | 1 |
-| `skipped` | `skip`/`skipif`/runtime `velox.skip()` | 0 |
+| `skipped` | `skip`/`skipif`/runtime `voci.skip()` | 0 |
 | `xfailed` | Expected failure, and it failed | 0 |
 | `xpassed` | Expected failure, but passed. Fails the run under `strict=True` | 0 / 1 |
 | `interrupted` | Cancelled by `--maxfail`, Ctrl-C, or a session-level abort | 2 |
@@ -96,11 +96,11 @@ the sync-blocking case ([11](11-runtime-safety.md)) — R§8.7.
 
 ## 5. Silent-pass eliminations
 
-Three cases where pytest can report green on a broken test. Each is a failure in velox (I8):
+Three cases where pytest can report green on a broken test. Each is a failure in voci (I8):
 
 1. **Un-awaited coroutine.** pytest's only async extension point is a `trylast` hook that plugins
    race to win; when the ordering goes wrong the coroutine is never awaited and the test *passes*
-   silently (R§5). velox: a `RuntimeWarning: coroutine ... was never awaited` raised during a test
+   silently (R§5). voci: a `RuntimeWarning: coroutine ... was never awaited` raised during a test
    fails that test, attributed via the capture ContextVar.
 2. **Non-`None` return from a test.** Error, with the returned value's repr.
 3. **Leaked task in the TaskGroup.** Failure, with the leaked coroutine's definition site.
@@ -144,7 +144,7 @@ class TestResult:
 ```
 
 JSON-round-trippable from day one (I4) — it is what makes `--isolated`, `--report-json`, a future
-multi-process mode, and velox's own tests possible. Retrofitting this forced xdist's `Repr*` tree
+multi-process mode, and voci's own tests possible. Retrofitting this forced xdist's `Repr*` tree
 into pytest core, the cautionary tale (R§8.8).
 
 ## 9. MVP
@@ -155,7 +155,7 @@ cancellation with shielded teardown; sync tests via the executor; the serializab
 
 ## 10. Roadmap
 
-- `@velox.isolated` subprocess tier: fork/spawn a worker, run one test, ship back a `TestResult` as
+- `@voci.isolated` subprocess tier: fork/spawn a worker, run one test, ship back a `TestResult` as
   JSON. Cheap *because* of I4.
 - `--isolated-all` for diagnosing a suite.
 - Concurrency visualization from the timing data (Gantt in the JSON report / an HTML view).

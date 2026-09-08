@@ -10,10 +10,10 @@ from typing import cast
 import pytest
 from _support import run_async as run
 
-import velox
-from velox import Depends
-from velox._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for
-from velox._di.runtime import ScopeStore, _construct, key_for, setup, teardown
+import voci
+from voci import Depends
+from voci._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for
+from voci._di.runtime import ScopeStore, _construct, key_for, setup, teardown
 
 #: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
 #: `BuiltinContext` it requires is never actually consulted -- a fixed placeholder suffices.
@@ -35,7 +35,7 @@ def test_acquire_single_flight_construction_runs_body_once_sequentially() -> Non
             return "value", None
 
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("k",)
         v1 = await store.acquire(key, "session", fx, build)
         v2 = await store.acquire(key, "session", fx, build)
@@ -58,7 +58,7 @@ def test_acquire_single_flight_construction_runs_body_once_under_concurrency() -
             return "value", None
 
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("k",)
         return await asyncio.gather(
             store.acquire(key, "session", fx, build),
@@ -90,7 +90,7 @@ def test_acquire_reserves_the_waiters_refcount_before_the_constructor_can_releas
             return "value", closer
 
         store = ScopeStore()
-        fx = velox.fixture(scope="module")(lambda: None)
+        fx = voci.fixture(scope="module")(lambda: None)
         key: tuple[object, ...] = ("module", 1, "m")
 
         async def constructor() -> object:
@@ -141,7 +141,7 @@ def test_non_session_scope_tears_down_when_refcount_reaches_zero(scope: str) -> 
             return "v", closer
 
         store = ScopeStore()
-        fx = velox.fixture()(lambda: None)
+        fx = voci.fixture()(lambda: None)
         key = (scope_, 1, "test1")
         await store.acquire(key, scope_, fx, build)
         await store.acquire(key, scope_, fx, build)  # refcount -> 2
@@ -164,7 +164,7 @@ def test_session_scope_never_tears_down_through_release_only_aclose() -> None:
             return "v", closer
 
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("session", 1)
         await store.acquire(key, "session", fx, build)
         await store.release(key)
@@ -198,7 +198,7 @@ def test_release_after_a_failed_build_is_a_no_op_and_the_exception_stays_cached(
             raise RuntimeError("never built")
 
         store = ScopeStore()
-        fx = velox.fixture()(lambda: None)
+        fx = voci.fixture()(lambda: None)
         key = ("function", 1, "t")
 
         with pytest.raises(RuntimeError) as first:
@@ -217,7 +217,7 @@ def test_release_after_a_failed_build_is_a_no_op_and_the_exception_stays_cached(
 
 
 def test_a_cancelled_construction_is_not_cached_and_the_next_acquire_rebuilds() -> None:
-    """A `build()` cancelled out from under its requester -- a `@velox.timeout` budget expiring,
+    """A `build()` cancelled out from under its requester -- a `@voci.timeout` budget expiring,
     `--maxfail`, a Ctrl-C -- says nothing about the fixture, so it must not be cached the way a
     genuine failure is. Caching it would make one test's deadline every later test's
     `CancelledError` for the rest of the run."""
@@ -225,7 +225,7 @@ def test_a_cancelled_construction_is_not_cached_and_the_next_acquire_rebuilds() 
 
     async def scenario() -> object:
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("session", 1, None)
 
         async def build():
@@ -256,7 +256,7 @@ def test_a_requester_parked_on_a_cancelled_construction_rebuilds_rather_than_inh
 
     async def scenario() -> object:
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("session", 1, None)
 
         async def build():
@@ -287,7 +287,7 @@ def test_cancelling_one_waiter_leaves_the_shared_construction_intact_for_everyon
 
     async def scenario() -> tuple[object, object, int]:
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         key = ("session", 1, None)
 
         async def build():
@@ -318,7 +318,7 @@ def test_cancelling_one_waiter_leaves_the_shared_construction_intact_for_everyon
 def test_broken_session_fixture_fails_every_dependent_with_the_same_exception_built_once() -> None:
     calls: list[int] = []
 
-    @velox.fixture(scope="session")
+    @voci.fixture(scope="session")
     def broken() -> int:
         calls.append(1)
         raise RuntimeError("boom")
@@ -351,12 +351,12 @@ def test_broken_session_fixture_fails_every_dependent_with_the_same_exception_bu
 def test_teardown_order_is_dependent_before_dependency() -> None:
     order: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def fx_a():
         yield "a"
         order.append("teardown_a")
 
-    @velox.fixture()
+    @voci.fixture()
     def fx_b(a: str = Depends(fx_a)):
         yield "b"
         order.append("teardown_b")
@@ -380,17 +380,17 @@ def test_partial_setup_failure_releases_what_was_already_acquired_in_reverse_ord
     reverse (b before a), the same inversion `teardown` gives on the success path."""
     released: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def fx_a():
         yield "a"
         released.append("a")
 
-    @velox.fixture()
+    @voci.fixture()
     def fx_b():
         yield "b"
         released.append("b")
 
-    @velox.fixture()
+    @voci.fixture()
     def fx_c():
         raise RuntimeError("c broke")
 
@@ -434,7 +434,7 @@ def test_teardown_raises_a_group_when_multiple_releases_fail() -> None:
 
     async def scenario() -> BaseExceptionGroup:
         store = ScopeStore()
-        fx = velox.fixture()(lambda: None)
+        fx = voci.fixture()(lambda: None)
         key_a, key_b = ("function", 1, "a"), ("function", 1, "b")
         await store.acquire(key_a, "function", fx, _build_a)
         await store.acquire(key_b, "function", fx, _build_b)
@@ -448,7 +448,7 @@ def test_teardown_raises_a_group_when_multiple_releases_fail() -> None:
 
 
 def test_teardown_folds_a_skipped_or_failed_closer_into_the_group_too() -> None:
-    """`velox.Skipped`/`velox.Failed` are `BaseException`s, not `Exception`s -- like the
+    """`voci.Skipped`/`voci.Failed` are `BaseException`s, not `Exception`s -- like the
     `KeyboardInterrupt`/`SystemExit`/`CancelledError` this loop's `except Exception` is
     deliberately narrowed to let through unfolded. Unlike those three, a closer raising one is an
     ordinary teardown failure, not an interrupt: it must still fold into the group, and the
@@ -456,13 +456,13 @@ def test_teardown_folds_a_skipped_or_failed_closer_into_the_group_too() -> None:
 
     async def _build_skips():
         async def closer() -> None:
-            raise velox.Skipped("skip boom")
+            raise voci.Skipped("skip boom")
 
         return "skips", closer
 
     async def scenario() -> BaseExceptionGroup:
         store = ScopeStore()
-        fx = velox.fixture()(lambda: None)
+        fx = voci.fixture()(lambda: None)
         key_a, key_b = ("function", 1, "a"), ("function", 1, "skips")
         await store.acquire(key_a, "function", fx, _build_a)
         await store.acquire(key_b, "function", fx, _build_skips)
@@ -481,7 +481,7 @@ def test_aclose_raises_a_group_when_multiple_session_closers_fail() -> None:
 
     async def scenario() -> BaseExceptionGroup:
         store = ScopeStore()
-        fx = velox.fixture(scope="session")(lambda: None)
+        fx = voci.fixture(scope="session")(lambda: None)
         await store.acquire(("session", 1), "session", fx, _build_a)
         await store.acquire(("session", 2), "session", fx, _build_b)
 
@@ -499,7 +499,7 @@ def test_aclose_raises_a_group_when_multiple_session_closers_fail() -> None:
 
 
 def test_sync_generator_yielding_twice_raises_naming_the_fixture() -> None:
-    @velox.fixture(name="bad_sync_gen")
+    @voci.fixture(name="bad_sync_gen")
     def bad():
         yield 1
         yield 2
@@ -515,7 +515,7 @@ def test_sync_generator_yielding_twice_raises_naming_the_fixture() -> None:
 
 
 def test_async_generator_yielding_twice_raises_naming_the_fixture() -> None:
-    @velox.fixture(name="bad_async_gen")
+    @voci.fixture(name="bad_async_gen")
     async def bad():
         yield 1
         yield 2
@@ -537,20 +537,20 @@ def test_async_generator_yielding_twice_raises_naming_the_fixture() -> None:
 def test_all_four_fixture_shapes_construct_and_tear_down() -> None:
     torn_down: list[str] = []
 
-    @velox.fixture()
+    @voci.fixture()
     def sync_fn() -> str:
         return "sync_fn"
 
-    @velox.fixture()
+    @voci.fixture()
     async def async_fn() -> str:
         return "async_fn"
 
-    @velox.fixture()
+    @voci.fixture()
     def sync_gen():
         yield "sync_gen"
         torn_down.append("sync_gen")
 
-    @velox.fixture()
+    @voci.fixture()
     async def async_gen():
         yield "async_gen"
         torn_down.append("async_gen")
@@ -582,7 +582,7 @@ def test_all_four_fixture_shapes_construct_and_tear_down() -> None:
 def test_call_scope_fixture_never_shares_an_instance_across_two_depends_sites() -> None:
     built: list[object] = []
 
-    @velox.fixture(scope="call")
+    @voci.fixture(scope="call")
     def token() -> object:
         obj = object()
         built.append(obj)
@@ -613,7 +613,7 @@ def test_generator_teardown_failure_is_the_users_exception_not_masked_by_gen_clo
     `finally: gen.close()` unconditionally, and that must not swallow or replace the user's own
     exception with something from the close path."""
 
-    @velox.fixture(name="flaky_teardown")
+    @voci.fixture(name="flaky_teardown")
     def flaky():
         yield 1
         raise RuntimeError("teardown boom")
@@ -635,7 +635,7 @@ def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
     async def _resolve() -> str:
         return "resolved"
 
-    @velox.fixture()
+    @voci.fixture()
     def returns_awaitable():
         return _resolve()
 
@@ -649,7 +649,7 @@ def test_sync_function_fixture_returning_an_awaitable_is_awaited() -> None:
 
 def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() -> None:
     """Two `key_for` calls for the same `(fixture, step_id)` never collide."""
-    fx: Fixture[object] = velox.fixture(scope="call")(lambda: object())
+    fx: Fixture[object] = voci.fixture(scope="call")(lambda: object())
     k1 = key_for(fx, 0, test_id="t", module_path="m")
     k2 = key_for(fx, 0, test_id="t", module_path="m")
     assert k1 != k2
@@ -660,7 +660,7 @@ def test_key_for_call_scope_is_unique_per_resolution_even_for_the_same_step() ->
 
 
 def test_setup_passes_the_chosen_case_value_as_the_param_kwarg() -> None:
-    @velox.fixture(params=["sqlite", "postgres"])
+    @voci.fixture(params=["sqlite", "postgres"])
     def backend(param: str) -> str:
         return f"backend={param}"
 
@@ -685,7 +685,7 @@ def test_setup_builds_a_distinct_module_scope_instance_per_case() -> None:
     every test in the module that picks the same case -- not one shared instance across cases."""
     built: list[str] = []
 
-    @velox.fixture(scope="module", params=["a", "b"])
+    @voci.fixture(scope="module", params=["a", "b"])
     def backend(param: str) -> str:
         built.append(param)
         return param
@@ -716,15 +716,15 @@ def test_setup_never_shares_a_construction_across_two_independent_parametrized_f
     combination of their cases."""
     built: list[tuple[str, int]] = []
 
-    @velox.fixture(scope="module", params=["a", "b"])
+    @voci.fixture(scope="module", params=["a", "b"])
     def left(param: str) -> str:
         return param
 
-    @velox.fixture(scope="module", params=[1, 2])
+    @voci.fixture(scope="module", params=[1, 2])
     def right(param: int) -> int:
         return param
 
-    @velox.fixture(scope="module")
+    @voci.fixture(scope="module")
     def combined(x: str = Depends(left), y: int = Depends(right)) -> str:
         built.append((x, y))
         return f"{x}-{y}"

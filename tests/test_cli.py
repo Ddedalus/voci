@@ -1,4 +1,4 @@
-"""Tests for `velox.cli`: argument parsing, usage errors, config merging, and `main`
+"""Tests for `voci.cli`: argument parsing, usage errors, config merging, and `main`
 end to end (discover -> collect -> run -> report -> exit code).
 """
 
@@ -15,17 +15,17 @@ import pytest
 from _support import Project
 from _support import make_record as _record
 
-from velox import __version__
-from velox._assertions import rewrite as _rewrite
-from velox._cache import LastRun
-from velox._cache import load as _load_cache
-from velox._collection import collect as _collect_module
-from velox._collection import discovery as _discovery
-from velox._collection.collect import CollectionError, CollectionResult
-from velox._config import Config
-from velox._run.run import Outcome
-from velox._run.run import TestResult as Result
-from velox.cli import (
+from voci import __version__
+from voci._assertions import rewrite as _rewrite
+from voci._cache import LastRun
+from voci._cache import load as _load_cache
+from voci._collection import collect as _collect_module
+from voci._collection import discovery as _discovery
+from voci._collection.collect import CollectionError, CollectionResult
+from voci._config import Config
+from voci._run.run import Outcome
+from voci._run.run import TestResult as Result
+from voci.cli import (
     _default_test_roots,
     _friendly_path,
     _installed_session,
@@ -72,24 +72,24 @@ def test_main_all_passing_exits_zero(project: Project) -> None:
 
 
 def test_main_runs_a_suite_wired_with_annotated_injections(project: Project) -> None:
-    """The annotated spelling, end to end and in the hardest module velox has to read one in:
+    """The annotated spelling, end to end and in the hardest module voci has to read one in:
     annotations stringified by `from __future__ import annotations`, a type that exists only
     under `TYPE_CHECKING`, an alias, a fixture declaring its own dependency the same way, and
-    `@velox.parametrize` supplying a parameter that now *follows* an injected one with no
+    `@voci.parametrize` supplying a parameter that now *follows* an injected one with no
     default — the signature shape the default-position form could never produce.
     """
     project.write(
         "test_sample.py",
         "from __future__ import annotations\n\n"
         "from typing import TYPE_CHECKING, Annotated\n\n"
-        "import velox\n"
-        "from velox import Depends\n\n"
+        "import voci\n"
+        "from voci import Depends\n\n"
         "if TYPE_CHECKING:\n"
         "    from decimal import Decimal\n\n"
-        "@velox.fixture()\n"
+        "@voci.fixture()\n"
         "def base() -> int:\n"
         "    return 2\n\n"
-        "@velox.fixture()\n"
+        "@voci.fixture()\n"
         "def doubled(value: Annotated[int, Depends(base)]) -> int:\n"
         "    return value * 2\n\n"
         "type Doubled = Annotated[int, Depends(doubled)]\n\n"
@@ -97,7 +97,7 @@ def test_main_runs_a_suite_wired_with_annotated_injections(project: Project) -> 
         "    assert value == 4\n\n"
         "async def test_unresolvable_type(value: Annotated[Decimal, Depends(doubled)]) -> None:\n"
         "    assert value == 4\n\n"
-        "@velox.parametrize('expected', [4])\n"
+        "@voci.parametrize('expected', [4])\n"
         "async def test_before_a_parametrized_argument(\n"
         "    value: Annotated[int, Depends(doubled)], expected: int\n"
         ") -> None:\n"
@@ -145,8 +145,8 @@ def test_a_bare_run_in_a_subdirectory_does_not_widen_to_the_whole_suite(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """rootdir climbs to the `pyproject.toml` so the run cache and the ids are stable, but the
-    *selection* must not climb with it: a bare `velox` inside `tests/unit` still means the tests
-    there. Only a `[tool.velox]` table -- a deliberate statement about where the suite lives --
+    *selection* must not climb with it: a bare `voci` inside `tests/unit` still means the tests
+    there. Only a `[tool.voci]` table -- a deliberate statement about where the suite lives --
     anchors the built-in default tier at the rootdir instead.
     """
     project.write_pyproject("[project]\nname = 'demo'\n")
@@ -211,11 +211,11 @@ def test_main_reports_a_setup_failure_as_error_not_failed(
     summary's `errored` bucket."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.fixture()\n"
+        "import voci\n\n"
+        "@voci.fixture()\n"
         "def broken():\n"
         "    raise RuntimeError('setup boom')\n\n"
-        "async def test_needs_it(value: int = velox.Depends(broken)):\n"
+        "async def test_needs_it(value: int = voci.Depends(broken)):\n"
         "    pass\n",
     )
 
@@ -281,12 +281,12 @@ def test_main_reports_a_timeout_as_its_own_outcome(
 def test_main_reports_a_skipped_test_and_still_exits_zero(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A `@velox.skip`-marked test must neither run for real nor fail the build over being
+    """A `@voci.skip`-marked test must neither run for real nor fail the build over being
     skipped -- `skipped` contributes `0` to the exit code, same as `passed`."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n",
     )
@@ -303,8 +303,8 @@ def test_main_reports_a_skipped_tests_reason_under_dash_v(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n",
     )
@@ -323,8 +323,8 @@ def test_main_leading_test_count_includes_skipped(
     `len(results)` alone would undercount by the skipped tests it never sees."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n\n"
         "async def test_runs():\n"
@@ -369,8 +369,8 @@ def test_main_dash_m_runs_only_matching_tags_and_reports_the_rest_deselected(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.tag('slow')\n"
+        "import voci\n\n"
+        "@voci.tag('slow')\n"
         "async def test_slow():\n"
         "    pass\n\n"
         "async def test_fast():\n"
@@ -421,9 +421,9 @@ def test_main_dash_m_never_reclassifies_a_skip_marked_test_as_deselected(
     and the exit code must not depend on whether `-m` happened to also exclude it."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.tag('slow')\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.tag('slow')\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n",
     )
@@ -444,7 +444,7 @@ def test_main_without_dash_m_never_deselects(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n\n@velox.tag('slow')\nasync def test_slow():\n    pass\n",
+        "import voci\n\n@voci.tag('slow')\nasync def test_slow():\n    pass\n",
     )
 
     status = main([str(project.root)])
@@ -494,7 +494,7 @@ def test_main_prints_the_config_path_relative_to_cwd(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The absolute form is noise when the file is right there under cwd."""
-    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write_pyproject("[tool.voci]\n")
     chdir_project.write_passing_test()
 
     assert main([]) == 0
@@ -527,45 +527,45 @@ def test_friendly_path_goes_absolute_past_the_up_hop_budget(
     assert _friendly_path(far) == str(far)
 
 
-def test_main_applies_tool_velox_env_before_the_first_test_import(
+def test_main_applies_tool_voci_env_before_the_first_test_import(
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`env` from config is applied before the first test module import -- a test module
     reading `os.environ` at import time (not just inside a test body) must already see it."""
-    monkeypatch.delenv("VELOX_CONFIG_SMOKE", raising=False)
-    chdir_project.write_pyproject("[tool.velox]\nenv = { VELOX_CONFIG_SMOKE = 'from-config' }\n")
+    monkeypatch.delenv("VOCI_CONFIG_SMOKE", raising=False)
+    chdir_project.write_pyproject("[tool.voci]\nenv = { VOCI_CONFIG_SMOKE = 'from-config' }\n")
     chdir_project.write(
         "tests/test_env.py",
         "import os\n"
-        "assert os.environ['VELOX_CONFIG_SMOKE'] == 'from-config'  # import time\n\n"
+        "assert os.environ['VOCI_CONFIG_SMOKE'] == 'from-config'  # import time\n\n"
         "async def test_sees_it():\n"
-        "    assert os.environ['VELOX_CONFIG_SMOKE'] == 'from-config'\n",
+        "    assert os.environ['VOCI_CONFIG_SMOKE'] == 'from-config'\n",
     )
 
     assert main([]) == 0
 
 
-def test_main_restores_tool_velox_env_after_the_run(
+def test_main_restores_tool_voci_env_after_the_run(
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`[tool.velox] env` must not leak from one `main` call into the next -- covers both a key
+    """`[tool.voci] env` must not leak from one `main` call into the next -- covers both a key
     that already existed (restored to its old value) and one that didn't (removed again)."""
-    monkeypatch.setenv("VELOX_CONFIG_PREEXISTING", "original")
-    monkeypatch.delenv("VELOX_CONFIG_NEW", raising=False)
+    monkeypatch.setenv("VOCI_CONFIG_PREEXISTING", "original")
+    monkeypatch.delenv("VOCI_CONFIG_NEW", raising=False)
     chdir_project.write_pyproject(
-        "[tool.velox]\n"
-        "env = { VELOX_CONFIG_PREEXISTING = 'overridden', VELOX_CONFIG_NEW = 'added' }\n"
+        "[tool.voci]\n"
+        "env = { VOCI_CONFIG_PREEXISTING = 'overridden', VOCI_CONFIG_NEW = 'added' }\n"
     )
     chdir_project.write_passing_test()
 
     assert main([]) == 0
 
-    assert os.environ["VELOX_CONFIG_PREEXISTING"] == "original"
-    assert "VELOX_CONFIG_NEW" not in os.environ
+    assert os.environ["VOCI_CONFIG_PREEXISTING"] == "original"
+    assert "VOCI_CONFIG_NEW" not in os.environ
 
 
 def test_main_config_testpaths_is_used_when_no_paths_are_given(chdir_project: Project) -> None:
-    chdir_project.write_pyproject("[tool.velox]\ntestpaths = ['suite']\n")
+    chdir_project.write_pyproject("[tool.voci]\ntestpaths = ['suite']\n")
     chdir_project.write("suite/test_it.py", "async def test_it():\n    pass\n")
     # A `tests/` dir also exists, empty -- proves `testpaths` wins over the built-in default,
     # not just that `suite/` happens to be found some other way.
@@ -581,7 +581,7 @@ def test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default(
 ) -> None:
     """`testpaths = []` must not be treated the same as "unset" and silently fall back to
     `_default_test_roots`."""
-    chdir_project.write_pyproject("[tool.velox]\ntestpaths = []\n")
+    chdir_project.write_pyproject("[tool.voci]\ntestpaths = []\n")
     chdir_project.write("tests/test_it.py", "async def test_it():\n    pass\n")
 
     assert main([]) == 5  # no tests collected, not "1 passed"
@@ -590,10 +590,10 @@ def test_main_empty_config_testpaths_means_no_tests_not_the_built_in_default(
 def test_main_cli_concurrency_overrides_config(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`[tool.velox] concurrency = 0` would be a usage error if it were ever consulted -- passing
+    """`[tool.voci] concurrency = 0` would be a usage error if it were ever consulted -- passing
     `--concurrency=2` on the command line must win instead of the merge falling through to the
-    bad config value: CLI flags take priority over `[tool.velox]`."""
-    chdir_project.write_pyproject("[tool.velox]\nconcurrency = 0\n")
+    bad config value: CLI flags take priority over `[tool.voci]`."""
+    chdir_project.write_pyproject("[tool.voci]\nconcurrency = 0\n")
     chdir_project.write_passing_test()
 
     assert main(["--concurrency=2"]) == 0
@@ -602,10 +602,10 @@ def test_main_cli_concurrency_overrides_config(
 def test_main_rejects_a_bad_config_concurrency_value_as_a_usage_error(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Named by its actual source (the `pyproject.toml` `[tool.velox]` set it in), not
+    """Named by its actual source (the `pyproject.toml` `[tool.voci]` set it in), not
     `--concurrency` -- the user never touched that flag, and a message pointing at it would send
     them looking in the wrong place."""
-    chdir_project.write_pyproject("[tool.velox]\nconcurrency = 0\n")
+    chdir_project.write_pyproject("[tool.voci]\nconcurrency = 0\n")
     chdir_project.write_passing_test()
 
     status = main([])
@@ -620,7 +620,7 @@ def test_main_rejects_a_bad_config_concurrency_value_as_a_usage_error(
 def test_main_rejects_a_bad_config_timeout_value_as_a_usage_error(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\ntimeout = -1\n")
+    chdir_project.write_pyproject("[tool.voci]\ntimeout = -1\n")
     chdir_project.write_passing_test()
 
     status = main([])
@@ -636,7 +636,7 @@ def test_main_config_test_file_patterns_empty_list_means_no_files_not_the_built_
 ) -> None:
     """`test_file_patterns = []` must not be treated the same as "unset" and silently fall
     back to the built-in `test_*.py` pattern."""
-    chdir_project.write_pyproject("[tool.velox]\ntest_file_patterns = []\n")
+    chdir_project.write_pyproject("[tool.voci]\ntest_file_patterns = []\n")
     chdir_project.write("test_ok.py", "async def test_ok():\n    raise AssertionError\n")
 
     assert main([]) == 5  # no tests collected, not "1 failed"
@@ -645,9 +645,9 @@ def test_main_config_test_file_patterns_empty_list_means_no_files_not_the_built_
 def test_main_nonexistent_config_testpath_entry_is_a_usage_error(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A typo'd `[tool.velox] testpaths` entry is a usage error (exit 4), not a silent
+    """A typo'd `[tool.voci] testpaths` entry is a usage error (exit 4), not a silent
     "0 tests"."""
-    chdir_project.write_pyproject("[tool.velox]\ntestpaths = ['tset']\n")
+    chdir_project.write_pyproject("[tool.voci]\ntestpaths = ['tset']\n")
     chdir_project.write("tests/test_it.py", "async def test_it():\n    pass\n")
 
     status = main([])
@@ -661,26 +661,26 @@ def test_main_env_is_restored_even_when_rewrite_install_fails_after_it_is_applie
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The `env` mutation happens inside the same `try` the restore guards, so even an
-    exception from `_rewrite.install` itself must still be undone -- not leak `[tool.velox]
+    exception from `_rewrite.install` itself must still be undone -- not leak `[tool.voci]
     env` into the process."""
-    monkeypatch.delenv("VELOX_CONFIG_INSTALL_FAILS", raising=False)
-    chdir_project.write_pyproject("[tool.velox]\nenv = { VELOX_CONFIG_INSTALL_FAILS = 'leaked' }\n")
+    monkeypatch.delenv("VOCI_CONFIG_INSTALL_FAILS", raising=False)
+    chdir_project.write_pyproject("[tool.voci]\nenv = { VOCI_CONFIG_INSTALL_FAILS = 'leaked' }\n")
     chdir_project.write_passing_test()
     monkeypatch.setattr(
-        "velox._assertions.rewrite.install",
+        "voci._assertions.rewrite.install",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated install failure")),
     )
 
     with pytest.raises(RuntimeError, match="simulated install failure"):
         main([])
 
-    assert "VELOX_CONFIG_INSTALL_FAILS" not in os.environ
+    assert "VOCI_CONFIG_INSTALL_FAILS" not in os.environ
 
 
-def test_main_rejects_an_invalid_tool_velox_table_as_a_usage_error(
+def test_main_rejects_an_invalid_tool_voci_table_as_a_usage_error(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\nnot_a_real_key = 1\n")
+    chdir_project.write_pyproject("[tool.voci]\nnot_a_real_key = 1\n")
 
     status = main([])
 
@@ -692,7 +692,7 @@ def test_main_config_test_file_patterns_and_ignore_are_honored(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     chdir_project.write_pyproject(
-        "[tool.velox]\ntest_file_patterns = ['check_*.py']\nignore = ['skip_me']\n"
+        "[tool.voci]\ntest_file_patterns = ['check_*.py']\nignore = ['skip_me']\n"
     )
     chdir_project.write("check_one.py", "async def test_one():\n    pass\n")
     # Would normally match the built-in `test_*.py` pattern -- must be ignored now that
@@ -811,7 +811,7 @@ def test_main_does_not_disturb_a_preexisting_sys_path_entry_for_rootdir(
     assert rootdir_str in sys.path
 
 
-# @velox.isolated: the per-test subprocess tier, end to end (each of these actually spawns a
+# @voci.isolated: the per-test subprocess tier, end to end (each of these actually spawns a
 # subprocess -- slower than the rest of this file by construction, not a bug).
 # -----------------------------------------------------------------------------------------
 
@@ -819,7 +819,7 @@ def test_main_does_not_disturb_a_preexisting_sys_path_entry_for_rootdir(
 def test_main_runs_a_passing_isolated_test(project: Project) -> None:
     project.write(
         "test_iso.py",
-        "import velox\n\n@velox.isolated\nasync def test_ok():\n    assert 1 + 1 == 2\n",
+        "import voci\n\n@voci.isolated\nasync def test_ok():\n    assert 1 + 1 == 2\n",
     )
     assert main([str(project.root)]) == 0
 
@@ -835,8 +835,8 @@ def test_isolated_test_runs_in_a_different_process(
     monkeypatch.setenv("ISO_TEST_PARENT_PID", str(os.getpid()))
     project.write(
         "test_iso.py",
-        "import os\nimport velox\n\n"
-        "@velox.isolated\n"
+        "import os\nimport voci\n\n"
+        "@voci.isolated\n"
         "async def test_elsewhere():\n"
         "    assert os.getpid() != int(os.environ['ISO_TEST_PARENT_PID'])\n",
     )
@@ -848,8 +848,8 @@ def test_main_reports_a_failing_isolated_test_with_assertion_introspection(
 ) -> None:
     project.write(
         "test_iso.py",
-        "import velox\n\n"
-        "@velox.isolated\n"
+        "import voci\n\n"
+        "@voci.isolated\n"
         "async def test_bad():\n"
         "    x = 2\n"
         "    y = 3\n"
@@ -870,8 +870,8 @@ def test_main_shows_captured_output_for_a_failing_isolated_test(
 ) -> None:
     project.write(
         "test_iso.py",
-        "import velox\n\n"
-        "@velox.isolated\n"
+        "import voci\n\n"
+        "@voci.isolated\n"
         "async def test_bad():\n"
         "    print('from the subprocess')\n"
         "    assert False\n",
@@ -888,9 +888,9 @@ def test_isolated_test_gets_a_working_tmp_path(project: Project) -> None:
     project.write(
         "test_iso.py",
         "from pathlib import Path\n"
-        "import velox\n\n"
-        "@velox.isolated\n"
-        "async def test_writes_a_file(tmp_path: Path = velox.Depends(velox.tmp_path)):\n"
+        "import voci\n\n"
+        "@voci.isolated\n"
+        "async def test_writes_a_file(tmp_path: Path = voci.Depends(voci.tmp_path)):\n"
         "    (tmp_path / 'f.txt').write_text('hi')\n"
         "    assert (tmp_path / 'f.txt').read_text() == 'hi'\n",
     )
@@ -902,12 +902,12 @@ def test_main_mixes_isolated_and_in_process_tests_in_one_run(
 ) -> None:
     project.write(
         "test_mixed.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "async def test_in_process_pass():\n    pass\n\n"
         "async def test_in_process_fail():\n    assert False\n\n"
-        "@velox.isolated\n"
+        "@voci.isolated\n"
         "async def test_isolated_pass():\n    pass\n\n"
-        "@velox.isolated\n"
+        "@voci.isolated\n"
         "async def test_isolated_fail():\n    assert False\n",
     )
 
@@ -926,9 +926,9 @@ def _write_selection_suite(project: Project) -> None:
     serves every selection, ordering and early-stop assertion below."""
     project.write(
         "test_users.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "async def test_create():\n    pass\n\n"
-        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "@voci.parametrize('role', ['admin', 'guest'])\n"
         "async def test_role(role):\n    pass\n\n"
         "class TestDelete:\n"
         "    async def test_soft(self):\n        pass\n",
@@ -1040,9 +1040,9 @@ def test_main_an_id_leaves_a_skipped_test_it_does_not_name_out_of_the_run(
     of the answer, and is not counted in the run either."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "async def test_wanted():\n    pass\n\n"
-        "@velox.skip('later')\n"
+        "@voci.skip('later')\n"
         "async def test_other():\n    pass\n",
     )
 
@@ -1059,9 +1059,9 @@ def test_main_k_leaves_a_skipped_test_it_does_not_match_out_of_the_run(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n\n"
+        "import voci\n\n"
         "async def test_wanted():\n    pass\n\n"
-        "@velox.skip('later')\n"
+        "@voci.skip('later')\n"
         "async def test_other():\n    pass\n",
     )
 
@@ -1080,9 +1080,9 @@ def test_main_an_id_naming_a_case_of_a_skipped_test_reports_the_skip(
     case selector has to reach it -- the alternative is calling a real test id a typo."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('later')\n"
-        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "import voci\n\n"
+        "@voci.skip('later')\n"
+        "@voci.parametrize('role', ['admin', 'guest'])\n"
         "async def test_role(role):\n    pass\n",
     )
 
@@ -1101,9 +1101,9 @@ def test_main_k_matches_a_skipped_test_by_the_id_it_has(
     still unbuilt -- so a term naming the test finds it, and one naming a case does not."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('later')\n"
-        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "import voci\n\n"
+        "@voci.skip('later')\n"
+        "@voci.parametrize('role', ['admin', 'guest'])\n"
         "async def test_role(role):\n    pass\n",
     )
 
@@ -1120,9 +1120,9 @@ def test_main_an_id_naming_a_case_of_a_test_dash_m_excluded_is_an_empty_run(
     never spelled out anywhere -- and naming it is an empty intersection, not a typo."""
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.tag('slow')\n"
-        "@velox.parametrize('role', ['admin', 'guest'])\n"
+        "import voci\n\n"
+        "@voci.tag('slow')\n"
+        "@voci.parametrize('role', ['admin', 'guest'])\n"
         "async def test_role(role):\n    pass\n",
     )
 
@@ -1268,7 +1268,7 @@ def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
 ) -> None:
     """The round trip `--collect-only` exists for: an id it printed, pasted back as an argument
     from wherever the reader happens to be standing."""
-    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write_pyproject("[tool.voci]\n")
     chdir_project.write("tests/test_sample.py", "async def test_one():\n    pass\n")
     assert main(["--collect-only"]) == 0
     printed = capsys.readouterr().out.splitlines()[-2]
@@ -1282,7 +1282,7 @@ def test_main_takes_a_collect_only_id_back_as_an_argument_from_a_subdirectory(
     assert "1 test · 1 passed" in out
 
 
-def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table_or_a_git_root(
+def test_main_leaves_a_missing_path_alone_without_a_tool_voci_table_or_a_git_root(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """With no config file and no `.git` boundary either, there's no fixed rootdir to
@@ -1297,10 +1297,10 @@ def test_main_leaves_a_missing_path_alone_without_a_tool_velox_table_or_a_git_ro
     assert "path does not exist: 'test_b.py'" in capsys.readouterr().err
 
 
-def test_main_rereads_a_missing_path_against_the_git_root_without_a_tool_velox_table(
+def test_main_rereads_a_missing_path_against_the_git_root_without_a_tool_voci_table(
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """No `[tool.velox]` table still leaves the enclosing `.git` directory as a fixed rootdir,
+    """No `[tool.voci]` table still leaves the enclosing `.git` directory as a fixed rootdir,
     so an argument typed from a subdirectory is re-read against it just the same."""
     (chdir_project.root / ".git").mkdir()
     chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
@@ -1319,7 +1319,7 @@ def test_main_prefers_the_local_reading_of_a_path_that_exists(
 ) -> None:
     """The rootdir reading is the fallback, not the rule: an argument that names something from
     here means that, whatever the same spelling would name under the rootdir."""
-    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write_pyproject("[tool.voci]\n")
     chdir_project.write("tests/test_sample.py", "async def test_root_level():\n    pass\n")
     chdir_project.write("tests/tests/test_sample.py", "async def test_nested():\n    pass\n")
 
@@ -1360,7 +1360,7 @@ def test_co_json_prints_one_json_object_with_id_path_and_lineno(
 
     assert status == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["runner"] == "velox"
+    assert report["runner"] == "voci"
     assert report["rootpath"] == str(project.root)
     assert report["tests"] == [
         {"id": "test_sample.py::test_one", "path": "test_sample.py", "lineno": 1},
@@ -1389,8 +1389,8 @@ def test_co_json_reports_a_skip_with_its_path_and_reason(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n\n"
-        "@velox.skip('not ready')\n"
+        "import voci\n\n"
+        "@voci.skip('not ready')\n"
         "async def test_skipped():\n"
         "    raise AssertionError('must not run')\n",
     )
@@ -1472,7 +1472,7 @@ def test_co_json_answers_from_the_index_without_reimporting(
     def _boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("collect() should not run when the index answers")
 
-    monkeypatch.setattr("velox._collection.collect.collect", _boom)
+    monkeypatch.setattr("voci._collection.collect.collect", _boom)
     assert main([str(project.root), "--co-json"]) == 0
     assert json.loads(capsys.readouterr().out) == warm
 
@@ -1674,7 +1674,7 @@ def test_main_report_json_writes_one_record_per_test(project: Project, tmp_path:
 
     assert status == 1
     report = json.loads(out.read_text())
-    assert report["runner"] == "velox"
+    assert report["runner"] == "voci"
     assert report["exit_status"] == 1
     assert report["collection_errors"] == []
     tests = {entry["id"]: entry for entry in report["tests"]}
@@ -1694,7 +1694,7 @@ def test_main_report_json_includes_skip_marked_tests(project: Project, tmp_path:
     not merely missing a duration, but absent from the file."""
     project.write(
         "test_sample.py",
-        "import velox\n\n@velox.skip('not ready')\nasync def test_skipped():\n    pass\n",
+        "import voci\n\n@voci.skip('not ready')\nasync def test_skipped():\n    pass\n",
     )
     out = tmp_path / "report.json"
 
@@ -1746,9 +1746,9 @@ def test_main_runs_class_grouped_tests_end_to_end(
 ) -> None:
     project.write(
         "test_sample.py",
-        "import velox\n"
-        "from velox import Depends\n\n"
-        "@velox.fixture()\n"
+        "import voci\n"
+        "from voci import Depends\n\n"
+        "@voci.fixture()\n"
         "async def number() -> int:\n    return 7\n\n"
         "class TestGroup:\n"
         "    async def test_injected(self, n: int = Depends(number)):\n"
@@ -1790,7 +1790,7 @@ def test_loop_watchdog_zero_switches_the_watchdog_off(project: Project) -> None:
 def test_a_bad_configured_loop_watchdog_names_the_config_file(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\nloop_watchdog = -3\n")
+    chdir_project.write_pyproject("[tool.voci]\nloop_watchdog = -3\n")
     chdir_project.write_passing_test()
 
     status = main([])
@@ -1820,14 +1820,14 @@ def test_maxfail_reports_the_tests_it_cancelled(
 
 @pytest.mark.skipif(
     threading.current_thread() is not threading.main_thread(),
-    reason="velox only takes SIGINT on the main thread",
+    reason="voci only takes SIGINT on the main thread",
 )
 def test_a_ctrl_c_exits_two_and_still_prints_the_report(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Exit code 2 rather than whatever the finished tests added up to: an interrupted run
     never reached a verdict, and a Ctrl-C reading as success in CI would be worse than
-    useless. The signal is sent from inside a test body, so it can only land while velox's own
+    useless. The signal is sent from inside a test body, so it can only land while voci's own
     handler is installed."""
     project.write(
         "test_sample.py",
@@ -1899,7 +1899,7 @@ def test_dash_w_error_fails_the_test_that_raised_the_warning(
 def test_dash_w_outranks_configured_filterwarnings(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['ignore::DeprecationWarning']\n")
+    chdir_project.write_pyproject("[tool.voci]\nfilterwarnings = ['ignore::DeprecationWarning']\n")
     chdir_project.write("test_sample.py", _WARNING_SUITE)
 
     status = main(["-W", "error::DeprecationWarning"])
@@ -1911,11 +1911,11 @@ def test_dash_w_outranks_configured_filterwarnings(
 def test_a_filterwarnings_mark_outranks_both(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['error::DeprecationWarning']\n")
+    chdir_project.write_pyproject("[tool.voci]\nfilterwarnings = ['error::DeprecationWarning']\n")
     chdir_project.write(
         "test_sample.py",
-        "import warnings\n\nimport velox\n\n"
-        "@velox.filterwarnings('ignore::DeprecationWarning')\n"
+        "import warnings\n\nimport voci\n\n"
+        "@voci.filterwarnings('ignore::DeprecationWarning')\n"
         "async def test_warns():\n"
         "    warnings.warn('legacy call', DeprecationWarning, stacklevel=1)\n",
     )
@@ -1934,8 +1934,8 @@ def test_a_mark_filter_does_not_reach_a_concurrently_running_test(
     test's `ignore` must not silence a sibling dispatched alongside it."""
     project.write(
         "test_sample.py",
-        "import asyncio\nimport warnings\n\nimport velox\n\n"
-        "@velox.filterwarnings('ignore::DeprecationWarning')\n"
+        "import asyncio\nimport warnings\n\nimport voci\n\n"
+        "@voci.filterwarnings('ignore::DeprecationWarning')\n"
         "async def test_silenced():\n"
         "    for _ in range(50):\n"
         "        warnings.warn('quiet', DeprecationWarning, stacklevel=1)\n"
@@ -2003,7 +2003,7 @@ def test_a_filter_can_name_a_warning_class_the_suite_defines(
     """Resolving a spec's category imports the module holding it, which for one of the suite's
     own only resolves once the rootdir is on `sys.path`."""
     chdir_project.write_pyproject(
-        "[tool.velox]\nfilterwarnings = ['error::myapp.warnings.LegacyWarning']\n"
+        "[tool.voci]\nfilterwarnings = ['error::myapp.warnings.LegacyWarning']\n"
     )
     chdir_project.write("myapp/__init__.py", "")
     chdir_project.write("myapp/warnings.py", "class LegacyWarning(UserWarning): pass\n")
@@ -2023,7 +2023,7 @@ def test_a_filter_can_name_a_warning_class_the_suite_defines(
 def test_a_malformed_configured_filter_names_the_config_file(
     chdir_project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chdir_project.write_pyproject("[tool.velox]\nfilterwarnings = ['shout::UserWarning']\n")
+    chdir_project.write_pyproject("[tool.voci]\nfilterwarnings = ['shout::UserWarning']\n")
     chdir_project.write_passing_test()
 
     status = main([])
@@ -2241,7 +2241,7 @@ def test_collect_only_answers_from_the_index_without_reimporting(
     def _boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("collect() should not run when the index answers")
 
-    monkeypatch.setattr("velox._collection.collect.collect", _boom)
+    monkeypatch.setattr("voci._collection.collect.collect", _boom)
     assert main([str(project.root), "--collect-only"]) == 0
 
 
@@ -2276,7 +2276,7 @@ def test_collect_only_with_a_keyword_filter_still_imports(
         calls.append(None)
         return real_collect(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr("velox._collection.collect.collect", _spy)
+    monkeypatch.setattr("voci._collection.collect.collect", _spy)
     assert main([str(project.root), "--collect-only", "-k", "test_ok"]) == 0
     assert calls
 
@@ -2302,7 +2302,7 @@ def test_a_keyword_filtered_run_does_not_poison_the_index(
 def test_maxfail_keeps_the_failures_it_stopped_short_of(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`velox -x --lf` is the loop --lf exists for, so a run cut short must not report that
+    """`voci -x --lf` is the loop --lf exists for, so a run cut short must not report that
     every test it never reached has stopped failing."""
     project.write(
         "test_a.py",
@@ -2386,14 +2386,14 @@ def test_last_failed_selecting_nothing_does_not_exit_zero(
     which would report a --lf that executed nothing as a green run."""
     project.write(
         "test_a.py",
-        "import velox\n\nasync def test_bad():\n    assert 1 == 2\n\n"
-        "@velox.skip('later')\nasync def test_skipped():\n    pass\n",
+        "import voci\n\nasync def test_bad():\n    assert 1 == 2\n\n"
+        "@voci.skip('later')\nasync def test_skipped():\n    pass\n",
     )
     assert main([str(project.root)]) == 1
     project.write(
         "test_a.py",
-        "import velox\n\nasync def test_renamed():\n    assert 1 == 2\n\n"
-        "@velox.skip('later')\nasync def test_skipped():\n    pass\n",
+        "import voci\n\nasync def test_renamed():\n    assert 1 == 2\n\n"
+        "@voci.skip('later')\nasync def test_skipped():\n    pass\n",
     )
     capsys.readouterr()
 
@@ -2443,14 +2443,14 @@ def test_a_run_over_one_directory_keeps_failures_recorded_elsewhere(
 
 
 def test_a_misplaced_declaration_is_not_recorded_as_an_error_file(project: Project) -> None:
-    """`velox.use(...)` in a module velox never collects is reported by every run that imports
+    """`voci.use(...)` in a module voci never collects is reported by every run that imports
     it, and named by a path discovery does not produce -- an absolute one, or a bare module name.
     Recording it would put a string in the cache no run could settle."""
     project.write(
         "misplaced_helper.py",
-        "import velox\n\n"
-        "@velox.fixture()\nasync def thing() -> int:\n    return 1\n\n"
-        "velox.use(thing)\n",
+        "import voci\n\n"
+        "@voci.fixture()\nasync def thing() -> int:\n    return 1\n\n"
+        "voci.use(thing)\n",
     )
     project.write("test_a.py", "import misplaced_helper\n\nasync def test_ok():\n    pass\n")
 
@@ -2461,7 +2461,7 @@ def test_a_misplaced_declaration_is_not_recorded_as_an_error_file(project: Proje
         # test's run would find this one's helper there and report it against its own project.
         sys.modules.pop("misplaced_helper", None)
 
-    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    recorded = json.loads((project.root / ".voci_cache" / "lastfailed.json").read_text())
     assert recorded["error_files"] == []
 
 
@@ -2473,16 +2473,16 @@ def test_last_failed_settles_the_cases_of_a_test_that_became_skipped(
     recorded `[case]` ids stay in the cache and every later --lf exits 5."""
     project.write(
         "test_a.py",
-        "import velox\n\n"
-        "@velox.parametrize('value', [1, 2])\n"
+        "import voci\n\n"
+        "@voci.parametrize('value', [1, 2])\n"
         "async def test_role(value: int) -> None:\n    assert value == 0\n",
     )
     assert main([str(project.root)]) == 1
     project.write(
         "test_a.py",
-        "import velox\n\n"
-        "@velox.skip('later')\n"
-        "@velox.parametrize('value', [1, 2])\n"
+        "import voci\n\n"
+        "@voci.skip('later')\n"
+        "@voci.parametrize('value', [1, 2])\n"
         "async def test_role(value: int) -> None:\n    assert value == 0\n",
     )
     capsys.readouterr()
@@ -2502,7 +2502,7 @@ def test_a_run_below_a_namespace_dir_does_not_clear_a_broken_package(
     must not report the recorded failure to import it fixed."""
     # Pins rootdir, so both runs below share the one cache rather than the narrower run
     # starting its own next to the directory it was pointed at.
-    project.write_pyproject("[tool.velox]\n")
+    project.write_pyproject("[tool.voci]\n")
     project.write("pkg/__init__.py", "import nosuchmodule\n")
     project.write("pkg/test_b.py", "async def test_y():\n    pass\n")
     # No __init__.py of its own, so collecting it never imports the package above it.
@@ -2511,7 +2511,7 @@ def test_a_run_below_a_namespace_dir_does_not_clear_a_broken_package(
 
     assert main([str(project.root / "pkg" / "sub")]) == 0
 
-    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    recorded = json.loads((project.root / ".voci_cache" / "lastfailed.json").read_text())
     assert recorded["error_files"] == ["pkg/__init__.py"]
 
 
@@ -2519,13 +2519,13 @@ def test_last_failed_does_not_invent_a_misplaced_declaration(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """--lf narrows which files are collected, not which ones are test modules: a
-    `velox.use(...)` in a test module left out of the run is still a declaration in a test
+    `voci.use(...)` in a test module left out of the run is still a declaration in a test
     module, however the run reaches that module."""
     project.write(
         "test_shared.py",
-        "import velox\n\n"
-        "@velox.fixture()\nasync def thing() -> int:\n    return 1\n\n"
-        "velox.use(thing)\n\n"
+        "import voci\n\n"
+        "@voci.fixture()\nasync def thing() -> int:\n    return 1\n\n"
+        "voci.use(thing)\n\n"
         "async def test_shared_ok():\n    pass\n",
     )
     project.write(
@@ -2558,7 +2558,7 @@ def test_a_broken_package_does_not_settle_the_failures_below_it(
     project.write("pkg/__init__.py", "import nosuchmodule\n")
     assert main([str(project.root)]) == 1
 
-    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    recorded = json.loads((project.root / ".voci_cache" / "lastfailed.json").read_text())
     assert "pkg/test_a.py::test_bad" in recorded["failed"]
 
 
@@ -2586,7 +2586,7 @@ def test_a_run_inside_a_package_does_not_declare_it_empty(
 ) -> None:
     """Walking a test-free directory *within* a broken package is not evidence the package holds
     no test -- one sits right beside it."""
-    project.write_pyproject("[tool.velox]\n")
+    project.write_pyproject("[tool.voci]\n")
     project.write("pkg/__init__.py", "import nosuchmodule\n")
     project.write("pkg/other/__init__.py", "")
     project.write("pkg/other/test_x.py", "async def test_x():\n    pass\n")
@@ -2596,7 +2596,7 @@ def test_a_run_inside_a_package_does_not_declare_it_empty(
     assert main([str(project.root / "pkg" / "sub")]) == 5
     capsys.readouterr()
 
-    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    recorded = json.loads((project.root / ".voci_cache" / "lastfailed.json").read_text())
     assert recorded["error_files"] == ["pkg/__init__.py"]
 
 
@@ -2629,7 +2629,7 @@ def test_a_recorded_test_in_a_newly_ignored_directory_stops_being_recorded(
     project.write("legacy/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
     project.write_passing_test()
     assert main([str(project.root)]) == 1
-    project.write_pyproject('[tool.velox]\nignore = ["legacy"]\n')
+    project.write_pyproject('[tool.voci]\nignore = ["legacy"]\n')
 
     assert main([str(project.root)]) == 0
     capsys.readouterr()
@@ -2641,7 +2641,7 @@ def test_a_recorded_test_in_a_newly_ignored_directory_stops_being_recorded(
 def test_one_malformed_test_does_not_strand_a_renamed_sibling(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The file collected fine except for the one bad test, so velox knows its ids in full: a
+    """The file collected fine except for the one bad test, so voci knows its ids in full: a
     recorded failure it no longer holds is settled like any other."""
     project.write(
         "test_a.py",
@@ -2655,7 +2655,7 @@ def test_one_malformed_test_does_not_strand_a_renamed_sibling(
     assert main([str(project.root)]) == 1
     capsys.readouterr()
 
-    recorded = json.loads((project.root / ".velox_cache" / "lastfailed.json").read_text())
+    recorded = json.loads((project.root / ".voci_cache" / "lastfailed.json").read_text())
     assert recorded["failed"] == []
 
 
@@ -2665,7 +2665,7 @@ def test_last_failed_says_when_no_recorded_failure_is_in_the_selection(
     """The recorded failure is real and this run is right not to settle it, but "0 tests" and
     exit 5 on their own read as a suite that collected nothing."""
     # Pins rootdir, so the narrower run reads the cache the first one wrote.
-    project.write_pyproject("[tool.velox]\n")
+    project.write_pyproject("[tool.voci]\n")
     project.write("one/test_a.py", "async def test_bad():\n    assert 1 == 2\n")
     project.write("two/test_b.py", "async def test_ok():\n    pass\n")
     assert main([str(project.root)]) == 1
@@ -2692,13 +2692,13 @@ def test_last_failed_explains_an_empty_selection_under_quiet(
 
 
 def test_collect_only_leaves_the_cache_directory_gitignored(project: Project) -> None:
-    """The rewriter fills the same directory during collection, so a project whose only velox
+    """The rewriter fills the same directory during collection, so a project whose only voci
     invocation is --collect-only must not pick up an untracked one."""
     project.write_passing_test()
 
     assert main([str(project.root), "--collect-only"]) == 0
 
-    gitignore = project.root / ".velox_cache" / ".gitignore"
+    gitignore = project.root / ".voci_cache" / ".gitignore"
     assert gitignore.exists()
     assert gitignore.read_text().endswith("*\n")
 
@@ -2717,7 +2717,7 @@ def test_watch_dispatches_to_the_watch_loop_with_watch_stripped(
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr("velox.cli._watch_run", fake_watch_run)
+    monkeypatch.setattr("voci.cli._watch_run", fake_watch_run)
 
     status = main([str(project.root), "--watch"])
 
@@ -2740,7 +2740,7 @@ def test_watch_does_not_double_apply_an_explicit_last_failed_or_failed_first(
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr("velox.cli._watch_run", fake_watch_run)
+    monkeypatch.setattr("voci.cli._watch_run", fake_watch_run)
 
     main([str(project.root), "--watch", flag])
 
@@ -2761,11 +2761,11 @@ def test_watch_scope_reanchors_a_pasted_back_id_on_the_rootdir(
     chdir_project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A test id `--collect-only`/`--co-json` printed is rootdir-relative -- read literally from
-    some other directory under a project with a [tool.velox] table, it would otherwise name a
+    some other directory under a project with a [tool.voci] table, it would otherwise name a
     path that doesn't exist, which `_watch_scope` would happily watch forever without ever
     seeing the real file's changes (main's own `_reread_on_rootdir` is what saves a real run
     from the same trap)."""
-    chdir_project.write_pyproject("[tool.velox]\n")
+    chdir_project.write_pyproject("[tool.voci]\n")
     chdir_project.write("tests/test_a.py", "async def test_ok():\n    pass\n")
     elsewhere = chdir_project.root / "elsewhere"
     elsewhere.mkdir()
@@ -2778,7 +2778,7 @@ def test_watch_scope_reanchors_a_pasted_back_id_on_the_rootdir(
 
 
 def test_watch_scope_falls_back_to_configured_testpaths(chdir_project: Project) -> None:
-    chdir_project.write_pyproject('[tool.velox]\ntestpaths = ["sub"]\n')
+    chdir_project.write_pyproject('[tool.voci]\ntestpaths = ["sub"]\n')
     chdir_project.write("sub/test_a.py", "async def test_a():\n    pass\n")
     args = build_parser().parse_args(["--watch"])
 
@@ -2797,7 +2797,7 @@ def test_watch_scope_falls_back_to_the_built_in_default(chdir_project: Project) 
 
 
 def test_watch_scope_never_raises_on_a_broken_config(chdir_project: Project) -> None:
-    """A `[tool.velox]` table `main`'s own resolution would reject as a usage error still gives
+    """A `[tool.voci]` table `main`'s own resolution would reject as a usage error still gives
     `--watch` something to poll -- that error, and reporting it, are `main`'s own first run's
     job, not this approximation's."""
     chdir_project.write_pyproject("not valid toml [[[")
@@ -2950,27 +2950,27 @@ def test_settle_keeps_a_still_broken_files_error_recorded(tmp_path: Path) -> Non
 def test_installed_session_installs_and_tears_down_every_piece(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = Config(rootdir=tmp_path, env={"VELOX_TEST_VAR": "1"})
+    config = Config(rootdir=tmp_path, env={"VOCI_TEST_VAR": "1"})
     setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
-    monkeypatch.delenv("VELOX_TEST_VAR", raising=False)
+    monkeypatch.delenv("VOCI_TEST_VAR", raising=False)
     calls: list[str] = []
-    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
-    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: calls.append("install"))
-    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("voci.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("voci.cli._rewrite.install", lambda *a, **k: calls.append("install"))
+    monkeypatch.setattr("voci.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
     monkeypatch.setattr(
-        "velox.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
+        "voci.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
     )
-    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+    monkeypatch.setattr("voci.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
 
     with _installed_session(config, [tmp_path], setup, ()) as problem:
         assert problem is None
         assert str(tmp_path) in sys.path
-        assert os.environ["VELOX_TEST_VAR"] == "1"
+        assert os.environ["VOCI_TEST_VAR"] == "1"
         assert calls == ["install", "warn_install"]
 
     assert calls == ["install", "warn_install", "uninstall", "warn_uninstall"]
     assert str(tmp_path) not in sys.path
-    assert "VELOX_TEST_VAR" not in os.environ
+    assert "VOCI_TEST_VAR" not in os.environ
 
 
 def test_installed_session_leaves_an_enclosing_calls_installs_alone(
@@ -2982,11 +2982,11 @@ def test_installed_session_leaves_an_enclosing_calls_installs_alone(
     config = Config(rootdir=tmp_path)
     setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
     calls: list[str] = []
-    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: object())
-    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: None)
-    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
-    monkeypatch.setattr("velox.cli._warnings.install", lambda *a, **k: False)
-    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+    monkeypatch.setattr("voci.cli._rewrite.installed_hook", lambda: object())
+    monkeypatch.setattr("voci.cli._rewrite.install", lambda *a, **k: None)
+    monkeypatch.setattr("voci.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("voci.cli._warnings.install", lambda *a, **k: False)
+    monkeypatch.setattr("voci.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
 
     with _installed_session(config, [tmp_path], setup, ()):
         pass
@@ -3000,11 +3000,11 @@ def test_installed_session_tears_down_on_an_exception(
     config = Config(rootdir=tmp_path)
     setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
     calls: list[str] = []
-    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
-    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: None)
-    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
-    monkeypatch.setattr("velox.cli._warnings.install", lambda *a, **k: True)
-    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+    monkeypatch.setattr("voci.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("voci.cli._rewrite.install", lambda *a, **k: None)
+    monkeypatch.setattr("voci.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("voci.cli._warnings.install", lambda *a, **k: True)
+    monkeypatch.setattr("voci.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
 
     with (
         pytest.raises(RuntimeError, match="boom"),
@@ -3022,14 +3022,14 @@ def test_installed_session_restores_env_and_sys_path_when_the_hook_probe_itself_
     """`_rewrite.installed_hook()` runs after `os.environ`/`sys.path` are already mutated, so
     it has to be inside the same try/finally that unwinds them -- not before it, where a raise
     here would leave both permanently changed for the rest of the process."""
-    config = Config(rootdir=tmp_path, env={"VELOX_TEST_VAR": "1"})
+    config = Config(rootdir=tmp_path, env={"VOCI_TEST_VAR": "1"})
     setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
-    monkeypatch.delenv("VELOX_TEST_VAR", raising=False)
+    monkeypatch.delenv("VOCI_TEST_VAR", raising=False)
 
     def _boom() -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("velox.cli._rewrite.installed_hook", _boom)
+    monkeypatch.setattr("voci.cli._rewrite.installed_hook", _boom)
 
     with (
         pytest.raises(RuntimeError, match="boom"),
@@ -3038,7 +3038,7 @@ def test_installed_session_restores_env_and_sys_path_when_the_hook_probe_itself_
         pass
 
     assert str(tmp_path) not in sys.path
-    assert "VELOX_TEST_VAR" not in os.environ
+    assert "VOCI_TEST_VAR" not in os.environ
 
 
 def test_installed_session_yields_a_filter_usage_error_and_skips_warnings_install(
@@ -3052,13 +3052,13 @@ def test_installed_session_yields_a_filter_usage_error_and_skips_warnings_instal
     config = Config(rootdir=tmp_path)
     setup = _rewrite.AssertionSetup(mode="plain", cache_dir=None)
     calls: list[str] = []
-    monkeypatch.setattr("velox.cli._rewrite.installed_hook", lambda: None)
-    monkeypatch.setattr("velox.cli._rewrite.install", lambda *a, **k: calls.append("install"))
-    monkeypatch.setattr("velox.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
+    monkeypatch.setattr("voci.cli._rewrite.installed_hook", lambda: None)
+    monkeypatch.setattr("voci.cli._rewrite.install", lambda *a, **k: calls.append("install"))
+    monkeypatch.setattr("voci.cli._rewrite.uninstall", lambda: calls.append("uninstall"))
     monkeypatch.setattr(
-        "velox.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
+        "voci.cli._warnings.install", lambda *a, **k: calls.append("warn_install") or True
     )
-    monkeypatch.setattr("velox.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
+    monkeypatch.setattr("voci.cli._warnings.uninstall", lambda: calls.append("warn_uninstall"))
 
     with _installed_session(config, [tmp_path], setup, ("a:b:c:d:e:f",)) as problem:
         assert problem is not None

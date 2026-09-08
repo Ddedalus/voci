@@ -13,7 +13,7 @@ pending future already failed without awaiting it.
 exception instead of re-running a `build()` that will fail again. Both `release` and `aclose` leave
 failed entries alone. Cleaning them up eagerly looks tidier and is wrong.
 
-**A *cancelled* entry does not.** A `build()` interrupted partway — a `@velox.timeout(...)` budget
+**A *cancelled* entry does not.** A `build()` interrupted partway — a `@voci.timeout(...)` budget
 expiring on whichever test happened to be the one constructing, `--maxfail`, a Ctrl-C — is the one
 failure that says nothing about the fixture. Caching it makes one test's deadline every later
 test's `CancelledError`: a shared `session`-scope fixture is only ever constructed once, so the
@@ -24,7 +24,7 @@ marker never escapes `acquire`, which is the only code that awaits an entry's fu
 
 **Waiters await the entry's future through an `asyncio.shield`.** An entry's future is shared by
 everyone asking for that key, and awaiting it bare makes it the awaiting *task*'s own
-`_fut_waiter` — which `Task.cancel` cancels directly. One waiter's `@velox.timeout` expiring would
+`_fut_waiter` — which `Task.cancel` cancels directly. One waiter's `@voci.timeout` expiring would
 therefore cancel the construction out from under the constructor (whose `set_result` then raises
 `InvalidStateError`) and every other waiter alongside it, from a deadline none of them was given.
 The shield gives each caller a private future to be cancelled instead, so a cancellation reaches
@@ -41,9 +41,9 @@ this method.
 lifetime, and both tear down at end of test. Ranking `"call"` lower would reject valid graphs over a
 caching distinction the check was never meant to police.
 
-**A parametrized fixture's case value has no `request` object to travel through.** velox never
+**A parametrized fixture's case value has no `request` object to travel through.** voci never
 grows one (`_check_missing_injections` has no name-based fallback to hang it off), so `params=`
-reuses the convention `@velox.parametrize` already established: the value arrives as an ordinary
+reuses the convention `@voci.parametrize` already established: the value arrives as an ordinary
 argument, name-matched at collection time rather than injected. Fixing that name to `param`
 instead of letting it be configured per fixture keeps a parametrized fixture's body readable
 without a decorator argument to cross-reference, and keeps `expand_cases` from needing to carry a

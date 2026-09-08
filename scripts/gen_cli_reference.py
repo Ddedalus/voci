@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render `velox --help` into the generated block of `docs/reference/cli.md`.
+"""Render `voci --help` into the generated block of `docs/reference/cli.md`.
 
     uv run python scripts/gen_cli_reference.py            # write
     uv run python scripts/gen_cli_reference.py --check    # fail if stale
@@ -30,7 +30,7 @@ USAGE_WIDTH = 94
 WRAP_WIDTH = 100
 
 # Characters Markdown would read as syntax. Help strings are plain prose written for a terminal --
-# `[tool.velox]`, `*args`, `tmp_path_factory` -- so every one of them reaches the page literally.
+# `[tool.voci]`, `*args`, `tmp_path_factory` -- so every one of them reaches the page literally.
 ESCAPE = "\\`*_[]<>#"
 
 
@@ -74,13 +74,13 @@ def _help(action: argparse.Action) -> str:
     """The action's help text with argparse's own `%(...)s` placeholders filled in."""
     text = " ".join((action.help or "").split())
     params = {key: value for key, value in vars(action).items() if value is not argparse.SUPPRESS}
-    params["prog"] = "velox"
+    params["prog"] = "voci"
     return text % params
 
 
 def render(parser: argparse.ArgumentParser) -> str:
     parser.formatter_class = partial(argparse.HelpFormatter, width=USAGE_WIDTH)
-    lines = [BEGIN, "", "```console", "$ velox --help", parser.format_usage().rstrip(), "```"]
+    lines = [BEGIN, "", "```console", "$ voci --help", parser.format_usage().rstrip(), "```"]
     # argparse exposes its groups only privately. `_group_actions` is the group's own actions;
     # `_actions` on a group is the parser-wide list, which would file every flag under the first
     # heading.
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     args.add_argument("--check", action="store_true", help="Exit 1 if the page is out of date.")
     check = args.parse_args(argv).check
 
-    from velox.cli import build_parser
+    from voci.cli import build_parser
 
     current = PAGE.read_text()
     updated = _splice(current, render(build_parser()))

@@ -10,7 +10,7 @@ None known.
 
 ## Features
 
-### velox-migrate
+### voci-migrate
 `plans/migration-tool-plan.md`
 
 Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by review, in
@@ -22,9 +22,9 @@ Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by
 
 ### Code quality consolidation
 
-Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
+Code review of voci so far, coverage gaps, clean CI, drop fat, identify duplication etc.
 
-Complexity concentrated in a handful of `velox-migrate` functions (line-count + `ruff --select
+Complexity concentrated in a handful of `voci-migrate` functions (line-count + `ruff --select
 C901` sweep, general lint and pyrefly otherwise clean): `plans/complexity-reduction-plan.md`.
 
 ### Reporting
@@ -43,7 +43,7 @@ Held for a design decision rather than for effort. Overriding rewires a graph on
 that cannot see the change: a `scope="session"` fixture two hops downstream of a substitution
 constructs once per override set, with nothing local telling its author so. `params=` on a fixture
 multiplies its dependents the same way, so the question to settle first is how much implicit
-specialization velox wants in total — and whether the answer here is a named specialization object
+specialization voci wants in total — and whether the answer here is a named specialization object
 that keeps the wiring visible at the call site, or nothing at all.
 
 Migration codegen depends on the outcome: with no override mechanism, a translated conftest
@@ -54,11 +54,11 @@ largest single source of hand edits in a migrated suite.
 ## Later
 
 ## Starvation-aware scheduling
-`exclusive=`/`@velox.solo` admission has no fairness guarantee: a
+`exclusive=`/`@voci.solo` admission has no fairness guarantee: a
 steady stream of ordinary tests can keep a waiting solo or exclusive-resource test from ever
 seeing an opening.
 
-## An `@velox.isolated` subprocess has no deadline of its own
+## An `@voci.isolated` subprocess has no deadline of its own
 `--timeout` is handed to the subprocess's own `run_suite` call, which arms it around the test —
 so nothing bounds the time *before* that: interpreter startup, importing the test module, and
 re-collecting it. A module that hangs at import leaves the parent waiting on `communicate()`
@@ -66,7 +66,7 @@ forever, holding that test's admission slot, with no way out but Ctrl-C. Boundin
 parent needs a decision on what the budget covers, since a legitimately slow import (a module
 pulling in a large dependency) must not read as a timed-out test.
 
-* Multi-process execution; `@velox.isolated` is the only subprocess path, though results are erializable so the door stays open.
+* Multi-process execution; `@voci.isolated` is the only subprocess path, though results are erializable so the door stays open.
 * First-class Windows support.
 
 ## trio support

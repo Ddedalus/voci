@@ -31,17 +31,17 @@ which ruff's B008 fires on every route in `app/main.py` — the test suite injec
 ## Commands
 
 ```bash
-velox                     # everything (25 tests), up to 16 at once ([tool.velox] concurrency)
-velox tests/test_users.py # one file
-velox --concurrency 1     # exactly serial — the first debugging step
-velox --timeout 5         # per-test setup+call budget; reported as TIMEOUT, not FAILED
-velox -s                  # live, id-prefixed stdout/stderr instead of captured-on-failure
+voci                     # everything (25 tests), up to 16 at once ([tool.voci] concurrency)
+voci tests/test_users.py # one file
+voci --concurrency 1     # exactly serial — the first debugging step
+voci --timeout 5         # per-test setup+call budget; reported as TIMEOUT, not FAILED
+voci -s                  # live, id-prefixed stdout/stderr instead of captured-on-failure
 ```
 
 ## Expected output
 
 ```
-$ velox
+$ voci
 config: /path/to/examples/01-fastapi-crud/pyproject.toml
 PASS  tests/test_orders.py                       13 tests  Σ 5.11s
 PASS  tests/test_users.py                        12 tests  Σ 2.83s   (2 skipped)
@@ -65,7 +65,7 @@ Each file's `Σ` is the serial cost of the tests in it — 7.94s of test time be
   dependency swapped, for one test, without touching the shared graph everyone else uses.
 - **`tests/fixtures.py::payment_sandbox`** — `exclusive="payments-sandbox"` declared on the
   resource; every test that transitively depends on it inherits the token automatically.
-- **`test_users.py::test_create_user`** — one `@velox.parametrize`d test in place of three
+- **`test_users.py::test_create_user`** — one `@voci.parametrize`d test in place of three
   near-identical functions; each case gets its own id (`test_create_user[bob]`,
   `test_create_user[tag-in-local-part]`, `test_create_user[subdomain]`) and runs concurrently with
   the rest of the suite.

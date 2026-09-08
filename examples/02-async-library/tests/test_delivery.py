@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from relay.client import DeliveryFailed, Relay, backoff_schedule
 from relay.transport import FakeTransport, Response
@@ -51,7 +51,7 @@ async def test_gives_up_after_configured_retries(
     r: Annotated[Relay, Depends(dead_relay)],
     t: Annotated[FakeTransport, Depends(dead_transport)],
 ) -> None:
-    with velox.raises(DeliveryFailed, match="failed after 3 attempts"):
+    with voci.raises(DeliveryFailed, match="failed after 3 attempts"):
         await r.deliver("https://hooks.test/v1", b"doomed")
 
     assert len(t.sent) == 3
@@ -105,7 +105,7 @@ async def test_422_is_never_retried(
 
 async def test_retries_are_logged(
     r: Annotated[Relay, Depends(flaky_relay)],
-    logs: Annotated[velox.LogRecords, Depends(velox.log_records)],
+    logs: Annotated[voci.LogRecords, Depends(voci.log_records)],
 ) -> None:
     """Log records are captured per test via a ContextVar, not by swapping a global handler.
 
@@ -117,20 +117,20 @@ async def test_retries_are_logged(
 
     # `logs.messages` is `record.getMessage()` already applied, aligned index-for-index with
     # `logs.records`. The raw `logging.LogRecord`s in `logs.records` never get a `.message`
-    # attribute set on them, since velox's capture handler never formats a record onto a stream.
+    # attribute set on them, since voci's capture handler never formats a record onto a stream.
     warnings = [rec for rec in logs.records if rec.levelno == logging.WARNING]
     assert len(warnings) == 2
     assert "attempt 1/3" in logs.messages[0]
 
 
-@velox.timeout(5)
+@voci.timeout(5)
 async def test_concurrent_delivery_does_not_serialise(
     r: Annotated[Relay, Depends(relay)],
     t: Annotated[FakeTransport, Depends(transport)],
 ) -> None:
     """Sixteen deliveries with 50ms of latency each finish in well under their serial cost.
 
-    The `@velox.timeout(5)` above is not enforced yet, so this test is held to the suite-wide
+    The `@voci.timeout(5)` above is not enforced yet, so this test is held to the suite-wide
     `--timeout`; the budget it names is what it should get once per-test timeouts land.
     """
     t.latency = 0.05

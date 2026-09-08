@@ -1,4 +1,4 @@
-"""Tests for `velox.fastapi`: concurrent dependency-override and state isolation over one
+"""Tests for `voci.fastapi`: concurrent dependency-override and state isolation over one
 module-level app, plus the upstream facts that isolation depends on -- `scope["app"]` is the
 singleton, the override is read per request, and the ASGI call happens in the caller's
 `contextvars.Context`.
@@ -17,7 +17,7 @@ from _support import run_async as run
 from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 
-from velox import fastapi as velox_fastapi
+from voci import fastapi as voci_fastapi
 
 # One module-level app, exactly as an application writes it, shared by every test in this file.
 app = FastAPI()
@@ -55,7 +55,7 @@ app.state.settings = "base-settings"
 
 
 async def flavor_seen_by(**kwargs: Any) -> str:
-    async with velox_fastapi.client(app, **kwargs) as http:
+    async with voci_fastapi.client(app, **kwargs) as http:
         return (await http.get("/flavor")).json()["flavor"]
 
 
@@ -77,7 +77,7 @@ def test_concurrent_contexts_each_see_their_own_overrides() -> None:
 
         async def untouched() -> str:
             _GATE.set(gate)
-            async with velox_fastapi.client(app) as http:
+            async with voci_fastapi.client(app) as http:
                 return (await http.get("/flavor")).json()["flavor"]
 
         async with asyncio.timeout(10):
@@ -101,7 +101,7 @@ def test_layers_nest_innermost_first() -> None:
     """A `client()` entered inside another stacks; the inner mapping wins, the outer still shows."""
 
     async def main() -> tuple[str, str, str]:
-        async with velox_fastapi.client(app, overrides={flavor: lambda: "outer"}) as outer:
+        async with voci_fastapi.client(app, overrides={flavor: lambda: "outer"}) as outer:
             first = (await outer.get("/flavor")).json()["flavor"]
             inner_seen = await flavor_seen_by(overrides={flavor: lambda: "inner"})
             after = (await outer.get("/flavor")).json()["flavor"]
@@ -114,7 +114,7 @@ def test_a_hand_written_override_stays_inside_the_test() -> None:
     """The idiom from the FastAPI docs, and the teardown it teaches, both kept local."""
 
     async def main() -> tuple[str, str]:
-        async with velox_fastapi.client(app) as http:
+        async with voci_fastapi.client(app) as http:
             app.dependency_overrides[flavor] = lambda: "by hand"
             mine = (await http.get("/flavor")).json()["flavor"]
             app.dependency_overrides.clear()  # the docs' teardown, applied to the local layer
@@ -122,7 +122,7 @@ def test_a_hand_written_override_stays_inside_the_test() -> None:
         return mine, after_clear
 
     assert run(main()) == ("by hand", "base")
-    assert dict(velox_fastapi._install(app).overrides.base) == {}, "the app's own dict is untouched"
+    assert dict(voci_fastapi._install(app).overrides.base) == {}, "the app's own dict is untouched"
 
 
 def test_overrides_read_as_a_mapping() -> None:
@@ -130,7 +130,7 @@ def test_overrides_read_as_a_mapping() -> None:
 
     async def main() -> tuple[bool, int, bool, bool, int]:
         outside = bool(app.dependency_overrides)
-        async with velox_fastapi.client(app, overrides={flavor: lambda: "x"}):
+        async with voci_fastapi.client(app, overrides={flavor: lambda: "x"}):
             return (
                 outside,
                 len(app.dependency_overrides),
@@ -148,7 +148,7 @@ def test_deleting_an_override_this_test_did_not_set_is_refused() -> None:
     other.dependency_overrides[flavor] = lambda: "shipped with the app"
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             with pytest.raises(RuntimeError, match=r"cannot `del app\.dependency_overrides"):
                 del other.dependency_overrides[flavor]
 
@@ -163,7 +163,7 @@ def test_deleting_an_override_this_test_did_not_set_is_refused() -> None:
 def test_concurrent_contexts_each_see_their_own_state() -> None:
     async def main() -> list[str]:
         async def seen(value: str) -> str:
-            async with velox_fastapi.client(app, state={"settings": value}) as http:
+            async with voci_fastapi.client(app, state={"settings": value}) as http:
                 return (await http.get("/settings")).json()["settings"]
 
         return list(await asyncio.gather(seen("left"), seen("right")))
@@ -174,7 +174,7 @@ def test_concurrent_contexts_each_see_their_own_state() -> None:
 
 def test_state_written_inside_a_layer_does_not_escape_it() -> None:
     async def main() -> str:
-        async with velox_fastapi.client(app, state={"settings": "mine"}):
+        async with voci_fastapi.client(app, state={"settings": "mine"}):
             app.state.extra = "scratch"
             assert app.state.extra == "scratch"
             return app.state.settings
@@ -189,7 +189,7 @@ def test_state_falls_through_to_the_app_for_keys_the_layer_lacks() -> None:
     try:
 
         async def main() -> tuple[str, str]:
-            async with velox_fastapi.client(app, state={"settings": "mine"}):
+            async with voci_fastapi.client(app, state={"settings": "mine"}):
                 return app.state.shared, app.state["shared"]
 
         assert run(main()) == ("from the app", "from the app")
@@ -199,7 +199,7 @@ def test_state_falls_through_to_the_app_for_keys_the_layer_lacks() -> None:
 
 def test_state_reports_a_missing_key_as_an_attribute_error() -> None:
     async def main() -> None:
-        async with velox_fastapi.client(app, state={"settings": "mine"}):
+        async with voci_fastapi.client(app, state={"settings": "mine"}):
             with pytest.raises(AttributeError):
                 _ = app.state.nonexistent
 
@@ -215,7 +215,7 @@ def test_concurrent_bare_client_contexts_do_not_leak_state_writes() -> None:
         gate = asyncio.Barrier(2)
 
         async def write(value: str) -> str:
-            async with velox_fastapi.client(other):
+            async with voci_fastapi.client(other):
                 other.state.cache = value
                 await gate.wait()  # both contexts hold their write open at once
                 return other.state.cache
@@ -242,7 +242,7 @@ def test_copy_of_layered_state_is_a_plain_state_with_the_merged_view() -> None:
     other.state.base_value = "from the app"
 
     async def main() -> tuple[str, str, bool]:
-        async with velox_fastapi.client(other, state={"layered": "from the layer"}):
+        async with voci_fastapi.client(other, state={"layered": "from the layer"}):
             copied = copy.copy(other.state)
             return copied.base_value, copied.layered, isinstance(copied, State)
 
@@ -261,7 +261,7 @@ def test_deepcopy_of_layered_state_no_longer_raises() -> None:
     other.state.nested = {"count": 1}
 
     async def main() -> dict[str, Any]:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             copied = copy.deepcopy(other.state)
             other.state.nested["count"] = 2  # mutate the original's dict after copying
             return copied.nested
@@ -272,7 +272,7 @@ def test_deepcopy_of_layered_state_no_longer_raises() -> None:
 def test_bare_new_state_reads_raise_attribute_error_not_recursion_error() -> None:
     """`_LayeredState.__new__` with no `__init__` ever run leaves both `_layers` and `_state`
     unset; an attribute read on it raises a plain `AttributeError`."""
-    bare = velox_fastapi._LayeredState.__new__(velox_fastapi._LayeredState)
+    bare = voci_fastapi._LayeredState.__new__(voci_fastapi._LayeredState)
     with pytest.raises(AttributeError):
         _ = bare.anything
 
@@ -344,7 +344,7 @@ def test_request_app_is_the_module_level_singleton() -> None:
     """
 
     async def main() -> dict[str, Any]:
-        async with velox_fastapi.client(app) as http:
+        async with voci_fastapi.client(app) as http:
             return (await http.get("/canaries")).json()
 
     assert run(main())["is_singleton"] is True
@@ -358,7 +358,7 @@ def test_the_handler_runs_in_the_callers_context() -> None:
 
     async def main() -> dict[str, Any]:
         _MARKER.set("set by the test")
-        async with velox_fastapi.client(app) as http:
+        async with voci_fastapi.client(app) as http:
             return (await http.get("/canaries")).json()
 
     assert run(main())["marker"] == "set by the test"
@@ -370,9 +370,9 @@ def test_the_override_is_read_per_request_not_at_registration() -> None:
     async def main() -> tuple[str, str]:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as http:
-            async with velox_fastapi.client(app, overrides={flavor: lambda: "first"}):
+            async with voci_fastapi.client(app, overrides={flavor: lambda: "first"}):
                 first = (await http.get("/flavor")).json()["flavor"]
-            async with velox_fastapi.client(app, overrides={flavor: lambda: "second"}):
+            async with voci_fastapi.client(app, overrides={flavor: lambda: "second"}):
                 second = (await http.get("/flavor")).json()["flavor"]
         return first, second
 
@@ -391,11 +391,11 @@ def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
     other = FastAPI(lifespan=lifespan)
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
-        assert started == [], "ASGITransport sends no lifespan scope, and velox fakes none"
+        assert started == [], "ASGITransport sends no lifespan scope, and voci fakes none"
 
-        fixture = velox_fastapi.lifespan(other)
+        fixture = voci_fastapi.lifespan(other)
         agen = fixture.func()
         assert await anext(agen) is other
         assert started == ["up"]
@@ -404,7 +404,7 @@ def test_lifespan_is_not_run_by_client_but_is_available_as_a_fixture() -> None:
         assert started == ["up", "down"]
 
     run(main())
-    assert velox_fastapi.lifespan(other).scope == "session"
+    assert voci_fastapi.lifespan(other).scope == "session"
 
 
 def test_lifespan_is_memoised_per_app() -> None:
@@ -412,13 +412,13 @@ def test_lifespan_is_memoised_per_app() -> None:
     session-scoped fixture, so startup and shutdown run once per run, not once per call site."""
     other = FastAPI()
 
-    first = velox_fastapi.lifespan(other)
-    second = velox_fastapi.lifespan(other)
+    first = voci_fastapi.lifespan(other)
+    second = voci_fastapi.lifespan(other)
 
     assert first is second
 
     other_app = FastAPI()
-    assert velox_fastapi.lifespan(other_app) is not first, "memoisation is per app, not global"
+    assert voci_fastapi.lifespan(other_app) is not first, "memoisation is per app, not global"
 
 
 # --------------------------------------------------------------------------------------
@@ -430,10 +430,10 @@ def test_installation_is_idempotent() -> None:
     other = FastAPI()
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
         installed = other.dependency_overrides
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
         assert other.dependency_overrides is installed
 
@@ -445,11 +445,11 @@ def test_replacing_dependency_overrides_escalates() -> None:
     other = FastAPI()
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
         other.dependency_overrides = {}  # what a copied-in teardown does
-        with pytest.raises(RuntimeError, match="was replaced after velox installed"):
-            async with velox_fastapi.client(other):
+        with pytest.raises(RuntimeError, match="was replaced after voci installed"):
+            async with voci_fastapi.client(other):
                 pass
 
     run(main())
@@ -461,52 +461,52 @@ def test_replacing_state_escalates() -> None:
     other = FastAPI()
 
     async def main() -> None:
-        async with velox_fastapi.client(other, state={"a": 1}):
+        async with voci_fastapi.client(other, state={"a": 1}):
             pass
         other.state = State()
         with pytest.raises(RuntimeError, match=r"app\.state was replaced"):
-            async with velox_fastapi.client(other, state={"a": 1}):
+            async with voci_fastapi.client(other, state={"a": 1}):
                 pass
 
     run(main())
 
 
-def test_uninstall_restores_the_objects_velox_replaced() -> None:
+def test_uninstall_restores_the_objects_voci_replaced() -> None:
     """`uninstall` puts back the `dependency_overrides` dict and `state` object the app was
     built with, by identity."""
     other = FastAPI()
     original_overrides = other.dependency_overrides
 
     async def main() -> None:
-        async with velox_fastapi.client(other, overrides={flavor: lambda: "x"}, state={"a": 1}):
+        async with voci_fastapi.client(other, overrides={flavor: lambda: "x"}, state={"a": 1}):
             pass
 
     run(main())
-    original_state = velox_fastapi._install(other).original_state
+    original_state = voci_fastapi._install(other).original_state
     assert other.dependency_overrides is not original_overrides
-    assert isinstance(other.state, velox_fastapi._LayeredState)
+    assert isinstance(other.state, voci_fastapi._LayeredState)
 
-    velox_fastapi.uninstall(other)
+    voci_fastapi.uninstall(other)
 
     assert other.dependency_overrides is original_overrides
     assert other.state is original_state
-    assert other not in velox_fastapi._INSTALLS
+    assert other not in voci_fastapi._INSTALLS
 
 
 def test_uninstall_is_a_no_op_on_an_app_that_was_never_installed() -> None:
-    velox_fastapi.uninstall(FastAPI())  # must not raise
+    voci_fastapi.uninstall(FastAPI())  # must not raise
 
 
 def test_uninstall_is_idempotent() -> None:
     other = FastAPI()
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
 
     run(main())
-    velox_fastapi.uninstall(other)
-    velox_fastapi.uninstall(other)  # must not raise the second time
+    voci_fastapi.uninstall(other)
+    voci_fastapi.uninstall(other)  # must not raise the second time
 
 
 def test_uninstall_then_client_reinstalls_cleanly() -> None:
@@ -515,11 +515,11 @@ def test_uninstall_then_client_reinstalls_cleanly() -> None:
     other = fresh_app()
 
     async def main() -> str:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
-        velox_fastapi.uninstall(other)
+        voci_fastapi.uninstall(other)
         overrides = {flavor: lambda: "after uninstall"}
-        async with velox_fastapi.client(other, overrides=overrides) as http:
+        async with voci_fastapi.client(other, overrides=overrides) as http:
             return (await http.get("/flavor")).json()["flavor"]
 
     assert run(main()) == "after uninstall"
@@ -527,11 +527,11 @@ def test_uninstall_then_client_reinstalls_cleanly() -> None:
 
 def test_uninstall_drops_the_memoised_lifespan_fixture() -> None:
     other = FastAPI()
-    first = velox_fastapi.lifespan(other)
+    first = voci_fastapi.lifespan(other)
 
-    velox_fastapi.uninstall(other)
+    voci_fastapi.uninstall(other)
 
-    assert velox_fastapi.lifespan(other) is not first
+    assert voci_fastapi.lifespan(other) is not first
 
 
 def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
@@ -541,12 +541,12 @@ def test_state_installs_on_first_client_call_even_without_state_kwarg() -> None:
     before = other.state
 
     async def main() -> None:
-        async with velox_fastapi.client(other):
+        async with voci_fastapi.client(other):
             pass
 
     run(main())
     assert other.state is not before
-    assert isinstance(other.state, velox_fastapi._LayeredState)
+    assert isinstance(other.state, voci_fastapi._LayeredState)
 
 
 def test_lifespan_alone_never_installs_anything() -> None:
@@ -556,7 +556,7 @@ def test_lifespan_alone_never_installs_anything() -> None:
     before_state = other.state
     before_overrides = other.dependency_overrides
 
-    velox_fastapi.lifespan(other)
+    voci_fastapi.lifespan(other)
 
     assert other.state is before_state
     assert other.dependency_overrides is before_overrides

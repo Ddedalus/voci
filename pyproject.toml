@@ -1,5 +1,5 @@
 [project]
-name = "velox-test"
+name = "voci"
 dynamic = ["version"]
 description = "Fast, concurrent test runner for Python."
 readme = "README.md"
@@ -10,7 +10,7 @@ dependencies = []
 uvloop = ["uvloop>=0.21"]
 
 [project.scripts]
-velox = "velox.cli:main"
+voci = "voci.cli:main"
 
 [dependency-groups]
 dev = [
@@ -35,14 +35,14 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 # Version comes from the git tag (e.g. tag "v0.1.0" -> version "0.1.0"), written to
-# velox/_version.py at build time. `fallback-version` covers builds with no reachable tag yet
+# voci/_version.py at build time. `fallback-version` covers builds with no reachable tag yet
 # (fresh clone before the first release, or a shallow/tagless checkout).
 [tool.hatch.version]
 source = "vcs"
 fallback-version = "0.0.0"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "velox/_version.py"
+version-file = "voci/_version.py"
 
 # `.venv` is in hatchling's own hardcoded EXCLUDED_DIRECTORIES, but `just py sync <version>`
 # (justfile, recipes/py.just) gives every non-default interpreter its own `.venv-X.Y` alongside
@@ -52,35 +52,35 @@ version-file = "velox/_version.py"
 [tool.hatch.build]
 exclude = ["/.venv-*"]
 
-# Distribution name ("velox-test") no longer matches the importable package directory
-# ("velox"), so hatchling's name-based auto-detection can't find it — point it there explicitly.
+# Explicit, though it now matches hatchling's name-based auto-detection, since the packaging
+# config shouldn't depend on distribution and package names staying aligned.
 [tool.hatch.build.targets.wheel]
-packages = ["velox"]
+packages = ["voci"]
 
 # `docs` joins `dev` in the environment `just sync` builds. Left out, every `just docs-build`
 # would install the docs toolchain and the next `just sync` would uninstall it again.
 [tool.uv]
 default-groups = ["dev", "docs"]
 
-# velox-migrate is a second distribution in this repo (plans/migration-tool-plan.md §2), kept in
-# the same workspace so its generated output can be exercised against velox itself in one CI run.
+# voci-migrate is a second distribution in this repo (plans/migration-tool-plan.md §2), kept in
+# the same workspace so its generated output can be exercised against voci itself in one CI run.
 [tool.uv.workspace]
-members = ["velox-migrate"]
+members = ["voci-migrate"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-# velox/_assertions/_vendor is kept byte-identical to upstream pytest so re-vendoring stays a
+# voci/_assertions/_vendor is kept byte-identical to upstream pytest so re-vendoring stays a
 # cheap, readable diff (spec/07 Q17). Formatting it would defeat that, so ruff never touches it.
-# velox-migrate/corpus holds deliberately-unidiomatic pytest suites used as codegen input
+# voci-migrate/corpus holds deliberately-unidiomatic pytest suites used as codegen input
 # fixtures, so linting them is meaningless. oss/ holds checkouts of other projects' suites, which
 # answer to their own rules.
 extend-exclude = [
     "oss",
     "research",
     "spec",
-    "velox/_assertions/_vendor",
-    "velox-migrate/corpus",
+    "voci/_assertions/_vendor",
+    "voci-migrate/corpus",
 ]
 
 [tool.ruff.lint]
@@ -98,20 +98,20 @@ select = [
 # `Depends(...)` sitting in a parameter default (spec/01 §3's whole wiring syntax) is exactly the
 # call-in-default-argument shape B008 exists to flag in general, but it's the intended spelling
 # here, same as FastAPI's own `Depends()` it's modeled on. Whitelisted by qualified name so
-# `velox.Depends(...)` and `Depends(...)` (after `from velox import Depends`) both pass; spec/01
+# `voci.Depends(...)` and `Depends(...)` (after `from voci import Depends`) both pass; spec/01
 # §10 names the one shape this can't cover -- a method call like `fixture.with_()`, which has no
 # fixed qualified name to whitelist, is why that API was deferred rather than shipped needing
-# every call site to disable the rule by hand. `velox._di.fixtures.Depends` covers the same spelling
+# every call site to disable the rule by hand. `voci._di.fixtures.Depends` covers the same spelling
 # inside `_builtins/fixtures.py` itself, which wires a builtin fixture onto another one (`tmpdir`
-# onto `tmp_path`) before the public `velox` package it would otherwise import from exists.
+# onto `tmp_path`) before the public `voci` package it would otherwise import from exists.
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["velox.Depends", "Depends", "velox._di.fixtures.Depends"]
+extend-immutable-calls = ["voci.Depends", "Depends", "voci._di.fixtures.Depends"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["velox", "velox_migrate"]
+known-first-party = ["voci", "voci_migrate"]
 # Named rather than left to isort, which reads a package as first-party when a directory of that
 # name sits where it looks for sources. A checkout of either project anywhere isort searches would
-# otherwise file the installed package next to velox's own imports, and moving that checkout would
+# otherwise file the installed package next to voci's own imports, and moving that checkout would
 # reshuffle the import block of every module that uses it.
 known-third-party = ["fastapi", "pytest"]
 
@@ -121,18 +121,18 @@ addopts = "-ra"
 
 [tool.pyrefly]
 project-includes = [
-    "velox/**/*.py",
+    "voci/**/*.py",
     "tests/**/*.py",
     "scripts/**/*.py",
 ]
-# Vendored code is upstream's problem, checked by upstream's own CI. velox-migrate/corpus
+# Vendored code is upstream's problem, checked by upstream's own CI. voci-migrate/corpus
 # holds deliberately-unidiomatic pytest suites used as codegen input fixtures, so type-checking
 # them is meaningless.
 project-excludes = [
     "oss/**",
     "research/**",
-    "velox/_assertions/_vendor/**",
-    "velox-migrate/corpus/**",
+    "voci/_assertions/_vendor/**",
+    "voci-migrate/corpus/**",
 ]
 # `tests/` has no `__init__.py`, so pytest's own rootpath insertion puts it on `sys.path` and
 # `tests/_support.py` is reachable as a bare `import _support` from every test file, subpackage

@@ -9,10 +9,10 @@ mod checks 'recipes/checks.just'
 # Docs site (zensical)
 mod docs 'recipes/docs.just'
 
-# velox-migrate tests and corpus dumps
+# voci-migrate tests and corpus dumps
 mod migrate 'recipes/migrate.just'
 
-# Run against a non-default interpreter (velox supports 3.13 and 3.14)
+# Run against a non-default interpreter (voci supports 3.13 and 3.14)
 mod py 'recipes/py.just'
 
 # AST-based tools for splitting/moving top-level objects and rewiring their imports
@@ -32,9 +32,9 @@ list:
 sync:
     uv sync --all-packages
 
-# Run the velox CLI (e.g. `just run --version`)
+# Run the voci CLI (e.g. `just run --version`)
 run *args:
-    uv run velox "$@"
+    uv run voci "$@"
 
 # Format with ruff
 fmt *args:

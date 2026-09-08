@@ -7,11 +7,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
-import velox
+import voci
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from velox import Depends
-from velox import fastapi as velox_fastapi
+from voci import Depends
+from voci import fastapi as voci_fastapi
 
 from app.db import get_session
 from app.main import app
@@ -73,12 +73,12 @@ async def test_list_orders_filters_by_minimum(
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture()
+@voci.fixture()
 def premium_settings() -> Settings:
     return Settings(database_url="unused", signup_bonus_cents=5_000, max_orders_per_user=2)
 
 
-@velox.fixture()
+@voci.fixture()
 async def premium_client(
     session: Annotated[AsyncSession, Depends(session)],
     settings: Annotated[Settings, Depends(premium_settings)],
@@ -89,7 +89,7 @@ async def premium_client(
     are still the ones everybody else uses. The tests below read `max_orders_per_user == 2` while
     their neighbours, running at the same moment against the same `app`, read the default.
     """
-    async with velox_fastapi.client(
+    async with voci_fastapi.client(
         app,
         overrides={get_session: lambda: session},
         state={"settings": settings},
@@ -126,12 +126,12 @@ async def test_order_limit_is_enforced(
 
 
 def test_settings_reject_a_non_numeric_bonus() -> None:
-    """`velox.raises`, with `match=` as a regex against the message.
+    """`voci.raises`, with `match=` as a regex against the message.
 
-    A `def`, not an `async def`: velox runs sync tests on a context-propagating executor thread,
+    A `def`, not an `async def`: voci runs sync tests on a context-propagating executor thread,
     where they hold a concurrency slot but cannot block the loop.
     """
-    with velox.raises(ValueError, match="invalid literal for int"):
+    with voci.raises(ValueError, match="invalid literal for int"):
         Settings.from_env({"SIGNUP_BONUS_CENTS": "five hundred"})
 
 
@@ -142,13 +142,13 @@ async def test_order_totals_convert_to_currency(
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 1999})
     orders = (await client.get(f"/users/{user.id}/orders")).json()
 
-    assert orders[0]["total_cents"] / 100 == velox.approx(19.99)
+    assert orders[0]["total_cents"] / 100 == voci.approx(19.99)
 
 
 async def test_duplicate_email_is_logged(
     user: Annotated[User, Depends(alice)],
     client: Annotated[AsyncClient, Depends(api_client)],
-    logs: Annotated[velox.LogRecords, Depends(velox.log_records)],
+    logs: Annotated[voci.LogRecords, Depends(voci.log_records)],
 ) -> None:
     """Log records captured for this test alone.
 
@@ -165,12 +165,12 @@ async def test_duplicate_email_is_logged(
 async def test_export_orders_to_disk(
     user: Annotated[User, Depends(alice)],
     client: Annotated[AsyncClient, Depends(api_client)],
-    tmp: Annotated[Path, Depends(velox.tmp_path)],
-    info: Annotated[velox.TestInfo, Depends(velox.test_info)],
+    tmp: Annotated[Path, Depends(voci.tmp_path)],
+    info: Annotated[voci.TestInfo, Depends(voci.test_info)],
 ) -> None:
     """`tmp_path` is unique by construction: `basetemp/<sanitized-test-id>`.
 
-    `velox.test_info` carries this test's id, tags, timeout budget and concurrency slot, and is
+    `voci.test_info` carries this test's id, tags, timeout budget and concurrency slot, and is
     read-only.
     """
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 4200})
@@ -197,7 +197,7 @@ async def test_order_charges_the_sandbox(
 
     So does `test_refund_releases_the_sandbox` below, and the two never overlap — while both still
     run alongside every other test in the suite, which is the difference between an exclusive
-    token and `@velox.solo`.
+    token and `@voci.solo`.
     """
     await client.post(f"/users/{user.id}/orders", json={"total_cents": 700})
     charge_id = await sandbox.charge(700)

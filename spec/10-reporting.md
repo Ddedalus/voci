@@ -16,7 +16,7 @@ behaviors:
    write assertion helpers, which every real suite does.
 2. **Cut to the test function** — drop all frames above the test, identified by its code object's
    filename and `firstlineno`. Two lines of code, disproportionate payoff (R§7).
-3. **Suppress runner frames** — `asyncio/`, `anyio/`, and `velox/` internal frames are hidden by
+3. **Suppress runner frames** — `asyncio/`, `anyio/`, and `voci/` internal frames are hidden by
    default, or every traceback drags in `Task.__step`, `TaskGroup.__aexit__`, and the envelope. This
    is async-specific and non-negotiable; `--full-trace` disables it.
 4. **Filter rewriter temps** — `@py_assert*` locals never appear in a locals display
@@ -104,14 +104,14 @@ Things that don't exist in pytest and must be visible:
 
 **JUnit XML** (~150 useful LOC): testcases in logical order; `<testsuite time>` carries **honest wall
 clock**. CI dashboards sum per-test times and will otherwise report the fast suite as slow —
-document the discrepancy explicitly, since it will otherwise be reported as a velox bug.
+document the discrepancy explicitly, since it will otherwise be reported as a voci bug.
 
 **GitHub Actions annotations**: `::error file=…,line=…,col=…::message`. Cheap, high-value, and the
 column comes free from PEP 657 positions.
 
 **`--report-json`**: the whole run — config header, per-test `TestResult` including timings and
 `FailureRepr`, plus scheduler facts (dispatch order, token holds). Enables an external Gantt view,
-flake tracking, and velox's own integration tests.
+flake tracking, and voci's own integration tests.
 
 ## 5. Colors and formatting dependency
 
@@ -131,7 +131,7 @@ footer, failure details and short summary in logical order; the wall-vs-Σ final
 - JUnit XML, GitHub annotations, `--report-json`.
 - `--stream-failures` for long runs (documented as breaking byte-identical output).
 - An HTML/Gantt view of the concurrency timeline from the JSON report — this is the artifact that
-  *shows* why velox is fast, and it is nearly free given the timing data.
+  *shows* why voci is fast, and it is nearly free given the timing data.
 - Flake detection (`--rerun-failed=N`) reported as a distinct outcome rather than hidden.
 - Diff-quality improvements in the explanation engine ([07](07-assertions.md)).
 

@@ -1,4 +1,4 @@
-"""Tests for velox._config: `pyproject.toml` search, `[tool.velox]` validation, and merging."""
+"""Tests for voci._config: `pyproject.toml` search, `[tool.voci]` validation, and merging."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from _support import Project
 
-from velox._config import Config, ConfigError, resolve
+from voci._config import Config, ConfigError, resolve
 
 
 def test_no_pyproject_anywhere_falls_back_to_defaults(tmp_path: Path) -> None:
@@ -19,9 +19,9 @@ def test_no_pyproject_anywhere_falls_back_to_defaults(tmp_path: Path) -> None:
     assert config == Config(rootdir=project)
 
 
-def test_finds_tool_velox_in_the_search_start_itself(tmp_path: Path) -> None:
+def test_finds_tool_voci_in_the_search_start_itself(tmp_path: Path) -> None:
     Project(tmp_path).write_pyproject(
-        "[tool.velox]\ntestpaths = ['tests']\nconcurrency = 8\ntimeout = 30\n",
+        "[tool.voci]\ntestpaths = ['tests']\nconcurrency = 8\ntimeout = 30\n",
     )
 
     config = resolve([tmp_path])
@@ -34,7 +34,7 @@ def test_finds_tool_velox_in_the_search_start_itself(tmp_path: Path) -> None:
 
 
 def test_walks_upward_from_a_nested_explicit_path(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 5\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nconcurrency = 5\n")
     nested = tmp_path / "a" / "b" / "test_deep.py"
     nested.parent.mkdir(parents=True)
     nested.write_text("")
@@ -45,12 +45,12 @@ def test_walks_upward_from_a_nested_explicit_path(tmp_path: Path) -> None:
     assert config.concurrency == 5
 
 
-def test_a_plain_pyproject_without_tool_velox_is_skipped(tmp_path: Path) -> None:
-    """A `pyproject.toml` with no `[tool.velox]` table is not a match -- the search keeps
+def test_a_plain_pyproject_without_tool_voci_is_skipped(tmp_path: Path) -> None:
+    """A `pyproject.toml` with no `[tool.voci]` table is not a match -- the search keeps
     walking upward past it."""
     Project(tmp_path).write_pyproject("[project]\nname = 'unrelated'\n")
     nested = tmp_path / "pkg"
-    Project(nested).write_pyproject("[tool.velox]\nconcurrency = 7\n")
+    Project(nested).write_pyproject("[tool.voci]\nconcurrency = 7\n")
     sub = nested / "tests"
     sub.mkdir()
 
@@ -67,8 +67,8 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
     (repo / ".git").mkdir(parents=True)
     project = repo / "sub"
     project.mkdir()
-    # A `[tool.velox]` above the git root must never be picked up.
-    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 99\n")
+    # A `[tool.voci]` above the git root must never be picked up.
+    Project(tmp_path).write_pyproject("[tool.voci]\nconcurrency = 99\n")
 
     config = resolve([project])
 
@@ -78,8 +78,8 @@ def test_search_stops_at_git_root_without_config(tmp_path: Path) -> None:
 def test_rootdir_without_a_table_is_the_pyproject_not_the_argument(tmp_path: Path) -> None:
     """An argument naming a subdirectory must not move the rootdir onto it.
 
-    rootdir fixes the id spelling, the `sys.path` entry and which `.velox_cache` the run uses, so
-    `velox tests/unit` rooting itself at `tests/unit` would give that one invocation a private
+    rootdir fixes the id spelling, the `sys.path` entry and which `.voci_cache` the run uses, so
+    `voci tests/unit` rooting itself at `tests/unit` would give that one invocation a private
     cache in a private id namespace -- and a `--lf` reading it finds "nothing recorded" where the
     truth is "your failures are all outside this selection".
     """
@@ -109,7 +109,7 @@ def test_a_git_root_alone_does_not_anchor_the_rootdir(tmp_path: Path) -> None:
     """The `.git` bounds the search but is not a fallback: it says nothing about where a suite's
     imports are rooted, and climbing to it would put `sys.path` somewhere a suite with a helper
     module beside its tests stops importing -- or, for a dotfiles repo at `$HOME`, drop a
-    `.velox_cache` in the home directory for any scratch tree under it.
+    `.voci_cache` in the home directory for any scratch tree under it.
     """
     (tmp_path / ".git").mkdir()
     unit = tmp_path / "tests" / "unit"
@@ -125,7 +125,7 @@ def test_git_root_directory_itself_is_still_checked_for_config(tmp_path: Path) -
     """The git root itself is examined, not skipped."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    Project(repo).write_pyproject("[tool.velox]\nconcurrency = 12\n")
+    Project(repo).write_pyproject("[tool.voci]\nconcurrency = 12\n")
     project = repo / "sub"
     project.mkdir()
 
@@ -140,7 +140,7 @@ def test_git_root_is_unset_when_a_table_is_found_first(tmp_path: Path) -> None:
     match below the git root leaves `git_root` unset, same as a repo-less project would."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    Project(repo).write_pyproject("[tool.velox]\nconcurrency = 12\n")
+    Project(repo).write_pyproject("[tool.voci]\nconcurrency = 12\n")
 
     config = resolve([repo])
 
@@ -150,7 +150,7 @@ def test_git_root_is_unset_when_a_table_is_found_first(tmp_path: Path) -> None:
 def test_no_explicit_paths_searches_from_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 3\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nconcurrency = 3\n")
     monkeypatch.chdir(tmp_path)
 
     config = resolve([])
@@ -160,7 +160,7 @@ def test_no_explicit_paths_searches_from_cwd(
 
 
 def test_search_start_is_the_common_ancestor_of_multiple_paths(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 2\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nconcurrency = 2\n")
     left = tmp_path / "left"
     right = tmp_path / "right"
     left.mkdir()
@@ -172,7 +172,7 @@ def test_search_start_is_the_common_ancestor_of_multiple_paths(tmp_path: Path) -
 
 
 def test_a_file_path_searches_from_its_parent_directory(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nconcurrency = 6\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nconcurrency = 6\n")
     test_file = tmp_path / "test_one.py"
     test_file.write_text("")
 
@@ -183,21 +183,21 @@ def test_a_file_path_searches_from_its_parent_directory(tmp_path: Path) -> None:
 
 
 def test_unknown_key_is_a_config_error(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nnot_a_real_key = 1\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nnot_a_real_key = 1\n")
 
     with pytest.raises(ConfigError, match="not_a_real_key"):
         resolve([tmp_path])
 
 
-def test_tool_velox_must_be_a_table(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool]\nvelox = 'nope'\n")
+def test_tool_voci_must_be_a_table(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool]\nvoci = 'nope'\n")
 
     with pytest.raises(ConfigError, match="must be a table"):
         resolve([tmp_path])
 
 
 def test_malformed_toml_is_a_config_error(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox\nthis is not valid toml")
+    Project(tmp_path).write_pyproject("[tool.voci\nthis is not valid toml")
 
     with pytest.raises(ConfigError):
         resolve([tmp_path])
@@ -205,58 +205,58 @@ def test_malformed_toml_is_a_config_error(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("bad", ["'sixteen'", "true", "16.5", "[1, 2]"])
 def test_concurrency_must_be_a_plain_integer(tmp_path: Path, bad: str) -> None:
-    Project(tmp_path).write_pyproject(f"[tool.velox]\nconcurrency = {bad}\n")
+    Project(tmp_path).write_pyproject(f"[tool.voci]\nconcurrency = {bad}\n")
 
     with pytest.raises(ConfigError, match="concurrency"):
         resolve([tmp_path])
 
 
 def test_timeout_accepts_both_int_and_float(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = 30\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\ntimeout = 30\n")
     assert resolve([tmp_path]).timeout == 30.0
 
-    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = 30.5\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\ntimeout = 30.5\n")
     assert resolve([tmp_path]).timeout == 30.5
 
 
 def test_timeout_rejects_a_bool(tmp_path: Path) -> None:
     """TOML `true`/`false` are Python `bool`, a subclass of `int` -- `timeout = true` must be
     a usage error, not silently become `timeout = 1.0`."""
-    Project(tmp_path).write_pyproject("[tool.velox]\ntimeout = true\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\ntimeout = true\n")
 
     with pytest.raises(ConfigError, match="timeout"):
         resolve([tmp_path])
 
 
 def test_loop_watchdog_accepts_a_number_and_zero_for_off(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 2.5\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nloop_watchdog = 2.5\n")
     assert resolve([tmp_path]).loop_watchdog == 2.5
 
-    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 0\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nloop_watchdog = 0\n")
     assert resolve([tmp_path]).loop_watchdog == 0.0
 
 
 def test_loop_watchdog_must_be_a_number(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nloop_watchdog = 'soon'\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nloop_watchdog = 'soon'\n")
 
     with pytest.raises(ConfigError, match="loop_watchdog"):
         resolve([tmp_path])
 
 
 def test_testpaths_must_be_a_list_of_strings(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\ntestpaths = 'tests'\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\ntestpaths = 'tests'\n")
 
     with pytest.raises(ConfigError, match="testpaths"):
         resolve([tmp_path])
 
-    Project(tmp_path).write_pyproject("[tool.velox]\ntestpaths = [1, 2]\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\ntestpaths = [1, 2]\n")
 
     with pytest.raises(ConfigError, match="testpaths"):
         resolve([tmp_path])
 
 
 def test_env_must_be_a_table_of_string_to_string(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nenv = { FOO = 1 }\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nenv = { FOO = 1 }\n")
 
     with pytest.raises(ConfigError, match="env"):
         resolve([tmp_path])
@@ -264,7 +264,7 @@ def test_env_must_be_a_table_of_string_to_string(tmp_path: Path) -> None:
 
 def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> None:
     Project(tmp_path).write_pyproject(
-        "[tool.velox]\n"
+        "[tool.voci]\n"
         "env = { ENVIRONMENT = 'test', DEBUG = '0' }\n"
         "ignore = ['.git', 'vendor']\n"
         "test_file_patterns = ['check_*.py']\n",
@@ -279,7 +279,7 @@ def test_env_and_ignore_and_test_file_patterns_round_trip(tmp_path: Path) -> Non
 
 def test_filterwarnings_round_trips_in_the_order_it_was_written(tmp_path: Path) -> None:
     Project(tmp_path).write_pyproject(
-        "[tool.velox]\nfilterwarnings = ['error', 'ignore::DeprecationWarning']\n",
+        "[tool.voci]\nfilterwarnings = ['error', 'ignore::DeprecationWarning']\n",
     )
 
     config = resolve([tmp_path])
@@ -288,7 +288,7 @@ def test_filterwarnings_round_trips_in_the_order_it_was_written(tmp_path: Path) 
 
 
 def test_filterwarnings_must_be_a_list_of_strings(tmp_path: Path) -> None:
-    Project(tmp_path).write_pyproject("[tool.velox]\nfilterwarnings = 'error'\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nfilterwarnings = 'error'\n")
 
     with pytest.raises(ConfigError, match="filterwarnings"):
         resolve([tmp_path])
@@ -297,14 +297,14 @@ def test_filterwarnings_must_be_a_list_of_strings(tmp_path: Path) -> None:
 def test_a_filter_spec_is_not_parsed_here(tmp_path: Path) -> None:
     """Resolving a spec's category imports the module holding it, which for one the suite
     defines itself needs a `sys.path` this has not finished deciding. `cli.main` parses them."""
-    Project(tmp_path).write_pyproject("[tool.velox]\nfilterwarnings = ['ignore::NotAWarning']\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nfilterwarnings = ['ignore::NotAWarning']\n")
 
     assert resolve([tmp_path]).filterwarnings == ("ignore::NotAWarning",)
 
 
 def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:
     """`watchdog_threshold` is not a recognized key -- an unknown key is a `ConfigError`."""
-    Project(tmp_path).write_pyproject("[tool.velox]\nwatchdog_threshold = 1.0\n")
+    Project(tmp_path).write_pyproject("[tool.voci]\nwatchdog_threshold = 1.0\n")
 
     with pytest.raises(ConfigError, match="watchdog_threshold"):
         resolve([tmp_path])

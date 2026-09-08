@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-VENDOR_DIR = Path(__file__).resolve().parents[2] / "velox" / "_assertions" / "_vendor"
+VENDOR_DIR = Path(__file__).resolve().parents[2] / "voci" / "_assertions" / "_vendor"
 REPO = Path(__file__).resolve().parents[2]
-#: The generated files only. `__init__.py` and `_shim.py` are velox's own, hand-written.
+#: The generated files only. `__init__.py` and `_shim.py` are voci's own, hand-written.
 VENDORED_SOURCES = sorted(
     p for p in VENDOR_DIR.glob("*.py") if p.name not in {"__init__.py", "_shim.py"}
 )
@@ -27,7 +27,7 @@ def test_there_is_something_vendored() -> None:
 
 @pytest.mark.parametrize("path", VENDORED_SOURCES, ids=lambda p: p.name)
 def test_no_runtime_dependency_on_pytest(path: Path) -> None:
-    """velox must not import pytest at run time. Comments are exempt — the generated header
+    """voci must not import pytest at run time. Comments are exempt — the generated header
     names the upstream file it came from."""
     offenders = [
         f"{i}: {line.strip()}"
@@ -48,11 +48,11 @@ def test_generated_header_is_intact(path: Path) -> None:
 
 
 def test_pytest_is_not_imported_by_using_the_rewriter() -> None:
-    """A fresh interpreter that installs and uses velox's assertion machinery must not end up
+    """A fresh interpreter that installs and uses voci's assertion machinery must not end up
     with `_pytest` in `sys.modules`."""
     code = (
         "import sys, tempfile, pathlib\n"
-        "from velox._assertions.rewrite import install, uninstall, assertion_context, Config\n"
+        "from voci._assertions.rewrite import install, uninstall, assertion_context, Config\n"
         "d = pathlib.Path(tempfile.mkdtemp())\n"
         "(d / 'test_x.py').write_text('def f():\\n    assert [1] == [2]\\n')\n"
         "install([d], cache_dir=d / 'cache')\n"
@@ -86,7 +86,7 @@ def test_vendored_tree_matches_the_script() -> None:
 
 
 def test_shim_is_hand_written_not_generated() -> None:
-    """`_shim.py` is the one file in the tree that is velox's own; it must not grow a
+    """`_shim.py` is the one file in the tree that is voci's own; it must not grow a
     generated header, because regenerating would blow it away."""
     assert "# ruff: noqa" not in (VENDOR_DIR / "_shim.py").read_text().split("\n")[0]
 

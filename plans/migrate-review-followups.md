@@ -1,7 +1,7 @@
-# velox-migrate: findings from the high-effort correctness review
+# voci-migrate: findings from the high-effort correctness review
 
 Eight-angle `/code-review high` of the dependency-typing merge (`25b6561`), scoped to
-`velox-migrate/` and read for data loss or incorrect conversion. Two confirmed correctness bugs
+`voci-migrate/` and read for data loss or incorrect conversion. Two confirmed correctness bugs
 were fixed directly at the time; the reuse/simplification/efficiency/altitude cleanups the same
 review surfaced were fixed in a later pass. The two lower-confidence correctness gaps left after
 that — `_takes()`'s missing request-forwarding case and `_absolute()`'s off-by-one — are fixed too,
@@ -17,7 +17,7 @@ of this heuristic already takes.
 
 ## Altitude — not urgent, revisit before a second plugin of the kind
 
-- `wiring.py`'s `_backend_findings`/`_backend_name` (VX324) key detection of "parametrized onto a
+- `wiring.py`'s `_backend_findings`/`_backend_name` (VC324) key detection of "parametrized onto a
   non-asyncio backend" off exactly the `anyio_backend` callspec parameter and the literal string
   `"asyncio"` — a different async plugin exposing an equivalently-purposed fixture under another
   name produces no finding. Not urgent — it degrades an audit finding's precision, not conversion

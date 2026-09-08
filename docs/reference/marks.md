@@ -6,44 +6,44 @@ For clarity, `skip`, `xfail` or `timeout` applied twice will raise `TypeError`. 
 
 ## Skipping and expected failures
 
-::: velox.skip
+::: voci.skip
 
-::: velox.skipif
+::: voci.skipif
 
-::: velox.xfail
+::: voci.xfail
 
 ## Selection and execution
 
 You can assign string labels to tests, which can then be selected via the CLI.
 
-::: velox.tag
+::: voci.tag
 
 ## Execution isolation
 
-For tests that may not play nicely with concurrency, velox provides isolated execution marks.
+For tests that may not play nicely with concurrency, voci provides isolated execution marks.
 
-::: velox.timeout
+::: voci.timeout
 
-::: velox.solo
+::: voci.solo
 
-::: velox.isolated
+::: voci.isolated
 
 ## Warnings
 
-::: velox.filterwarnings
+::: voci.filterwarnings
 
 See [Warnings](warnings.md) for the filter grammar and how the three tiers of filters are layered.
 
 ## Parametrization
 
-::: velox.parametrize
+::: voci.parametrize
 
-::: velox.case
+::: voci.case
 
 ## Stopping a test from within
 
 Two exception classes are provided to force a test result from within the body.
 
-::: velox.Skipped
+::: voci.Skipped
 
-::: velox.Failed
+::: voci.Failed

@@ -1,0 +1,262 @@
+"""`--lf`/`--ff`: what the previous run's failures do to this run's test set.
+
+`candidate_files` narrows discovery to the files that could hold one, which is what keeps `--lf`
+from importing a suite it has no intention of running any of. `select` and `reorder` then work
+over the collected records: the first deselects everything that isn't a recorded failure, the
+second keeps the whole suite and lifts the failures to the front of it. `settled_paths`,
+`vanished` and `missing_paths` answer the other direction -- which of the previous run's entries
+this one is entitled to overwrite (`voci._cache.merge`) -- and `error_paths` says which of this
+run's own collection errors are in a form a later run could settle at all.
+
+Between them those four are what keeps the cache finite: an entry no run can name is an entry
+that never clears, and a `--lf` narrowing to it selects nothing and exits 5 for good.
+
+A file the previous run failed to *collect* contributed no ids to record, so every test in it
+counts as a recorded failure; where that file is a package `__init__.py`, so does every test in
+the tree below it, none of which was collected either.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Container, Iterable
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from voci._cache import LastRun
+from voci._collection.collect import (
+    CollectionError,
+    CollectionResult,
+    TestRecord,
+    display_path,
+)
+from voci._collection.requires import package_inits
+
+__all__ = [
+    "Recorded",
+    "candidate_files",
+    "dead_paths",
+    "error_paths",
+    "read_files",
+    "reorder",
+    "select",
+    "settled_paths",
+    "vanished",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Recorded:
+    """The previous run's failures, in the form this run matches its own paths and ids against."""
+
+    ids: frozenset[str]
+    whole_files: frozenset[str]
+    """Rootdir-relative paths of files that failed to collect, replayed test by test."""
+    trees: tuple[Path, ...]
+    """Directories whose package `__init__.py` is one of `whole_files`. Nothing beneath one was
+    collected, so the whole tree is replayed rather than the `__init__.py` alone -- which
+    discovery never yields as a test file in the first place."""
+    paths: frozenset[str]
+    """Every rootdir-relative path a recorded failure names, `whole_files` included."""
+
+    @classmethod
+    def of(cls, last_run: LastRun) -> Recorded:
+        whole_files = frozenset(last_run.error_files)
+        return cls(
+            ids=frozenset(last_run.failed),
+            whole_files=whole_files,
+            trees=tuple(
+                Path(path).parent for path in whole_files if Path(path).name == "__init__.py"
+            ),
+            paths=whole_files | {_path_of(test_id) for test_id in last_run.failed},
+        )
+
+    def could_hold_one(self, relative: Path) -> bool:
+        """Whether a file at `relative` is worth importing for `--lf`'s sake."""
+        return str(relative) in self.paths or self._in_tree(relative)
+
+    def names(self, test_id: str, relative: Path) -> bool:
+        """Whether one collected test is a recorded failure, by its own id or by sitting in a
+        file that never got as far as having one."""
+        return test_id in self.ids or str(relative) in self.whole_files or self._in_tree(relative)
+
+    def _in_tree(self, relative: Path) -> bool:
+        return any(tree in relative.parents for tree in self.trees)
+
+
+def candidate_files(files: Iterable[Path], last_run: LastRun, *, rootdir: Path) -> list[Path]:
+    """The files in `files` that a recorded failure names, in the order given."""
+    recorded = Recorded.of(last_run)
+    resolved_rootdir = Path(rootdir).resolve()
+    return [path for path in files if recorded.could_hold_one(display_path(path, resolved_rootdir))]
+
+
+def select(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
+    """`collected` with everything that isn't a recorded failure moved to `deselected`.
+
+    Skips go the same way as records: a skip-marked test the previous run never failed on is one
+    this run was not asked for, and leaving it counted would report a `--lf` that executed
+    nothing as a run that collected something.
+    """
+    recorded = Recorded.of(last_run)
+    records = [record for record in collected.records if recorded.names(record.id, record.path)]
+    skipped = [skip for skip in collected.skipped if recorded.names(skip.id, skip.path)]
+    dropped = [
+        entry.id
+        for entry in (*collected.records, *collected.skipped)
+        if not recorded.names(entry.id, entry.path)
+    ]
+    return replace(
+        collected,
+        records=_reindexed(records),
+        skipped=skipped,
+        deselected=[*collected.deselected, *dropped],
+    )
+
+
+def reorder(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
+    """`collected` with the recorded failures moved to the front, each half otherwise in the
+    logical order collection gave it."""
+    recorded = Recorded.of(last_run)
+    failed = [record for record in collected.records if recorded.names(record.id, record.path)]
+    rest = [record for record in collected.records if not recorded.names(record.id, record.path)]
+    return replace(collected, records=_reindexed([*failed, *rest]))
+
+
+def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
+    """The rootdir-relative paths this run has an answer for.
+
+    Every file collection was handed, plus the package `__init__.py` files importing those
+    required -- `package_inits`' own rule, which is what collection walks: an unbroken
+    `__init__.py` chain up from the file's directory. Importing a package is what collecting
+    anything under it requires, so a recorded failure the run did not report again is one the run
+    fixed; without that a broken `__init__.py` stays recorded for good, since discovery never
+    yields it as a file of its own. A directory with no `__init__.py` ends the chain, so
+    `voci pkg/sub` over a namespace `pkg/sub/` answers for nothing about `pkg/__init__.py` --
+    it never imported it.
+    """
+    answered = set(attempted)
+    for candidate in attempted:
+        for init in package_inits(rootdir / candidate, rootdir):
+            if init.is_relative_to(rootdir):
+                answered.add(str(init.relative_to(rootdir)))
+    return answered
+
+
+def dead_paths(
+    last_run: LastRun, *, discovered: Collection[str], roots: Collection[Path], rootdir: Path
+) -> set[str]:
+    """The recorded paths nothing will ever hand to collection again.
+
+    Settling normally goes through a run that *collected* the path, so a path discovery has
+    stopped producing is one no run can answer for: the entry outlives the file, and once the
+    rest of the suite goes green `--lf` narrows to it, selects nothing and exits 5 on every
+    invocation after that. Two kinds of evidence close that, each with its own reach:
+
+    * The file is gone from disk. Read off the filesystem rather than off this run's discovery,
+      so a run over one directory still leaves the rest of the suite's failures recorded rather
+      than declaring every file it did not look at gone.
+    * This run walked the directory the path sits in and discovery produced nothing that reaches
+      it -- deleted, renamed, newly `ignore`d, or no longer matching `test_file_patterns`.
+      Scoped to the roots actually walked, and to directories those roots *contain* rather than
+      ones they sit inside, so neither `voci one/` nor `voci pkg/sub` concludes anything about
+      what it only saw part of.
+
+    "Reaches it" is `settled_paths` over the discovered set, which is what makes this the exact
+    complement of settling: a package `__init__.py` counts as still live only through the
+    unbroken `__init__.py` chain that would import it, never through a namespace directory
+    sitting under it, and a plain file counts through being discovered at all.
+    """
+    recorded = Recorded.of(last_run).paths
+    if not recorded:
+        return set()
+    walked = tuple(Path(root).resolve() for root in roots)
+    reachable = settled_paths(discovered, rootdir=rootdir)
+
+    def is_dead(path: str) -> bool:
+        absolute = rootdir / path
+        if not absolute.exists():
+            return True
+        looked_in = any(absolute.parent.is_relative_to(root) for root in walked)
+        return looked_in and path not in reachable
+
+    return {path for path in recorded if is_dead(path)}
+
+
+def error_paths(errors: Iterable[CollectionError], *, answered: Container[str]) -> set[str]:
+    """The paths of `errors` some later run would be in a position to settle.
+
+    The exact mirror of `settled_paths`, which is what clears these again. An error on any other
+    path is one no discovery will ever produce, so recording it leaves `error_files` holding a
+    string nothing takes back out -- and a `--lf` narrowing to a file it never finds, selecting
+    nothing and exiting 5 from then on.
+
+    That is `_misplaced_declarations`: a `voci.use(...)` in a module voci never collects, named
+    by an absolute path when it lies outside `rootdir` and by a bare dotted module name when it
+    has no `__file__` at all. Every run that imports the module finds it again and reports it,
+    which is what makes leaving it out of the cache safe.
+    """
+    return {str(error.path) for error in errors if str(error.path) in answered}
+
+
+def read_files(attempted: Collection[str], unread: Collection[str]) -> set[str]:
+    """The attempted paths whose entire test set this run established.
+
+    `unread` is the files that yielded no test at all -- a failed import, not a file that
+    collected fine except for one malformed test, whose remaining ids voci knows in full. Its
+    tree goes with it: a file under a package whose `__init__.py` failed to import is skipped
+    before it is read and carries no error of its own, `collect` attributing that one to the
+    `__init__.py`, once, however many files sit beneath it.
+
+    Left in, such a file reads to `vanished` as "collected, and holding nothing", which would
+    drop every failure recorded in it.
+    """
+    broken_trees = tuple(Path(path).parent for path in unread if Path(path).name == "__init__.py")
+    return {
+        path
+        for path in attempted
+        if path not in unread and not any(tree in Path(path).parents for tree in broken_trees)
+    }
+
+
+def vanished(
+    last_run: LastRun, collected: CollectionResult, *, known_files: Container[str]
+) -> set[str]:
+    """The recorded ids whose tests no longer exist.
+
+    A file is `known` when this run establishes its entire test set: one collection imported
+    without error, or one `missing_paths` found is no longer on disk, whose test set is
+    therefore empty. A recorded id under such a file that the file did not produce names a test
+    that has been renamed, deleted or moved. Nothing will ever run it, so nothing else would
+    take it out of the cache, and a `--lf` would go on narrowing to a file it then selects
+    nothing from.
+
+    `collected` is what collection found, before `select` narrowed it: a deselection is read
+    below as "the run stopped short of building this test's cases", which is true of the `-m`
+    and `-k` ones and false of `--lf`'s own.
+    """
+    deselected = set(collected.deselected)
+    existing = deselected | {record.id for record in collected.records}
+    existing |= {skip.id for skip in collected.skipped}
+    # A test excluded before its `@voci.parametrize` cases were built has no per-case ids for a
+    # recorded one to match. Only a deselection counts here: a skip settles its own cases, and
+    # matching those too would leave them recorded for good.
+    prefixes = tuple(prefix for prefix in collected.unexpanded if prefix in deselected)
+    return {
+        test_id
+        for test_id in last_run.failed
+        if _path_of(test_id) in known_files
+        and test_id not in existing
+        and not any(test_id.startswith(f"{prefix}[") for prefix in prefixes)
+    }
+
+
+def _path_of(test_id: str) -> str:
+    """The rootdir-relative path a test id starts with. A qualname can hold `::` of its own (a
+    method on a `Test*` class), so the path is what precedes the first one."""
+    return test_id.partition("::")[0]
+
+
+def _reindexed(records: list[TestRecord]) -> list[TestRecord]:
+    """`records` renumbered from zero, so `index` stays the position of a test in the run that
+    is actually about to happen."""
+    return [replace(record, index=index) for index, record in enumerate(records)]

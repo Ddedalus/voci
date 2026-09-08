@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from velox._collection.collect import TestRecord as Record
-from velox._di.fixtures import ResolutionPlan
-from velox._marks import Marks, decided, marks_of
+from voci._collection.collect import TestRecord as Record
+from voci._di.fixtures import ResolutionPlan
+from voci._marks import Marks, decided, marks_of
 
 #: A test with no `Depends(...)` at all still needs a plan (`_collect.py` gives every
 #: `TestRecord` one, uniformly) — the trivial one, shared by every factory below.

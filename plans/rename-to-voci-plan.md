@@ -1,12 +1,12 @@
-# Rename velox → voci
+# Rename voci → voci
 
-`velox` is taken on PyPI (the project currently publishes as `velox-test` to work around it).
+`voci` is taken on PyPI (the project currently publishes as `voci-test` to work around it).
 `voci` and `voci-migrate` are both free — confirmed 2026-09-04 via `pypi.org/pypi/<name>/json`
 (404 on both). This plan is the full rename: source, config, docs, generated artifacts, GitHub,
 PyPI.
 
-Scope, so the size of this is not a surprise going in: ~2,660 occurrences of `velox` across ~250
-files in `velox/`, `velox-migrate/`, `tests/`, `docs/`, `spec/`, `plans/`, `examples/`, root
+Scope, so the size of this is not a surprise going in: ~2,660 occurrences of `voci` across ~250
+files in `voci/`, `voci-migrate/`, `tests/`, `docs/`, `spec/`, `plans/`, `examples/`, root
 config, and `.claude/skills/`. This is a mechanical sweep, not hundreds of individual decisions —
 one naming map, applied everywhere, plus a handful of named exceptions below.
 
@@ -14,46 +14,46 @@ one naming map, applied everywhere, plus a handful of named exceptions below.
 
 ### 1. Naming map (decisions, locked)
 
-Plain case-preserving substring replacement of `velox` → `voci`, `Velox` → `Voci`,
-`VELOX` → `VOCI`, everywhere in-scope. This is deliberately a substring rule, not a
-word-bounded one: it has to reach into `velox_migrate`, `velox-migrate`, `.velox_cache`,
-`VELOX_REWRITE_CACHE`, `velox.fixture` in one pass and produce `voci_migrate`, `voci-migrate`,
+Plain case-preserving substring replacement of `voci` → `voci`, `Voci` → `Voci`,
+`VOCI` → `VOCI`, everywhere in-scope. This is deliberately a substring rule, not a
+word-bounded one: it has to reach into `voci_migrate`, `voci-migrate`, `.voci_cache`,
+`VOCI_REWRITE_CACHE`, `voci.fixture` in one pass and produce `voci_migrate`, `voci-migrate`,
 `.voci_cache`, `VOCI_REWRITE_CACHE`, `voci.fixture` correctly.
 
 Two named exceptions the mechanical rule gets wrong, both applied by hand, not by the substring
 script:
 
-- **`velox-test` (the PyPI distribution name) becomes `voci`, not `voci-test`.** The `-test`
-  suffix existed only to dodge the `velox` collision; `voci` doesn't have that collision, so the
-  suffix drops. Everywhere `velox-test` appears (root `pyproject.toml` `[project].name`,
+- **`voci-test` (the PyPI distribution name) becomes `voci`, not `voci-test`.** The `-test`
+  suffix existed only to dodge the `voci` collision; `voci` doesn't have that collision, so the
+  suffix drops. Everywhere `voci-test` appears (root `pyproject.toml` `[project].name`,
   `README.md`'s install line, `examples/01-fastapi-crud`'s dependency + `[tool.uv.sources]`,
   `release.yml`'s PyPI environment URL) gets this fix.
-- **The migration tool's `VX###` construct codes (105 of them, e.g. `VX214`) become `VC###`**
-  ("Voci Construct", same shape as today's unstated "Velox Construct"). These don't spell out
-  `velox`, so the substring rule never touches them — needs its own pass, a regex like
+- **The migration tool's `VX###` construct codes (105 of them, e.g. `VC214`) become `VC###`**
+  ("Voci Construct", same shape as today's unstated "Voci Construct"). These don't spell out
+  `voci`, so the substring rule never touches them — needs its own pass, a regex like
   `\bVX(\d{3})\b` → `VC\1`, applied case-sensitively (never lowercase `vx`) across
-  `velox_migrate/matrix.py` (the 105 definitions), `velox_migrate/{audit,convert,report}/*.py`,
-  `velox-migrate/tests/*.py`, `docs/migrate/matrix.md`, `docs/migrate/index.md`,
+  `voci_migrate/matrix.py` (the 105 definitions), `voci_migrate/{audit,convert,report}/*.py`,
+  `voci-migrate/tests/*.py`, `docs/migrate/matrix.md`, `docs/migrate/index.md`,
   `plans/migration-findings.md`, `plans/trio-support-plan.md`. Not present in
-  `velox-migrate/corpus/` (checked — no dump or showcase file bakes in a VX code), so no corpus
-  regeneration needed for this one. `VELOX-TODO[category]` (the marker converted source actually
-  carries) is a different string — plain `VELOX`, caught by the ordinary substring rule, becomes
+  `voci-migrate/corpus/` (checked — no dump or showcase file bakes in a VX code), so no corpus
+  regeneration needed for this one. `VOCI-TODO[category]` (the marker converted source actually
+  carries) is a different string — plain `VOCI`, caught by the ordinary substring rule, becomes
   `VOCI-TODO[category]` for free.
 
 Everything else is the mechanical rule applied consistently:
 
 | Old | New |
 |---|---|
-| `velox/` (package dir) | `voci/` |
-| `velox-migrate/` (dir), dist name, CLI command | `voci-migrate/` |
-| `velox_migrate` (import package) | `voci_migrate` |
-| `velox` CLI command, `import velox`, `@velox.fixture` etc. | `voci` |
-| `[tool.velox]` config table | `[tool.voci]` |
-| `.velox_cache`, `.velox-migrate` work dir | `.voci_cache`, `.voci-migrate` |
-| `VELOX_REWRITE_CACHE` env var | `VOCI_REWRITE_CACHE` |
-| `VELOX_REWRITER_REVISION`, `VELOX_CODEGEN_OPTIONS`, `VELOX_BLOCK`, `VELOX_REPORT_VERSION`, `_VELOX_DIR` (internal constants) | `VOCI_*` equivalents |
-| `velox-example-*` (example project names) | `voci-example-*` |
-| GitHub `Ddedalus/velox` | `Ddedalus/voci` |
+| `voci/` (package dir) | `voci/` |
+| `voci-migrate/` (dir), dist name, CLI command | `voci-migrate/` |
+| `voci_migrate` (import package) | `voci_migrate` |
+| `voci` CLI command, `import voci`, `@voci.fixture` etc. | `voci` |
+| `[tool.voci]` config table | `[tool.voci]` |
+| `.voci_cache`, `.voci-migrate` work dir | `.voci_cache`, `.voci-migrate` |
+| `VOCI_REWRITE_CACHE` env var | `VOCI_REWRITE_CACHE` |
+| `VOCI_REWRITER_REVISION`, `VOCI_CODEGEN_OPTIONS`, `VOCI_BLOCK`, `VOCI_REPORT_VERSION`, `_VOCI_DIR` (internal constants) | `VOCI_*` equivalents |
+| `voci-example-*` (example project names) | `voci-example-*` |
+| GitHub `Ddedalus/voci` | `Ddedalus/voci` |
 | `VX###` construct codes (§1 exception, own regex) | `VC###` |
 
 Not touched: `oss/*` (pinned third-party submodules — FastAPI, pytest, httpx, etc.; editing
@@ -66,18 +66,18 @@ delete and let `just docs build` regenerate rather than editing.
 Large mechanical refactor touching nearly every file → worktree workflow, not direct-commit
 (`.claude/skills/dev-workflow/SKILL.md`).
 
-- `git worktree add ../velox-wt-rename-voci -b rename-voci`, `EnterWorktree`, `just sync` inside it.
-- `git mv velox voci`
-- `git mv velox-migrate voci-migrate && git mv voci-migrate/velox_migrate voci-migrate/voci_migrate`
-- `git mv .claude/skills/velox-docs .claude/skills/voci-docs`
+- `git worktree add ../voci-wt-rename-voci -b rename-voci`, `EnterWorktree`, `just sync` inside it.
+- `git mv voci voci`
+- `git mv voci-migrate voci-migrate && git mv voci-migrate/voci_migrate voci-migrate/voci_migrate`
+- `git mv .claude/skills/voci-docs .claude/skills/voci-docs`
 - Run the substring sweep (script, not by hand) over every tracked file except `oss/`, `.git/`,
   `.venv*/`, `site/`, `.cache/`, `.ruff_cache/`, `.pytest_cache/`, `uv.lock` — a `git ls-files`
   walk with the three-case substitution is enough; ripgrep/sed works too if it preserves case.
-- Apply the `velox-test` → `voci` exception by hand at its four call sites (§1).
+- Apply the `voci-test` → `voci` exception by hand at its four call sites (§1).
 - Apply the `VX###` → `VC###` regex pass (§1) — separately from the substring sweep, since it
-  doesn't spell `velox` and the sweep won't reach it.
-- Fix up path-shaped strings the substring rule won't reach on its own: `[tool.hatch.build.hooks.vcs] version-file`, `[tool.hatch.build.targets.wheel] packages`, `pyrefly` `project-includes`/`project-excludes`/`search-path`, `ruff` `extend-exclude`, `isort` `known-first-party`, `justfile`/`recipes/*.just` path references, CI workflow paths (`velox-migrate/velox_migrate` → `voci-migrate/voci_migrate` etc.) — these are directory paths, so `git mv` above already renamed the targets; this step is confirming every reference to those paths was swept too, since a path is textually just `velox...` and the substring rule should already have caught it. Spot-check rather than assume.
-- Root `CLAUDE.md`: update the `velox-docs` skill reference to `voci-docs`.
+  doesn't spell `voci` and the sweep won't reach it.
+- Fix up path-shaped strings the substring rule won't reach on its own: `[tool.hatch.build.hooks.vcs] version-file`, `[tool.hatch.build.targets.wheel] packages`, `pyrefly` `project-includes`/`project-excludes`/`search-path`, `ruff` `extend-exclude`, `isort` `known-first-party`, `justfile`/`recipes/*.just` path references, CI workflow paths (`voci-migrate/voci_migrate` → `voci-migrate/voci_migrate` etc.) — these are directory paths, so `git mv` above already renamed the targets; this step is confirming every reference to those paths was swept too, since a path is textually just `voci...` and the substring rule should already have caught it. Spot-check rather than assume.
+- Root `CLAUDE.md`: update the `voci-docs` skill reference to `voci-docs`.
 
 ### 3. Regenerate generated artifacts (don't hand-edit these)
 
@@ -86,7 +86,7 @@ Large mechanical refactor touching nearly every file → worktree workflow, not 
   into the output). Hand-editing the vendor tree instead would defeat the point of it staying a
   cheap diff against upstream.
 - `just migrate corpus-dumps` — the corpus fixture sources (e.g.
-  `typed_showcase/test_top.py::test_a_builtin_is_typed_by_velox`) get swept like any other file;
+  `typed_showcase/test_top.py::test_a_builtin_is_typed_by_voci`) get swept like any other file;
   the checked-in ground-truth JSON dumps that reference those names need regenerating, not editing.
 - `just docs cli` and `just docs matrix` — regenerate `docs/reference/cli.md` and
   `docs/migrate/matrix.md`'s generated blocks from the renamed `voci.cli`/`voci_migrate.matrix`
@@ -125,7 +125,7 @@ Local-only (not in CI, but this rename touches what they check, so run them anyw
 
 - `just docs check` — site builds clean, `docs/reference/cli.md` and `docs/migrate/matrix.md`'s
   generated blocks match the renamed `voci.cli`/`voci_migrate.matrix`
-- `git grep -i velox` over the worktree — should come back empty except inside `oss/` and, if kept
+- `git grep -i voci` over the worktree — should come back empty except inside `oss/` and, if kept
   as a compatibility note, this plan file's own history
 - `git grep -i vx[0-9]` — should come back empty (the `VX###` → `VC###` pass, §1)
 
@@ -166,7 +166,7 @@ steps. No review step — §4 and §5 are the gate.
 - `gh repo rename voci` from the `main` checkout (equivalent: repo Settings → rename). GitHub
   auto-redirects the old URL and existing clones' `origin` remotes keep working, so this is safe
   to do whenever — no hard ordering dependency on the code sweep, but doing it after merge keeps
-  the rename atomic from an outside observer's perspective (one moment the project is `velox`,
+  the rename atomic from an outside observer's perspective (one moment the project is `voci`,
   the next it's `voci`, not a straddling state).
 - After renaming, `git remote set-url origin https://github.com/Ddedalus/voci.git` in this
   checkout (and any other local clones/worktrees) — the redirect works but pins to it forever
@@ -177,9 +177,9 @@ steps. No review step — §4 and §5 are the gate.
 ### 8. PyPI
 
 Not a rename — `voci` is a brand-new PyPI project, since PyPI has no rename operation and the
-distribution name is changing (`velox-test` → `voci`, not `velox-test` → `voci-test`).
+distribution name is changing (`voci-test` → `voci`, not `voci-test` → `voci-test`).
 
-- Nothing to publish yet if `velox-test` was never actually released (no git tags, no
+- Nothing to publish yet if `voci-test` was never actually released (no git tags, no
   `gh release list` output as of this plan — check again before assuming, in case a release
   happened outside this checkout's view).
 - When the first release does happen: register PyPI trusted publishing (OIDC) for the new `voci`
@@ -187,23 +187,23 @@ distribution name is changing (`velox-test` → `voci`, not `velox-test` → `vo
   `pypi`. `release.yml`'s existing `environment.url` already points at `pypi.org/project/voci/`
   after §1/§2's sweep + exception; the trusted-publisher registration is a PyPI-side setting that
   doesn't exist until someone creates it there, unrelated to anything in this repo.
-- `velox-migrate` has no PyPI publish job today (`release.yml` only builds/publishes the root
+- `voci-migrate` has no PyPI publish job today (`release.yml` only builds/publishes the root
   package) — nothing to register for `voci-migrate` until that changes.
-- The old `velox-test` PyPI project, if anything was ever pushed to it, is simply abandoned; PyPI
+- The old `voci-test` PyPI project, if anything was ever pushed to it, is simply abandoned; PyPI
   doesn't support deleting or redirecting a project, so there's no cleanup action beyond deciding
   whether to yank any releases on it (only relevant if it was ever actually published to).
 
 ### 9. Outside the repo (not part of the worktree's diff, do separately/manually)
 
-- This checkout's own directory is named `velox` on disk (`/home/hubert/velox`) — cosmetic only,
+- This checkout's own directory is named `voci` on disk (`/home/hubert/voci`) — cosmetic only,
   renaming it is optional and yours to do (`mv`, then point any shell aliases/IDE workspaces at
   the new path).
-- `~/velox-headless` — the permanent headless worktree noted in memory
-  ([project-headless-worktree](/home/hubert/.claude/projects/-home-hubert-velox/memory/project-headless-worktree.md)).
+- `~/voci-headless` — the permanent headless worktree noted in memory
+  ([project-headless-worktree](/home/hubert/.claude/projects/-home-hubert-voci/memory/project-headless-worktree.md)).
   Never remove it per that memory; renaming or repointing it is a separate decision, not implied
   by this plan.
-- Update Claude memory afterward: `project-velox.md`'s architecture notes, the worktree-typecheck
-  memory's `velox-wt-<name>` convention example, and `MEMORY.md`'s index all still say `velox` —
+- Update Claude memory afterward: `project-voci.md`'s architecture notes, the worktree-typecheck
+  memory's `voci-wt-<name>` convention example, and `MEMORY.md`'s index all still say `voci` —
   worth a pass once the rename has actually landed, not before (memories should describe what's
   true, and it isn't yet).
 

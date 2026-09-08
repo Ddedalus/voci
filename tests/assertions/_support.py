@@ -13,8 +13,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from velox._assertions import rewrite as _rewrite
-from velox._assertions.rewrite import Config, explanation_lines
+from voci._assertions import rewrite as _rewrite
+from voci._assertions.rewrite import Config, explanation_lines
 
 
 def mock_config(
@@ -41,7 +41,7 @@ def callop(
     verbose: int = 0,
     assertion_text_diff_style: str = "ndiff",
 ) -> list[str] | None:
-    """Ported from upstream `callop`; dispatches straight at velox's explanation entrypoint."""
+    """Ported from upstream `callop`; dispatches straight at voci's explanation entrypoint."""
     return explanation_lines(
         op,
         left,

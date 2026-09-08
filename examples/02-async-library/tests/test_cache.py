@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 from typing import Annotated
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from relay.cache import FakeClock, TTLCache
 from tests.fixtures import cache, clock
@@ -111,12 +111,12 @@ async def test_hit_rate(c: Annotated[TTLCache, Depends(cache)]) -> None:
     c.get("a")
     c.get("missing")
 
-    assert c.hit_rate == velox.approx(2 / 3)
+    assert c.hit_rate == voci.approx(2 / 3)
 
 
 async def test_stats_can_be_dumped(
     c: Annotated[TTLCache, Depends(cache)],
-    tmp: Annotated[Path, Depends(velox.tmp_path)],
+    tmp: Annotated[Path, Depends(voci.tmp_path)],
 ) -> None:
     """`tmp_path` is `basetemp/<sanitized-test-id>` — unique by construction, no scan-and-retry."""
     c.put("a", b"1")
@@ -128,7 +128,7 @@ async def test_stats_can_be_dumped(
     assert json.loads(target.read_text()) == {"hits": 1, "misses": 0}
 
 
-@velox.skip("cache does not evict on size yet (unbounded growth, not an AssertionError)")
+@voci.skip("cache does not evict on size yet (unbounded growth, not an AssertionError)")
 async def test_evicts_when_full(c: Annotated[TTLCache, Depends(cache)]) -> None:
     for i in range(10_000):
         c.put(f"k{i}", b"v")

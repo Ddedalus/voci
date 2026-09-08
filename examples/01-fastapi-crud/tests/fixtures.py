@@ -1,10 +1,10 @@
 """Fixtures shared by the whole suite.
 
-velox has no `conftest.py`. This is an ordinary module and test files import from it by name, so
+voci has no `conftest.py`. This is an ordinary module and test files import from it by name, so
 "go to definition" works, renames are safe, and a typo is an `ImportError` at collection rather
 than a fixture-not-found at run time.
 
-`from __future__ import annotations` below costs nothing: velox reads the injection plan from
+`from __future__ import annotations` below costs nothing: voci reads the injection plan from
 `__defaults__` and never evaluates an annotation. The annotations are for you and your type
 checker.
 """
@@ -15,11 +15,11 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-import velox
+import voci
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from velox import Depends
-from velox import fastapi as velox_fastapi
+from voci import Depends
+from voci import fastapi as voci_fastapi
 
 from app.db import get_session
 from app.main import app
@@ -27,7 +27,7 @@ from app.models import User
 from app.settings import Settings
 
 # Engine construction and the transaction-per-test dance live next door, in `tests/database.py`:
-# that part is SQLAlchemy's business rather than velox's.
+# that part is SQLAlchemy's business rather than voci's.
 from tests import database
 
 # --------------------------------------------------------------------------------------
@@ -35,9 +35,9 @@ from tests import database
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture(scope="session")
+@voci.fixture(scope="session")
 async def engine(
-    tmp: Annotated[velox.TmpPathFactory, Depends(velox.tmp_path_factory)],
+    tmp: Annotated[voci.TmpPathFactory, Depends(voci.tmp_path_factory)],
 ) -> AsyncIterator[AsyncEngine]:
     """One engine for the entire run, shared by every concurrent test.
 
@@ -48,7 +48,7 @@ async def engine(
         yield e
 
 
-@velox.fixture()
+@voci.fixture()
 async def session(engine: Annotated[AsyncEngine, Depends(engine)]) -> AsyncIterator[AsyncSession]:
     """A real session inside a transaction that is always rolled back.
 
@@ -64,12 +64,12 @@ async def session(engine: Annotated[AsyncEngine, Depends(engine)]) -> AsyncItera
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture()
+@voci.fixture()
 def settings() -> Settings:
     return Settings(database_url="unused: the session is injected", signup_bonus_cents=0)
 
 
-@velox.fixture()
+@voci.fixture()
 async def api_client(
     session: Annotated[AsyncSession, Depends(session)],
     settings: Annotated[Settings, Depends(settings)],
@@ -84,10 +84,10 @@ async def api_client(
     the test passed, failed, or raised halfway through.
 
     `ASGITransport` sends no lifespan scope, so `app`'s `lifespan` stays out of the way here. When
-    startup builds something your tests need, depend on `velox.fastapi.lifespan(app)`, which runs
+    startup builds something your tests need, depend on `voci.fastapi.lifespan(app)`, which runs
     it once for the whole session.
     """
-    async with velox_fastapi.client(
+    async with voci_fastapi.client(
         app,
         overrides={get_session: lambda: session},
         state={"settings": settings},
@@ -100,7 +100,7 @@ async def api_client(
 # --------------------------------------------------------------------------------------
 
 
-@velox.fixture()
+@voci.fixture()
 async def alice(session: Annotated[AsyncSession, Depends(session)]) -> User:
     """A user who exists, for tests that need one to.
 
@@ -130,7 +130,7 @@ class PaymentSandbox:
         return f"ch_{len(self.charges):04d}"
 
 
-@velox.fixture(exclusive="payments-sandbox")
+@voci.fixture(exclusive="payments-sandbox")
 async def payment_sandbox() -> AsyncIterator[PaymentSandbox]:
     """The sandbox, held by one test at a time.
 

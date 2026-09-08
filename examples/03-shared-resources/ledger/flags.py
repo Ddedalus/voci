@@ -2,7 +2,7 @@
 
 Module-level mutable state read at call time. There is no per-task view of it, no ContextVar
 underneath, and no way to give two concurrent tests different answers. A test that flips a flag
-must therefore run alone — this is the canonical `@velox.solo` case, and it has nothing to do with
+must therefore run alone — this is the canonical `@voci.solo` case, and it has nothing to do with
 mocking.
 """
 

@@ -1,4 +1,4 @@
-"""Tests for velox._run.isolated: the parent side of a `@velox.isolated` test's subprocess
+"""Tests for voci._run.isolated: the parent side of a `@voci.isolated` test's subprocess
 dispatch. Exercised against a stand-in subprocess (`_FakeProcess`) rather than a real `python -m`
 spawn -- `tests/test_cli.py` covers the real thing end to end; these cover `run_isolated`'s own
 crash/cancellation handling, which a real subprocess can't be coaxed into on demand.
@@ -16,9 +16,9 @@ import pytest
 from _support import make_record as _record
 from _support import run_async
 
-from velox._run.isolated import IsolatedConfig, result_to_json, run_isolated
-from velox._run.run import Outcome
-from velox._run.run import TestResult as Result
+from voci._run.isolated import IsolatedConfig, result_to_json, run_isolated
+from voci._run.run import Outcome
+from voci._run.run import TestResult as Result
 
 
 async def _passes() -> None:

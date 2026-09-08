@@ -11,7 +11,7 @@ import linecache
 
 import pytest
 
-from velox._assertions.pep657 import explain_assertion, source_at
+from voci._assertions.pep657 import explain_assertion, source_at
 
 
 def _explain(fn, *args) -> str | None:

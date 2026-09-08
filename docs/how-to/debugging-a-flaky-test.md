@@ -6,7 +6,7 @@ question before it's anything else. Three flags narrow it down, cheapest first.
 ## `--serial`
 
 `--serial` is shorthand for `--concurrency 1`: one test at a time, in collection order. If a test
-fails under `velox` but passes under `velox --serial <same test id>`, the cause is something it
+fails under `voci` but passes under `voci --serial <same test id>`, the cause is something it
 shares with whatever else was running, not a bug in the test itself.
 
 ```python
@@ -39,13 +39,13 @@ sharing that loop, this is the flag that turns "the suite got slower for no reas
 specific stack:
 
 ```
-velox: the event loop has been blocked for 6.3s
+voci: the event loop has been blocked for 6.3s
   tests/test_safety.py::test_blocking_call_stalls_the_loop is holding it; nothing else runs
   until it returns (11 tests in flight):
     File "ledger/store.py", line 42, in balance
       ...
   A blocking call in an `async def` test, or in a fixture, holds the loop for the whole suite.
-  Move the work into a sync `def` test (velox runs those in a worker thread), or
+  Move the work into a sync `def` test (voci runs those in a worker thread), or
   await asyncio.to_thread(...).
 ```
 
@@ -64,7 +64,7 @@ it's the fastest way to land on a single reproducible failure instead of reading
 where several things went wrong for different reasons:
 
 ```console
-$ velox --serial -x tests/test_safety.py
+$ voci --serial -x tests/test_safety.py
 ```
 
 `--maxfail N` generalizes it past the first failure, useful once `-x` has confirmed a test is

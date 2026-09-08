@@ -1,4 +1,4 @@
-"""Tests for `velox._cache`: the run cache's round trip, its tolerance of a file it cannot
+"""Tests for `voci._cache`: the run cache's round trip, its tolerance of a file it cannot
 read, and the merge rule that decides what one run is allowed to forget.
 """
 
@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from velox import _cache
+from voci import _cache
 
 
 def _cache_file(root: Path) -> Path:
@@ -26,7 +26,7 @@ def test_save_then_load_round_trips(tmp_path: Path) -> None:
 
 
 def test_save_writes_a_gitignore_covering_the_cache_directory(tmp_path: Path) -> None:
-    """A project must not pick up a diff for having run velox once."""
+    """A project must not pick up a diff for having run voci once."""
     _cache.save(tmp_path, _cache.LastRun(failed=("test_a.py::test_x",)))
     assert (tmp_path / _cache.CACHE_DIR_NAME / ".gitignore").read_text().endswith("*\n")
 
@@ -144,7 +144,7 @@ def test_update_merges_into_what_is_on_disk_not_a_stale_baseline(tmp_path: Path)
         settled_ids={"a.py::t1", "b.py::t2"},
         settled_files={"a.py", "b.py"},
     )
-    # The scoped run, `velox a.py`, landing second off the older baseline.
+    # The scoped run, `voci a.py`, landing second off the older baseline.
     _cache.update(
         tmp_path,
         baseline,

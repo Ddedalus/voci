@@ -1,8 +1,8 @@
 set positional-arguments
 set working-directory := '..'
 
-# Both interpreters velox supports. They disagree about annotations (PEP 649: on 3.14 they are
-# computed lazily and reach `velox._di.fixtures` as source text, where 3.13 hands it objects), so
+# Both interpreters voci supports. They disagree about annotations (PEP 649: on 3.14 they are
+# computed lazily and reach `voci._di.fixtures` as source text, where 3.13 hands it objects), so
 # each version exercises a different half of the injection scan and of the `sys.version_info`
 # branches around it. `.python-version` picks the one everything runs under by default.
 #
@@ -31,5 +31,5 @@ run version *args:
     # every switch, which is slow enough that agents stop switching.
     if [ "$version" = "$(cat .python-version)" ]; then env=.venv; else env=".venv-$version"; fi
     # `--all-packages` because uv's implicit sync would otherwise install the root project alone
-    # and leave `velox_migrate` missing from a fresh alternate environment.
+    # and leave `voci_migrate` missing from a fresh alternate environment.
     UV_PYTHON="$version" UV_PROJECT_ENVIRONMENT="$env" uv run --all-packages "$@"

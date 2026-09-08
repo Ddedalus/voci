@@ -8,7 +8,7 @@ write the same dict — and the documented teardown idiom, `clear()`, wipes ever
 too. The alternative usually recommended is an app factory, which is a change to production code
 made solely for tests.
 
-velox swaps each attribute once, per app, for a proxy layering a `ContextVar` of per-test values
+voci swaps each attribute once, per app, for a proxy layering a `ContextVar` of per-test values
 over what was already there. Three upstream facts make it work, all verified by reading the source
 rather than assumed: a route stores only a *pointer* to the app and resolves the override at
 request-solve time via `.get(call, call)`; `request.app` comes from the ASGI scope, which Starlette

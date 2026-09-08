@@ -1,10 +1,10 @@
-"""Tests for velox._collection.selection: expression parsing, tag matching and -k id matching."""
+"""Tests for voci._collection.selection: expression parsing, tag matching and -k id matching."""
 
 from __future__ import annotations
 
 import pytest
 
-from velox._collection.selection import (
+from voci._collection.selection import (
     SelectionError,
     compile_keyword_expression,
     compile_tag_expression,

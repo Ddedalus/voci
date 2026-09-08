@@ -1,4 +1,4 @@
-"""Tests for `velox._report.color`: the enabled/disabled decision and `paint`'s wrapping."""
+"""Tests for `voci._report.color`: the enabled/disabled decision and `paint`'s wrapping."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from velox._report.color import GREEN, color_enabled, paint
+from voci._report.color import GREEN, color_enabled, paint
 
 
 class _FakeTTYStream(io.StringIO):

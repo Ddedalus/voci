@@ -1,4 +1,4 @@
-"""Tests for velox._mocking: finding `unittest.mock` patching on a test, and the guard that
+"""Tests for voci._mocking: finding `unittest.mock` patching on a test, and the guard that
 refuses a patch entered by a test running alongside others."""
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from unittest import mock
 
 import pytest
 
-from velox import _mocking
-from velox._builtins import capture as _capture
+from voci import _mocking
+from voci._builtins import capture as _capture
 
 
 @pytest.fixture
@@ -101,7 +101,7 @@ def test_patch_dict_is_found_even_though_it_records_no_patchings() -> None:
     """`mock.patch.dict`'s decorator is a closure over its patcher rather than a wrapper
     carrying a `patchings` list, so it is found through the closure."""
 
-    @mock.patch.dict(os.environ, {"VELOX_TEST": "1"})
+    @mock.patch.dict(os.environ, {"VOCI_TEST": "1"})
     def test_patched() -> None:
         pass
 
@@ -138,7 +138,7 @@ def test_real_function_reads_through_decorators() -> None:
 
 
 def test_real_function_stops_at_the_innermost_actual_function() -> None:
-    """`__wrapped__` is an ordinary attribute anyone can set to anything; whatever velox hands
+    """`__wrapped__` is an ordinary attribute anyone can set to anything; whatever voci hands
     back has to be a function, since the caller reads `__code__` off it."""
 
     def test_underneath() -> None:
@@ -159,7 +159,7 @@ def test_a_patch_entered_by_a_concurrently_running_test_is_refused(
         pass
 
     assert "getcwd" in str(excinfo.value)
-    assert "@velox.solo" in str(excinfo.value)
+    assert "@voci.solo" in str(excinfo.value)
     assert os.getcwd() != "/x"
 
 
@@ -168,11 +168,11 @@ def test_patch_dict_entered_by_a_concurrently_running_test_is_refused(
 ) -> None:
     with (
         pytest.raises(_mocking.GlobalPatchError),
-        mock.patch.dict(os.environ, {"VELOX_TEST": "1"}),
+        mock.patch.dict(os.environ, {"VOCI_TEST": "1"}),
     ):
         pass
 
-    assert "VELOX_TEST" not in os.environ
+    assert "VOCI_TEST" not in os.environ
 
 
 def test_a_test_running_alone_patches_freely(guard: None, running_solo_test: None) -> None:

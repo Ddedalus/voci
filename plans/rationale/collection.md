@@ -23,9 +23,9 @@ running tests, which is the one thing the grouping must not buy. The wrapper tha
 `functools.wraps`, which copies `__dict__` wholesale: `mock.patch` keeps its `patchings` list
 there, and a copy of it on the wrapper is counted a second time by `patching_of`, doubling both
 the reported patch targets and the positional arguments they are taken to supply — which then
-hides a real missing injection behind a parameter velox believes a mock will fill.
+hides a real missing injection behind a parameter voci believes a mock will fill.
 
-**A test shape that would collect as nothing is a collection error.** A `Test*` class velox can't
+**A test shape that would collect as nothing is a collection error.** A `Test*` class voci can't
 construct, a `setup_method` that would never run, a mark on a class, a `test_*` name bound to a
 lambda, a test that yields — each of these is silent in the worst way: the suite looks green
 because tests are missing from it, or because a test ran without the setup it was written to
@@ -41,7 +41,7 @@ Reading only `vars(cls)` silently drops every test a shared base contributes —
 "one suite, run against three backends" layout — and lets an inherited `setup_method` through the
 guard whose entire job is catching setup that will never run.
 
-**`@velox.parametrize` shares one resolution plan across every expanded case.** `plan_for` runs
+**`@voci.parametrize` shares one resolution plan across every expanded case.** `plan_for` runs
 once per test function, not once per case: a parametrized value is a call kwarg, not a DI graph
 node, so building the plan per case would repeat identical work for nothing. `parametrize.
 known_params_of` computes what names parametrize supplies before that one `plan_for` call, so
@@ -51,11 +51,11 @@ actual `Depends(...)` injection, since either would otherwise fail confusingly l
 once two sources tried to supply the same keyword.
 
 **A collected record carries its own marks, and every condition on them is already decided.**
-`velox.case(value, marks=...)` puts a mark on one case of a `@velox.parametrize`, so the marks
+`voci.case(value, marks=...)` puts a mark on one case of a `@voci.parametrize`, so the marks
 reaching one record of a test function need not be the marks reaching the next. Collection folds
 the case's marks into the function's and stores the result on `TestRecord`, which is what the
 runner reads — a mark answered by looking at `func` would be answered once for cases that differ.
-The same pass decides `@velox.skipif`'s and `@velox.xfail(condition=...)`'s conditions, both of
+The same pass decides `@voci.skipif`'s and `@voci.xfail(condition=...)`'s conditions, both of
 which may be callables: evaluating a condition is running suite code, and running it inside the
 runner would mean a user's expression raising in the middle of concurrent dispatch rather than
 becoming this test's collection error alongside every other malformed mark. A `-m` tag expression

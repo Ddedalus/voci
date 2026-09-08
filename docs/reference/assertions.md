@@ -1,17 +1,17 @@
 # Assertions
 
-Velox vendors pytest's assertion rewriter, so a plain `assert` statements are explained in case of a failure.
+Voci vendors pytest's assertion rewriter, so a plain `assert` statements are explained in case of a failure.
 
 Utilities for capturing exceptions and approximate comparisons are available:
 
 ## Capturing exceptions
 
-::: velox.raises
+::: voci.raises
 
-::: velox.ExceptionInfo
+::: voci.ExceptionInfo
 
 ## Approximate comparisons
 
-::: velox.approx
+::: voci.approx
 
-::: velox.Approx
+::: voci.Approx

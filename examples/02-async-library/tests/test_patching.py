@@ -1,12 +1,12 @@
 """The mocking ladder, in one file, cheapest rung first.
 
-velox ships **no patching API of its own**. `unittest.mock` is already concurrency-correct where it
+voci ships **no patching API of its own**. `unittest.mock` is already concurrency-correct where it
 matters — `MagicMock`, `AsyncMock`, `create_autospec`, the call assertions are all per-instance
-state — and velox never wraps any of it. The one thing that is not safe is the *installer*:
+state — and voci never wraps any of it. The one thing that is not safe is the *installer*:
 `mock.patch` does a real `setattr` on a module or class, and every concurrently-running test sees
 it.
 
-So velox's job here is not to reimplement patching. It is to *notice* patching and schedule around
+So voci's job here is not to reimplement patching. It is to *notice* patching and schedule around
 it.
 """
 
@@ -16,8 +16,8 @@ import os
 from typing import Annotated
 from unittest import mock
 
-import velox
-from velox import Depends
+import voci
+from voci import Depends
 
 from relay.cache import FakeClock, TTLCache
 from relay.client import Relay
@@ -73,13 +73,13 @@ async def test_clock_substituted_by_di() -> None:
 async def test_settings_substituted_by_di() -> None:
     """`Settings.from_env` takes the mapping. No `setenv`, no `patch.dict`, no solo.
 
-    velox provides no `monkeypatch.setenv` equivalent: it would add an API without adding a
+    voci provides no `monkeypatch.setenv` equivalent: it would add an API without adding a
     capability, since the underlying `os.environ` write is global either way.
     """
     settings = Settings.from_env({"RELAY_RETRIES": "7", "RELAY_CACHE_TTL": "1.5"})
 
     assert settings.retries == 7
-    assert settings.cache_ttl == velox.approx(1.5)
+    assert settings.cache_ttl == voci.approx(1.5)
 
 
 # ========================================================================================
@@ -96,7 +96,7 @@ async def test_jitter_is_deterministic(
 ) -> None:
     """The mock parameter comes first, exactly as under pytest — `mock.patch` injects positionally.
 
-    Injected parameters come after it and are resolved as usual: velox reads this test's
+    Injected parameters come after it and are resolved as usual: voci reads this test's
     dependencies off the function underneath the decorator, and `unittest.mock` fills the leading
     parameters it owns. `relay.client.random.uniform` is a module global, though, so this test is
     scheduled to run alone and the suite drains around it — the summary line at the end of the run
@@ -122,10 +122,10 @@ async def test_settings_from_the_real_environment() -> None:
 
 
 # `with mock.patch(...)` inside a body has no patcher object to find until the line runs, so
-# `@velox.solo` is written by hand here. Without it the patch is refused as it installs and the
+# `@voci.solo` is written by hand here. Without it the patch is refused as it installs and the
 # test fails, naming the target — a patch nothing scheduled around is never quietly allowed to
 # reach a module every other running test reads.
-@velox.solo
+@voci.solo
 async def test_context_manager_patching_must_be_marked(
     r: Annotated[Relay, Depends(relay)],
     t: Annotated[FakeTransport, Depends(transport)],
@@ -144,8 +144,8 @@ async def test_context_manager_patching_must_be_marked(
 
 
 # `chdir` has no per-task equivalent in CPython — one cwd per process — so this test is marked
-# `@velox.isolated` rather than run for real against the process every other test shares.
-@velox.isolated
+# `@voci.isolated` rather than run for real against the process every other test shares.
+@voci.isolated
 async def test_relative_path_resolution() -> None:
     os.chdir("/tmp")
     assert os.getcwd() == "/tmp"
