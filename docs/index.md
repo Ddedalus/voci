@@ -1,4 +1,15 @@
+---
+# Zensical treats the homepage's H1 as its tab title too, so without this it renders "voci - voci"
+# (`page.title - config.site_name`). This front-matter title takes precedence and reads as "Home -
+# voci" instead.
+title: Home
+---
+
 # voci
+
+<p align="center">
+  <img src="static/voci-logo-2.svg" alt="" width="160">
+</p>
 
 **A concurrent test runner for async Python.** voci runs your whole suite in one process on one
 event loop, with every test as a concurrent `asyncio` task. For a suite that spends its time

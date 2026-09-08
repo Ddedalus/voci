@@ -1,5 +1,9 @@
 # voci
 
+<p align="center">
+  <img src="docs/static/voci-logo-2.svg" alt="" width="160">
+</p>
+
 **A concurrent test runner for async Python.** voci runs your whole suite in one process on one
 event loop, with every test as a concurrent `asyncio` task. For a suite that spends its time
 waiting — on a database, on an ASGI app, on a network stub — that turns wall-clock time from the
