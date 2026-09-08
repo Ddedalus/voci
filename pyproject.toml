@@ -3,6 +3,8 @@ name = "voci"
 dynamic = ["version"]
 description = "Fast, concurrent test runner for Python."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = []
 

@@ -4,6 +4,16 @@
   <img src="docs/static/voci-logo-2.svg" alt="" width="160">
 </p>
 
+<p align="center">
+  <a href="https://pypi.org/project/voci/"><img src="https://img.shields.io/pypi/v/voci" alt="PyPI"></a>
+  <a href="https://github.com/Ddedalus/voci/actions/workflows/ci.yml"><img src="https://github.com/Ddedalus/voci/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.13%20%7C%203.14-blue" alt="Python 3.13 | 3.14">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
+  <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
+  <a href="https://github.com/facebook/pyrefly"><img src="https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json" alt="Pyrefly"></a>
+</p>
+
 **A concurrent test runner for async Python.** voci runs your whole suite in one process on one
 event loop, with every test as a concurrent `asyncio` task. For a suite that spends its time
 waiting — on a database, on an ASGI app, on a network stub — that turns wall-clock time from the

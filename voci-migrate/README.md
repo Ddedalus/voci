@@ -1,5 +1,7 @@
 # voci-migrate
 
+[![PyPI](https://img.shields.io/pypi/v/voci-migrate)](https://pypi.org/project/voci-migrate/)
+
 Tooling that migrates a pytest suite to voci. A separate distribution from voci itself: the
 runtime never depends on it, and it never becomes part of what a migrated suite ships.
 
