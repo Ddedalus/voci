@@ -33,9 +33,17 @@ split is proposed here — each PR below simplifies functions in place.
 
 Each was `# noqa: C901`'d in place rather than fixed in PR 3, to keep that PR's review small and
 because several of these are real refactors, not small splits. The gate is already on, so nothing
-new can regress silently in the meantime — this PR is about paying down what's grandfathered.
+new can regress silently in the meantime — this PR is about paying down what's grandfathered. Each
+item lands as its own PR rather than one big one, per the list below.
 
-- `velox-migrate/velox_migrate/convert/specialize.py` `_bound_in` (11 > 10)
+### Done
+
+- `velox-migrate/velox_migrate/convert/specialize.py` `_bound_in` (11 > 10) — split the `Import`
+  and `Assign` match arms' loops into `_import_bindings`/`_assign_bindings`. Under 10; no behavior
+  change.
+
+### To do
+
 - `velox-migrate/velox_migrate/matrix.py` `_validate` (14 > 10)
 - `velox/_collection/collect.py` `collect` (19 > 10)
 - `velox/_di/runtime.py` `_construct` (14 > 10)
