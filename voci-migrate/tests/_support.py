@@ -80,9 +80,17 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def git_repo(path: Path) -> Path:
-    """An empty git repository at `path`, on branch `main`, ready to commit into."""
+    """An empty git repository at `path`, on branch `main`, ready to commit into.
+
+    Identity is set in local config, not just `git()`'s env -- `workspace.scaffold` runs its own
+    git commands (rebase, most notably) directly against this repo and its worktrees, with no env
+    of its own, so it needs a committer identity available the same way a real user's would be:
+    from config, on a runner that may have no global `user.name`/`user.email` at all.
+    """
     path.mkdir(parents=True, exist_ok=True)
     git(path, "init", "-q", "-b", "main")
+    git(path, "config", "user.name", _GIT_IDENTITY["GIT_AUTHOR_NAME"])
+    git(path, "config", "user.email", _GIT_IDENTITY["GIT_AUTHOR_EMAIL"])
     return path
 
 
