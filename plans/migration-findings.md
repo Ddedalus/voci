@@ -129,6 +129,31 @@ Nothing refused, no `VOCI-TODO` markers written, and concurrency cost nothing: t
 fail serially and in parallel, so none of the 203 tests the audit flagged under VC412 (seeded
 randomness) actually depends on running alone.
 
+**Re-run 2026-09-08, post velox→voci rename.** Same suite, same commit, against the renamed tool.
+The pass/fail numbers above reproduced exactly — `voci --serial` and `voci` (9.5x) both 1183/5, the
+same five `test_registry.py` cases — so the rename itself introduced no behavioral change. Two
+things drifted since the original run above, and both were confirmed present on `main` *before*
+the rename too (checked by running the identical repro against a pre-rename worktree), so neither
+is a rename regression:
+
+- **`convert --write`'s baseline recording breaks on a suite that sets its own `norecursedirs`.**
+  `_record_baseline` (`voci_migrate/workspace.py`'s `snapshot_baseline` + `voci_migrate/cli.py`'s
+  `_record_baseline`) snapshots the tree into `root/.voci-migrate/baseline/tree` and then reruns
+  pytest over `root` with no explicit paths, relying on pytest's default `norecursedirs = ('.*', ...)`
+  to skip back over that snapshot. marshmallow's own `pyproject.toml` sets
+  `norecursedirs = ".git .ropeproject .tox docs env venv tests/mypy_test_cases"`, which replaces
+  rather than extends the default and drops the `.*` wildcard, so pytest walks into
+  `.voci-migrate/baseline/tree/tests` too and collects two same-named `tests` packages at different
+  paths — `_pytest.pathlib.ImportPathMismatchError`, baseline recording aborts, `convert --write`
+  refuses to touch the tree. Worked around here with `convert --write -- --ignore=.voci-migrate`;
+  the real fix is snapshotting outside `root` (or passing `--ignore` unconditionally) so the
+  baseline survives suites that don't lean on pytest's default excludes.
+- **15 `VOCI-TODO[VC114]` markers now appear where the original run had none** (four files:
+  `test_decorators.py`, `test_deserialization.py`, `test_fields.py`, `test_serialization.py`), all
+  the same row — parametrize calls without attributable ids. Not investigated further; flagged here
+  as drift since the original baseline's "no markers" claim, worth reconciling next time this suite
+  is re-run.
+
 ### Environment obstacles worth remembering
 
 `convert --write` rewrites the tree in place, so the suite has to be copied out of `oss/` first —
