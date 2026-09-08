@@ -323,14 +323,11 @@ def _bound_in(body: Sequence[ast.stmt]) -> Iterator[tuple[ast.stmt, str]]:
     for node in body:
         match node:
             case ast.Import() | ast.ImportFrom():
-                for alias in node.names:
-                    yield node, alias.asname or alias.name.partition(".")[0]
+                yield from _import_bindings(node)
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef():
                 yield node, node.name
             case ast.Assign(targets=targets):
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        yield node, target.id
+                yield from _assign_bindings(node, targets)
             case ast.AnnAssign(target=ast.Name(id=name)):
                 yield node, name
             case ast.If() | ast.Try() | ast.With() | ast.For() | ast.While():
@@ -338,6 +335,19 @@ def _bound_in(body: Sequence[ast.stmt]) -> Iterator[tuple[ast.stmt, str]]:
                     yield from _bound_in(nested)
             case _:
                 pass
+
+
+def _import_bindings(node: ast.Import | ast.ImportFrom) -> Iterator[tuple[ast.stmt, str]]:
+    """The names an import statement binds, one per alias."""
+    for alias in node.names:
+        yield node, alias.asname or alias.name.partition(".")[0]
+
+
+def _assign_bindings(node: ast.stmt, targets: Sequence[ast.expr]) -> Iterator[tuple[ast.stmt, str]]:
+    """The plain names an assignment's targets bind, skipping tuple/attribute targets."""
+    for target in targets:
+        if isinstance(target, ast.Name):
+            yield node, target.id
 
 
 def _blocks(node: ast.stmt) -> Iterator[Sequence[ast.stmt]]:

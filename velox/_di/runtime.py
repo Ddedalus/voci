@@ -344,7 +344,7 @@ async def _release_all(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
         raise BaseExceptionGroup("fixture teardown", errors)
 
 
-async def _construct(
+async def _construct(  # noqa: C901
     fixture: Fixture[Any], kwargs: Mapping[str, Any], ctx: BuiltinContext
 ) -> tuple[Any, Closer | None]:
     """Call `fixture.func`, adapting whichever of the four supported shapes it is — or, for a

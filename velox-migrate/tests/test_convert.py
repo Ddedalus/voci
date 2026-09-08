@@ -1412,6 +1412,13 @@ def test_a_builtin_type_the_consumer_already_binds_is_imported_under_an_alias() 
     )
 
 
+def test_module_level_names_sees_a_type_alias_like_bindings_does() -> None:
+    # `Resolver._claimed()` unions this with `annotate.bindings()`'s own node-matching to decide
+    # what a consumer already binds; a `type` statement only one of them recognized would leave the
+    # two disagreeing about whether `Path` is taken.
+    assert layout.module_level_names("type Path = str\n") == {"Path"}
+
+
 def test_a_builtin_velox_has_no_counterpart_for_is_no_worklist_row() -> None:
     # There is no injection to lose a type at, so there is nothing for a user to go and annotate.
     resolver = annotate.Resolver({}, layout.Layout(homes={}, moves={}, imports={}))

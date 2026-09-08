@@ -16,8 +16,8 @@ import math
 import os
 import sys
 import time
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TextIO, overload
 
@@ -133,12 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Dispatches tests as asyncio.Tasks under a shared semaphore(N). type=int makes
     # argparse reject non-numeric input on its own; "positive" is checked by hand in
-    # main, so it can report exit code 4 with a velox-styled message instead of
+    # _prepare_run, so it can report exit code 4 with a velox-styled message instead of
     # argparse's generic one.
     #
-    # default=None, not DEFAULT_CONCURRENCY: main needs to tell "the user typed
+    # default=None, not DEFAULT_CONCURRENCY: _prepare_run needs to tell "the user typed
     # --concurrency" apart from "argparse filled in a default" to apply CLI >
-    # [tool.velox] > built-in default correctly -- see main's concurrency-resolution
+    # [tool.velox] > built-in default correctly -- see its own concurrency-resolution
     # comment for where None gets folded back to the real default.
     parser.add_argument(
         "--concurrency",
@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Wraps each test's setup+call in asyncio.timeout. Default is None (off): pytest
     # itself has no default test timeout either, so leaving this off keeps an existing
     # suite's behavior unchanged until the user opts in. <= 0 and non-finite values are
-    # rejected by hand in main, same exit-4 style as --concurrency: asyncio.timeout(0)
+    # rejected by hand in _prepare_run, same exit-4 style as --concurrency: asyncio.timeout(0)
     # neither raises nor means "no limit" -- it fires at the test's first suspension
     # point (or never, if it has none), which isn't a real, useful mode. None already
     # doubles as "unset" here, same trick as --concurrency above.
@@ -288,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # A fresh, numbered session root by default (see
     # _capture.DEFAULT_BASETEMP_RETENTION), or this override. Validated by hand in
-    # main (_invalid_basetemp_argument, exit code 4) before it ever reaches
+    # _prepare_run (_invalid_basetemp_argument, exit code 4) before it ever reaches
     # _capture.install's own shutil.rmtree -- the one "does real work" flag whose
     # failure mode is irreversible.
     parser.add_argument(
@@ -417,14 +417,19 @@ def _reread_on_rootdir(targets: list[_targets.Target]) -> list[_targets.Target]:
     at otherwise. `config.anchored`, not `config.source`: what disqualifies a rootdir here is
     being derived from the arguments, which would make one argument's meaning depend on the
     others, and a rootdir read off a file on disk is not that whether or not the file claimed
-    velox. Searched at all only when some argument names nothing from here, the uncommon case.
+    velox. A run anchored by neither falls back to the enclosing `.git` directory instead, when
+    there is one -- a weaker anchor than a `pyproject.toml` (see `_config.resolve`), but still a
+    fixed point, unlike `config.rootdir` in that case, which is just the search start and would
+    make one argument's meaning depend on the others were it used here. With none of the three,
+    there's no anchor to re-read against and the arguments are left alone. Searched at all only
+    when some argument names nothing from here, the uncommon case.
     """
     if all(target.path.is_absolute() or target.path.exists() for target in targets):
         return targets
     config = _config.resolve([])
-    if not config.anchored:
+    rootdir = config.rootdir if config.anchored else config.git_root
+    if rootdir is None:
         return targets
-    rootdir = config.rootdir
     reread = []
     for target in targets:
         on_rootdir = rootdir / target.path
@@ -485,11 +490,11 @@ def _report_collection(
     The ids are printed bare, one per line, so the list pipes into another tool (or back
     into `velox` as arguments) without stripping anything. An id's path is relative to the
     rootdir, and so is an argument that names nothing from the current directory, so a run
-    a `[tool.velox]` table gives a fixed rootdir takes its own ids back from any directory
-    under it. Skips and collection errors are
-    shown the way a real run shows them: `--collect-only` is how a suite is inspected
-    before it runs, and a file that failed to import is exactly what such an inspection is
-    looking for.
+    with a fixed rootdir -- one a `[tool.velox]` table gives, or failing that the enclosing
+    `.git` directory -- takes its own ids back from any directory under it. Skips and
+    collection errors are shown the way a real run shows them: `--collect-only` is how a
+    suite is inspected before it runs, and a file that failed to import is exactly what
+    such an inspection is looking for.
     """
     for test_id in ids:
         print(test_id)
@@ -622,7 +627,388 @@ def _parse_filters(
         return f"{source} {exc}", ()
 
 
-def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
+@dataclass(frozen=True)
+class _PreparedRun:
+    """Everything `main`'s execute phase needs, once every usage error checkable before a
+    single test file is touched has been ruled out by `_prepare_run`: the compiled
+    `-k`/`-m` expressions (and whether either of them, or an id selector, narrows this
+    run), the resolved `[tool.velox]` config, the three-tier-resolved run options, and
+    the roots collection walks."""
+
+    id_selection: _targets.IdSelection | None
+    markexpr: _selection.TagExpression | None
+    keywordexpr: _selection.KeywordExpression | None
+    narrowed_by_selection: bool
+    config: _config.Config
+    concurrency: int
+    timeout: float | None
+    watchdog: float
+    filterwarnings: tuple[str, ...]
+    roots: list[Path]
+    maxfail: int | None
+
+
+def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | None]:  # noqa: C901
+    """Resolve `args` into everything `main`'s execute phase needs, or the first usage
+    error found along the way -- unprefixed, like `_parse_filters`'s, since `main` is
+    what knows to prefix every one of these the same way.
+
+    Deliberately linear, in the same order `main` itself checked these before this was
+    pulled out of it: a flag's own contradictions first (cheap, and needs nothing but
+    `args`), then targets, then the -k/-m expressions the id-selection needs to make
+    sense of, then config (which targets anchor the search for), then the options
+    config and CLI flags both feed, then the roots collection actually walks -- each
+    tier depends on the ones before it, so this is not a set of independent checks that
+    could run in a different order or in parallel.
+    """
+    # argparse's choices= can't express "unless this other flag is set", so this
+    # contradiction (--rewrite-cache with --assert=plain, which never touches the
+    # cache) is checked by hand.
+    if args.assert_mode == "plain" and args.rewrite_cache is not None:
+        return (
+            "--rewrite-cache has no effect with --assert=plain "
+            "(plain mode never touches the rewrite cache)",
+            None,
+        )
+
+    # --basetemp is the one "does real work" flag whose failure mode is irreversible
+    # (_capture.install eventually shutil.rmtrees it), so it's checked here, before
+    # collection and rewrite-hook setup run for a call that was always going to fail.
+    basetemp_problem = _invalid_basetemp_argument(args.basetemp)
+    if basetemp_problem is not None:
+        return basetemp_problem, None
+
+    # Both shorthands mean exactly one other flag's value, so the contradiction is worth
+    # reporting rather than silently picking a winner -- a run that quietly ignored
+    # --serial (or -x) would report the wrong thing about what it did.
+    if args.serial and args.concurrency is not None and args.concurrency != 1:
+        return (
+            f"--serial is --concurrency=1, and --concurrency={args.concurrency} was also given",
+            None,
+        )
+    # One says "run only these", the other "run everything, these first"; picking a winner
+    # silently would misreport what the run was.
+    if args.last_failed and args.failed_first:
+        return (
+            "--lf runs only the last run's failures and --ff runs the whole suite with "
+            "them first -- pass one or the other",
+            None,
+        )
+    if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
+        return f"-x is --maxfail=1, and --maxfail={args.maxfail} was also given", None
+
+    # Checked by hand rather than through argparse, same as --concurrency and --timeout
+    # below: exit code 4 with a velox-styled message instead of argparse's generic one.
+    maxfail = 1 if args.exitfirst else args.maxfail
+    if maxfail is not None and maxfail < 1:
+        return f"--maxfail must be a positive integer, got {maxfail}", None
+    if args.durations < 0:
+        return f"--durations must be zero or more, got {args.durations}", None
+
+    targets = [_targets.parse_target(raw) for raw in args.paths]
+    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
+    # nothing from the current directory gets that reading before anything else looks at
+    # it: pasting an id `--collect-only` printed back as an argument is the point.
+    try:
+        targets = _reread_on_rootdir(targets)
+    except _config.ConfigError as exc:
+        return str(exc), None
+
+    # A typo'd path and a genuinely empty suite must not look the same: without this,
+    # a bad path would silently walk to nothing and exit 5 "no tests collected",
+    # indistinguishable from an honest empty selection.
+    problem = _invalid_target_argument(targets)
+    if problem is not None:
+        return problem, None
+    # None unless some argument actually carried a `::` selector, which is what lets
+    # collection skip id filtering entirely in the common case.
+    id_selection = _targets.IdSelection.of(targets)
+
+    # Compiled up front, before collection does any real work, so a malformed -m/-k
+    # expression fails fast with a usage error rather than surfacing mid-collection.
+    markexpr = None
+    keywordexpr = None
+    try:
+        if args.markexpr is not None:
+            markexpr = _selection.compile_tag_expression(args.markexpr)
+        if args.keywordexpr is not None:
+            keywordexpr = _selection.compile_keyword_expression(args.keywordexpr)
+    except _selection.SelectionError as exc:
+        return str(exc), None
+
+    # -k/-m/an id argument bake their narrowing straight into collect()'s own records and
+    # deselected -- `tag_expr`/`keyword_expr`/`id_selection` below -- so a run any of them
+    # narrows sees a partial file, never the whole of what it holds. Read in two places: the
+    # collection-index fast path won't answer under one (it has no notion of the narrowing to
+    # replay), and a real collection under one must not write its partial view of a file into
+    # the index either, where a later un-narrowed --collect-only would take it as the whole
+    # file. --lf/--ff don't have this problem -- they narrow which files collect() sees, never
+    # what one collected file reports -- so they're not part of this.
+    narrowed_by_selection = (
+        markexpr is not None or keywordexpr is not None or id_selection is not None
+    )
+
+    # [tool.velox]-anchored upward search, stopping at the git root -- see
+    # _config.resolve's own docstring for exactly where it starts and stops. A
+    # malformed pyproject.toml/[tool.velox] table is always a usage error: never
+    # silently fall back to defaults over a config the user wrote but velox can't honor.
+    # The file part of a `path.py::test_name` argument is what anchors the search, the
+    # same as a plain path does.
+    try:
+        config = _config.resolve([target.path for target in targets])
+    except _config.ConfigError as exc:
+        return str(exc), None
+
+    # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
+    # args.timeout are None exactly when the flag wasn't given (see build_parser's
+    # comments on both). --serial joins the CLI tier: a flag typed on the command line
+    # outranks [tool.velox] concurrency whichever of the two spellings was used.
+    effective_concurrency = _resolve_layered(
+        1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
+    )
+    effective_timeout = _resolve_layered(args.timeout, config.timeout)
+    effective_watchdog = _resolve_layered(
+        args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
+    )
+
+    # Named by its actual source (the CLI flag, or the config file that set it) rather
+    # than always saying --concurrency/--timeout -- a bad [tool.velox] concurrency
+    # shouldn't point the user at a flag they never touched.
+    if effective_concurrency < 1:
+        source = (
+            "--concurrency" if args.concurrency is not None else f"{config.source} 'concurrency'"
+        )
+        return f"{source} must be a positive integer, got {effective_concurrency}", None
+    if effective_timeout is not None and not (
+        math.isfinite(effective_timeout) and effective_timeout > 0
+    ):
+        source = "--timeout" if args.timeout is not None else f"{config.source} 'timeout'"
+        return (
+            f"{source} must be a positive, finite number of seconds, got {effective_timeout}",
+            None,
+        )
+    # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
+    # negative and non-finite values are usage errors.
+    if not math.isfinite(effective_watchdog) or effective_watchdog < 0:
+        source = (
+            "--loop-watchdog"
+            if args.loop_watchdog is not None
+            else f"{config.source} 'loop_watchdog'"
+        )
+        return (
+            f"{source} must be zero (off) or a positive, finite number of seconds, got "
+            f"{effective_watchdog}",
+            None,
+        )
+
+    # Both tiers, in precedence order rather than layered like the scalars above: warning
+    # filters accumulate, and the last one to match a warning is the one that decides it,
+    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
+    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
+    # class the suite defines itself is not importable before then.
+    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
+
+    # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
+    # relative to wherever [tool.velox] was declared, so they're resolved against
+    # config.rootdir here, not cwd().
+    # is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
+    # and means "nothing" -- truthiness would silently run the built-in default instead.
+    if targets:
+        roots = [target.path for target in targets]
+    elif config.testpaths is not None:
+        roots = [config.rootdir / p for p in config.testpaths]
+        # Mirrors _invalid_target_argument's reasoning for CLI paths: a typo'd testpaths
+        # entry must not silently look like an honest empty selection either.
+        for root, raw in zip(roots, config.testpaths, strict=True):
+            if not root.exists():
+                return f"{config.source}: testpaths entry does not exist: {raw!r}", None
+    else:
+        # config.source, not config.anchored: a configured project keeps resolving this tier
+        # against its rootdir exactly as it always has -- a table that sets no testpaths is a
+        # thin thing to read intent from, but changing what it selects is not this change's
+        # business. Everything else resolves against cwd, so the rootdir climbing to the nearest
+        # pyproject.toml (`_config.resolve`) doesn't quietly widen a bare `velox` run inside
+        # tests/unit into the whole suite the new rootdir can see.
+        roots = _default_test_roots(config.rootdir if config.source is not None else None)
+
+    return None, _PreparedRun(
+        id_selection=id_selection,
+        markexpr=markexpr,
+        keywordexpr=keywordexpr,
+        narrowed_by_selection=narrowed_by_selection,
+        config=config,
+        concurrency=effective_concurrency,
+        timeout=effective_timeout,
+        watchdog=effective_watchdog,
+        filterwarnings=effective_filterwarnings,
+        roots=roots,
+        maxfail=maxfail,
+    )
+
+
+def _settle(
+    results: Sequence[_run.TestResult],
+    collected: _collect.CollectionResult,
+    found: _collect.CollectionResult,
+    *,
+    files: Sequence[Path],
+    discovered: Sequence[Path],
+    last_run: _cache.LastRun,
+    roots: Sequence[Path],
+    rootdir: Path,
+) -> None:
+    """Tell the cache what this run is entitled to, `last_run` updated with it and written back.
+
+    `collected` is what this run actually ran (`--lf`/`--ff` narrowed or reordered, if either
+    applied); `found` is collection's own unnarrowed result, which is what `_cache.update` and the
+    collection index both key off -- the index describes what a file holds, not what one
+    particular invocation asked to see. `files`/`discovered` are the same two collection was
+    handed (see `main`'s own comments for why they can differ under `--lf`).
+
+    One computation is used both ways round: what this run can settle is exactly what it may
+    record, so no error goes into the cache that no later run could take back out.
+
+    `_cache.update`, not `_cache.save(rootdir, _cache.merge(...))`: `last_run` is the baseline
+    loaded at startup, and merging into it here would leave the window for a lost update open for
+    the entire length of the run -- long enough that a scoped run finishing after a full one drops
+    the full run's new failures. `update` re-reads the freshest cache on disk at the write instead,
+    falling back to `last_run` only if that re-read fails. See `plans/rationale/cache.md`.
+    """
+    resolved_rootdir = rootdir.resolve()
+    attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}
+    answered = _lastfailed.settled_paths(attempted, rootdir=resolved_rootdir)
+    errored = _lastfailed.error_paths(collected.errors, answered=answered)
+    # Recorded paths this run establishes nothing will ever collect again: gone from disk, or in
+    # a directory it walked and no longer discovered there. Nothing else is in a position to take
+    # these out of the cache. Skipped outright with nothing recorded: there is no entry for a
+    # walk to declare dead, and resolving every discovered path to find that out is not free.
+    gone: set[str] = set()
+    if not last_run.is_empty():
+        gone = _lastfailed.dead_paths(
+            last_run,
+            discovered={str(_collect.display_path(path, resolved_rootdir)) for path in discovered},
+            roots=roots,
+            rootdir=resolved_rootdir,
+        )
+    # A file that collected tests was read, whatever else in it went wrong: one malformed test
+    # does not make the ids beside it unknowable, and treating the file as unread would leave a
+    # renamed sibling recorded for good.
+    produced = {str(record.path) for record in found.records}
+    produced |= {str(skip.path) for skip in found.skipped}
+    # A CANCELLED test never got to say anything about the code under test, so it settles
+    # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a Ctrl-C --
+    # would drop every failure it cut short. `vanished` is the other direction: a recorded id a
+    # file collection fully read no longer has is settled by its absence, there being no run left
+    # to settle it.
+    settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
+    settled_ids |= {s.id for s in collected.skipped}
+    settled_ids |= _lastfailed.vanished(
+        last_run,
+        found,
+        known_files=_lastfailed.read_files(attempted, errored - produced) | gone,
+    )
+    _cache.update(
+        rootdir,
+        last_run,
+        failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
+        errored=errored,
+        settled_ids=settled_ids,
+        settled_files=answered | gone,
+    )
+
+
+@contextlib.contextmanager
+def _installed_session(
+    config: _config.Config,
+    roots: Sequence[Path],
+    setup: _rewrite.AssertionSetup,
+    filterwarnings: Sequence[str],
+) -> Iterator[str | None]:
+    """Install everything a run's execute phase needs on process-global state -- `config.env`,
+    `rootdir` on `sys.path`, the assertion-rewrite import hook, and the parsed `-W`/
+    `[tool.velox]` warning filters, in that order -- and tear all four back down again on the way
+    out, however the `with` block exits: a return, an uncaught exception, or a `KeyboardInterrupt`
+    alike. Yields the first usage error found while resolving the filters, or `None` once every
+    one of the four is live; the caller is expected to bail out on the former before doing
+    anything the latter three make possible.
+
+    Order matters past the first two: resolving a filter's category can import the module holding
+    it, which must go through the rewrite hook like any other test-adjacent import, and a module
+    that warns at import time is only caught once the warnings shim is live too -- so filters
+    resolve after the hook and before the shim, not before either.
+
+    Each of the four remembers whether *this* call is the one that installed it -- `_rewrite`'s
+    and `_warnings`' own `install` are both documented no-ops when an enclosing call already did,
+    and env/`sys.path` are checked the same way by hand -- so a nested `main()` call (this
+    package's own test suite calls it repeatedly in-process, and an embedding caller may too)
+    tears down only what it put there, leaving an outer call's own setup alone.
+    """
+    # Not monkeypatch -- this is production code. Restored to exactly what it was before this
+    # call touched it, key by key, so one main() call's config never leaks into the next.
+    env_backup = {key: os.environ.get(key) for key in config.env}
+    os.environ.update(config.env)
+
+    # rootdir goes on sys.path exactly once, before the first test module import, so a plain
+    # absolute import rooted at rootdir resolves via ordinary PEP 420 namespace-package lookup --
+    # no __init__.py required. Collection's own import mechanism is untouched by this, so
+    # relative imports between test modules (`from .conftest import x`) stay unsupported.
+    # sys.path[0], not appended: matches pytest's prepend import-mode convention, so the test
+    # tree's own sources shadow a same-named installed package. str(...), not the Path: sys.path
+    # holds strings, and comparing a Path against it with `in` would never match, inserting a
+    # fresh duplicate on every main() call.
+    rootdir_str = str(config.rootdir)
+    sys_path_inserted = rootdir_str not in sys.path
+    if sys_path_inserted:
+        sys.path.insert(0, rootdir_str)
+
+    # Set here, not just inside the try below: if _rewrite.installed_hook() itself raised, the
+    # finally's `if not hook_already_installed:` would otherwise hit an unbound name. False is
+    # also the safer fallback value -- it makes finally attempt an uninstall(), not skip one.
+    hook_already_installed = False
+    warnings_installed = False
+    try:
+        # Must be installed before any test module is imported below -- a module already in
+        # sys.modules can't retroactively be rewritten.
+        #
+        # Known cost, not fixed here: install walks every .py under roots for its own file list,
+        # and discover_files (in the caller, after this yields) walks the same roots again for
+        # test files specifically -- two full traversals per run. They want different filters
+        # (all .py vs test_*.py/*_test.py), so unifying them means changing install's signature
+        # to accept a pre-discovered file list.
+        hook_already_installed = _rewrite.installed_hook() is not None
+        _rewrite.install(roots, setup=setup, warn=False)
+        problem, session_filters = _parse_filters(config, filterwarnings)
+        if problem is None:
+            warnings_installed = _warnings.install(session_filters)
+        yield problem
+    finally:
+        # Only torn down if this call is the one that put it there: install is a documented
+        # no-op when a hook is already on sys.meta_path, so an embedder (or a nested main())
+        # that installed its own hook first must keep it.
+        if not hook_already_installed:
+            _rewrite.uninstall()
+        # Same rule, and the same reason: `warnings.showwarning` is process-global, so a nested
+        # main() leaves the outer call's shim in place for the outer call to remove.
+        if warnings_installed:
+            _warnings.uninstall()
+        # Symmetric with hook_already_installed above: only remove what this call put on
+        # sys.path, and only if it's still there.
+        if sys_path_inserted:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(rootdir_str)
+        # Whatever this run did or didn't get to, the rewriter may have written bytecode into
+        # the cache directory on its way there.
+        _cache.ensure_gitignore(config.rootdir)
+        # Symmetric with env_backup's own comment above: restores exactly the keys this call
+        # touched, to exactly what they were before it touched them.
+        for key, prev_value in env_backup.items():
+            if prev_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev_value
+
+
+def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:  # noqa: C901
     # The process start, not the top of main(): interpreter startup, importing velox,
     # argument parsing, config resolution, discovery, and collection (importing every
     # test module) all happen before a single test runs, and a run that spends its time
@@ -660,204 +1046,26 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
             run_once=main,
         )
 
-    # argparse's choices= can't express "unless this other flag is set", so this
-    # contradiction (--rewrite-cache with --assert=plain, which never touches the
-    # cache) is checked by hand. Exit 4: usage error.
-    if args.assert_mode == "plain" and args.rewrite_cache is not None:
-        print(
-            "velox: --rewrite-cache has no effect with --assert=plain "
-            "(plain mode never touches the rewrite cache)",
-            file=sys.stderr,
-        )
-        return 4
-
-    # --basetemp is the one "does real work" flag whose failure mode is irreversible
-    # (_capture.install eventually shutil.rmtrees it), so it's checked here, before
-    # collection and rewrite-hook setup run for a call that was always going to fail.
-    basetemp_problem = _invalid_basetemp_argument(args.basetemp)
-    if basetemp_problem is not None:
-        print(f"velox: {basetemp_problem}", file=sys.stderr)
-        return 4
-
-    # Both shorthands mean exactly one other flag's value, so the contradiction is worth
-    # reporting rather than silently picking a winner -- a run that quietly ignored
-    # --serial (or -x) would report the wrong thing about what it did.
-    if args.serial and args.concurrency is not None and args.concurrency != 1:
-        print(
-            f"velox: --serial is --concurrency=1, and --concurrency={args.concurrency} was also "
-            f"given",
-            file=sys.stderr,
-        )
-        return 4
-    # One says "run only these", the other "run everything, these first"; picking a winner
-    # silently would misreport what the run was.
-    if args.last_failed and args.failed_first:
-        print(
-            "velox: --lf runs only the last run's failures and --ff runs the whole suite with "
-            "them first -- pass one or the other",
-            file=sys.stderr,
-        )
-        return 4
-    if args.exitfirst and args.maxfail is not None and args.maxfail != 1:
-        print(
-            f"velox: -x is --maxfail=1, and --maxfail={args.maxfail} was also given",
-            file=sys.stderr,
-        )
-        return 4
-
-    # Checked by hand rather than through argparse for the same reason --concurrency is:
-    # exit code 4 with a velox-styled message instead of argparse's generic one.
-    maxfail = 1 if args.exitfirst else args.maxfail
-    if maxfail is not None and maxfail < 1:
-        print(f"velox: --maxfail must be a positive integer, got {maxfail}", file=sys.stderr)
-        return 4
-    if args.durations < 0:
-        print(
-            f"velox: --durations must be zero or more, got {args.durations}",
-            file=sys.stderr,
-        )
-        return 4
-
-    targets = [_targets.parse_target(raw) for raw in args.paths]
-    # Test ids are rootdir-relative wherever velox prints them, so an argument naming
-    # nothing from the current directory gets that reading before anything else looks at
-    # it: pasting an id `--collect-only` printed back as an argument is the point.
-    try:
-        targets = _reread_on_rootdir(targets)
-    except _config.ConfigError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # A typo'd path and a genuinely empty suite must not look the same: without this,
-    # a bad path would silently walk to nothing and exit 5 "no tests collected",
-    # indistinguishable from an honest empty selection.
-    problem = _invalid_target_argument(targets)
+    # Every usage error checkable before collection touches a single test file, in one
+    # phase: a flag's own contradictions, PATHS, -k/-m, [tool.velox], and the run
+    # options all three of those and the CLI feed. See _prepare_run's own docstring for
+    # why this has to stay linear.
+    problem, prepared = _prepare_run(args)
     if problem is not None:
         print(f"velox: {problem}", file=sys.stderr)
         return 4
-    # None unless some argument actually carried a `::` selector, which is what lets
-    # collection skip id filtering entirely in the common case.
-    id_selection = _targets.IdSelection.of(targets)
-
-    # Compiled up front, before collection does any real work, so a malformed -m/-k
-    # expression fails fast with a usage error rather than surfacing mid-collection.
-    markexpr = None
-    keywordexpr = None
-    try:
-        if args.markexpr is not None:
-            markexpr = _selection.compile_tag_expression(args.markexpr)
-        if args.keywordexpr is not None:
-            keywordexpr = _selection.compile_keyword_expression(args.keywordexpr)
-    except _selection.SelectionError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # -k/-m/an id argument bake their narrowing straight into collect()'s own records and
-    # deselected -- `tag_expr`/`keyword_expr`/`id_selection` below -- so a run any of them
-    # narrows sees a partial file, never the whole of what it holds. Read in two places: the
-    # collection-index fast path won't answer under one (it has no notion of the narrowing to
-    # replay), and a real collection under one must not write its partial view of a file into
-    # the index either, where a later un-narrowed --collect-only would take it as the whole
-    # file. --lf/--ff don't have this problem -- they narrow which files collect() sees, never
-    # what one collected file reports -- so they're not part of this.
-    narrowed_by_selection = (
-        markexpr is not None or keywordexpr is not None or id_selection is not None
-    )
-
-    # [tool.velox]-anchored upward search, stopping at the git root -- see
-    # _config.resolve's own docstring for exactly where it starts and stops. A
-    # malformed pyproject.toml/[tool.velox] table is always a usage error: never
-    # silently fall back to defaults over a config the user wrote but velox can't honor.
-    # The file part of a `path.py::test_name` argument is what anchors the search, the
-    # same as a plain path does.
-    try:
-        config = _config.resolve([target.path for target in targets])
-    except _config.ConfigError as exc:
-        print(f"velox: {exc}", file=sys.stderr)
-        return 4
-
-    # CLI > [tool.velox] > built-in default, via one shared helper -- args.concurrency/
-    # args.timeout are None exactly when the flag wasn't given (see build_parser's
-    # comments on both). --serial joins the CLI tier: a flag typed on the command line
-    # outranks [tool.velox] concurrency whichever of the two spellings was used.
-    effective_concurrency = _resolve_layered(
-        1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
-    )
-    effective_timeout = _resolve_layered(args.timeout, config.timeout)
-    effective_watchdog = _resolve_layered(
-        args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
-    )
-
-    # Named by its actual source (the CLI flag, or the config file that set it) rather
-    # than always saying --concurrency/--timeout -- a bad [tool.velox] concurrency
-    # shouldn't point the user at a flag they never touched.
-    if effective_concurrency < 1:
-        source = (
-            "--concurrency" if args.concurrency is not None else f"{config.source} 'concurrency'"
-        )
-        print(
-            f"velox: {source} must be a positive integer, got {effective_concurrency}",
-            file=sys.stderr,
-        )
-        return 4
-    if effective_timeout is not None and not (
-        math.isfinite(effective_timeout) and effective_timeout > 0
-    ):
-        source = "--timeout" if args.timeout is not None else f"{config.source} 'timeout'"
-        print(
-            f"velox: {source} must be a positive, finite number of seconds, got "
-            f"{effective_timeout}",
-            file=sys.stderr,
-        )
-        return 4
-    # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
-    # negative and non-finite values are usage errors.
-    if not math.isfinite(effective_watchdog) or effective_watchdog < 0:
-        source = (
-            "--loop-watchdog"
-            if args.loop_watchdog is not None
-            else f"{config.source} 'loop_watchdog'"
-        )
-        print(
-            f"velox: {source} must be zero (off) or a positive, finite number of seconds, got "
-            f"{effective_watchdog}",
-            file=sys.stderr,
-        )
-        return 4
-
-    # Both tiers, in precedence order rather than layered like the scalars above: warning
-    # filters accumulate, and the last one to match a warning is the one that decides it,
-    # so a `-W` on the command line simply follows what [tool.velox] already said. Parsed
-    # further down, once rootdir is on sys.path: a spec names a warning category, which for a
-    # class the suite defines itself is not importable before then.
-    effective_filterwarnings = (*(config.filterwarnings or ()), *args.filterwarnings)
-
-    # PATHS > configured testpaths > the rootdir. config.testpaths entries are written
-    # relative to wherever [tool.velox] was declared, so they're resolved against
-    # config.rootdir here, not cwd().
-    # is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
-    # and means "nothing" -- truthiness would silently run the built-in default instead.
-    if targets:
-        roots = [target.path for target in targets]
-    elif config.testpaths is not None:
-        roots = [config.rootdir / p for p in config.testpaths]
-        # Mirrors _invalid_target_argument's reasoning for CLI paths: a typo'd testpaths
-        # entry must not silently look like an honest empty selection either.
-        for root, raw in zip(roots, config.testpaths, strict=True):
-            if not root.exists():
-                print(
-                    f"velox: {config.source}: testpaths entry does not exist: {raw!r}",
-                    file=sys.stderr,
-                )
-                return 4
-    else:
-        # config.source, not config.anchored: a configured project keeps resolving this tier
-        # against its rootdir exactly as it always has -- a table that sets no testpaths is a
-        # thin thing to read intent from, but changing what it selects is not this change's
-        # business. Everything else resolves against cwd, so the rootdir climbing to the nearest
-        # pyproject.toml (`_config.resolve`) doesn't quietly widen a bare `velox` run inside
-        # tests/unit into the whole suite the new rootdir can see.
-        roots = _default_test_roots(config.rootdir if config.source is not None else None)
+    assert prepared is not None
+    id_selection = prepared.id_selection
+    markexpr = prepared.markexpr
+    keywordexpr = prepared.keywordexpr
+    narrowed_by_selection = prepared.narrowed_by_selection
+    config = prepared.config
+    effective_concurrency = prepared.concurrency
+    effective_timeout = prepared.timeout
+    effective_watchdog = prepared.watchdog
+    effective_filterwarnings = prepared.filterwarnings
+    roots = prepared.roots
+    maxfail = prepared.maxfail
 
     # Loaded whether or not this run reads it back: the merge at the end of main needs what
     # the previous run recorded about tests this one never reaches.
@@ -907,203 +1115,330 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
 
     rootdir = config.rootdir
 
-    # env_backup and the matching restore loop in this try's finally (not monkeypatch
-    # -- this is production code) make repeated in-process main() calls safe: every
-    # key env touches is restored to its pre-call value (or removed) on the way out,
-    # so one main() call's config never leaks into the next.
-    #
-    # The first thing inside this try, ahead of _rewrite.install: putting the mutation
-    # inside the same try/finally that restores it means the restore fires even if
-    # _rewrite.install itself raises.
-    env_backup = {key: os.environ.get(key) for key in config.env}
-    os.environ.update(config.env)
-
-    # rootdir goes on sys.path exactly once, here, before the first test module import
-    # below, so a plain absolute import rooted at rootdir resolves via ordinary PEP
-    # 420 namespace-package lookup -- no __init__.py required. Collection's own import
-    # mechanism is untouched by this, so relative imports between test modules
-    # (`from .conftest import x`) stay unsupported.
-    # sys.path[0], not appended: matches pytest's prepend import-mode convention, so
-    # the test tree's own sources shadow a same-named installed package.
-    # str(rootdir), not the Path: sys.path holds strings, and comparing a Path against
-    # it with `in` would never match, inserting a fresh duplicate on every main() call.
-    # Only removed on the way out if this call is the one that added it.
-    rootdir_str = str(rootdir)
-    sys_path_inserted = rootdir_str not in sys.path
-    if sys_path_inserted:
-        sys.path.insert(0, rootdir_str)
-
-    # Set here, not just inside the try below: if _rewrite.installed_hook() itself
-    # raised, the finally's `if not hook_already_installed:` would otherwise hit an
-    # unbound name. False is also the safer fallback value -- it makes finally attempt
-    # an uninstall(), not skip one.
-    hook_already_installed = False
-    warnings_installed = False
     try:
-        # Must be installed before any test module is imported below -- a module
-        # already in sys.modules can't retroactively be rewritten. warn already
-        # happened inside plan above, so this call is handed the decision it made
-        # rather than re-probing the cache.
-        #
-        # Known cost, not fixed here: install walks every .py under roots for its own
-        # file list, and discover_files below walks the same roots again for test
-        # files specifically -- two full traversals per run. They want different
-        # filters (all .py vs test_*.py/*_test.py), so unifying them means changing
-        # install's signature to accept a pre-discovered file list.
-        hook_already_installed = _rewrite.installed_hook() is not None
-        _rewrite.install(roots, setup=setup, warn=False)
-        # After the hook, and before the first test-module import below: resolving a filter's
-        # category imports the module holding it, which for one of the suite's own must go
-        # through the rewrite hook like any other, and a module that warns at import time warns
-        # during collection, which this is what records.
-        problem, session_filters = _parse_filters(config, args.filterwarnings)
-        if problem is not None:
-            print(f"velox: {problem}", file=sys.stderr)
-            return 4
-        warnings_installed = _warnings.install(session_filters)
-        # config.test_file_patterns/config.ignore replace discover_files's own
-        # defaults outright when set, not add to them -- a user who wants "the
-        # defaults plus one more" repeats the defaults themselves. is not None, not
-        # truthiness, for both: an explicit [] is a real, if unusual, thing to write
-        # and means "none".
-        patterns = (
-            config.test_file_patterns
-            if config.test_file_patterns is not None
-            else _discovery.DEFAULT_TEST_FILE_PATTERNS
-        )
-        ignore_dirs = (
-            frozenset(config.ignore)
-            if config.ignore is not None
-            else _discovery.DEFAULT_IGNORE_DIRS
-        )
-        files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
-        # Before collect, not after: not importing the files that hold nothing --lf would run
-        # is where the flag's speed comes from. `files` stays exactly what collection was
-        # handed, which is what the merge below reads as "settled by this run".
-        discovered = files
+        with _installed_session(config, roots, setup, args.filterwarnings) as problem:
+            if problem is not None:
+                print(f"velox: {problem}", file=sys.stderr)
+                return 4
+            # config.test_file_patterns/config.ignore replace discover_files's own
+            # defaults outright when set, not add to them -- a user who wants "the
+            # defaults plus one more" repeats the defaults themselves. is not None, not
+            # truthiness, for both: an explicit [] is a real, if unusual, thing to write
+            # and means "none".
+            patterns = (
+                config.test_file_patterns
+                if config.test_file_patterns is not None
+                else _discovery.DEFAULT_TEST_FILE_PATTERNS
+            )
+            ignore_dirs = (
+                frozenset(config.ignore)
+                if config.ignore is not None
+                else _discovery.DEFAULT_IGNORE_DIRS
+            )
+            files = _discovery.discover_files(roots, patterns=patterns, ignore_dirs=ignore_dirs)
+            # Before collect, not after: not importing the files that hold nothing --lf would run
+            # is where the flag's speed comes from. `files` stays exactly what collection was
+            # handed, which is what the merge below reads as "settled by this run".
+            discovered = files
 
-        # A plain --collect-only/--co-json -- no -k/-m/id/--lf/--ff narrowing it to something the
-        # index doesn't track -- can answer from `collection_index` alone when every discovered
-        # file is still fresh in it, skipping collect() and therefore every import it would have
-        # done. Anything narrower falls through to a real collection exactly as before.
-        if (
-            (args.collect_only or args.co_json)
-            and not replay_last_failed
-            and not replay_failed_first
-            and not narrowed_by_selection
-        ):
-            fast_answer = _index.answer(collection_index, files, rootdir=rootdir)
-            if fast_answer is not None:
-                warnings_stream = sys.stderr if args.co_json else sys.stdout
+            # A plain --collect-only/--co-json -- no -k/-m/id/--lf/--ff narrowing it to something
+            # the index doesn't track -- can answer from `collection_index` alone when every
+            # discovered file is still fresh in it, skipping collect() and therefore every import
+            # it would have done. Anything narrower falls through to a real collection exactly as
+            # before.
+            if (
+                (args.collect_only or args.co_json)
+                and not replay_last_failed
+                and not replay_failed_first
+                and not narrowed_by_selection
+            ):
+                fast_answer = _index.answer(collection_index, files, rootdir=rootdir)
+                if fast_answer is not None:
+                    warnings_stream = sys.stderr if args.co_json else sys.stdout
+                    if args.co_json:
+                        _collect_json.print_report(
+                            tests=[
+                                _collect_json.TestLocation(id=id_, path=path, lineno=lineno)
+                                for id_, path, lineno in zip(
+                                    fast_answer.ids,
+                                    fast_answer.paths,
+                                    fast_answer.lines,
+                                    strict=True,
+                                )
+                            ],
+                            skipped=[
+                                (id_, path, reason)
+                                for (id_, reason), path in zip(
+                                    fast_answer.skipped, fast_answer.skipped_paths, strict=True
+                                )
+                            ],
+                            deselected=(),
+                            errors=(),
+                            rootdir=rootdir,
+                        )
+                        status = _collection_exit_status(
+                            ids=fast_answer.ids, skipped=fast_answer.skipped, errors=()
+                        )
+                    else:
+                        status = _report_collection(
+                            ids=fast_answer.ids,
+                            skipped=fast_answer.skipped,
+                            deselected=0,
+                            errors=(),
+                            color_enabled=_color.color_enabled(sys.stdout),
+                        )
+                    # Called for symmetry with every other exit through this function: this run
+                    # imported nothing, so in the ordinary case there is nothing recorded to print.
+                    _report_warnings(rootdir, stream=warnings_stream)
+                    return status
+
+            if replay_last_failed:
+                files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
+            collected = _collect.collect(
+                files,
+                rootdir=rootdir,
+                tag_expr=markexpr,
+                keyword_expr=keywordexpr,
+                id_selection=id_selection,
+                # The unnarrowed set, so --lf leaving a test module out doesn't turn its
+                # `velox.use(...)` into a misplaced declaration. Nothing here is imported. Only
+                # when narrowed: otherwise it is `files`, which the loop below walks anyway.
+                collectible=discovered if replay_last_failed else (),
+            )
+            # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
+            # flags already made, so `velox --lf -k users` means both.
+            #
+            # What collection itself found is kept for the cache write at the end: `select` moves
+            # the tests --lf wasn't asked for into `deselected`, and `vanished` reads a deselected
+            # unexpanded test as "this run never built its cases, so its recorded ones stand" --
+            # true of a -k/-m deselection, and false of --lf's own, whose skips it would otherwise
+            # strand in the cache for good.
+            found = collected
+            if replay_last_failed:
+                collected = _lastfailed.select(collected, last_run)
+                # Otherwise the run below reports "0 tests" and exits 5, which reads as a suite
+                # that collected nothing rather than as one holding none of what was recorded --
+                # a run pointed somewhere else, or a failing test renamed since. Checked on the
+                # selection rather than on the candidate files, since a file can survive the
+                # narrowing and still contribute nothing to it.
+                # At every verbosity, unlike the "nothing recorded" line above it: that one
+                # describes how the run was set up, which -q asks to do without, while this one
+                # is the whole of what the run found.
+                if not collected.records and not collected.skipped and not collected.errors:
+                    print("--lf: no recorded failure is in this run's selection")
+            elif replay_failed_first:
+                collected = _lastfailed.reorder(collected, last_run)
+            # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
+            # would otherwise select nothing and exit 5, indistinguishable from a file that
+            # genuinely holds no tests.
+            #
+            # Every id collection produced counts as a match, not just the selected ones: a
+            # `@velox.skip`-marked test is a normal thing to name, and an id that `-k`/`-m`
+            # then deselects is an empty intersection the user asked for, not a typo. Skipped
+            # entirely when a file failed to import, since the ids it would have contributed
+            # are unknowable -- the traceback printed below is the real story there.
+            #
+            # collected.unexpanded is the part of that which stops short of its own `[case]` ids
+            # (a skip, or a test -m excluded), so `test_role[admin]` naming a case of one of those
+            # counts as a match rather than reading as a typo.
+            #
+            # Not under --lf: an id naming a test that passed last time matches nothing there by
+            # design, and velox has no way to tell that apart from a typo.
+            if id_selection is not None and not collected.errors and not replay_last_failed:
+                missing = id_selection.unmatched(
+                    [record.id for record in collected.records]
+                    + [skipped.id for skipped in collected.skipped]
+                    + collected.deselected,
+                    unexpanded=collected.unexpanded,
+                    rootdir=rootdir,
+                )
+                if missing:
+                    print(
+                        f"velox: no test matches {', '.join(repr(name) for name in missing)}",
+                        file=sys.stderr,
+                    )
+                    _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
+                    return 4
+
+            # Shared with reporter's own coloring (it resolves the same thing internally
+            # for its own prints) so the COLLECTION ERROR and --maxfail lines below, which
+            # main prints itself rather than through reporter, match its file blocks
+            # instead of being colored by a different rule.
+            color_enabled = _color.color_enabled(sys.stdout)
+
+            if args.collect_only or args.co_json:
+                if not narrowed_by_selection:
+                    _save_collection_index(
+                        rootdir,
+                        collection_index,
+                        found,
+                        files=files,
+                        discovered=discovered,
+                        roots=roots,
+                    )
                 if args.co_json:
                     _collect_json.print_report(
                         tests=[
-                            _collect_json.TestLocation(id=id_, path=path, lineno=lineno)
-                            for id_, path, lineno in zip(
-                                fast_answer.ids, fast_answer.paths, fast_answer.lines, strict=True
+                            _collect_json.TestLocation(
+                                id=record.id, path=str(record.path), lineno=record.lineno
                             )
+                            for record in collected.records
                         ],
                         skipped=[
-                            (id_, path, reason)
-                            for (id_, reason), path in zip(
-                                fast_answer.skipped, fast_answer.skipped_paths, strict=True
-                            )
+                            (skip.id, str(skip.path), skip.reason) for skip in collected.skipped
                         ],
-                        deselected=(),
-                        errors=(),
+                        deselected=collected.deselected,
+                        errors=[(str(error.path), error.message) for error in collected.errors],
                         rootdir=rootdir,
                     )
                     status = _collection_exit_status(
-                        ids=fast_answer.ids, skipped=fast_answer.skipped, errors=()
+                        ids=[record.id for record in collected.records],
+                        skipped=collected.skipped,
+                        errors=collected.errors,
                     )
                 else:
                     status = _report_collection(
-                        ids=fast_answer.ids,
-                        skipped=fast_answer.skipped,
-                        deselected=0,
-                        errors=(),
-                        color_enabled=_color.color_enabled(sys.stdout),
+                        ids=[record.id for record in collected.records],
+                        skipped=[(skip.id, skip.reason) for skip in collected.skipped],
+                        deselected=len(collected.deselected),
+                        errors=collected.errors,
+                        color_enabled=color_enabled,
                     )
-                # Called for symmetry with every other exit through this function: this run
-                # imported nothing, so in the ordinary case there is nothing recorded to print.
-                _report_warnings(rootdir, stream=warnings_stream)
+                # Collection is what imports every test module, so a module that warns at import
+                # has warned by now -- and this is the only report this run will print.
+                _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
                 return status
 
-        if replay_last_failed:
-            files = _lastfailed.candidate_files(files, last_run, rootdir=rootdir)
-        collected = _collect.collect(
-            files,
-            rootdir=rootdir,
-            tag_expr=markexpr,
-            keyword_expr=keywordexpr,
-            id_selection=id_selection,
-            # The unnarrowed set, so --lf leaving a test module out doesn't turn its
-            # `velox.use(...)` into a misplaced declaration. Nothing here is imported. Only
-            # when narrowed: otherwise it is `files`, which the loop below walks anyway.
-            collectible=discovered if replay_last_failed else (),
-        )
-        # After -k/-m/ids rather than instead of them: --lf narrows a selection the other
-        # flags already made, so `velox --lf -k users` means both.
-        #
-        # What collection itself found is kept for the cache write at the end: `select` moves
-        # the tests --lf wasn't asked for into `deselected`, and `vanished` reads a deselected
-        # unexpanded test as "this run never built its cases, so its recorded ones stand" --
-        # true of a -k/-m deselection, and false of --lf's own, whose skips it would otherwise
-        # strand in the cache for good.
-        found = collected
-        if replay_last_failed:
-            collected = _lastfailed.select(collected, last_run)
-            # Otherwise the run below reports "0 tests" and exits 5, which reads as a suite
-            # that collected nothing rather than as one holding none of what was recorded --
-            # a run pointed somewhere else, or a failing test renamed since. Checked on the
-            # selection rather than on the candidate files, since a file can survive the
-            # narrowing and still contribute nothing to it.
-            # At every verbosity, unlike the "nothing recorded" line above it: that one
-            # describes how the run was set up, which -q asks to do without, while this one
-            # is the whole of what the run found.
-            if not collected.records and not collected.skipped and not collected.errors:
-                print("--lf: no recorded failure is in this run's selection")
-        elif replay_failed_first:
-            collected = _lastfailed.reorder(collected, last_run)
-        # Same reasoning as a path that doesn't exist, one level down: a mistyped test id
-        # would otherwise select nothing and exit 5, indistinguishable from a file that
-        # genuinely holds no tests.
-        #
-        # Every id collection produced counts as a match, not just the selected ones: a
-        # `@velox.skip`-marked test is a normal thing to name, and an id that `-k`/`-m`
-        # then deselects is an empty intersection the user asked for, not a typo. Skipped
-        # entirely when a file failed to import, since the ids it would have contributed
-        # are unknowable -- the traceback printed below is the real story there.
-        #
-        # collected.unexpanded is the part of that which stops short of its own `[case]` ids
-        # (a skip, or a test -m excluded), so `test_role[admin]` naming a case of one of those
-        # counts as a match rather than reading as a typo.
-        #
-        # Not under --lf: an id naming a test that passed last time matches nothing there by
-        # design, and velox has no way to tell that apart from a typo.
-        if id_selection is not None and not collected.errors and not replay_last_failed:
-            missing = id_selection.unmatched(
-                [record.id for record in collected.records]
-                + [skipped.id for skipped in collected.skipped]
-                + collected.deselected,
-                unexpanded=collected.unexpanded,
+            capture_passthrough = args.capture == "no" or args.capture_s
+            # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
+            # for what can land here. Empty in the common case. Rendered by
+            # reporter.finish below, not printed here directly, keeping every "what got
+            # printed and in what order" decision in one place.
+            unattributed: list[str] = []
+
+            # Reporter groups TestResults (which carry no path of their own) back into
+            # per-file blocks by walking collected.records itself -- handed to it
+            # directly, not reduced to an {id: path} dict first, since a dict
+            # comprehension keyed by id would silently collapse two records sharing an id
+            # (an ordinary case: a factory-generated test repeats its id for every
+            # instance it produces). See Reporter's own docstring for the full reasoning.
+            reporter = _report.Reporter(
+                records=collected.records,
+                skipped=collected.skipped,
+                capture_passthrough=capture_passthrough,
+                stream=sys.stdout,
+                verbosity=verbosity,
+                durations=args.durations,
                 rootdir=rootdir,
             )
-            if missing:
+
+            # Set by run_suite's own on_interrupt callback, from the loop, the first time a
+            # Ctrl-C lands. Everything the run did find is still reported below; this only
+            # decides what the last line says and which exit code goes with it.
+            interrupted = False
+
+            def on_interrupt() -> None:
+                nonlocal interrupted
+                interrupted = True
+
+            results = _run.run_suite(
+                collected.records,
+                concurrency=effective_concurrency,
+                timeout=effective_timeout,
+                capture_passthrough=capture_passthrough,
+                maxfail=maxfail,
+                basetemp=args.basetemp,
+                unattributed_output=unattributed,
+                on_result=reporter.on_result,
+                on_interrupt=on_interrupt,
+                # 0 means "off" at the CLI; run_suite spells that None, and treats a
+                # non-positive number the same way regardless.
+                loop_watchdog=effective_watchdog or None,
+                filterwarnings=effective_filterwarnings,
+                # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
+                # isolated test's subprocess must reproduce what this run actually decided
+                # (a --assert=rewrite request can still fall back to plain), not re-derive
+                # and re-warn about it once per isolated test.
+                isolated=_isolated.IsolatedConfig(
+                    rootdir=rootdir,
+                    assert_mode=setup.mode,
+                    assert_cache_dir=setup.cache_dir,
+                    rewrite_roots=tuple(roots),
+                ),
+            )
+            wall_clock = time.monotonic() - wall_start
+
+            # Before this function prints anything of its own: a run stopped by --maxfail
+            # leaves a file block unprinted, and -q leaves its line of characters unclosed.
+            reporter.flush_pending()
+
+            error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
+            for error in collected.errors:
+                print(f"{error.path} {error_word}")
+                print(error.message)
+
+            # run_suite returns one result per test that ran -- a cancelled test included --
+            # so anything collection handed it that isn't in there is a test the run stopped
+            # before it ever started.
+            not_run = len(collected.records) - len(results)
+            stopped_by = "interrupted" if interrupted else "--maxfail"
+            if interrupted:
+                print(_color.paint("INTERRUPTED (Ctrl-C)", _color.YELLOW, enabled=color_enabled))
+            elif not_run:
                 print(
-                    f"velox: no test matches {', '.join(repr(name) for name in missing)}",
-                    file=sys.stderr,
+                    _color.paint(
+                        f"stopped after {maxfail} failed (--maxfail)",
+                        _color.YELLOW,
+                        enabled=color_enabled,
+                    )
                 )
-                _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
-                return 4
 
-        # Shared with reporter's own coloring (it resolves the same thing internally
-        # for its own prints) so the COLLECTION ERROR and --maxfail lines below, which
-        # main prints itself rather than through reporter, match its file blocks
-        # instead of being colored by a different rule.
-        color_enabled = _color.color_enabled(sys.stdout)
+            # Every count the run ends on is reporter's to print, so the file blocks above and
+            # the totals below can't drift into disagreeing about the same suite. Skips reach it
+            # through its constructor, since it counts them per file too.
+            reporter.finish(
+                results,
+                wall_clock=wall_clock,
+                unattributed_output=unattributed,
+                session_warnings=_warnings.session_warnings(),
+                not_run=not_run,
+                not_run_label=stopped_by,
+                deselected=len(collected.deselected),
+                collection_errors=len(collected.errors),
+            )
 
-        if args.collect_only or args.co_json:
+            # 2, not what the partial results happen to add up to: an interrupted run never
+            # got to the point of having a verdict, and exiting 0 because the tests that did
+            # finish passed would let a Ctrl-C read as success in CI.
+            exit_status = (
+                2
+                if interrupted
+                else _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
+            )
+            if args.report_json is not None:
+                _json_report.write_report(
+                    args.report_json,
+                    records=collected.records,
+                    results=results,
+                    skipped=collected.skipped,
+                    collection_errors=collected.errors,
+                    rootdir=rootdir,
+                    exit_status=exit_status,
+                    wall_clock=wall_clock,
+                    session_warnings=_warnings.session_warnings(),
+                )
+            # Last, after everything this run had to say: a cache velox cannot write costs the
+            # next --lf its ordering, and must not touch this one's output or exit code.
+            _settle(
+                results,
+                collected,
+                found,
+                files=files,
+                discovered=discovered,
+                last_run=last_run,
+                roots=roots,
+                rootdir=rootdir,
+            )
             if not narrowed_by_selection:
                 _save_collection_index(
                     rootdir,
@@ -1113,213 +1448,7 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
                     discovered=discovered,
                     roots=roots,
                 )
-            if args.co_json:
-                _collect_json.print_report(
-                    tests=[
-                        _collect_json.TestLocation(
-                            id=record.id, path=str(record.path), lineno=record.lineno
-                        )
-                        for record in collected.records
-                    ],
-                    skipped=[(skip.id, str(skip.path), skip.reason) for skip in collected.skipped],
-                    deselected=collected.deselected,
-                    errors=[(str(error.path), error.message) for error in collected.errors],
-                    rootdir=rootdir,
-                )
-                status = _collection_exit_status(
-                    ids=[record.id for record in collected.records],
-                    skipped=collected.skipped,
-                    errors=collected.errors,
-                )
-            else:
-                status = _report_collection(
-                    ids=[record.id for record in collected.records],
-                    skipped=[(skip.id, skip.reason) for skip in collected.skipped],
-                    deselected=len(collected.deselected),
-                    errors=collected.errors,
-                    color_enabled=color_enabled,
-                )
-            # Collection is what imports every test module, so a module that warns at import
-            # has warned by now -- and this is the only report this run will print.
-            _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
-            return status
-
-        capture_passthrough = args.capture == "no" or args.capture_s
-        # Populated by run_suite iff non-None -- see _builtins/capture.py's module docstring
-        # for what can land here. Empty in the common case. Rendered by
-        # reporter.finish below, not printed here directly, keeping every "what got
-        # printed and in what order" decision in one place.
-        unattributed: list[str] = []
-
-        # Reporter groups TestResults (which carry no path of their own) back into
-        # per-file blocks by walking collected.records itself -- handed to it
-        # directly, not reduced to an {id: path} dict first, since a dict
-        # comprehension keyed by id would silently collapse two records sharing an id
-        # (an ordinary case: a factory-generated test repeats its id for every
-        # instance it produces). See Reporter's own docstring for the full reasoning.
-        reporter = _report.Reporter(
-            records=collected.records,
-            skipped=collected.skipped,
-            capture_passthrough=capture_passthrough,
-            stream=sys.stdout,
-            verbosity=verbosity,
-            durations=args.durations,
-            rootdir=rootdir,
-        )
-
-        # Set by run_suite's own on_interrupt callback, from the loop, the first time a
-        # Ctrl-C lands. Everything the run did find is still reported below; this only
-        # decides what the last line says and which exit code goes with it.
-        interrupted = False
-
-        def on_interrupt() -> None:
-            nonlocal interrupted
-            interrupted = True
-
-        results = _run.run_suite(
-            collected.records,
-            concurrency=effective_concurrency,
-            timeout=effective_timeout,
-            capture_passthrough=capture_passthrough,
-            maxfail=maxfail,
-            basetemp=args.basetemp,
-            unattributed_output=unattributed,
-            on_result=reporter.on_result,
-            on_interrupt=on_interrupt,
-            # 0 means "off" at the CLI; run_suite spells that None, and treats a
-            # non-positive number the same way regardless.
-            loop_watchdog=effective_watchdog or None,
-            filterwarnings=effective_filterwarnings,
-            # setup.mode/setup.cache_dir, not args.assert_mode/args.rewrite_cache: an
-            # isolated test's subprocess must reproduce what this run actually decided
-            # (a --assert=rewrite request can still fall back to plain), not re-derive
-            # and re-warn about it once per isolated test.
-            isolated=_isolated.IsolatedConfig(
-                rootdir=rootdir,
-                assert_mode=setup.mode,
-                assert_cache_dir=setup.cache_dir,
-                rewrite_roots=tuple(roots),
-            ),
-        )
-        wall_clock = time.monotonic() - wall_start
-
-        # Before this function prints anything of its own: a run stopped by --maxfail
-        # leaves a file block unprinted, and -q leaves its line of characters unclosed.
-        reporter.flush_pending()
-
-        error_word = _color.paint("COLLECTION ERROR", _color.RED, enabled=color_enabled)
-        for error in collected.errors:
-            print(f"{error.path} {error_word}")
-            print(error.message)
-
-        # run_suite returns one result per test that ran -- a cancelled test included --
-        # so anything collection handed it that isn't in there is a test the run stopped
-        # before it ever started.
-        not_run = len(collected.records) - len(results)
-        stopped_by = "interrupted" if interrupted else "--maxfail"
-        if interrupted:
-            print(_color.paint("INTERRUPTED (Ctrl-C)", _color.YELLOW, enabled=color_enabled))
-        elif not_run:
-            print(
-                _color.paint(
-                    f"stopped after {maxfail} failed (--maxfail)",
-                    _color.YELLOW,
-                    enabled=color_enabled,
-                )
-            )
-
-        # Every count the run ends on is reporter's to print, so the file blocks above and
-        # the totals below can't drift into disagreeing about the same suite. Skips reach it
-        # through its constructor, since it counts them per file too.
-        reporter.finish(
-            results,
-            wall_clock=wall_clock,
-            unattributed_output=unattributed,
-            session_warnings=_warnings.session_warnings(),
-            not_run=not_run,
-            not_run_label=stopped_by,
-            deselected=len(collected.deselected),
-            collection_errors=len(collected.errors),
-        )
-
-        # 2, not what the partial results happen to add up to: an interrupted run never
-        # got to the point of having a verdict, and exiting 0 because the tests that did
-        # finish passed would let a Ctrl-C read as success in CI.
-        exit_status = (
-            2
-            if interrupted
-            else _run.exit_code_for(results, collected.errors, skipped=len(collected.skipped))
-        )
-        if args.report_json is not None:
-            _json_report.write_report(
-                args.report_json,
-                records=collected.records,
-                results=results,
-                skipped=collected.skipped,
-                collection_errors=collected.errors,
-                rootdir=rootdir,
-                exit_status=exit_status,
-                wall_clock=wall_clock,
-                session_warnings=_warnings.session_warnings(),
-            )
-        # Last, after everything this run had to say: a cache velox cannot write costs the
-        # next --lf its ordering, and must not touch this one's output or exit code.
-        resolved_rootdir = rootdir.resolve()
-        attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}
-        # One computation used both ways round: what this run can settle is exactly what it may
-        # record, so no error goes into the cache that no later run could take back out.
-        answered = _lastfailed.settled_paths(attempted, rootdir=resolved_rootdir)
-        errored = _lastfailed.error_paths(collected.errors, answered=answered)
-        # Recorded paths this run establishes nothing will ever collect again: gone from
-        # disk, or in a directory it walked and no longer discovered there. Nothing else is
-        # in a position to take these out of the cache.
-        # Skipped outright with nothing recorded: there is no entry for a walk to declare
-        # dead, and resolving every discovered path to find that out is not free.
-        gone: set[str] = set()
-        if not last_run.is_empty():
-            gone = _lastfailed.dead_paths(
-                last_run,
-                discovered={
-                    str(_collect.display_path(path, resolved_rootdir)) for path in discovered
-                },
-                roots=roots,
-                rootdir=resolved_rootdir,
-            )
-        # A file that collected tests was read, whatever else in it went wrong: one malformed
-        # test does not make the ids beside it unknowable, and treating the file as unread
-        # would leave a renamed sibling recorded for good.
-        produced = {str(record.path) for record in found.records}
-        produced |= {str(skip.path) for skip in found.skipped}
-        # A CANCELLED test never got to say anything about the code under test, so it settles
-        # nothing: without this, the very stop --lf exists to iterate through -- `-x`, or a
-        # Ctrl-C -- would drop every failure it cut short. `vanished` is the other direction:
-        # a recorded id a file collection fully read no longer has is settled by its absence,
-        # there being no run left to settle it.
-        settled_ids = {r.id for r in results if r.outcome is not _run.Outcome.CANCELLED}
-        settled_ids |= {s.id for s in collected.skipped}
-        settled_ids |= _lastfailed.vanished(
-            last_run,
-            found,
-            known_files=_lastfailed.read_files(attempted, errored - produced) | gone,
-        )
-        # update, not save(merge(last_run, ...)): the baseline is re-read at the write so a
-        # concurrent run's failures aren't erased by this one's whole-payload write. `last_run`
-        # stays the startup baseline everywhere above -- `dead_paths` and `vanished` reason about
-        # what *this* run observed, and have no evidence to offer about an entry that appeared
-        # while it was running.
-        _cache.update(
-            rootdir,
-            last_run,
-            failed=[r.id for r in results if r.outcome in _run.FAILING_OUTCOMES],
-            errored=errored,
-            settled_ids=settled_ids,
-            settled_files=answered | gone,
-        )
-        if not narrowed_by_selection:
-            _save_collection_index(
-                rootdir, collection_index, found, files=files, discovered=discovered, roots=roots
-            )
-        return exit_status
+            return exit_status
     except KeyboardInterrupt:
         # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second
         # one (the deliberate "abort now" path), or one that landed while this call was
@@ -1328,37 +1457,6 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
         print(file=sys.stdout, flush=True)
         print("velox: aborted (Ctrl-C)", file=sys.stderr)
         return 2
-    finally:
-        # main is called repeatedly in-process (this package's own test suite does
-        # exactly that), and an embedding caller may too -- leaving the hook on
-        # sys.meta_path after this call returns would leak global state into whatever
-        # runs next. This must fire on every exit path, including an exception
-        # bubbling out of collection or execution.
-        #
-        # Only torn down if this call is the one that put it there: install is a
-        # documented no-op when a hook is already on sys.meta_path, so an embedder (or
-        # a nested main()) that installed its own hook first must keep it.
-        if not hook_already_installed:
-            _rewrite.uninstall()
-        # Same rule, and the same reason: `warnings.showwarning` is process-global, so a
-        # nested main() leaves the outer call's shim in place for the outer call to remove.
-        if warnings_installed:
-            _warnings.uninstall()
-        # Symmetric with hook_already_installed above: only remove what this call put
-        # on sys.path, and only if it's still there.
-        if sys_path_inserted:
-            with contextlib.suppress(ValueError):
-                sys.path.remove(rootdir_str)
-        # Whatever this run did or didn't get to, the rewriter may have written bytecode
-        # into the cache directory on its way there.
-        _cache.ensure_gitignore(rootdir)
-        # Symmetric with env_backup's own comment above: restores exactly the keys
-        # this call touched, to exactly what they were before it touched them.
-        for key, prev_value in env_backup.items():
-            if prev_value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = prev_value
 
 
 if __name__ == "__main__":

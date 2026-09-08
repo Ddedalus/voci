@@ -16,6 +16,7 @@ agrees is raising concurrency a question about the suite rather than about the t
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -143,17 +144,26 @@ def run(
     runner that stopped short, or an argument that would narrow only one of them.
     """
     paths = paths or []
-    if before_tree is None:
-        if paths or pytest_args:
-            raise RunnerError(
-                "without `--before` there is no pytest run to narrow: the baseline records "
-                "whatever the run that wrote it collected, and narrowing only velox would "
-                "report the rest of the suite as tests the conversion lost. Re-record the "
-                "baseline over the same selection, or pass `--before`."
-            )
-        loaded = load_record(baseline)
-        before = record(loaded, tree=Path(loaded.get("rootpath", ".")))
-    else:
-        before = run_pytest(before_tree, out=baseline, paths=paths, extra=list(pytest_args or []))
-    after = run_velox(after_tree, paths=paths, concurrency=concurrency)
+    if before_tree is None and (paths or pytest_args):
+        raise RunnerError(
+            "without `--before` there is no pytest run to narrow: the baseline records "
+            "whatever the run that wrote it collected, and narrowing only velox would "
+            "report the rest of the suite as tests the conversion lost. Re-record the "
+            "baseline over the same selection, or pass `--before`."
+        )
+
+    def _before() -> Run:
+        if before_tree is None:
+            loaded = load_record(baseline)
+            return record(loaded, tree=Path(loaded.get("rootpath", ".")))
+        return run_pytest(before_tree, out=baseline, paths=paths, extra=list(pytest_args or []))
+
+    # Each side is a blocking subprocess call in a tree of its own, and `compare` only needs both
+    # results at the end — so run them on threads rather than back to back, which cuts `verify`'s
+    # wall time to roughly the slower of the two rather than their sum. A thread each is enough:
+    # `subprocess.run` releases the GIL for the part that actually takes the time.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        before_future = pool.submit(_before)
+        after_future = pool.submit(run_velox, after_tree, paths=paths, concurrency=concurrency)
+        before, after = before_future.result(), after_future.result()
     return compare(before, after)

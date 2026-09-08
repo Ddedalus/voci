@@ -1,6 +1,6 @@
 # pytest → velox migration tool: implementation plan
 
-The tool exists and its own suite is green (973 tests). Two real suites have been through it:
+The tool exists and its own suite is green (981 tests). Two real suites have been through it:
 marshmallow converts and runs, httpx2 has been audited but not converted. What that turned up is in
 [migration-findings.md](migration-findings.md), and it is why the remaining work below is not just
 "finish Phase 4".
@@ -25,15 +25,11 @@ Exit: httpx2 migrated end to end and written up.
 - [x] **3. httpx2: audit findings write-up.** 342 blocked of 1991, 88.0% serial on one autouse
   `clean_environ`, no override chains.
 
-- [ ] **4. Make the audit report what it does not recognise.** A construct with no matrix row is
-  currently counted as *converts untouched*, so the headline number cannot distinguish "nothing
-  wrong with this" from "nothing looked at this" — which is how marshmallow's audit came back clean
-  on four constructs that then generated uncompilable code. Add an unclassified count: a fixture,
-  test body, class body or config key that no rule claimed is listed with its file and line rather
-  than silently absorbed into the clean bucket.
-
-  *Exit:* audit a suite from outside the corpus and outside the ten already scanned; the surprises
-  in it land in the unclassified list rather than in the clean count.
+- [x] **4. Make the audit report what it does not recognise.** `audit/completeness.py`
+  cross-checks the dump's fixture/test/class census against a plain `ast` walk of the same sources;
+  a name pytest resolved that the walk can't find is `Audit.unclassified`, pulled out of
+  `clean_tests` and listed in `migration-report.md`'s "What this audit cannot see". Config keys
+  already had no such gap (`VX309` classifies every unrecognised setting).
 
 ### Coexistence workspace
 
@@ -56,36 +52,15 @@ hand.
 `source`'s current tip — cheap to regenerate wholesale, never worth reconciling. That only holds if
 nothing that changes the suite's meaning is ever applied to `dest` alone: prefactors (below) land on
 `source` as ordinary commits, verified green under the suite's own pytest, *before* `scaffold` is
-ever run. The one thing `dest` is allowed to carry that `source` doesn't is a relocation
-fixup — a hardcoded path or anything else that only broke because the suite now lives somewhere
-else. Anything found while poking at `dest` that isn't that goes back into `source` and `dest` gets
-re-scaffolded, never patched in place. This is what keeps the reset/reconvert loop in task 6 sound:
-there is exactly one tree suite content can change in, so there is nothing for two copies to
-disagree about.
+ever run. Anything found while poking at `dest` that isn't a relocation fixup goes back into
+`source` and `dest` gets re-scaffolded, never patched in place. This is what keeps the
+reset/reconvert loop in task 6 sound: there is exactly one tree suite content can change in, so
+there is nothing for two copies to disagree about. `scaffold` (task 5, done) is the mechanism.
 
-A re-scaffold has to happen every time a prefactor lands on `source` — that's the whole point of
-routing prefactors there — so a relocation fixup a human re-does by hand on every `scaffold` call is
-not a one-time cost, it is redone once per prefactor. Rather than build a patch-capture-and-apply
-mechanism, this reuses `source`'s own git, which already has to be there for prefactors to land as
-ordinary commits. Relocation fixups are commits on a small branch, `velox-migrate/relocation`;
-`scaffold` rebases that branch onto `source`'s current tip and materializes the rebased tree into
-`dest` as a plain export (`git archive`/`checkout-index`, not a worktree — `dest` stays a plain
-directory as already decided, git is only the merge engine here). A prefactor commit that touches
-the same lines as a relocation fixup surfaces as an ordinary rebase conflict, resolved once with
-git's own tooling, not a bespoke "patch failed to apply" path.
-
-- [ ] **5. `scaffold`, the relocation branch, and the baseline snapshot.** `velox-migrate scaffold
-  <source> [dest]` rebases `velox-migrate/relocation` onto `source`'s tip (creating the branch
-  empty, off the tip, the first time) and exports the result into `dest` — handles suites that live
-  in a read-only submodule, same as marshmallow needed by hand (migration-findings.md). The user
-  runs pytest there and fixes what's still broken by committing directly to the relocation branch
-  (`dest` tracks it) until it's green. `convert --write` snapshots `dest` into
-  `.velox-migrate/baseline/` (a plain copy) and records pytest outcomes before it overwrites
-  anything, closing today's footgun where a forgotten `--record` loses the baseline for good.
-  *Exit:* landing a second prefactor on `source` and re-running `scaffold` reproduces a green `dest`
-  with no hand-editing when the branches don't conflict, and a real conflict when they do. Running
-  `--write` twice in a row without touching `dest` in between still leaves a usable baseline both
-  times.
+- [x] **5. `scaffold`, the relocation branch, and the baseline snapshot.** `velox_migrate/
+  workspace.py`; see the code, its tests, and the README's "Coexisting with the pytest suite" for
+  the shape. Not wired into anything downstream yet — `verify` still reads its own
+  `--record`ed baseline rather than `scaffold`'s snapshot, which is task 6's job.
 
 - [ ] **6. `convert --reset`, and adoption.** Restores `dest` from `.velox-migrate/baseline/`, so
   reconverting after a codegen tweak is `--reset` then `convert --write` again — no re-copy, no
@@ -168,12 +143,9 @@ under test.
   `verify --record` baseline and, per task 12, a coverage comparison.
 
 - [ ] **14. Concurrency triage.** Raise concurrency, use the audit's hazard census as the triage
-  index, hand-apply `@velox.solo`/`@velox.isolated` where tests fail. Automate only a pattern that
-  repeats often enough to pay for a skill. A `concurrency-triage` skill for this, plus an
-  `unwind-override` skill for the over-budget chains the decisions table below points at, are
-  already written against this shape of `findings.json` — parked, unmerged, on `vx-migrate-skills`
-  (worktree `velox-wt-migrate-skills`) since this plan still had the old task numbering. Review
-  against the current matrix/findings fields (unchanged since, per a spot check) and merge.
+  index, hand-apply `@velox.solo`/`@velox.isolated` where tests fail. `concurrency-triage` and
+  `unwind-override` (for the over-budget chains the decisions table below points at) are merged,
+  at `velox-migrate/skills/`. What's left is running the triage against a real audit.
 
 - [ ] **15. Write-up.** Both suites, audit findings, verify results, httpx2's before/after
   concurrency, and the coverage comparison. This is what the phase is for.

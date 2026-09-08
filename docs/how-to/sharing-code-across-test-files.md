@@ -1,24 +1,24 @@
 # Sharing code across test files
 
-velox splits importing in two: one mechanism handles the suite's own code, a separate one handles
-the test files it collects. The split is what makes sharing code across files predictable.
+velox handles two kinds of imports differently: the suite's own code, and the test files it
+collects. This page covers both, and how they interact when you split a suite across directories.
 
 ## The rootdir
 
-Every run picks a rootdir before doing anything else. The search starts at the common ancestor of
-the paths given on the command line (the current directory, if none were given), then walks upward
-looking for a `pyproject.toml` with a `[tool.velox]` table. A `pyproject.toml` without that table
-doesn't stop the walk — a package nested inside a bigger repo, say. The walk also stops at the
-first directory holding a `.git`, checking that directory's own `pyproject.toml` first but never
-looking past it. Reaching the filesystem root with no match and no `.git` stops it too.
+Every run picks a rootdir first. The search starts at the common ancestor of the paths given on
+the command line, or the current directory if none were given. It walks upward from there, looking
+for a `pyproject.toml` with a `[tool.velox]` table. A `pyproject.toml` without that table doesn't
+stop the walk — a package nested inside a bigger repo, say. The walk stops at the first directory
+holding a `.git`, checking that directory's own `pyproject.toml` first but never looking past it.
+If it reaches the filesystem root with no match and no `.git`, it stops there too.
 
 If no `[tool.velox]` table was found, the rootdir is the directory of the nearest plain
 `pyproject.toml` the walk passed — the startup header's `config: none` line names that case. Only
 when there was no `pyproject.toml` at all does the rootdir fall back to wherever the search
 started.
 
-The rootdir does double duty: it's what `testpaths` and `ignore` are resolved against, what test
-ids are shown relative to, where `.velox_cache/lastfailed.json` lives, and the one directory velox
+Relative config — `testpaths`, `ignore` — is resolved against the rootdir. Test ids are shown
+relative to it. `.velox_cache/lastfailed.json` lives under it. And it's the one directory velox
 puts on `sys.path`.
 
 Which is why a `pyproject.toml` anchors it, rather than the arguments. Every one of those four
@@ -33,47 +33,47 @@ from the rootdir, exactly as the next section does.
 
 ## rootdir on sys.path
 
-Before collecting the first file, velox inserts the rootdir at `sys.path[0]` and removes it again
-once the run ends. Prepended, not appended, so the suite's own sources shadow an installed package
-of the same name.
+Before collecting the first file, velox inserts the rootdir at `sys.path[0]`, and removes it again
+once the run ends. It goes at the front, not the back, so the suite's own sources shadow an
+installed package of the same name.
 
-That single insertion is the whole import setup. No `__init__.py` is required anywhere: PEP 420
-namespace packages let any directory under the rootdir be imported by its dotted path as long as
-the rootdir is on `sys.path`. That's what resolves an ordinary import like this:
+No `__init__.py` is required anywhere for this to work: PEP 420 namespace packages let any
+directory under the rootdir be imported by its dotted path, as long as the rootdir is on
+`sys.path`. So this resolves:
 
 ```python
 # tests/test_delivery.py
 from tests.fixtures import settings
 ```
 
-`tests.fixtures` behaves like any other import — cached in `sys.modules`, safe to import from more
-than one place, free to use relative imports of its own. None of that is velox-specific.
+`tests.fixtures` is an ordinary import. It's cached in `sys.modules`, it can be imported from more
+than one place, and it can use relative imports of its own. velox does nothing special to it.
 
 ## Test files are imported differently
 
-A file collection walks for its own tests doesn't go through `sys.path`. It's imported straight
-from its file path, under a synthetic name shaped like `velox_tests.<escaped relative path>`, and
-dropped from `sys.modules` again once collection is done with it.
+Collection doesn't use `sys.path` to reach the files it walks for tests. Each one is imported
+straight from its file path, under a synthetic name shaped like `velox_tests.<escaped relative
+path>`. Once collection is done with a file, its module is dropped from `sys.modules` again.
 
-The synthetic name is what keeps two files named `test_utils.py` in different directories from
-colliding under one module name — pytest calls this `ImportPathMismatchError`; velox avoids it by
-construction.
+The synthetic name keeps two files both named `test_utils.py`, in different directories, from
+colliding under one module name. pytest calls the collision this avoids `ImportPathMismatchError`.
 
-It costs a test file two things. A relative import has nothing to resolve against: `from .fixtures
-import settings` fails, naming a `velox_tests` package that doesn't exist. And one test file can't
-import another by name — there's no real module behind it to reach. Code shared between test files
-has to live somewhere else: an ordinary module, reached the way `tests.fixtures` was above.
+Two things follow from this. A relative import inside a test file has nothing to resolve against —
+`from .fixtures import settings` fails, naming a `velox_tests` package that doesn't exist. And one
+test file can't import another by name, because there's no real module behind it to reach. Code
+shared between test files needs to live in an ordinary module instead, imported the way
+`tests.fixtures` was above.
 
 ## Packages above a test file
 
-A package's `__init__.py` is imported the same synthetic way, ahead of the test file itself, so a
-`velox.use(...)` call in it reaches every test below. That walk stops at the first directory with
-no `__init__.py`, independent of the rootdir search above it.
+A package's `__init__.py` is imported the same way, ahead of the test file itself, so a
+`velox.use(...)` call in it reaches every test below. This walk stops at the first directory with
+no `__init__.py`. It has nothing to do with the rootdir search above.
 
 ## Isolated tests
 
-A `@velox.isolated` test runs in its own subprocess, which repeats the rootdir-on-`sys.path` step
-before importing anything, so its imports behave exactly like the parent run's.
+A `@velox.isolated` test runs in its own subprocess. That subprocess repeats the rootdir-on-
+`sys.path` step before importing anything, so its imports behave the same as the parent run's.
 
 ## A layout that works
 
@@ -97,5 +97,5 @@ from tests.fixtures import settings
 from tests.api.fixtures import payload
 ```
 
-Both are ordinary absolute imports, resolved because `tests/` sits under the rootdir on `sys.path`
-— not because either file is a collected test module.
+Both are ordinary absolute imports. They resolve because `tests/` sits under the rootdir on
+`sys.path`, not because either file is a collected test module.

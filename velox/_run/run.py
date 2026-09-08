@@ -191,7 +191,7 @@ def _resolve_call_outcome(
     )
 
 
-async def _run_one(
+async def _run_one(  # noqa: C901
     record: TestRecord,
     store: _di.ScopeStore,
     *,
@@ -768,7 +768,7 @@ class StopController:
         return True
 
 
-def run_suite(
+def run_suite(  # noqa: C901
     records: list[TestRecord],
     *,
     concurrency: int = DEFAULT_CONCURRENCY,

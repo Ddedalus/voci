@@ -36,9 +36,10 @@ from velox_migrate.audit.findings import Finding, Site
 # parameter of a function the suite calls itself, is not pytest's.
 REQUEST = "request"
 
-# What pytest collects as a test, which with a fixture factory is the whole of what it injects
-# into. `python_functions` can widen it; a suite that has changed it is reported under VX302, and
-# reads here as one whose helpers are not tests, which is the conservative direction.
+# What pytest collects as a test, absent a dump to read the real collected names from. `scan_source`
+# falls back to this only when `known_tests` is `None`: a suite that has widened `python_functions`
+# away from this prefix is reported under VX302, and reads here as one whose helpers are not tests,
+# which is the conservative direction -- `scan`, called with a dump in hand, does not take it.
 _TEST_PREFIX = "test"
 
 # What each `request` attribute reaches, for the message. `config` is here for the reads other than
@@ -193,11 +194,17 @@ class Scan:
     files: int
 
 
-def scan(paths: Iterable[Path], *, root: Path) -> Scan:
+def scan(
+    paths: Iterable[Path], *, root: Path, known_tests: Mapping[str, frozenset[str]] | None = None
+) -> Scan:
     """Every finding in `paths`, sited relative to `root`.
 
     A path that is not a file is skipped without comment; one whose bytes or syntax cannot be read
-    is named in `Scan.unparsed` and the scan goes on.
+    is named in `Scan.unparsed` and the scan goes on. `known_tests` is the dump's own qualnames
+    -- `Class.method` or a bare function name -- collected as tests in each path, keyed the same
+    way; a path this does not mention reads as holding none, which is right for a `conftest.py` and
+    wrong only where a caller forgot to name a file it should have. `None` leaves every path to
+    `scan_source`'s own name-prefix guess, for a caller with no dump to read.
     """
     findings: list[Finding] = []
     unparsed: list[str] = []
@@ -217,8 +224,9 @@ def scan(paths: Iterable[Path], *, root: Path) -> Scan:
         except (OSError, UnicodeDecodeError):
             unparsed.append(relative)
             continue
+        tests = None if known_tests is None else known_tests.get(relative, frozenset())
         try:
-            findings.extend(scan_source(source, path=relative))
+            findings.extend(scan_source(source, path=relative, known_tests=tests))
         except cst.ParserSyntaxError:
             unparsed.append(relative)
             continue
@@ -231,14 +239,30 @@ def scan(paths: Iterable[Path], *, root: Path) -> Scan:
     )
 
 
-def scan_source(source: str, *, path: str) -> tuple[Finding, ...]:
+def scan_source(
+    source: str, *, path: str, known_tests: frozenset[str] | None = None
+) -> tuple[Finding, ...]:
     """Every finding in `source`, sited at `path` verbatim.
 
-    Raises `libcst.ParserSyntaxError` for source it cannot parse.
+    `known_tests` names the qualnames -- `Class.method` or a bare function name -- that a dump
+    resolved as this file's own tests, which decides what `request` forwarded into a plain-looking
+    `def` still counts as pytest's; `None` (the default, for a caller with no dump) falls back to
+    `_TEST_PREFIX`. Raises `libcst.ParserSyntaxError` for source it cannot parse.
     """
     wrapper = MetadataWrapper(cst.parse_module(source), unsafe_skip_copy=True)
-    scanner = _Scanner(path, _module_level_names(wrapper.module))
+    module_names = _module_level_names(wrapper.module)
+    forwarded: frozenset[str] = frozenset()
+    scanner = _Scanner(path, module_names, known_tests=known_tests, forwarded=forwarded)
     wrapper.visit(scanner)
+    # Re-scan for as long as a pass finds a function newly forwarded `request` -- a forwarding call
+    # site can be written above or below the `def` it hands `request` to, and a chain of helpers
+    # (a test forwards into one, which forwards into another) only surfaces its outermost link on
+    # the first pass, its next on the second, and so on. Bounded by the module's own finite set of
+    # callable names, so this always settles.
+    while scanner.forwarded_targets - forwarded:
+        forwarded = scanner.forwarded_targets
+        scanner = _Scanner(path, module_names, known_tests=known_tests, forwarded=forwarded)
+        wrapper.visit(scanner)
     return scanner.findings
 
 
@@ -279,19 +303,41 @@ class _Scanner(cst.CSTVisitor):
 
     METADATA_DEPENDENCIES = (PositionProvider, QualifiedNameProvider, ParentNodeProvider)
 
-    def __init__(self, path: str, module_names: frozenset[str]) -> None:
+    def __init__(
+        self,
+        path: str,
+        module_names: frozenset[str],
+        *,
+        known_tests: frozenset[str] | None = None,
+        forwarded: frozenset[str] = frozenset(),
+    ) -> None:
         super().__init__()
         self._path = path
         self._module_names = module_names
+        # `None` here means "no dump to read", which is what falls `visit_FunctionDef` back to
+        # `_TEST_PREFIX`; an empty set, by contrast, is a dump's own answer that this file has no
+        # tests, which is just as good an answer as a populated one.
+        self._known_tests = known_tests
+        # The functions a first pass over this same module found `request` forwarded into by name;
+        # empty on that first pass, since nothing has been discovered yet.
+        self._forwarded = forwarded
         self._stack: list[_Frame] = [_Frame(name="")]
         # Names bound to a `mock.patch(...)` object, so a later `.start()` on one is recognized.
         # Kept per module rather than per scope, since the pattern is always write-then-start.
         self._patchers: set[str] = set()
         self._findings: dict[tuple[str, int, str], Finding] = {}
+        # Functions in this file seen handed this frame's own pytest `request` by name (qualified,
+        # so two functions sharing a plain name in different scopes are not conflated), for a later
+        # pass to treat as injecting it too.
+        self._forwarded_targets: set[str] = set()
 
     @property
     def findings(self) -> tuple[Finding, ...]:
         return tuple(sorted(self._findings.values(), key=lambda f: (f.site.line or 0, f.code)))
+
+    @property
+    def forwarded_targets(self) -> frozenset[str]:
+        return frozenset(self._forwarded_targets)
 
     # --- scopes ------------------------------------------------------------------------------
 
@@ -299,15 +345,26 @@ class _Scanner(cst.CSTVisitor):
         name = node.name.value
         at_module_level = len(self._stack) == 1
         in_class = not at_module_level and not self._stack[-1].is_function
+        params = _param_names(node.params)
+        # `QualifiedNameProvider` resolves a nested class's own dotted chain
+        # (`TestOuter.TestInner.test_a`) and a nested function's (`test_b.<locals>.helper`), the
+        # same two shapes `known_tests` and `_forwarded` are keyed by -- the first from the dump's
+        # own `item.cls.__qualname__`, the second from resolving a call site the same way.
+        qualified = self._names(node)
+        if self._known_tests is None:
+            is_test = name.startswith(_TEST_PREFIX) and (at_module_level or in_class)
+        else:
+            is_test = (at_module_level or in_class) and bool(qualified & self._known_tests)
         self._stack.append(
             _Frame(
                 name=name,
-                params=_param_names(node.params),
+                params=params,
                 locals=_assigned_names(node),
                 is_function=True,
                 is_async=node.asynchronous is not None,
                 injects=_is_fixture_def(node)
-                or (name.startswith(_TEST_PREFIX) and (at_module_level or in_class)),
+                or is_test
+                or (REQUEST in params and bool(qualified & self._forwarded)),
             )
         )
         if in_class and _is_fixture_def(node):
@@ -437,6 +494,36 @@ class _Scanner(cst.CSTVisitor):
         self._pytest_call(node, names)
         self._fixture_call(node)
         self._hazard_call(node, names)
+        self._forwarding_call(node)
+
+    def _forwarding_call(self, node: cst.Call) -> None:
+        """Record `node` where it hands this frame's own pytest `request` to a function defined
+        somewhere in this same file, by the same name -- `helper(request)` or
+        `helper(request=request)` -- so a later pass can tell that function's identically named
+        parameter is pytest's `request` too. A call into another file is not seen this way: this
+        scan is one file at a time, so a helper imported from a sibling module keeps its `request`
+        parameter unrecognized.
+
+        Only a bare call to a name, not a method or an attribute, since there is no signature to
+        match a keyword against and no body to re-scan for anything else. The target is recorded by
+        its resolved qualified name -- `helper`, or `test_b.<locals>.helper` for one nested inside
+        another function -- so two functions sharing a plain name in different scopes are not
+        conflated. A positional match is taken on faith until a later pass finds the target
+        actually declares a `request` parameter of its own; a keyword spelled anything else lands on
+        a parameter this scan cannot follow, so it is left as the existing `VX017` finding at this
+        call site says.
+        """
+        func = node.func
+        if not isinstance(func, cst.Name) or not self._takes(REQUEST):
+            return
+        forwards = any(
+            isinstance(arg.value, cst.Name)
+            and arg.value.value == REQUEST
+            and (arg.keyword is None or arg.keyword.value == REQUEST)
+            for arg in node.args
+        )
+        if forwards:
+            self._forwarded_targets.update(self._names(node))
 
     def _tabled_call(self, node: cst.Call, names: frozenset[str]) -> None:
         for name in sorted(names):
@@ -455,63 +542,75 @@ class _Scanner(cst.CSTVisitor):
     def _pytest_call(self, node: cst.Call, names: frozenset[str]) -> None:
         positional = _positional(node)
         if "pytest.raises" in names:
-            entered = isinstance(self.get_metadata(ParentNodeProvider, node, None), cst.WithItem)
-            if not entered and len(positional) < 2:
-                self._report(
-                    "VX210",
-                    node,
-                    "`pytest.raises` is neither entered by a `with` nor called with a second "
-                    "positional argument for it to call, so its result is being stashed for "
-                    "later.",
-                )
-            elif not entered and len(positional) >= 2 and _keyword(node, "match") is not None:
-                self._report(
-                    "VX210",
-                    node,
-                    "`pytest.raises` is called with `match=` and a callable to call: pytest "
-                    "forwards `match` to the callable there, but `velox.raises` always "
-                    "intercepts it to match the exception.",
-                )
-            if positional and self._names(positional[0].value) & _CANCELLED:
-                self._report(
-                    "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."
-                )
+            self._raises_call(node, positional)
         elif "pytest.approx" in names and positional:
-            found = self._approx_kind(positional[0].value)
-            if found is not None:
-                code, message = found
-                self._report(code, node, message)
+            self._approx_call(node, positional)
         elif "pytest.param" in names:
-            marks = _keyword(node, "marks")
-            if marks is not None:
-                self._report(
-                    "VX102",
-                    node,
-                    f"`pytest.param` puts `{_render(marks.value)}` on one case.",
-                )
+            self._param_call(node)
         elif "pytest.mark.skipif" in names:
-            condition = _condition(node, positional)
-            if isinstance(condition, cst.SimpleString | cst.ConcatenatedString):
-                self._report(
-                    "VX103",
-                    node,
-                    f"`@pytest.mark.skipif` is given the string condition `{_render(condition)}`.",
-                )
+            self._skipif_call(node, positional)
         elif "pytest.mark.xfail" in names:
-            condition = _condition(node, positional)
-            if condition is not None:
-                self._report(
-                    "VX105",
-                    node,
-                    f"`@pytest.mark.xfail` expects a failure only when `{_render(condition)}`.",
-                )
-            run = _keyword(node, "run")
-            if run is not None and _is_false(run.value):
-                self._report(
-                    "VX106",
-                    node,
-                    "`@pytest.mark.xfail(run=False)` expects a failure without running the test.",
-                )
+            self._xfail_call(node, positional)
+
+    def _raises_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        entered = isinstance(self.get_metadata(ParentNodeProvider, node, None), cst.WithItem)
+        if not entered and len(positional) < 2:
+            self._report(
+                "VX210",
+                node,
+                "`pytest.raises` is neither entered by a `with` nor called with a second "
+                "positional argument for it to call, so its result is being stashed for later.",
+            )
+        elif not entered and len(positional) >= 2 and _keyword(node, "match") is not None:
+            self._report(
+                "VX210",
+                node,
+                "`pytest.raises` is called with `match=` and a callable to call: pytest forwards "
+                "`match` to the callable there, but `velox.raises` always intercepts it to match "
+                "the exception.",
+            )
+        if positional and self._names(positional[0].value) & _CANCELLED:
+            self._report(
+                "VX211", node, "`pytest.raises` is asked to catch `asyncio.CancelledError`."
+            )
+
+    def _approx_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        found = self._approx_kind(positional[0].value)
+        if found is not None:
+            code, message = found
+            self._report(code, node, message)
+
+    def _param_call(self, node: cst.Call) -> None:
+        marks = _keyword(node, "marks")
+        if marks is not None:
+            self._report(
+                "VX102", node, f"`pytest.param` puts `{_render(marks.value)}` on one case."
+            )
+
+    def _skipif_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        condition = _condition(node, positional)
+        if isinstance(condition, cst.SimpleString | cst.ConcatenatedString):
+            self._report(
+                "VX103",
+                node,
+                f"`@pytest.mark.skipif` is given the string condition `{_render(condition)}`.",
+            )
+
+    def _xfail_call(self, node: cst.Call, positional: list[cst.Arg]) -> None:
+        condition = _condition(node, positional)
+        if condition is not None:
+            self._report(
+                "VX105",
+                node,
+                f"`@pytest.mark.xfail` expects a failure only when `{_render(condition)}`.",
+            )
+        run = _keyword(node, "run")
+        if run is not None and _is_false(run.value):
+            self._report(
+                "VX106",
+                node,
+                "`@pytest.mark.xfail(run=False)` expects a failure without running the test.",
+            )
 
     def _approx_kind(self, argument: cst.BaseExpression) -> tuple[str, str] | None:
         """The code and message for why `pytest.approx(argument)` will not convert to

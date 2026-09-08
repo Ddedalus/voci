@@ -16,10 +16,6 @@ None known.
 Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by review, in
 `plans/migrate-review-followups.md`.
 
-Two migration skills (`unwind-override`, `concurrency-triage`) are written but unmerged, on branch
-`vx-migrate-skills` (worktree `velox-wt-migrate-skills`) — see task 14 in
-`plans/migration-tool-plan.md`.
-
 ### docs
 `plans/docsite-plan.md`
 
@@ -27,6 +23,9 @@ Two migration skills (`unwind-override`, `concurrency-triage`) are written but u
 ### Code quality consolidation
 
 Code review of velox so far, coverage gaps, clean CI, drop fat, identify duplication etc.
+
+Complexity concentrated in a handful of `velox-migrate` functions (line-count + `ruff --select
+C901` sweep, general lint and pyrefly otherwise clean): `plans/complexity-reduction-plan.md`.
 
 ### Reporting
 JUnit XML and GitHub annotations

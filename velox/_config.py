@@ -65,6 +65,15 @@ class Config:
     #: `cli._reread_on_rootdir` offer a printed id back as an argument. Always true alongside a
     #: `source`; true without one for the plain-`pyproject.toml` fallback.
     anchored: bool = False
+    #: The nearest ancestor of the search start containing `.git`, noted on the same upward walk
+    #: that looked for a `pyproject.toml` — set even when nothing anchored `rootdir`, unlike
+    #: `rootdir` itself, which falls back to the search start in that case and so is no use as a
+    #: fixed anchor. A weaker anchor than `anchored` -- it says nothing about where the suite's
+    #: imports are rooted -- so `cli._reread_on_rootdir` only reaches for it when `anchored` is
+    #: `False`. `None` when the walk never crossed a `.git` boundary, or crossed one only after
+    #: already finding an anchor (that walk stops the moment it finds one, before checking any
+    #: further).
+    git_root: Path | None = None
     testpaths: tuple[str, ...] | None = None
     concurrency: int | None = None
     timeout: float | None = None
@@ -95,7 +104,7 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
     `pyproject.toml` first (the common case: a `.git` at the project root sitting next to the
     `pyproject.toml` that governs it), but never looking above it. A `pyproject.toml` with no
     `[tool.velox]` table (a package nested inside a bigger repo, say) is not a match; the walk
-    continues past it.
+    continues past it, remembered as `fallback` below.
 
     Finding no table but a plain `pyproject.toml`, the nearest one's directory is the rootdir.
     The arguments must not decide it: rootdir fixes the spelling of every test id, the `sys.path`
@@ -105,11 +114,13 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
     failures are all outside this selection", the one state `--lf` reports as a clean exit `0`.
     See `plans/rationale/cache.md`.
 
-    A `pyproject.toml` and nothing else. The `.git` the walk stops at is a worse anchor than no
-    anchor: it bounds the search without saying anything about where a suite's imports are rooted,
-    and it is routinely somewhere a rootdir has no business being — a dotfiles repo at `$HOME`
-    would collect a `.velox_cache` for a scratch directory under it. Without either marker the
-    rootdir stays the search start, exactly as before.
+    Finding neither, the `.git` the walk stops at is recorded as `git_root` but does not anchor
+    `rootdir`: it bounds the search without saying anything about where a suite's imports are
+    rooted, and it is routinely somewhere a rootdir has no business being — a dotfiles repo at
+    `$HOME` would collect a `.velox_cache` for a scratch directory under it. `rootdir` stays the
+    search start in that case, exactly as with no `.git` boundary either; `git_root` is there
+    purely as the weaker, argument-independent anchor `cli._reread_on_rootdir` falls back to when
+    nothing better anchored the search.
 
     `explicit_paths` is `cli.main`'s `args.paths`, already known to exist — empty when the user
     gave none, in which case the search starts at `cwd()`.
@@ -129,7 +140,9 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
             if fallback is None:
                 fallback = current
         if (current / ".git").exists():
-            break
+            if fallback is not None:
+                return Config(rootdir=fallback, anchored=True, git_root=current)
+            return Config(rootdir=start, git_root=current)
         parent = current.parent
         if parent == current:
             # Filesystem root, reached without ever finding a `.git` boundary (a repo-less

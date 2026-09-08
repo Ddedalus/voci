@@ -1296,7 +1296,7 @@ def by_area() -> Iterator[tuple[Area, tuple[Construct, ...]]]:
         yield area, tuple(c for c in CONSTRUCTS if c.area is area)
 
 
-def _validate() -> None:
+def _validate() -> None:  # noqa: C901
     """Guard the table's own invariants, which nothing else in the pipeline re-checks."""
     seen: set[str] = set()
     for c in CONSTRUCTS:

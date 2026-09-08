@@ -21,11 +21,13 @@ from velox_migrate.audit.findings import (
     Suite,
     Summary,
     TypeReadiness,
+    Unclassified,
     ordered,
+    unclassified_ordered,
 )
 from velox_migrate.matrix import Construct
 
-FINDINGS_VERSION = 2
+FINDINGS_VERSION = 3
 
 
 def payload(audit: Audit) -> dict[str, Any]:
@@ -42,12 +44,23 @@ def payload(audit: Audit) -> dict[str, Any]:
         "type_readiness": _type_readiness(audit.type_readiness),
         "findings": [_finding(finding) for finding in findings],
         "blind_spots": [_blind_spot(construct) for construct in audit.blind_spots],
+        "unclassified": [_unclassified(row) for row in unclassified_ordered(audit.unclassified)],
     }
 
 
 def write(audit: Audit, path: str | Path) -> None:
     """`audit` written to `path` as UTF-8 JSON ending in a newline."""
-    text = json.dumps(payload(audit), indent=1, ensure_ascii=False)
+    write_json(payload(audit), path)
+
+
+def write_json(data: Any, path: str | Path) -> None:
+    """`data` written to `path` as UTF-8 JSON, indented and ending in a newline.
+
+    The one place that convention (indent width, `ensure_ascii`) is decided, so `write` above and
+    `verify/report.py::write_payload` -- the only other JSON artifact this tool writes from a
+    process that can import the package -- cannot drift apart on it.
+    """
+    text = json.dumps(data, indent=1, ensure_ascii=False)
     Path(path).write_text(f"{text}\n", encoding="utf-8")
 
 
@@ -80,6 +93,7 @@ def _totals(summary: Summary) -> dict[str, Any]:
         "clean_tests": summary.clean_tests,
         "marker_tests": summary.marker_tests,
         "hazard_tests": summary.hazard_tests,
+        "unclassified_tests": summary.unclassified_tests,
         "blocked_tests": summary.blocked_tests,
         "convertible_tests": summary.convertible_tests,
         "suite_findings": summary.suite_findings,
@@ -146,4 +160,15 @@ def _blind_spot(construct: Construct) -> dict[str, Any]:
         "subject": construct.subject,
         "note": construct.note,
         "action": construct.action,
+    }
+
+
+def _unclassified(row: Unclassified) -> dict[str, Any]:
+    return {
+        "kind": row.kind,
+        "name": row.name,
+        "file": row.site.file,
+        "line": row.site.line,
+        "function": row.site.function,
+        "tests": list(row.tests),
     }

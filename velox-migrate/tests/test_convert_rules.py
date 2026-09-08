@@ -24,6 +24,7 @@ BY_CODE = {rule.code: rule for rule in rules.RULES}
 
 def _context(
     *tests: str,
+    path: str = PATH,
     blocked: Iterable[str] = (),
     axis_ids: Mapping[tuple[str, str], tuple[str, ...]] | None = None,
     xfail_strict: bool = False,
@@ -33,7 +34,7 @@ def _context(
     generated: Mapping[str, Sequence[Generated]] | None = None,
 ) -> rules.Context:
     return rules.Context(
-        path=PATH,
+        path=path,
         axis_ids=axis_ids or {},
         tests=frozenset(tests),
         blocked=frozenset(blocked),
@@ -2405,3 +2406,24 @@ def test_an_absolute_import_is_not_a_relative_one() -> None:
     source = "from tests.support import STAMP\nimport tests.support\n"
 
     assert _untouched("VX034", source, _context()) == ()
+
+
+def test_a_level_import_matching_a_two_deep_file_still_resolves() -> None:
+    # `tests/pkg/test_suite.py` is two packages deep, and a level-2 import is the last one that
+    # still names a package inside the suite -- the boundary the level-3 case below falls past.
+    before = "from ..sibling import thing\n"
+    after = "from tests.sibling import thing\n"
+    context = _context(path="tests/pkg/test_suite.py")
+
+    assert _codes(_rewrite("VX034", before, after, context)) == ["VX034"]
+
+
+def test_a_level_import_one_past_a_two_deep_file_is_left_as_it_was() -> None:
+    # One level further than the case above reaches past `tests/`, same as
+    # `test_an_import_reaching_above_the_root_is_left_as_it_was` one level up from a
+    # single-deep file -- the boundary itself, not past it, which a prior off-by-one accepted and
+    # silently resolved to `sibling` alone, dropping the `tests` prefix a real import needs.
+    source = "from ...sibling import thing\n"
+    context = _context(path="tests/pkg/test_suite.py")
+
+    assert _untouched("VX034", source, context) == ()

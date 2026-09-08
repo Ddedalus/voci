@@ -283,7 +283,7 @@ class Reporter:
             print(file=self.stream)
             self._open_progress_line = False
 
-    def finish(
+    def finish(  # noqa: C901
         self,
         results: list[TestResult],
         *,

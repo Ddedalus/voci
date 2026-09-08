@@ -11,7 +11,7 @@ converts untouched, how much needs a human, and what fraction of it ends up runn
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from velox_migrate import matrix
@@ -114,13 +114,33 @@ class Finding:
 
 
 @dataclass(frozen=True, slots=True)
+class Unclassified:
+    """A fixture, test or class the dump says pytest resolved, whose defining code no scan located.
+
+    Not a `Finding`: there is no matrix code for it, because the whole point is that no rule ever
+    ran against it. `kind` is `"fixture"`, `"test"` or `"class"`. `tests` are the node ids it
+    reaches, by the same attribution `Finding.tests` uses, and are excluded from
+    `Summary.clean_tests` rather than counted as a construct nothing found wrong with.
+    """
+
+    kind: str
+    name: str
+    site: Site
+    tests: tuple[str, ...] = ()
+
+    @property
+    def sort_key(self) -> tuple[str, tuple[str, int, str], str]:
+        return (self.kind, self.site.sort_key, self.name)
+
+
+@dataclass(frozen=True, slots=True)
 class Summary:
     """The totals a reader needs before deciding whether to convert anything.
 
     Every test falls in exactly one of `clean_tests`, `marker_tests`, `hazard_tests` and
-    `blocked_tests`, by the worst finding that touches it; a test nothing touches is clean.
-    `serialized_tests` cuts across all four, since a construct can be mechanical to translate and
-    still have to run alone.
+    `blocked_tests`, by the worst finding that touches it; a test nothing touches, and that no
+    `Unclassified` entry reaches either, is clean. `serialized_tests` cuts across all four, since a
+    construct can be mechanical to translate and still have to run alone.
     """
 
     tests: int
@@ -133,6 +153,7 @@ class Summary:
     blocked_tests: int
     serialized_tests: int
     suite_findings: int
+    unclassified_tests: int = 0
 
     @property
     def convertible_tests(self) -> int:
@@ -219,7 +240,10 @@ class Audit:
     """Everything one audit of a suite concluded.
 
     `unparsed` names the source files the static scan could not read; while it is non-empty the
-    body-level counts are lower bounds, which every rendering of an audit has to say.
+    body-level counts are lower bounds, which every rendering of an audit has to say. `unclassified`
+    is the same kind of gap at the level of one fixture, test or class rather than a whole file: its
+    defining code parsed fine but no scan located it there, so unlike a `Finding` it names no matrix
+    code — only that nothing looked.
     """
 
     suite: Suite
@@ -228,7 +252,8 @@ class Audit:
     scanned_files: int
     unparsed: tuple[str, ...]
     budget: int
-    type_readiness: TypeReadiness = TypeReadiness()
+    type_readiness: TypeReadiness = field(default_factory=TypeReadiness)
+    unclassified: tuple[Unclassified, ...] = ()
 
     def of_disposition(self, disposition: Disposition) -> tuple[Finding, ...]:
         return tuple(f for f in self.findings if f.disposition is disposition)
@@ -242,8 +267,14 @@ class Audit:
         return tuple(c for c in matrix.CONSTRUCTS if not c.detected)
 
 
-def summarize(findings: Sequence[Finding], *, tests: int) -> Summary:
-    """The totals over `findings` for a suite of `tests` collected tests."""
+def summarize(
+    findings: Sequence[Finding], *, tests: int, unclassified: Collection[Unclassified] = ()
+) -> Summary:
+    """The totals over `findings` for a suite of `tests` collected tests.
+
+    `unclassified` pulls the tests it reaches out of `clean_tests` on top of `findings`' own worst-
+    finding tally, since a test only one of those touches would otherwise read as clean either way.
+    """
     by_disposition = {disposition: 0 for disposition in SEVERITY}
     by_code: dict[str, int] = {}
     worst: dict[str, Disposition] = {}
@@ -267,17 +298,24 @@ def summarize(findings: Sequence[Finding], *, tests: int) -> Summary:
     for disposition in worst.values():
         counted[disposition] += 1
     blocked = counted[Disposition.UNSUPPORTED] + counted[Disposition.REFUSED]
+    unclassified_tests = {nodeid for row in unclassified for nodeid in row.tests} - worst.keys()
 
     return Summary(
         tests=tests,
         findings=len(findings),
         by_disposition=by_disposition,
         by_code={code: by_code[code] for code in sorted(by_code)},
-        # Everything not touched by a finding worse than mechanical, tests nothing touched
-        # included, which is why this is a remainder rather than its own tally.
-        clean_tests=tests - blocked - counted[Disposition.HAZARD] - counted[Disposition.MARKER],
+        # Everything not touched by a finding worse than mechanical and not reached by an
+        # unclassified fixture, test or class either, which is why this is a remainder rather than
+        # its own tally.
+        clean_tests=tests
+        - blocked
+        - counted[Disposition.HAZARD]
+        - counted[Disposition.MARKER]
+        - len(unclassified_tests),
         marker_tests=counted[Disposition.MARKER],
         hazard_tests=counted[Disposition.HAZARD],
+        unclassified_tests=len(unclassified_tests),
         blocked_tests=blocked,
         serialized_tests=len(serialized),
         suite_findings=suite_findings,
@@ -287,6 +325,11 @@ def summarize(findings: Sequence[Finding], *, tests: int) -> Summary:
 def ordered(findings: Iterable[Finding]) -> tuple[Finding, ...]:
     """`findings` worst-first, then by code and location, so two audits of a suite read alike."""
     return tuple(sorted(findings, key=lambda finding: finding.sort_key))
+
+
+def unclassified_ordered(rows: Iterable[Unclassified]) -> tuple[Unclassified, ...]:
+    """`rows` by kind, then by location, so two audits of a suite read alike."""
+    return tuple(sorted(rows, key=lambda row: row.sort_key))
 
 
 def _percent(part: int, whole: int) -> float:
