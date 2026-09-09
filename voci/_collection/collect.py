@@ -71,7 +71,7 @@ from voci._collection.selection import KeywordExpression, TagExpression
 from voci._collection.targets import IdSelection
 from voci._di.fixtures import Fixture, ResolutionPlan, expand_cases, plan_for
 from voci._marks import MARKS_ATTR, NO_MARKS, Marks, decided, holds, marks_of, merged
-from voci._mocking import patching_of, real_function
+from voci._mocking import Patching, patching_of, real_function
 
 __all__ = [
     "CollectionError",
@@ -269,7 +269,7 @@ def _cases_carry_tags(marks: Marks) -> bool:
     )
 
 
-def collect(  # noqa: C901
+def collect(
     files: Iterable[Path],
     *,
     rootdir: Path,
@@ -362,182 +362,22 @@ def collect(  # noqa: C901
     for path in files:
         resolved_path = Path(path).resolve()
         declaring_files.add(resolved_path)
-        relpath = display_path(path, resolved_rootdir)
-
-        inherited = _package_declarations(
-            path, rootdir=rootdir, cache=package_declarations, errors=errors
+        index = _collect_file(
+            path,
+            resolved_path=resolved_path,
+            rootdir=rootdir,
+            resolved_rootdir=resolved_rootdir,
+            tag_expr=tag_expr,
+            keyword_expr=keyword_expr,
+            id_selection=id_selection,
+            package_declarations=package_declarations,
+            records=records,
+            errors=errors,
+            skipped=skipped,
+            deselected=deselected,
+            unexpanded=unexpanded,
+            index=index,
         )
-        if inherited is None:
-            # A package above this file failed to import; the error naming it is already
-            # recorded. Running its tests anyway would silently drop declared setup.
-            continue
-
-        module_name = module_name_for(path, rootdir)
-        try:
-            module = _import_module(path, module_name)
-        except Exception as error:
-            # Attributed to the file, not raised: one broken test module must not take the
-            # rest of the suite down with it.
-            errors.append(CollectionError(path=relpath, message=_import_failure(error, path)))
-            continue
-
-        implicit = combined(inherited, requires_of(module))
-        if implicit:
-            try:
-                # Validated once against a stand-in body rather than per test: the declared graph
-                # is the same for all of them, so the alternative is one identical traceback per
-                # test in the file.
-                plan_for(_no_dependencies, implicit=implicit)
-            except Exception:
-                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
-                continue
-
-        candidates, problems = _module_candidates(module, module_name)
-        errors.extend(CollectionError(path=relpath, message=problem) for problem in problems)
-
-        for candidate in candidates:
-            func = candidate.func
-            test_id = f"{relpath}::{candidate.name}"
-            marks = marks_of(func)
-            try:
-                reason = _skip_reason(marks)
-            except Exception:
-                # One test's malformed marks must not abort the file's remaining tests any more
-                # than a broken import aborts the remaining files.
-                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
-                continue
-
-            if reason is not None:
-                # Every exit from here on names the test by its bare id, cases and all: what
-                # follows excludes it before expansion, which is what would have built them.
-                unexpanded.append(test_id)
-                # -k and a `path.py::test_name` argument say which tests this run is about at
-                # all, so a skip they exclude is not its business to report. They differ in
-                # reach here, and only here: `test_role[admin]` names this exact test whatever
-                # its cases turn out to be, while a -k term is matched against the id that
-                # exists -- so -k admin, which would have found the case, doesn't find this.
-                if keyword_expr is not None and not keyword_expr.matches(test_id):
-                    deselected.append(test_id)
-                    continue
-                if id_selection is not None and not id_selection.selects_unexpanded(
-                    resolved_path, candidate.name
-                ):
-                    deselected.append(test_id)
-                    continue
-                # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
-                # regardless of -m -- @voci.skip is never silently reclassified as deselected
-                # depending on which tags happen to be in play.
-                skipped.append(Skipped(id=test_id, reason=reason, path=relpath))
-                continue
-
-            # Deferred to the expansion below when a case carries tags of its own: the
-            # function's tags are then not the whole answer for any of its cases.
-            per_case_tags = _cases_carry_tags(marks)
-            if tag_expr is not None and not per_case_tags and not tag_expr.matches(marks.tags):
-                deselected.append(test_id)
-                unexpanded.append(test_id)
-                continue
-
-            # A decorator's wrapper takes `(*args, **kwargs)`, so the injection plan and the
-            # definition line are read off the function underneath it; `func` itself stays what
-            # gets called, since the decorator is the whole point of applying it.
-            defined = real_function(func)
-            patching = patching_of(func)
-            try:
-                # `known_params` must be computed before `plan_for`, which reads it to keep a
-                # parametrized argument from reading as a missing injection -- and `cases_for`
-                # only needs to run after, to build this same function's expanded call kwargs.
-                # A `mock.patch.multiple` parameter is supplied by name at call time exactly as
-                # a parametrized one is, so it joins the same set.
-                known_params = known_params_of(marks.parametrizations) | patching.keyword_args
-                plan = plan_for(
-                    defined,
-                    known_params=known_params,
-                    implicit=implicit,
-                    # A method's `self`/`cls` is supplied by the call `_receiving` builds around
-                    # it, ahead of whatever mocks a `@mock.patch` under it fills in -- both are
-                    # leading positional parameters that are handed a value rather than injected.
-                    positional_supplied=candidate.supplied_positionals + patching.positional_args,
-                )
-                cases = cases_for(marks.parametrizations) if marks.parametrizations else None
-                # Folded here, inside this try, rather than in the loop below: a case's
-                # `skipif`/`xfail` condition is a callable this calls, and one that raises is
-                # this test's `CollectionError` exactly as a malformed graph is. One answer per
-                # case rather than per record -- the fixture-case axis crossing it changes
-                # neither the marks nor the reason.
-                base_marks = decided(marks)
-                per_case = [
-                    (case, *_case_disposition(base_marks, case))
-                    for case in (cases if cases is not None else (None,))
-                ]
-                expansions = expand_cases(plan)
-            except Exception:
-                # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, for an
-                # unusable `Depends(...)` — declared twice, twice in one `Annotated[...]`, or
-                # naming a fixture a stringified annotation cannot reach;
-                # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
-                # both claim, and a case's own condition raises whatever it raises. All are
-                # attributed to this test and collection continues, same as the `_skip_reason`
-                # catch above.
-                errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
-                continue
-
-            # `cases` is `None` for a test with no `@voci.parametrize` mark; `expansions` always
-            # has at least one entry, `case_id=None` when the test depends on no parametrized
-            # fixture. The two axes are independent and cross freely: a test with neither gets one
-            # un-suffixed record, exactly as before either axis existed.
-            entries = [
-                (
-                    "-".join(
-                        part for part in (expansion.case_id, case.id if case else None) if part
-                    ),
-                    case.params if case else None,
-                    expansion.plan,
-                    case_marks,
-                    case_reason,
-                )
-                for expansion in expansions
-                for case, case_marks, case_reason in per_case
-            ]
-            for case_id, params, record_plan, record_marks, case_reason in entries:
-                name = f"{candidate.name}[{case_id}]" if case_id else candidate.name
-                record_id = f"{relpath}::{name}"
-                # Both filters run here rather than per function, above: a `-k` term and a
-                # `path.py::test_name[case]` argument alike can name one case of a parametrized
-                # test, which doesn't exist as an id until this expansion.
-                if keyword_expr is not None and not keyword_expr.matches(record_id):
-                    deselected.append(record_id)
-                    continue
-                if id_selection is not None and not id_selection.selects(resolved_path, name):
-                    deselected.append(record_id)
-                    continue
-                # A case's own `skip`/`skipif`: the function's was answered before the expansion
-                # and excluded the whole test there, so anything left here is one case's alone.
-                if case_reason is not None:
-                    skipped.append(Skipped(id=record_id, reason=case_reason, path=relpath))
-                    continue
-                if (
-                    tag_expr is not None
-                    and per_case_tags
-                    and not tag_expr.matches(record_marks.tags)
-                ):
-                    deselected.append(record_id)
-                    continue
-                records.append(
-                    TestRecord(
-                        id=record_id,
-                        index=index,
-                        path=relpath,
-                        lineno=defined.__code__.co_firstlineno,
-                        qualname=func.__qualname__,
-                        func=func,
-                        params=params,
-                        marks=record_marks,
-                        plan=record_plan,
-                        patches=patching.targets,
-                    )
-                )
-                index += 1
 
     declaring_files.update(package_declarations)
     errors.extend(_misplaced_declarations(declaring_files, resolved_rootdir))
@@ -548,6 +388,324 @@ def collect(  # noqa: C901
         deselected=deselected,
         unexpanded=unexpanded,
     )
+
+
+def _collect_file(
+    path: Path,
+    *,
+    resolved_path: Path,
+    rootdir: Path,
+    resolved_rootdir: Path,
+    tag_expr: TagExpression | None,
+    keyword_expr: KeywordExpression | None,
+    id_selection: IdSelection | None,
+    package_declarations: dict[Path, tuple[Fixture[Any], ...] | None],
+    records: list[TestRecord],
+    errors: list[CollectionError],
+    skipped: list[Skipped],
+    deselected: list[str],
+    unexpanded: list[str],
+    index: int,
+) -> int:
+    """One file's contribution to `collect`'s result: its package declarations, its import, and
+    every candidate it defines -- `index` threaded through and returned so records keep one
+    running count across every file rather than restarting per file."""
+    relpath = display_path(path, resolved_rootdir)
+
+    inherited = _package_declarations(
+        path, rootdir=rootdir, cache=package_declarations, errors=errors
+    )
+    if inherited is None:
+        # A package above this file failed to import; the error naming it is already
+        # recorded. Running its tests anyway would silently drop declared setup.
+        return index
+
+    module_name = module_name_for(path, rootdir)
+    try:
+        module = _import_module(path, module_name)
+    except Exception as error:
+        # Attributed to the file, not raised: one broken test module must not take the
+        # rest of the suite down with it.
+        errors.append(CollectionError(path=relpath, message=_import_failure(error, path)))
+        return index
+
+    implicit = combined(inherited, requires_of(module))
+    if implicit:
+        try:
+            # Validated once against a stand-in body rather than per test: the declared graph
+            # is the same for all of them, so the alternative is one identical traceback per
+            # test in the file.
+            plan_for(_no_dependencies, implicit=implicit)
+        except Exception:
+            errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
+            return index
+
+    candidates, problems = _module_candidates(module, module_name)
+    errors.extend(CollectionError(path=relpath, message=problem) for problem in problems)
+
+    for candidate in candidates:
+        index = _collect_candidate(
+            candidate,
+            relpath=relpath,
+            resolved_path=resolved_path,
+            implicit=implicit,
+            tag_expr=tag_expr,
+            keyword_expr=keyword_expr,
+            id_selection=id_selection,
+            records=records,
+            errors=errors,
+            skipped=skipped,
+            deselected=deselected,
+            unexpanded=unexpanded,
+            index=index,
+        )
+
+    return index
+
+
+def _collect_candidate(
+    candidate: _Candidate,
+    *,
+    relpath: Path,
+    resolved_path: Path,
+    implicit: tuple[Fixture[Any], ...],
+    tag_expr: TagExpression | None,
+    keyword_expr: KeywordExpression | None,
+    id_selection: IdSelection | None,
+    records: list[TestRecord],
+    errors: list[CollectionError],
+    skipped: list[Skipped],
+    deselected: list[str],
+    unexpanded: list[str],
+    index: int,
+) -> int:
+    """One candidate's contribution to `records`: a skip-marked or tag-excluded test contributes
+    none and leaves `index` untouched; otherwise its DI graph and parametrize/fixture-case
+    expansion are resolved and each surviving record appended, `index` advancing by however many
+    that turns out to be."""
+    func = candidate.func
+    test_id = f"{relpath}::{candidate.name}"
+    marks = marks_of(func)
+    try:
+        reason = _skip_reason(marks)
+    except Exception:
+        # One test's malformed marks must not abort the file's remaining tests any more
+        # than a broken import aborts the remaining files.
+        errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
+        return index
+
+    if reason is not None:
+        # Every exit from here on names the test by its bare id, cases and all: what
+        # follows excludes it before expansion, which is what would have built them.
+        _skip_candidate(
+            candidate,
+            test_id=test_id,
+            reason=reason,
+            relpath=relpath,
+            resolved_path=resolved_path,
+            keyword_expr=keyword_expr,
+            id_selection=id_selection,
+            skipped=skipped,
+            deselected=deselected,
+            unexpanded=unexpanded,
+        )
+        return index
+
+    # Deferred to the expansion below when a case carries tags of its own: the
+    # function's tags are then not the whole answer for any of its cases.
+    per_case_tags = _cases_carry_tags(marks)
+    if tag_expr is not None and not per_case_tags and not tag_expr.matches(marks.tags):
+        deselected.append(test_id)
+        unexpanded.append(test_id)
+        return index
+
+    # A decorator's wrapper takes `(*args, **kwargs)`, so the injection plan and the
+    # definition line are read off the function underneath it; `func` itself stays what
+    # gets called, since the decorator is the whole point of applying it.
+    defined = real_function(func)
+    patching = patching_of(func)
+    entries = _resolve_expansions(candidate, marks, implicit, patching, defined, relpath, errors)
+    if entries is None:
+        return index
+
+    return _append_records(
+        entries,
+        candidate=candidate,
+        func=func,
+        defined=defined,
+        patching=patching,
+        relpath=relpath,
+        resolved_path=resolved_path,
+        tag_expr=tag_expr,
+        keyword_expr=keyword_expr,
+        id_selection=id_selection,
+        per_case_tags=per_case_tags,
+        records=records,
+        skipped=skipped,
+        deselected=deselected,
+        index=index,
+    )
+
+
+def _skip_candidate(
+    candidate: _Candidate,
+    *,
+    test_id: str,
+    reason: str,
+    relpath: Path,
+    resolved_path: Path,
+    keyword_expr: KeywordExpression | None,
+    id_selection: IdSelection | None,
+    skipped: list[Skipped],
+    deselected: list[str],
+    unexpanded: list[str],
+) -> None:
+    """Where a skip-marked test's bare id lands: `skipped`, unless `keyword_expr` or
+    `id_selection` leaves it out of the run altogether, in which case `deselected` instead."""
+    unexpanded.append(test_id)
+    # -k and a `path.py::test_name` argument say which tests this run is about at
+    # all, so a skip they exclude is not its business to report. They differ in
+    # reach here, and only here: `test_role[admin]` names this exact test whatever
+    # its cases turn out to be, while a -k term is matched against the id that
+    # exists -- so -k admin, which would have found the case, doesn't find this.
+    if keyword_expr is not None and not keyword_expr.matches(test_id):
+        deselected.append(test_id)
+        return
+    if id_selection is not None and not id_selection.selects_unexpanded(
+        resolved_path, candidate.name
+    ):
+        deselected.append(test_id)
+        return
+    # Ahead of tag_expr: a test marked skip is skipped for the reason it gives,
+    # regardless of -m -- @voci.skip is never silently reclassified as deselected
+    # depending on which tags happen to be in play.
+    skipped.append(Skipped(id=test_id, reason=reason, path=relpath))
+
+
+def _resolve_expansions(
+    candidate: _Candidate,
+    marks: Marks,
+    implicit: tuple[Fixture[Any], ...],
+    patching: Patching,
+    defined: Callable[..., object],
+    relpath: Path,
+    errors: list[CollectionError],
+) -> list[tuple[str, Mapping[str, object] | None, ResolutionPlan, Marks, str | None]] | None:
+    """This candidate's DI graph resolved and crossed with its parametrize/fixture-case cases,
+    one entry per record to build -- `None`, with a `CollectionError` already appended to
+    `errors`, when any of that raises."""
+    try:
+        # `known_params` must be computed before `plan_for`, which reads it to keep a
+        # parametrized argument from reading as a missing injection -- and `cases_for`
+        # only needs to run after, to build this same function's expanded call kwargs.
+        # A `mock.patch.multiple` parameter is supplied by name at call time exactly as
+        # a parametrized one is, so it joins the same set.
+        known_params = known_params_of(marks.parametrizations) | patching.keyword_args
+        plan = plan_for(
+            defined,
+            known_params=known_params,
+            implicit=implicit,
+            # A method's `self`/`cls` is supplied by the call `_receiving` builds around
+            # it, ahead of whatever mocks a `@mock.patch` under it fills in -- both are
+            # leading positional parameters that are handed a value rather than injected.
+            positional_supplied=candidate.supplied_positionals + patching.positional_args,
+        )
+        cases = cases_for(marks.parametrizations) if marks.parametrizations else None
+        # Folded here, inside this try, rather than in the loop below: a case's
+        # `skipif`/`xfail` condition is a callable this calls, and one that raises is
+        # this test's `CollectionError` exactly as a malformed graph is. One answer per
+        # case rather than per record -- the fixture-case axis crossing it changes
+        # neither the marks nor the reason.
+        base_marks = decided(marks)
+        per_case = [
+            (case, *_case_disposition(base_marks, case))
+            for case in (cases if cases is not None else (None,))
+        ]
+        expansions = expand_cases(plan)
+    except Exception:
+        # `plan_for` raises `DIError` for a malformed graph and, via `plan_of`, for an
+        # unusable `Depends(...)` — declared twice, twice in one `Annotated[...]`, or
+        # naming a fixture a stringified annotation cannot reach;
+        # `known_params_of` raises `ValueError` for a name two stacked `@parametrize`s
+        # both claim, and a case's own condition raises whatever it raises. All are
+        # attributed to this test and collection continues, same as the `_skip_reason`
+        # catch above.
+        errors.append(CollectionError(path=relpath, message=traceback.format_exc()))
+        return None
+
+    # `cases` is `None` for a test with no `@voci.parametrize` mark; `expansions` always
+    # has at least one entry, `case_id=None` when the test depends on no parametrized
+    # fixture. The two axes are independent and cross freely: a test with neither gets one
+    # un-suffixed record, exactly as before either axis existed.
+    return [
+        (
+            "-".join(part for part in (expansion.case_id, case.id if case else None) if part),
+            case.params if case else None,
+            expansion.plan,
+            case_marks,
+            case_reason,
+        )
+        for expansion in expansions
+        for case, case_marks, case_reason in per_case
+    ]
+
+
+def _append_records(
+    entries: list[tuple[str, Mapping[str, object] | None, ResolutionPlan, Marks, str | None]],
+    *,
+    candidate: _Candidate,
+    func: Callable[..., object],
+    defined: Callable[..., object],
+    patching: Patching,
+    relpath: Path,
+    resolved_path: Path,
+    tag_expr: TagExpression | None,
+    keyword_expr: KeywordExpression | None,
+    id_selection: IdSelection | None,
+    per_case_tags: bool,
+    records: list[TestRecord],
+    skipped: list[Skipped],
+    deselected: list[str],
+    index: int,
+) -> int:
+    """Each of `entries` filtered by `keyword_expr`/`id_selection`/its own skip/`tag_expr`, the
+    survivors appended to `records`; returns `index` advanced by however many that was."""
+    for case_id, params, record_plan, record_marks, case_reason in entries:
+        name = f"{candidate.name}[{case_id}]" if case_id else candidate.name
+        record_id = f"{relpath}::{name}"
+        # Both filters run here rather than per function, above: a `-k` term and a
+        # `path.py::test_name[case]` argument alike can name one case of a parametrized
+        # test, which doesn't exist as an id until this expansion.
+        if keyword_expr is not None and not keyword_expr.matches(record_id):
+            deselected.append(record_id)
+            continue
+        if id_selection is not None and not id_selection.selects(resolved_path, name):
+            deselected.append(record_id)
+            continue
+        # A case's own `skip`/`skipif`: the function's was answered before the expansion
+        # and excluded the whole test there, so anything left here is one case's alone.
+        if case_reason is not None:
+            skipped.append(Skipped(id=record_id, reason=case_reason, path=relpath))
+            continue
+        if tag_expr is not None and per_case_tags and not tag_expr.matches(record_marks.tags):
+            deselected.append(record_id)
+            continue
+        records.append(
+            TestRecord(
+                id=record_id,
+                index=index,
+                path=relpath,
+                lineno=defined.__code__.co_firstlineno,
+                qualname=func.__qualname__,
+                func=func,
+                params=params,
+                marks=record_marks,
+                plan=record_plan,
+                patches=patching.targets,
+            )
+        )
+        index += 1
+    return index
 
 
 def _package_declarations(

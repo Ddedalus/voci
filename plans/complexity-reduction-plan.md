@@ -43,10 +43,16 @@ item lands as its own PR rather than one big one, per the list below.
   change.
 - `voci-migrate/voci_migrate/matrix.py` `_validate` (14 > 10) — split into `_validate_codes`,
   `_validate_dispositions`, `_validate_cross_references`. All under 10; no behavior change.
+- `voci/_collection/collect.py` `collect` (19 > 10) — split into `_collect_file` (per file:
+  package declarations, import, module candidates), `_collect_candidate` (per test: skip/tag
+  disposition, then DI resolution and expansion), `_skip_candidate` (a skip-marked test's
+  skipped/deselected disposition), `_resolve_expansions` (DI plan plus parametrize/fixture-case
+  cases, crossed into per-record entries), and `_append_records` (filtering entries by
+  `keyword_expr`/`id_selection`/tag/skip and appending survivors). All under 10; no behavior
+  change.
 
 ### To do
 
-- `voci/_collection/collect.py` `collect` (19 > 10)
 - `voci/_di/runtime.py` `_construct` (14 > 10)
 - `voci/_mocking.py` `patching_of` (11 > 10)
 - `voci/_report/terminal.py` `TerminalReporter.finish` (11 > 10)
