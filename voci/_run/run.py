@@ -543,7 +543,7 @@ async def _run_one(
         call=call,
         teardown_failure=teardown_failure,
         teardown_summary=teardown_summary,
-        skip_reason=setup.skip_reason or call.skip_reason,
+        skip_reason=setup.skip_reason if setup.skip_reason is not None else call.skip_reason,
         xfail=None if call.misused else record.marks.xfail,
     )
 
