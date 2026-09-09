@@ -41,10 +41,11 @@ item lands as its own PR rather than one big one, per the list below.
 - `voci-migrate/voci_migrate/convert/specialize.py` `_bound_in` (11 > 10) — split the `Import`
   and `Assign` match arms' loops into `_import_bindings`/`_assign_bindings`. Under 10; no behavior
   change.
+- `voci-migrate/voci_migrate/matrix.py` `_validate` (14 > 10) — split into `_validate_codes`,
+  `_validate_dispositions`, `_validate_cross_references`. All under 10; no behavior change.
 
 ### To do
 
-- `voci-migrate/voci_migrate/matrix.py` `_validate` (14 > 10)
 - `voci/_collection/collect.py` `collect` (19 > 10)
 - `voci/_di/runtime.py` `_construct` (14 > 10)
 - `voci/_mocking.py` `patching_of` (11 > 10)

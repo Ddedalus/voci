@@ -1296,8 +1296,8 @@ def by_area() -> Iterator[tuple[Area, tuple[Construct, ...]]]:
         yield area, tuple(c for c in CONSTRUCTS if c.area is area)
 
 
-def _validate() -> None:  # noqa: C901
-    """Guard the table's own invariants, which nothing else in the pipeline re-checks."""
+def _validate_codes() -> None:
+    """Every row's code is unique and a VCnnn string in a known area."""
     seen: set[str] = set()
     for c in CONSTRUCTS:
         if c.code in seen:
@@ -1305,12 +1305,21 @@ def _validate() -> None:  # noqa: C901
         seen.add(c.code)
         if c.code[:2] != "VC" or not c.code[2:].isdigit() or c.code[2] not in _AREA_BY_BLOCK:
             raise AssertionError(f"Support-matrix code {c.code} is not a VCnnn code in an area.")
+
+
+def _validate_dispositions() -> None:
+    """Every row's disposition agrees with its `marker`, `action`, and `converts` fields."""
+    for c in CONSTRUCTS:
         if (c.disposition is Disposition.MARKER) != (c.marker is not None):
             raise AssertionError(f"{c.code}: a marker category belongs to a `marker` row, only.")
         if c.disposition is not Disposition.MECHANICAL and c.action is None:
             raise AssertionError(f"{c.code}: anything but a mechanical row needs an action.")
         if not c.detected and c.converts:
             raise AssertionError(f"{c.code}: a row conversion writes code for is not a blind spot.")
+
+
+def _validate_cross_references() -> None:
+    """Everything outside `CONSTRUCTS` that cites a row's code or a plugin cites one that exists."""
     for recipe in PLUGINS.values():
         if recipe.code not in BY_CODE:
             raise AssertionError(f"Plugin {recipe.dist} cites unknown row {recipe.code}.")
@@ -1321,6 +1330,13 @@ def _validate() -> None:  # noqa: C901
     for name, dist in PLUGIN_MARKS.items():
         if dist not in PLUGINS:
             raise AssertionError(f"The mark {name!r} cites unknown plugin {dist!r}.")
+
+
+def _validate() -> None:
+    """Guard the table's own invariants, which nothing else in the pipeline re-checks."""
+    _validate_codes()
+    _validate_dispositions()
+    _validate_cross_references()
 
 
 _validate()
