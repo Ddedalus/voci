@@ -7,6 +7,8 @@ description: Documentation style rules - where each kind of information belongs 
 
 Docs are a product surface, not a build log. Readers neither know nor care about how voci was built.
 
+All new docs prose needs to go through review against [./ClaudishToEnglish.md] to kills any slop Claude idioms.
+
 ## Where information lives
 
 | Layer | Holds | Budget |
