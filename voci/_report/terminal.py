@@ -283,7 +283,7 @@ class Reporter:
             print(file=self.stream)
             self._open_progress_line = False
 
-    def finish(  # noqa: C901
+    def finish(
         self,
         results: list[TestResult],
         *,
@@ -315,38 +315,8 @@ class Reporter:
         failing = [result for result in results if result.outcome in FAILING_OUTCOMES]
 
         if failing:
-            print(file=self.stream)
-            for result in failing:
-                label = _color.paint(
-                    result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
-                )
-                print(f"{label} {result.id}", file=self.stream)
-                if result.failure:
-                    # result.failure already ends in a newline (traceback.format_exc's
-                    # own convention); a bare print would add a second and leave a
-                    # stray blank line.
-                    print(result.failure.rstrip("\n"), file=self.stream)
-                if not self.capture_passthrough and result.captured_stdout:
-                    print("--- captured stdout ---", file=self.stream)
-                    print(result.captured_stdout, file=self.stream)
-                if not self.capture_passthrough and result.captured_stderr:
-                    print("--- captured stderr ---", file=self.stream)
-                    print(result.captured_stderr, file=self.stream)
-                if result.log_records:
-                    print("--- captured log records ---", file=self.stream)
-                    for record in result.log_records:
-                        print(
-                            f"{record.levelname} {record.name}: {record.getMessage()}",
-                            file=self.stream,
-                        )
-
-            print("--- short test summary ---", file=self.stream)
-            for result in failing:
-                reason = _failure_reason(result)
-                label = _color.paint(
-                    result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
-                )
-                print(f"{label} {result.id} - {reason}", file=self.stream)
+            self._print_failure_details(failing)
+            self._print_short_summary(failing)
 
         if unattributed_output:
             print(file=self.stream)
@@ -372,6 +342,45 @@ class Reporter:
             warnings=warned,
         )
         self.stream.flush()
+
+    def _print_failure_details(self, failing: list[TestResult]) -> None:
+        """One block per failing result: its outcome label and id, traceback, captured
+        stdout/stderr (when not already echoed live, since passthrough echoes them as they
+        happen) and log records (always, since those are never echoed live)."""
+        print(file=self.stream)
+        for result in failing:
+            label = _color.paint(
+                result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
+            )
+            print(f"{label} {result.id}", file=self.stream)
+            if result.failure:
+                # result.failure already ends in a newline (traceback.format_exc's
+                # own convention); a bare print would add a second and leave a
+                # stray blank line.
+                print(result.failure.rstrip("\n"), file=self.stream)
+            if not self.capture_passthrough and result.captured_stdout:
+                print("--- captured stdout ---", file=self.stream)
+                print(result.captured_stdout, file=self.stream)
+            if not self.capture_passthrough and result.captured_stderr:
+                print("--- captured stderr ---", file=self.stream)
+                print(result.captured_stderr, file=self.stream)
+            if result.log_records:
+                print("--- captured log records ---", file=self.stream)
+                for record in result.log_records:
+                    print(
+                        f"{record.levelname} {record.name}: {record.getMessage()}",
+                        file=self.stream,
+                    )
+
+    def _print_short_summary(self, failing: list[TestResult]) -> None:
+        """One line per failing result: its outcome label, id, and why."""
+        print("--- short test summary ---", file=self.stream)
+        for result in failing:
+            reason = _failure_reason(result)
+            label = _color.paint(
+                result.outcome.value.upper(), _color.RED, enabled=self._color_enabled
+            )
+            print(f"{label} {result.id} - {reason}", file=self.stream)
 
     def _print_counts(
         self,
