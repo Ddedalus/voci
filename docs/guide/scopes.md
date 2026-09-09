@@ -24,11 +24,22 @@ def request_id() -> str: ...
 transitive dependencies ask for it, and tears down when that test finishes. `"module"` widens the
 same sharing to every test in one file; `"session"` widens it to the whole run. `"call"` narrows
 it instead: a fresh instance for every `Depends(...)` site, so a test naming the same fixture
-twice through two parameters gets two distinct values, each torn down at end of test regardless.
+twice through two parameters gets two distinct instances, each torn down at end of test
+regardless.
 
-Declaring a dependency doesn't declare its scope — a `"function"`-scope fixture depending on a
-`"session"`-scope one is enough to reach the shared instance; nothing about the dependent needs to
-say so.
+A fixture may only depend on a fixture at its own scope or wider — `"session"` > `"module"` >
+`"function"`/`"call"` — never narrower:
+
+```python
+@voci.fixture()
+async def session(
+    engine: Annotated[AsyncEngine, Depends(engine)],
+) -> AsyncIterator[AsyncSession]: ...
+```
+
+is fine (`"function"` depending on `"session"`), but a `"session"`-scope fixture depending on a
+`"function"`-scope one raises `DIError` at collection, naming both fixtures: the narrower one
+would tear down while the wider one built from it was still alive.
 
 ## Build order and teardown order
 
@@ -44,9 +55,9 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 
 @voci.fixture()
-async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
+async def session(engine: Annotated[AsyncEngine, Depends(engine)]) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(engine) as s:
-        yield s  # this teardown, and every test using `session`, runs before dispose()
+        yield s  # this runs before dispose(), for every test
 ```
 
 A plain-return fixture has nothing to release, and a generator fixture releases whatever runs
@@ -56,26 +67,22 @@ after its `yield` — same as a `@contextlib.contextmanager`, but without needin
 
 A fixture wider than `"function"` scope is shared by tests running at the same moment, so voci
 builds it exactly once regardless of how many tests ask for it concurrently: whichever test
-reaches it first constructs it, and every other test in the meantime waits on that same
-construction rather than starting one of its own. 200 tests starting together against a
-`scope="session"` engine produce exactly one `create_async_engine` call.
+reaches it first constructs it, and every other test asking for it in the meantime waits on that
+same construction rather than starting one of its own.
 
-A `"module"` fixture's teardown waits for that module's own last test to finish, not for the
-fixture's own use to end mid-run — two test files sharing a fixture at `"module"` scope get two
-separate instances, one per file, each torn down once. A `"session"` fixture's teardown instead
-waits for the whole run, and runs even for a fixture nothing built until the very last test asked
-for it.
+A `"module"` fixture's teardown waits for that module's own last test to finish; two test files
+sharing a fixture at `"module"` scope each get their own instance. A `"session"` fixture's
+teardown instead waits for the whole run, even for one nothing built until the very last test
+asked for it.
 
 ## Choosing a scope
 
-`"function"` is the right default: a fresh instance means one test's mutation is never a
-neighbour's problem, at the cost of building it every time. Widen to `"module"` or `"session"`
-for something expensive to build and safe to share reads of the same instance
-across tests — a database engine, an HTTP client's connection pool — and pair it with a
-`"function"`-scope fixture underneath for whatever each test needs to see reset: see [Sharing a
-database engine](../how-to/sharing-a-database-engine.md) for the session-engine/function-session
-pair worked through in full, transaction rollback included.
+`"function"` is the right default: a fresh instance means tests never share state, at the cost of
+building it every time. Widen to `"module"` or `"session"` for something expensive to build and
+safe to share reads of the same instance across tests — a database engine, an HTTP client's
+connection pool — paired with a `"function"`-scope fixture underneath for whatever each test needs
+to see reset. [Sharing a database engine](../how-to/sharing-a-database-engine.md) works through
+that session-engine/function-session pair in full, transaction rollback included.
 
-`"call"` is the narrow exception, for a fixture whose whole point is to hand out a fresh value
-per site rather than per test — a request ID generator, a counter — where even `"function"` scope
-would be too much sharing.
+`"call"` is for a fixture that hands out a fresh value per site rather than per test — a request ID
+generator, a counter.
