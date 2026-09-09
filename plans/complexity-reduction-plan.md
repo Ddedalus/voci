@@ -50,10 +50,12 @@ item lands as its own PR rather than one big one, per the list below.
   cases, crossed into per-record entries), and `_append_records` (filtering entries by
   `keyword_expr`/`id_selection`/tag/skip and appending survivors). All under 10; no behavior
   change.
+- `voci/_di/runtime.py` `_construct` (14 > 10) — split its async-generator and sync-generator
+  branches into `_construct_asyncgen`/`_construct_gen`, leaving `_construct` a flat dispatch over
+  the four fixture shapes. Both under 10; no behavior change.
 
 ### To do
 
-- `voci/_di/runtime.py` `_construct` (14 > 10)
 - `voci/_mocking.py` `patching_of` (11 > 10)
 - `voci/_report/terminal.py` `TerminalReporter.finish` (11 > 10)
 - `voci/_run/run.py` `_run_one` (31 > 10) and `run_suite` (40 > 10) — the two largest by far;

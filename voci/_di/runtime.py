@@ -344,7 +344,7 @@ async def _release_all(store: ScopeStore, keys: Iterable[CacheKey]) -> None:
         raise BaseExceptionGroup("fixture teardown", errors)
 
 
-async def _construct(  # noqa: C901
+async def _construct(
     fixture: Fixture[Any], kwargs: Mapping[str, Any], ctx: BuiltinContext
 ) -> tuple[Any, Closer | None]:
     """Call `fixture.func`, adapting whichever of the four supported shapes it is — or, for a
@@ -365,43 +365,9 @@ async def _construct(  # noqa: C901
 
     func = fixture.func
     if inspect.isasyncgenfunction(func):
-        gen = func(**kwargs)
-        try:
-            value = await anext(gen)
-        except StopAsyncIteration:
-            raise RuntimeError(f"fixture {fixture.name!r} did not yield a value") from None
-
-        async def closer() -> None:
-            try:
-                await anext(gen)
-            except StopAsyncIteration:
-                return
-            else:
-                raise RuntimeError(f"fixture {fixture.name!r} yielded more than once")
-            finally:
-                await gen.aclose()
-
-        return value, closer
-
+        return await _construct_asyncgen(fixture, func, kwargs)
     if inspect.isgeneratorfunction(func):
-        gen = func(**kwargs)
-        try:
-            value = next(gen)
-        except StopIteration:
-            raise RuntimeError(f"fixture {fixture.name!r} did not yield a value") from None
-
-        async def closer() -> None:
-            try:
-                next(gen)
-            except StopIteration:
-                return
-            else:
-                raise RuntimeError(f"fixture {fixture.name!r} yielded more than once")
-            finally:
-                gen.close()
-
-        return value, closer
-
+        return _construct_gen(fixture, func, kwargs)
     if inspect.iscoroutinefunction(func):
         return await func(**kwargs), None
 
@@ -413,3 +379,51 @@ async def _construct(  # noqa: C901
     if inspect.isawaitable(result):
         return await result, None
     return result, None
+
+
+async def _construct_asyncgen(
+    fixture: Fixture[Any], func: Callable[..., Any], kwargs: Mapping[str, Any]
+) -> tuple[Any, Closer | None]:
+    """An `async def` generator fixture: run to its `yield`, and hand back a closer that resumes
+    it past there."""
+    gen = func(**kwargs)
+    try:
+        value = await anext(gen)
+    except StopAsyncIteration:
+        raise RuntimeError(f"fixture {fixture.name!r} did not yield a value") from None
+
+    async def closer() -> None:
+        try:
+            await anext(gen)
+        except StopAsyncIteration:
+            return
+        else:
+            raise RuntimeError(f"fixture {fixture.name!r} yielded more than once")
+        finally:
+            await gen.aclose()
+
+    return value, closer
+
+
+def _construct_gen(
+    fixture: Fixture[Any], func: Callable[..., Any], kwargs: Mapping[str, Any]
+) -> tuple[Any, Closer | None]:
+    """A sync generator fixture: run to its `yield`, and hand back a closer that resumes it past
+    there."""
+    gen = func(**kwargs)
+    try:
+        value = next(gen)
+    except StopIteration:
+        raise RuntimeError(f"fixture {fixture.name!r} did not yield a value") from None
+
+    async def closer() -> None:
+        try:
+            next(gen)
+        except StopIteration:
+            return
+        else:
+            raise RuntimeError(f"fixture {fixture.name!r} yielded more than once")
+        finally:
+            gen.close()
+
+    return value, closer
