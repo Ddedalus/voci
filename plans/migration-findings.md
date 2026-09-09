@@ -152,9 +152,21 @@ is a rename regression:
   config and any passthrough args.
 - **15 `VOCI-TODO[VC114]` markers now appear where the original run had none** (four files:
   `test_decorators.py`, `test_deserialization.py`, `test_fields.py`, `test_serialization.py`), all
-  the same row — parametrize calls without attributable ids. Not investigated further; flagged here
-  as drift since the original baseline's "no markers" claim, worth reconciling next time this suite
-  is re-run.
+  the same row — parametrize calls without attributable ids. **Fixed 2026-09-09:** pytest folds
+  every "direct" (non-fixture) parametrized name's `indices` entry into one counter shared by the
+  whole callspec once two or more such axes stack on a test (`Metafunc._recompute_direct_params_
+  indices`), so `voci_migrate.convert.parametrize._grouped` — which told two stacked axes apart by
+  comparing that field — saw the same numbers for both and fused them into one axis that explained
+  no position of the composed id. All 15 were ordinary stacked `@pytest.mark.parametrize` pairs
+  over plain arguments (`fmt`/`timezone`, `unknown_val`/`usage_location`, ...), a pattern common
+  enough that this was never marshmallow-specific; it just never surfaced in the corpus fixtures
+  before because their stacked-mark cases (`mechanical_showcase`'s `test_parametrize_stacked`)
+  happened to use values whose repr is also pytest's own id, so the same fused axis still wrote a
+  matching (if uncredited) case list. `_grouped` now reads the item's own `markers_with_origin`
+  first and only falls back to the index signature for axes no mark on the item names (a hook's,
+  or a fixture's own `params=` — the fold doesn't touch those). One of the 15 stays a marker: a
+  `data` axis parametrized with exactly one value, which no position of a composed id can ever be
+  attributed to regardless of how the axes are grouped.
 
 ### Environment obstacles worth remembering
 

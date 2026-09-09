@@ -146,12 +146,13 @@ def axes(cases: Sequence[Item]) -> tuple[Axis, ...]:
     if len(specs) != len(cases) or not specs:
         return ()
     found: list[Axis] = []
-    for argnames in _grouped(specs):
-        position, ids = _position_of(specs, argnames)
+    for argnames in _grouped(specs, cases[0]):
+        index = _row_index(specs, argnames)
+        position, ids = _position_of(specs, index)
         found.append(
             Axis(
                 argnames=argnames,
-                values=_values(specs, argnames),
+                values=_values(specs, argnames, index),
                 ids=ids,
                 position=position,
             )
@@ -533,36 +534,77 @@ def _qualname_of(item: Item) -> str:
 # --- the shape of one test's case list ----------------------------------------------------------
 
 
-def _grouped(specs: Sequence[CallSpec]) -> Iterator[tuple[str, ...]]:
-    names = list(specs[0].indices)
-    grouped: dict[tuple[int, ...], list[str]] = {}
-    for name in names:
-        signature = tuple(spec.indices.get(name, -1) for spec in specs)
-        grouped.setdefault(signature, []).append(name)
+def _grouped(specs: Sequence[CallSpec], item: Item) -> Iterator[tuple[str, ...]]:
+    """Which argnames vary together as one axis.
+
+    An explicit `@pytest.mark.parametrize` on this test names its own argnames directly, and that
+    is ground truth this reaches for first: pytest folds every "direct" (non-fixture) parametrized
+    name's own `indices` entry into one counter shared by the whole callspec the moment two or
+    more such axes stack on a test (`Metafunc._recompute_direct_params_indices`, needed so the
+    synthetic per-call fixture it builds for a plain argument caches correctly), so the index alone
+    can no longer tell two marks' argnames apart — nor even one mark's own argnames from a name a
+    low-cardinality column (a `bool`, a `None`) happens to repeat in step with. A name no mark on
+    this item covers — a hook-built axis, or a fixture's own `params=` — has no such ground truth
+    to fall back on, so it keeps the index signature, which is what those are still correct for
+    (the fold only touches "direct" params).
+    """
+    marks = _mark_positions(item)
+    grouped: dict[object, list[str]] = {}
+    for name in specs[0].indices:
+        key: object = marks.get(name)
+        if key is None:
+            key = tuple(spec.indices.get(name, -1) for spec in specs)
+        grouped.setdefault(key, []).append(name)
     for group in grouped.values():
         yield tuple(group)
 
 
-def _values(specs: Sequence[CallSpec], argnames: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+def _mark_positions(item: Item) -> Mapping[str, int]:
+    """Which `@pytest.mark.parametrize` on `item`, by position, named each argname."""
+    found: dict[str, int] = {}
+    for position, mark in enumerate(item.markers_with_origin):
+        if mark.name != "parametrize" or not mark.args:
+            continue
+        for name in _named(mark.args[0]):
+            found.setdefault(name, position)
+    return found
+
+
+def _row_index(specs: Sequence[CallSpec], argnames: tuple[str, ...]) -> tuple[int, ...]:
+    """Each spec's position in this axis's own declared list, recovered from its whole row.
+
+    Reads the same evidence `_grouped` does for the same reason: pytest's own `indices` no longer
+    says anything once a "direct" param is stacked with another, so the row of values `argnames`
+    holds is what is left. Keyed on the whole row rather than on one argname, since a
+    `parametrize(("a", "b"), ...)` axis is only as wide as its distinct rows — one column
+    repeating a value across two different rows (a `bool`, a `None`) is not the same thing as the
+    row itself repeating.
+    """
+    seen: dict[tuple[str, ...], int] = {}
+    return tuple(
+        seen.setdefault(tuple(spec.params.get(name, "") for name in argnames), len(seen))
+        for spec in specs
+    )
+
+
+def _values(
+    specs: Sequence[CallSpec], argnames: tuple[str, ...], index: tuple[int, ...]
+) -> tuple[tuple[str, ...], ...]:
     """The `repr` of each argname's value, one row per case index, in index order."""
     by_index: dict[int, tuple[str, ...]] = {}
-    for spec in specs:
-        index = spec.indices.get(argnames[0])
-        if index is None or index in by_index:
+    for spec, position in zip(specs, index, strict=True):
+        if position in by_index:
             continue
-        by_index[index] = tuple(spec.params.get(name, "") for name in argnames)
-    return tuple(by_index[index] for index in sorted(by_index))
+        by_index[position] = tuple(spec.params.get(name, "") for name in argnames)
+    return tuple(by_index[position] for position in sorted(by_index))
 
 
 def _position_of(
-    specs: Sequence[CallSpec], argnames: tuple[str, ...]
+    specs: Sequence[CallSpec], index: tuple[int, ...]
 ) -> tuple[int | None, tuple[str, ...] | None]:
     by_index: dict[int, list[CallSpec]] = {}
-    for spec in specs:
-        index = spec.indices.get(argnames[0])
-        if index is None:
-            return None, None
-        by_index.setdefault(index, []).append(spec)
+    for spec, position in zip(specs, index, strict=True):
+        by_index.setdefault(position, []).append(spec)
     if len(by_index) < 2 and len(specs) > 1:
         # An axis with one value explains nothing about which part of the id is its own.
         return None, None

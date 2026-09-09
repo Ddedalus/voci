@@ -476,17 +476,16 @@ def test_stacked_parametrize_marks_are_reversed_so_their_composed_ids_hold(
     assert "test_marks.py::test_parametrize_stacked[i1-o2]" in ids_under(VOCI, tree)
 
 
-def test_ids_composed_from_several_axes_are_reported_even_where_they_hold(
-    version: str, tmp_path: Path
-) -> None:
-    # The ids match, but only because every axis here is a string voci spells the same way. No
-    # `ids=` could be written onto either mark, so the report says so rather than relying on that.
+def test_a_single_case_axis_reports_even_where_its_id_holds(version: str, tmp_path: Path) -> None:
+    # `test_parametrize_single_case_axes` stacks two one-value axes: each explains none of the
+    # composed id on its own (`_position_of` needs at least two values to attribute a position),
+    # so both are reported even though the id voci generates matches pytest's anyway.
     tree = tmp_path / MECHANICAL
     result = converted(MECHANICAL, version, tree)
 
     reported = {record.qualname for record in result.applied if record.code == "VC114"}
 
-    assert reported == {"test_parametrize_stacked", "test_parametrize_single_case_axes"}
+    assert reported == {"test_parametrize_single_case_axes"}
 
 
 def test_an_axis_of_its_own_carries_pytests_ids_verbatim(version: str, tmp_path: Path) -> None:

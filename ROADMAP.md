@@ -4,11 +4,6 @@ This page is the work ledger. Stuff that already exists is: a) in `README.md`, b
 
 # Next items
 
-## Bugs and workspace issues - top priority
-
-**15 `VOCI-TODO[VC114]` markers appear on marshmallow where the original migration run had none.**
-Same file, drift since `plans/migration-findings.md`'s original numbers — not investigated.
-
 ## Features
 
 ### voci-migrate

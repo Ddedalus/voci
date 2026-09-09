@@ -26,6 +26,7 @@ DUMPS = CORPUS / "dumps"
 
 PARAMETRIZE = "parametrize_showcase"
 FIXTURES = "fixtures_showcase"
+MECHANICAL = "mechanical_showcase"
 
 
 def ground_truth(suite: str) -> GroundTruth:
@@ -103,6 +104,29 @@ def test_a_test_with_no_cases_has_no_axes() -> None:
     cases = [item for item in gt.items if item.originalname == "test_uses"]
 
     assert parametrize.axes(cases) == ()
+
+
+def test_two_stacked_marks_over_plain_arguments_stay_two_axes() -> None:
+    # pytest folds every "direct" (non-fixture) parametrized name's own index into one counter
+    # shared by the whole callspec once two or more such axes stack on a test
+    # (`Metafunc._recompute_direct_params_indices`), so `outer` and `inner` here carry the same
+    # index in every one of the four cases even though neither is parametrized with the other's
+    # values. Grouping by that alone would fuse them into one axis that explains no position of
+    # the composed id at all.
+    gt = ground_truth(MECHANICAL)
+    cases = [item for item in gt.items if item.originalname == "test_parametrize_stacked"]
+    for case in cases:
+        assert case.callspec is not None
+        assert case.callspec.indices["outer"] == case.callspec.indices["inner"]
+
+    inner, outer = sorted(parametrize.axes(cases), key=lambda axis: axis.key)
+
+    assert outer.argnames == ("outer",)
+    assert outer.values == (("'o1'",), ("'o2'",))
+    assert outer.ids == ("o1", "o2")
+    assert inner.argnames == ("inner",)
+    assert inner.values == (("'i1'",), ("'i2'",))
+    assert inner.ids == ("i1", "i2")
 
 
 # --- what each construct becomes ----------------------------------------------------------------
