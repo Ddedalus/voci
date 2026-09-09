@@ -56,6 +56,10 @@ item lands as its own PR rather than one big one, per the list below.
 - `voci/_mocking.py` `patching_of` (11 > 10) — split its two per-level scans (`mock.patch`(-family)
   groups, `mock.patch.dict` closures) into `_record_patchings`/`_record_dict_patches`. Both under
   10; no behavior change.
+- `voci/_report/terminal.py` `TerminalReporter.finish` (11 > 10) — split its failing-result
+  printing into `_print_failure_details`/`_print_short_summary`, matching the existing
+  `_print_*` helpers it already delegated the rest of the report to. Both under 10; no behavior
+  change.
 
 ### To do
 
