@@ -53,10 +53,12 @@ item lands as its own PR rather than one big one, per the list below.
 - `voci/_di/runtime.py` `_construct` (14 > 10) — split its async-generator and sync-generator
   branches into `_construct_asyncgen`/`_construct_gen`, leaving `_construct` a flat dispatch over
   the four fixture shapes. Both under 10; no behavior change.
+- `voci/_mocking.py` `patching_of` (11 > 10) — split its two per-level scans (`mock.patch`(-family)
+  groups, `mock.patch.dict` closures) into `_record_patchings`/`_record_dict_patches`. Both under
+  10; no behavior change.
 
 ### To do
 
-- `voci/_mocking.py` `patching_of` (11 > 10)
 - `voci/_report/terminal.py` `TerminalReporter.finish` (11 > 10)
 - `voci/_run/run.py` `_run_one` (31 > 10) and `run_suite` (40 > 10) — the two largest by far;
   likely each need their own PR rather than sharing one with the rest of this list.

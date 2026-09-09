@@ -52,7 +52,7 @@ class Patching:
 NO_PATCHING = Patching(targets=(), positional_args=0)
 
 
-def patching_of(func: Callable[..., Any]) -> Patching:  # noqa: C901
+def patching_of(func: Callable[..., Any]) -> Patching:
     """The `unittest.mock` patching decorating `func`, or `NO_PATCHING`. Never raises.
 
     Nothing can be patching when `unittest.mock` was never imported, which is the whole cost
@@ -71,29 +71,49 @@ def patching_of(func: Callable[..., Any]) -> Patching:  # noqa: C901
     keyword_args: set[str] = set()
     positional_args = 0
     for level in _wrapper_chain(func):
-        for group in getattr(level, "patchings", None) or ():
-            if not isinstance(group, patch_type):
-                continue
-            for patcher in _group_members(group):
-                targets.append(_target_name(patcher))
-                if patcher.new is not default:
-                    continue  # `new=` named the replacement; the test is passed nothing
-                # `mock.patch.multiple` names the parameter it fills, every other form
-                # appends its mock to the positional arguments the test is called with.
-                if patcher.attribute_name is None:
-                    positional_args += 1
-                else:
-                    keyword_args.add(patcher.attribute_name)
-        # `mock.patch.dict` records no `patchings`: its decorator is a closure over the
-        # patcher, so the closure is where it can be found. It passes no mock object in.
-        for value in _closure_values(level):
-            if isinstance(value, dict_patch_type):
-                targets.append(_target_name(value))
+        added_positional, added_keyword = _record_patchings(level, patch_type, default, targets)
+        positional_args += added_positional
+        keyword_args.update(added_keyword)
+        _record_dict_patches(level, dict_patch_type, targets)
     return Patching(
         targets=tuple(targets),
         positional_args=positional_args,
         keyword_args=frozenset(keyword_args),
     )
+
+
+def _record_patchings(
+    level: Any, patch_type: type, default: Any, targets: list[str]
+) -> tuple[int, set[str]]:
+    """One wrapper level's `mock.patch`(-family) targets, appended into `targets`; the
+    positional-argument count and keyword-argument names its unnamed replacements add."""
+    positional_args = 0
+    keyword_args: set[str] = set()
+    for group in getattr(level, "patchings", None) or ():
+        if not isinstance(group, patch_type):
+            continue
+        for patcher in _group_members(group):
+            targets.append(_target_name(patcher))
+            if patcher.new is not default:
+                continue  # `new=` named the replacement; the test is passed nothing
+            # `mock.patch.multiple` names the parameter it fills, every other form
+            # appends its mock to the positional arguments the test is called with.
+            if patcher.attribute_name is None:
+                positional_args += 1
+            else:
+                keyword_args.add(patcher.attribute_name)
+    return positional_args, keyword_args
+
+
+def _record_dict_patches(level: Any, dict_patch_type: type, targets: list[str]) -> None:
+    """One wrapper level's `mock.patch.dict` targets, appended into `targets`.
+
+    `mock.patch.dict` records no `patchings`: its decorator is a closure over the patcher, so
+    the closure is where it can be found. It passes no mock object in.
+    """
+    for value in _closure_values(level):
+        if isinstance(value, dict_patch_type):
+            targets.append(_target_name(value))
 
 
 def _group_members(patcher: Any) -> Iterator[Any]:
