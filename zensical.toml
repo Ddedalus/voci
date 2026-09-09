@@ -12,7 +12,7 @@ strict = true
 
 nav = [
   { "Home" = "index.md" },
-  { "Guide" = ["guide/index.md"] },
+  { "Guide" = ["guide/index.md", "guide/scopes.md", "guide/marks.md"] },
   { "How-to" = [
       "how-to/index.md",
       "how-to/sharing-a-database-engine.md",
