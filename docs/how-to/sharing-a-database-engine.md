@@ -30,9 +30,9 @@ async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncS
         yield s
 ```
 
-`scope="session"` is what makes `engine` a run-wide singleton rather than a per-test one; every
-other fixture scope in voci is per-test. Depending on it from `session` is enough to reach it —
-nothing about the dependent fixture needs to know its dependency is shared.
+`scope="session"` is what makes `engine` a run-wide singleton rather than a per-test one — see
+[Scopes](../guide/scopes.md) for the full set. Depending on it from `session` is enough to reach
+it — nothing about the dependent fixture needs to know its dependency is shared.
 
 The rollback itself is ordinary SQLAlchemy, not a voci mechanism: `session` opens a connection,
 begins a transaction, and hands the test a session bound to it. Whatever the test does — insert,
