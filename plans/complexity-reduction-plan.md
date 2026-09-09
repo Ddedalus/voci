@@ -61,11 +61,17 @@ item lands as its own PR rather than one big one, per the list below.
   `_print_*` helpers it already delegated the rest of the report to. Both under 10; no behavior
   change.
 
+- `voci/_run/run.py` `_run_one` (31 > 10) — its three phases (setup, call, teardown) were one
+  function's worth of nested try/except, each folding its own failure/skip/cancellation into
+  local variables the final outcome resolution then read back out of. Split each phase into its
+  own function returning a small result (`_run_setup`/`_SetupResult`, `_run_call`/`_CallResult`,
+  `_run_teardown`) instead of mutating locals, and the final disposition logic into
+  `_resolve_outcome`, leaving `_run_one` itself the sequencing: run each phase, then resolve.
+  All under 10; no behavior change — `just check` (full suite) and `tests/run/` alone both green.
+
 ### To do
 
-- `voci/_report/terminal.py` `TerminalReporter.finish` (11 > 10)
-- `voci/_run/run.py` `_run_one` (31 > 10) and `run_suite` (40 > 10) — the two largest by far;
-  likely each need their own PR rather than sharing one with the rest of this list.
+- `voci/_run/run.py` `run_suite` (40 > 10) — the largest by far; its own PR.
 - `voci/cli.py` `_prepare_run` (21 > 10) and `main` (28 > 10)
 
 Regression nets: whichever suite each file's own tests live under (`voci-migrate/tests/` for the
