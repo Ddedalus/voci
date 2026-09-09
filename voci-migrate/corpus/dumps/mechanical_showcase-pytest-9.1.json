@@ -1011,6 +1011,27 @@
     "lineno": 1154,
     "wrapped": false
    }
+  },
+  "f43": {
+   "argname": "flag",
+   "scope": "function",
+   "params": null,
+   "ids": null,
+   "autouse": false,
+   "visibility": "",
+   "kind": "DirectParamFixtureDef",
+   "direct_param": true,
+   "argnames": [
+    "request"
+   ],
+   "returns": "Any",
+   "func": {
+    "module": "_pytest.python",
+    "qualname": "get_direct_param_fixture_func",
+    "file": "${site_packages}/_pytest/python.py",
+    "lineno": 1154,
+    "wrapped": false
+   }
   }
  },
  "fixture_registry": {
@@ -2267,9 +2288,198 @@
    }
   },
   {
-   "nodeid": "test_marks.py::test_skip_without_a_reason",
+   "nodeid": "test_marks.py::test_parametrize_repeated_value[True0]",
    "path": "test_marks.py",
    "lineno": 42,
+   "originalname": "test_parametrize_repeated_value",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_repeated_value[True0]",
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "flag"
+   ],
+   "initialnames": [
+    "flag"
+   ],
+   "names_closure": [
+    "flag"
+   ],
+   "name2fixturedefs": {
+    "flag": [
+     "f43"
+    ]
+   },
+   "callspec": {
+    "id": "True0",
+    "idlist": [
+     "True0"
+    ],
+    "params": {
+     "flag": "True"
+    },
+    "indices": {
+     "flag": 0
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_repeated_value[False]",
+   "path": "test_marks.py",
+   "lineno": 42,
+   "originalname": "test_parametrize_repeated_value",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_repeated_value[False]",
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "flag"
+   ],
+   "initialnames": [
+    "flag"
+   ],
+   "names_closure": [
+    "flag"
+   ],
+   "name2fixturedefs": {
+    "flag": [
+     "f43"
+    ]
+   },
+   "callspec": {
+    "id": "False",
+    "idlist": [
+     "False"
+    ],
+    "params": {
+     "flag": "False"
+    },
+    "indices": {
+     "flag": 1
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_parametrize_repeated_value[True1]",
+   "path": "test_marks.py",
+   "lineno": 42,
+   "originalname": "test_parametrize_repeated_value",
+   "cls": null,
+   "own_markers": [
+    {
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    }
+   ],
+   "markers_with_origin": [
+    {
+     "from": "test_marks.py::test_parametrize_repeated_value[True1]",
+     "name": "parametrize",
+     "args": [
+      "'flag'",
+      "[True, False, True]"
+     ],
+     "kwargs": {}
+    },
+    {
+     "from": "test_marks.py",
+     "name": "modmark",
+     "args": [],
+     "kwargs": {}
+    }
+   ],
+   "usefixtures": [],
+   "autouse": [],
+   "argnames": [
+    "flag"
+   ],
+   "initialnames": [
+    "flag"
+   ],
+   "names_closure": [
+    "flag"
+   ],
+   "name2fixturedefs": {
+    "flag": [
+     "f43"
+    ]
+   },
+   "callspec": {
+    "id": "True1",
+    "idlist": [
+     "True1"
+    ],
+    "params": {
+     "flag": "True"
+    },
+    "indices": {
+     "flag": 2
+    },
+    "marks": []
+   }
+  },
+  {
+   "nodeid": "test_marks.py::test_skip_without_a_reason",
+   "path": "test_marks.py",
+   "lineno": 47,
    "originalname": "test_skip_without_a_reason",
    "cls": null,
    "own_markers": [
@@ -2303,7 +2513,7 @@
   {
    "nodeid": "test_marks.py::test_skip_with_a_reason",
    "path": "test_marks.py",
-   "lineno": 47,
+   "lineno": 52,
    "originalname": "test_skip_with_a_reason",
    "cls": null,
    "own_markers": [
@@ -2341,7 +2551,7 @@
   {
    "nodeid": "test_marks.py::test_skipif_boolean",
    "path": "test_marks.py",
-   "lineno": 52,
+   "lineno": 57,
    "originalname": "test_skipif_boolean",
    "cls": null,
    "own_markers": [
@@ -2383,7 +2593,7 @@
   {
    "nodeid": "test_marks.py::test_xfail",
    "path": "test_marks.py",
-   "lineno": 57,
+   "lineno": 62,
    "originalname": "test_xfail",
    "cls": null,
    "own_markers": [
@@ -2421,7 +2631,7 @@
   {
    "nodeid": "test_marks.py::test_xfail_not_strict",
    "path": "test_marks.py",
-   "lineno": 62,
+   "lineno": 67,
    "originalname": "test_xfail_not_strict",
    "cls": null,
    "own_markers": [
@@ -2461,7 +2671,7 @@
   {
    "nodeid": "test_marks.py::test_xfail_raises",
    "path": "test_marks.py",
-   "lineno": 67,
+   "lineno": 72,
    "originalname": "test_xfail_raises",
    "cls": null,
    "own_markers": [
@@ -2501,7 +2711,7 @@
   {
    "nodeid": "test_marks.py::test_tagged_and_timed",
    "path": "test_marks.py",
-   "lineno": 72,
+   "lineno": 77,
    "originalname": "test_tagged_and_timed",
    "cls": null,
    "own_markers": [

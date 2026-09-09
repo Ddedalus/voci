@@ -2,9 +2,9 @@
 
 Contributes the two-argname form over `str`/`int`/`bool`/`None` values, the `float` and `tuple`
 values whose generated ids pytest and voci spell differently, `pytest.param(v, id=...)`, two
-stacked marks, two single-case axes whose composed id can be attributed to neither of them, both
-`skip` spellings, a boolean `skipif`, all three `xfail` shapes, a custom mark used as a tag,
-`@pytest.mark.timeout`, and the module-level `pytestmark`.
+stacked marks, two single-case axes whose composed id can be attributed to neither of them, one
+axis whose declared values repeat, both `skip` spellings, a boolean `skipif`, all three `xfail`
+shapes, a custom mark used as a tag, `@pytest.mark.timeout`, and the module-level `pytestmark`.
 """
 
 import sys
@@ -37,6 +37,11 @@ def test_parametrize_stacked(outer, inner):
 def test_parametrize_single_case_axes(region, shard):
     assert region == "eu"
     assert shard == "primary"
+
+
+@pytest.mark.parametrize("flag", [True, False, True])
+def test_parametrize_repeated_value(flag):
+    assert isinstance(flag, bool)
 
 
 @pytest.mark.skip

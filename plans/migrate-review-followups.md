@@ -13,22 +13,10 @@ instead of guessing, so a class the dump never collected contributes no false po
 forwarding fix follows a chain of same-file helpers to its end and does not conflate two functions
 sharing a name in different scopes, but stays file-local by design: a helper imported from a
 sibling module keeps its `request` parameter unrecognized, the same conservative direction the rest
-of this heuristic already takes.
-
-## Correctness — data loss, found incidentally by a misscoped review pass
-
-- `convert/parametrize.py`'s `_row_index` (added by `8063807`, the VC114 stacked-direct-param fix)
-  keys each spec's recovered position on the `repr` of its whole value row
-  (`seen.setdefault(tuple(spec.params.get(name, "") for name in argnames), len(seen))`), not on
-  pytest's own per-case index. Two distinct declared cases whose values happen to repr equal —
-  `@pytest.mark.parametrize("flag", [True, False, True])`, case 0 and case 2 both rowing to
-  `('True',)` — collapse onto the same synthetic position, so `_values` (which trusts that index)
-  silently drops the repeated case's data instead of emitting three values. Direct repro: calling
-  `axes()` on three such synthetic specs returns two `Axis` values instead of three. No test in the
-  VC114 diff or the corpus exercises a parametrize list with a repeated value, so `just migrate
-  test` passes despite it. Needs a fix that only falls back to value-based row identity for the
-  axes actually affected by the direct-param index fold, not unconditionally for every axis
-  (`_values`/`_position_of` too, both downstream of the same `index` tuple).
+of this heuristic already takes. A third correctness bug, found incidentally by a misscoped review
+pass — `convert/parametrize.py`'s `_row_index` collapsing repeated-value cases onto one position —
+is fixed too; see `axes()`/`_direct_names()`/`_row_index()` and
+`test_a_repeated_value_keeps_its_own_case` in `tests/test_convert_parametrize.py`.
 
 ## Altitude — not urgent, revisit before a second plugin of the kind
 

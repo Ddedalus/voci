@@ -129,6 +129,23 @@ def test_two_stacked_marks_over_plain_arguments_stay_two_axes() -> None:
     assert inner.ids == ("i1", "i2")
 
 
+def test_a_repeated_value_keeps_its_own_case() -> None:
+    # A lone axis is never touched by the direct-param fold `test_two_stacked_marks_...` covers
+    # above, so its own `indices` still tells two cases with the same value apart. Keying the
+    # recovered position on the repr of the row instead — value-based identity, needed only where
+    # the fold actually reaches — would fold the second `True` case onto the first and silently
+    # drop it.
+    gt = ground_truth(MECHANICAL)
+    cases = [item for item in gt.items if item.originalname == "test_parametrize_repeated_value"]
+    assert len(cases) == 3
+
+    (axis,) = parametrize.axes(cases)
+
+    assert axis.argnames == ("flag",)
+    assert axis.values == (("True",), ("False",), ("True",))
+    assert axis.ids == ("True0", "False", "True1")
+
+
 # --- what each construct becomes ----------------------------------------------------------------
 
 
