@@ -1913,6 +1913,25 @@ def test_skip_raised_during_fixture_setup_reports_skipped_not_error() -> None:
     assert result.failure == "backend not installed"
 
 
+def test_skip_raised_during_fixture_setup_with_no_message_still_reports_skipped() -> None:
+    """`str(voci.Skipped())` is `""` -- an empty, not missing, reason. `_run_one` merges the
+    setup and call phases' skip reasons with an `is not None` check rather than `or`, precisely
+    so this falsy-but-real reason isn't discarded in favor of the call phase never having run.
+    """
+
+    @voci.fixture()
+    def unavailable() -> int:
+        raise voci.Skipped()
+
+    async def test_func(x: int = voci.Depends(unavailable)) -> None:
+        raise AssertionError("must never run: setup already skipped")
+
+    (result,) = run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
+
+    assert result.outcome is Outcome.SKIPPED
+    assert result.failure == ""
+
+
 def test_skip_in_the_call_phase_still_tears_fixtures_down() -> None:
     torn_down = False
 

@@ -191,7 +191,266 @@ def _resolve_call_outcome(
     )
 
 
-async def _run_one(  # noqa: C901
+@dataclass(slots=True)
+class _SetupResult:
+    """One test's setup phase, folded to a result rather than left as an exception -- see
+    `_run_setup`."""
+
+    kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
+    keys: tuple[_di.CacheKey, ...] = ()
+    done: bool = False
+    failure: str | None = None
+    summary: str | None = None
+    skip_reason: str | None = None
+
+
+@dataclass(slots=True)
+class _CallResult:
+    """One test's call phase, folded to a result rather than left as an exception -- see
+    `_run_call`."""
+
+    failure: str | None = None
+    summary: str | None = None
+    exc: BaseException | None = None
+    skip_reason: str | None = None
+    misused: bool = False
+
+
+async def _run_setup(
+    record: TestRecord, store: _di.ScopeStore, partial_module_keys: list[_di.CacheKey]
+) -> _SetupResult:
+    """Acquire `record`'s fixtures, folding a setup failure or an imperative skip into the
+    returned result rather than raising. Only a stop-worthy interrupt -- Ctrl-C, or the
+    `asyncio.CancelledError`/`TimeoutError` `_run_one`'s own deadline handles -- propagates."""
+    try:
+        kwargs, keys = await _di.setup(
+            record.plan,
+            store,
+            test_id=record.id,
+            module_path=str(record.path),
+            partial_module_keys=partial_module_keys,
+        )
+        return _SetupResult(kwargs=kwargs, keys=keys, done=True)
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except Skipped as exc:
+        # Caught ahead of the generic handler below: a skip raised while acquiring a
+        # fixture is not a setup failure, and nothing acquired after it exists to run a
+        # call phase against.
+        return _SetupResult(skip_reason=str(exc))
+    except BaseException as exc:
+        return _SetupResult(failure=traceback.format_exc(), summary=_summarize_exception(exc))
+
+
+async def _run_call(record: TestRecord, call_kwargs: dict[str, Any]) -> _CallResult:
+    """Run `record.func`'s call phase alone, folding its failure or an imperative skip into
+    the returned result -- same not-raising contract as `_run_setup`."""
+    try:
+        # Open across the call phase alone: CPython reports a coroutine nobody
+        # awaited as soon as its last reference drops, which for one a test
+        # created is somewhere inside this block -- at the statement that
+        # dropped it, or at the test's own frame dying as it returns.
+        with _safety.watch_unawaited() as unawaited:
+            if inspect.iscoroutinefunction(record.func):
+                coro = cast("Coroutine[Any, Any, object]", record.func(**call_kwargs))
+                returned = await coro
+            else:
+                # A sync `def test_*`: dispatched to the loop's default executor
+                # (`_capture.ContextPropagatingExecutor`, installed by `run_suite`)
+                # rather than called inline, so a blocking call in its body stalls
+                # only this test's own concurrency slot instead of the shared loop
+                # every other concurrently-dispatched test also runs on. Wrapped so
+                # that a body which never returns can still be named afterwards
+                # (`safety.stuck_calls`) rather than silently holding the process
+                # open.
+                returned = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    _safety.track_sync_call(
+                        record.id, functools.partial(record.func, **call_kwargs)
+                    ),
+                )
+        # Read after the block, not inside it: a coroutine held in a local until
+        # the test returns is reported as that frame is torn down, which is the
+        # last thing to happen inside it.
+        misuse = _safety.call_misuse(returned, unawaited)
+        if misuse is not None:
+            return _CallResult(failure=misuse.detail, summary=misuse.summary, misused=True)
+        return _CallResult()
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except Skipped as exc:
+        # Caught ahead of the generic handler below, and ahead of `xfail`: a skip
+        # reached mid-call is reported as skipped regardless of what an `xfail` mark
+        # on this test expected -- pytest's own imperative skip takes the same
+        # priority over it.
+        return _CallResult(skip_reason=str(exc))
+    except BaseException as exc:
+        return _CallResult(
+            failure=traceback.format_exc(), summary=_summarize_exception(exc), exc=exc
+        )
+
+
+@dataclass(slots=True)
+class _TeardownResult:
+    """One test's teardown phase, folded to a result rather than left as an exception -- see
+    `_run_teardown`."""
+
+    module_keys: tuple[_di.CacheKey, ...] = ()
+    failure: str | None = None
+    summary: str | None = None
+
+
+async def _run_teardown(
+    store: _di.ScopeStore,
+    setup: _SetupResult,
+    *,
+    cancelled: bool,
+    timed_out: bool,
+    stop: StopController | None,
+    record_id: str,
+    partial_module_keys: list[_di.CacheKey],
+) -> _TeardownResult:
+    """Release `setup`'s fixtures, or whatever module-scope keys setup partially acquired if it
+    never finished. A teardown failure folds to a note rather than raising, same contract as
+    `_run_setup`/`_run_call`."""
+    if not setup.done:
+        # Gated on setup.done, not setup.failure is None: this also covers "the timeout
+        # fired (or setup was cancelled) before setup returned", which leaves setup.failure
+        # unset too.
+        return _TeardownResult(module_keys=tuple(partial_module_keys))
+
+    # key[0] is the scope tag every key _di.key_for returns starts with.
+    module_keys = tuple(key for key in setup.keys if key[0] == "module")
+    other_keys = tuple(key for key in setup.keys if key[0] != "module")
+    # Time-boxed for a cancelled test, where the run is already ending and a fixture
+    # that waits on something that will never come would hold it open -- and for a
+    # timed-out one, where the fixture the deadline just fired on is the first suspect:
+    # an unbounded teardown there would hang the whole run (holding its admission slot)
+    # in exactly the case `--timeout` exists to bound. An ordinary test's teardown keeps
+    # the budget it has always had: none.
+    grace = stop.teardown_grace if (cancelled or timed_out) and stop is not None else None
+    try:
+        async with asyncio.timeout(grace):
+            await _di.teardown(store, other_keys)
+    except TimeoutError:
+        # Only reachable when `grace` is not None, i.e. on the cancellation or timeout
+        # path, where the result is CANCELLED/TIMEOUT and this becomes a note on it.
+        # Said out loud too: a leaked container or connection is worth knowing about
+        # while the run is still on screen, not only in the result the reporter drops.
+        why = "the run being stopped" if cancelled else "this test's timeout"
+        teardown_failure = (
+            f"teardown did not finish within {grace}s of {why} -- the "
+            f"fixture may not have been fully torn down"
+        )
+        teardown_summary = f"teardown exceeded its {grace}s grace budget"
+        if stop is not None:
+            stop.note(f"voci: {record_id}: {teardown_failure}")
+        return _TeardownResult(module_keys, teardown_failure, teardown_summary)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except asyncio.CancelledError:
+        # Not re-raised (unlike the setup/call guards in _run_setup/_run_call): teardown
+        # runs outside the `async with deadline:` block, so there is no
+        # asyncio.timeout __aexit__ left to hand a re-raise to, and no outer
+        # handler in _run_one left to catch it -- re-raising here would let a
+        # bare CancelledError escape _run_one, breaking run_suite's invariant that
+        # every dispatched task fills its own results slot.
+        if stop is not None and stop.claim():
+            # The run stopped while this test was releasing its fixtures, which is
+            # nothing the test did: its call phase already reached a verdict and that
+            # verdict stands. What is left to say is that the release may be half
+            # done, and the place to say it is the run, not the result.
+            stop.note(
+                f"voci: {record_id}: teardown was cancelled when the run stopped -- "
+                f"the fixture may not have been fully torn down"
+            )
+            return _TeardownResult(module_keys=module_keys)
+        # A collateral cancellation instead: recorded as an ERROR, tagged
+        # distinctly since it too may have left the fixture partially torn down.
+        teardown_failure = (
+            "teardown was cancelled (most likely collateral from a sibling's "
+            "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
+            f"down:\n\n{traceback.format_exc()}"
+        )
+        teardown_summary = (
+            "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
+        )
+        return _TeardownResult(module_keys, teardown_failure, teardown_summary)
+    except BaseException as exc:
+        return _TeardownResult(module_keys, traceback.format_exc(), _summarize_exception(exc))
+    return _TeardownResult(module_keys=module_keys)
+
+
+def _resolve_outcome(
+    *,
+    timed_out: bool,
+    cancelled: bool,
+    stop: StopController | None,
+    timeout: float | None,
+    setup: _SetupResult,
+    call: _CallResult,
+    teardown: _TeardownResult,
+    xfail: XFail | None,
+) -> tuple[Outcome, str | None, str | None]:
+    """This test's final disposition, once every phase has had its say -- priority order
+    timed-out > cancelled > setup failure > teardown failure > skip > call outcome (reread
+    against `xfail`). See `_run_one`'s own docstring for why `xfail` only reclassifies pass/fail.
+    """
+    teardown_failure, teardown_summary = teardown.failure, teardown.summary
+    # setup and call never both set a skip reason: a skip raised during setup means the call
+    # phase never ran (_run_one only invokes _run_call once setup comes back clean).
+    skip_reason = setup.skip_reason if setup.skip_reason is not None else call.skip_reason
+    if timed_out:
+        outcome = Outcome.TIMEOUT
+        # Phrased without naming --timeout specifically: `timeout` here may be the
+        # suite-wide budget or a per-test `@voci.timeout(...)` override, and this
+        # message doesn't know which.
+        failure = f"test exceeded its {timeout}s timeout budget"
+        summary = failure
+        # Whichever of these is set (never both) is the exception that actually
+        # surfaced while the deadline was expiring, kept for context.
+        extra = call.failure if call.failure is not None else setup.failure
+        if extra is not None:
+            failure = f"{failure}\n\n{extra}"
+        # A teardown that overran the grace above is part of what this test left behind, and
+        # TIMEOUT is the only outcome that reports it -- the branches below all read
+        # `teardown_failure` for themselves.
+        if teardown_failure is not None:
+            failure = f"{failure}\n\n{teardown_failure}"
+        return outcome, failure, summary
+    if cancelled:
+        # Ahead of every phase's own failure, and of `xfail`: whatever this test was
+        # about to report, it didn't get to finish saying it.
+        outcome = Outcome.CANCELLED
+        reason = stop.reason_text if stop is not None else "the run stopped"
+        failure = f"cancelled: {reason}"
+        summary = failure
+        if teardown_failure is not None:
+            failure = f"{failure}\n\n{teardown_failure}"
+        return outcome, failure, summary
+    if setup.failure is not None:
+        return Outcome.ERROR, setup.failure, setup.summary
+    if teardown_failure is not None:
+        failure = (
+            f"{call.failure}\n\n(teardown also failed)\n\n{teardown_failure}"
+            if call.failure is not None
+            else teardown_failure
+        )
+        # Call-first, mirroring failure's own text ordering just above.
+        summary = call.summary if call.failure is not None else teardown_summary
+        return Outcome.ERROR, failure, summary
+    if skip_reason is not None:
+        # After setup/teardown failure, ahead of `_resolve_call_outcome`: a skip that reached
+        # this far had a clean setup and (if it got that far) a clean teardown, and it is not
+        # reread through `xfail` the way a call failure or pass is -- there is no "expected
+        # failure" question left to ask about a test that never got to fail or pass.
+        return Outcome.SKIPPED, skip_reason, f"SKIPPED: {skip_reason}"
+    return _resolve_call_outcome(
+        xfail, call_exc=call.exc, call_failure=call.failure, call_summary=call.summary
+    )
+
+
+async def _run_one(
     record: TestRecord,
     store: _di.ScopeStore,
     *,
@@ -207,17 +466,7 @@ async def _run_one(  # noqa: C901
     what keeps `scope="module"` fixtures shared under concurrent dispatch.
 
     Teardown always runs once setup has acquired anything, whatever the call phase did.
-    A timed-out envelope is reported TIMEOUT ahead of any other phase's failure; a
-    cancellation `stop` delivered is CANCELLED; setup raising is ERROR; teardown raising
-    is ERROR even over a passing call (both tracebacks are kept if the call also failed);
-    a `voci.Skipped` raised during setup or the call phase -- ahead of that phase's own
-    ERROR/FAILED, but behind a later teardown's ERROR -- is SKIPPED; otherwise FAILED or
-    PASSED (call raised or not), reread as XFAILED/XPASSED when `record.func` carries a
-    `@voci.xfail(...)` mark. `xfail` only ever reclassifies those last two -- a timeout, a
-    setup error, a teardown error, or a skip reports as such regardless of the mark, the same
-    way pytest's own xfail only wraps the test's call phase, and so does a call phase that
-    returned a value or dropped a coroutine un-awaited (`safety.call_misuse`): a mark can't
-    have predicted a failure that isn't an exception in the first place.
+    See `_resolve_outcome` for how the three phases' results resolve to one outcome.
 
     `stop`, when the run has one, is both how a cancellation is recognized as the run's
     own doing rather than a sibling's collateral damage and where the teardown of a
@@ -225,23 +474,10 @@ async def _run_one(  # noqa: C901
     CANCELLED/TIMEOUT with a note that its fixtures may not have been fully released.
     """
     start = time.monotonic()
-    setup_failure: str | None = None
-    setup_summary: str | None = None
-    skip_reason: str | None = None
-    call_failure: str | None = None
-    call_summary: str | None = None
-    call_exc: BaseException | None = None
-    teardown_failure: str | None = None
-    teardown_summary: str | None = None
-    cancelled_failure: str | None = None
-    cancelled_summary: str | None = None
+    setup = _SetupResult()
+    call = _CallResult()
     timed_out = False
     cancelled = False
-    call_misused = False
-    setup_done = False
-    kwargs: dict[str, Any] = {}
-    keys: tuple[_di.CacheKey, ...] = ()
-    module_keys: tuple[_di.CacheKey, ...] = ()
     partial_module_keys: list[_di.CacheKey] = []
 
     # asyncio.timeout(None) is a documented no-op, so entering it is unconditional.
@@ -249,76 +485,15 @@ async def _run_one(  # noqa: C901
     deadline = asyncio.timeout(timeout)
     try:
         async with deadline:
-            try:
-                kwargs, keys = await _di.setup(
-                    record.plan,
-                    store,
-                    test_id=record.id,
-                    module_path=str(record.path),
-                    partial_module_keys=partial_module_keys,
-                )
-                setup_done = True
-            except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-                raise
-            except Skipped as exc:
-                # Caught ahead of the generic handler below: a skip raised while acquiring a
-                # fixture is not a setup failure, and nothing acquired after it exists to run a
-                # call phase against.
-                skip_reason = str(exc)
-            except BaseException as exc:
-                setup_failure = traceback.format_exc()
-                setup_summary = _summarize_exception(exc)
-
-            if setup_failure is None and skip_reason is None:
-                # `record.params` first, `kwargs` (this case's DI plan) second: collection
-                # already rejects any name both `@voci.parametrize` and `Depends(...)` claim
-                # (`_di._check_missing_injections`), so the two never actually overlap -- this
-                # ordering is only a tie-breaker that can't be exercised.
-                call_kwargs = {**(record.params or {}), **kwargs}
-                try:
-                    # Open across the call phase alone: CPython reports a coroutine nobody
-                    # awaited as soon as its last reference drops, which for one a test
-                    # created is somewhere inside this block -- at the statement that
-                    # dropped it, or at the test's own frame dying as it returns.
-                    with _safety.watch_unawaited() as unawaited:
-                        if inspect.iscoroutinefunction(record.func):
-                            coro = cast("Coroutine[Any, Any, object]", record.func(**call_kwargs))
-                            returned = await coro
-                        else:
-                            # A sync `def test_*`: dispatched to the loop's default executor
-                            # (`_capture.ContextPropagatingExecutor`, installed by `run_suite`)
-                            # rather than called inline, so a blocking call in its body stalls
-                            # only this test's own concurrency slot instead of the shared loop
-                            # every other concurrently-dispatched test also runs on. Wrapped so
-                            # that a body which never returns can still be named afterwards
-                            # (`safety.stuck_calls`) rather than silently holding the process
-                            # open.
-                            returned = await asyncio.get_running_loop().run_in_executor(
-                                None,
-                                _safety.track_sync_call(
-                                    record.id, functools.partial(record.func, **call_kwargs)
-                                ),
-                            )
-                    # Read after the block, not inside it: a coroutine held in a local until
-                    # the test returns is reported as that frame is torn down, which is the
-                    # last thing to happen inside it.
-                    misuse = _safety.call_misuse(returned, unawaited)
-                    if misuse is not None:
-                        call_failure = misuse.detail
-                        call_summary = misuse.summary
-                        call_misused = True
-                except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-                    raise
-                except Skipped as exc:
-                    # Caught ahead of the generic handler below, and ahead of `xfail`: a skip
-                    # reached mid-call is reported as skipped regardless of what an `xfail` mark
-                    # on this test expected -- pytest's own imperative skip takes the same
-                    # priority over it.
-                    skip_reason = str(exc)
-                except BaseException as exc:
-                    call_failure = traceback.format_exc()
-                    call_summary = _summarize_exception(exc)
-                    call_exc = exc
+            setup = await _run_setup(record, store, partial_module_keys)
+            if setup.failure is None and setup.skip_reason is None:
+                # `record.params` first, `setup.kwargs` (this case's DI plan) second:
+                # collection already rejects any name both `@voci.parametrize` and
+                # `Depends(...)` claim (`_di._check_missing_injections`), so the two never
+                # actually overlap -- this ordering is only a tie-breaker that can't be
+                # exercised.
+                call_kwargs = {**(record.params or {}), **setup.kwargs}
+                call = await _run_call(record, call_kwargs)
     except TimeoutError:
         # Only reachable when `timeout` is not None. By the time this is caught,
         # `asyncio.timeout.__aexit__` has already converted its own cancellation into
@@ -331,19 +506,23 @@ async def _run_one(  # noqa: C901
         # into TimeoutError above -- see the cross-check below), or a collateral
         # cancellation from a sibling task. Only the first is `stop`'s to claim, and
         # claiming it also un-cancels this task so the teardown below can still await;
-        # for the other two `setup_done` decides whether this reads as a setup or a call
+        # for the other two `setup.done` decides whether this reads as a setup or a call
         # failure.
         if stop is not None and stop.claim():
             cancelled = True
         else:
+            # A collateral cancellation, not `stop`'s to claim: folded into whichever
+            # phase's result was still open when it arrived, the one case where a phase's
+            # result is written from outside the `_run_setup`/`_run_call` that returned it --
+            # neither saw this exception, since it only reaches `_run_one`'s own `try`.
             cancelled_failure = traceback.format_exc()
             cancelled_summary = _summarize_exception(exc)
-            if setup_done:
-                call_failure = cancelled_failure
-                call_summary = cancelled_summary
+            if setup.done:
+                call.failure = cancelled_failure
+                call.summary = cancelled_summary
             else:
-                setup_failure = cancelled_failure
-                setup_summary = cancelled_summary
+                setup.failure = cancelled_failure
+                setup.summary = cancelled_summary
 
     if not timed_out and deadline.expired():
         # Cross-check: catches a timeout whose injected CancelledError never reached
@@ -353,128 +532,27 @@ async def _run_one(  # noqa: C901
         # discarded.
         timed_out = True
 
-    # Gated on setup_done, not setup_failure is None: this also covers "the timeout
-    # fired (or setup was cancelled) before setup returned", which leaves setup_failure
-    # unset too.
-    if setup_done:
-        # key[0] is the scope tag every key _di.key_for returns starts with.
-        module_keys = tuple(key for key in keys if key[0] == "module")
-        other_keys = tuple(key for key in keys if key[0] != "module")
-        # Time-boxed for a cancelled test, where the run is already ending and a fixture
-        # that waits on something that will never come would hold it open -- and for a
-        # timed-out one, where the fixture the deadline just fired on is the first suspect:
-        # an unbounded teardown there would hang the whole run (holding its admission slot)
-        # in exactly the case `--timeout` exists to bound. An ordinary test's teardown keeps
-        # the budget it has always had: none.
-        grace = stop.teardown_grace if (cancelled or timed_out) and stop is not None else None
-        try:
-            async with asyncio.timeout(grace):
-                await _di.teardown(store, other_keys)
-        except TimeoutError:
-            # Only reachable when `grace` is not None, i.e. on the cancellation or timeout
-            # path, where the result is CANCELLED/TIMEOUT and this becomes a note on it.
-            # Said out loud too: a leaked container or connection is worth knowing about
-            # while the run is still on screen, not only in the result the reporter drops.
-            why = "the run being stopped" if cancelled else "this test's timeout"
-            teardown_failure = (
-                f"teardown did not finish within {grace}s of {why} -- the "
-                f"fixture may not have been fully torn down"
-            )
-            teardown_summary = f"teardown exceeded its {grace}s grace budget"
-            if stop is not None:
-                stop.note(f"voci: {record.id}: {teardown_failure}")
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except asyncio.CancelledError:
-            # Not re-raised (unlike the setup/call guards above): teardown
-            # runs outside the `async with deadline:` block, so there is no
-            # asyncio.timeout __aexit__ left to hand a re-raise to, and no outer
-            # handler in this function left to catch it -- re-raising here would let a
-            # bare CancelledError escape _run_one, breaking run_suite's invariant that
-            # every dispatched task fills its own results slot.
-            if stop is not None and stop.claim():
-                # The run stopped while this test was releasing its fixtures, which is
-                # nothing the test did: its call phase already reached a verdict and that
-                # verdict stands. What is left to say is that the release may be half
-                # done, and the place to say it is the run, not the result.
-                stop.note(
-                    f"voci: {record.id}: teardown was cancelled when the run stopped -- "
-                    f"the fixture may not have been fully torn down"
-                )
-            else:
-                # A collateral cancellation instead: recorded as an ERROR, tagged
-                # distinctly since it too may have left the fixture partially torn down.
-                teardown_failure = (
-                    "teardown was cancelled (most likely collateral from a sibling's "
-                    "KeyboardInterrupt/SystemExit) -- the fixture may not have been fully torn "
-                    f"down:\n\n{traceback.format_exc()}"
-                )
-                teardown_summary = (
-                    "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
-                )
-        except BaseException as exc:
-            teardown_failure = traceback.format_exc()
-            teardown_summary = _summarize_exception(exc)
-    elif partial_module_keys:
-        # Setup failed (or timed out) partway through but had already acquired a
-        # module-scope key -- _di.setup leaves it unreleased, so it needs to reach
-        # run_suite's module-lifetime accounting.
-        module_keys = tuple(partial_module_keys)
+    teardown = await _run_teardown(
+        store,
+        setup,
+        cancelled=cancelled,
+        timed_out=timed_out,
+        stop=stop,
+        record_id=record.id,
+        partial_module_keys=partial_module_keys,
+    )
 
     duration = time.monotonic() - start
-
-    if timed_out:
-        outcome = Outcome.TIMEOUT
-        # Phrased without naming --timeout specifically: `timeout` here may be the
-        # suite-wide budget or a per-test `@voci.timeout(...)` override, and this
-        # message doesn't know which.
-        failure = f"test exceeded its {timeout}s timeout budget"
-        summary = failure
-        # Whichever of these is set (never both) is the exception that actually
-        # surfaced while the deadline was expiring, kept for context.
-        extra = call_failure if call_failure is not None else setup_failure
-        if extra is not None:
-            failure = f"{failure}\n\n{extra}"
-        # A teardown that overran the grace above is part of what this test left behind, and
-        # TIMEOUT is the only outcome that reports it -- the branches below all read
-        # `teardown_failure` for themselves.
-        if teardown_failure is not None:
-            failure = f"{failure}\n\n{teardown_failure}"
-    elif cancelled:
-        # Ahead of every phase's own failure, and of `xfail`: whatever this test was
-        # about to report, it didn't get to finish saying it.
-        outcome = Outcome.CANCELLED
-        reason = stop.reason_text if stop is not None else "the run stopped"
-        failure = f"cancelled: {reason}"
-        summary = failure
-        if teardown_failure is not None:
-            failure = f"{failure}\n\n{teardown_failure}"
-    elif setup_failure is not None:
-        outcome, failure, summary = Outcome.ERROR, setup_failure, setup_summary
-    elif teardown_failure is not None:
-        outcome = Outcome.ERROR
-        failure = (
-            f"{call_failure}\n\n(teardown also failed)\n\n{teardown_failure}"
-            if call_failure is not None
-            else teardown_failure
-        )
-        # Call-first, mirroring failure's own text ordering just above.
-        summary = call_summary if call_failure is not None else teardown_summary
-    elif skip_reason is not None:
-        # After setup/teardown failure, ahead of `_resolve_call_outcome`: a skip that reached
-        # this far had a clean setup and (if it got that far) a clean teardown, and it is not
-        # reread through `xfail` the way a call failure or pass is -- there is no "expected
-        # failure" question left to ask about a test that never got to fail or pass.
-        outcome = Outcome.SKIPPED
-        failure = skip_reason
-        summary = f"SKIPPED: {skip_reason}"
-    else:
-        outcome, failure, summary = _resolve_call_outcome(
-            None if call_misused else record.marks.xfail,
-            call_exc=call_exc,
-            call_failure=call_failure,
-            call_summary=call_summary,
-        )
+    outcome, failure, summary = _resolve_outcome(
+        timed_out=timed_out,
+        cancelled=cancelled,
+        stop=stop,
+        timeout=timeout,
+        setup=setup,
+        call=call,
+        teardown=teardown,
+        xfail=None if call.misused else record.marks.xfail,
+    )
 
     result = TestResult(
         id=record.id,
@@ -484,7 +562,7 @@ async def _run_one(  # noqa: C901
         failure=failure,
         failure_summary=summary,
     )
-    return result, module_keys
+    return result, teardown.module_keys
 
 
 def solo_for_patching(record: TestRecord) -> bool:
