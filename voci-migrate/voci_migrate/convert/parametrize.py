@@ -149,7 +149,7 @@ def axes(cases: Sequence[Item]) -> tuple[Axis, ...]:
     # pytest only shares one counter across a test's "direct" (non-fixture, non-indirect)
     # parametrized names once more than one axis stacks on it — see `_row_index`. A lone axis's
     # own `indices` is never touched, whatever kind it is.
-    folded = _direct_names(cases[0]) if len(groups) > 1 else frozenset[str]()
+    folded = _direct_names(specs, cases[0]) if len(groups) > 1 else frozenset[str]()
     found: list[Axis] = []
     for argnames in groups:
         index = (
@@ -579,19 +579,28 @@ def _mark_positions(item: Item) -> Mapping[str, int]:
     return found
 
 
-def _direct_names(item: Item) -> frozenset[str]:
-    """Names an explicit, non-indirect `@pytest.mark.parametrize` on `item` covers.
-
-    These are what pytest calls a "direct" param, and `axes` only reaches for `_row_index`'s
-    value-based recovery for one of them: an indirect mark targets a fixture, which keeps its own
-    index regardless of what else stacks on the test, exactly like a fixture's own `params=` or a
-    hook-built axis do.
+def _direct_names(specs: Sequence[CallSpec], item: Item) -> frozenset[str]:
+    """Names pytest calls a "direct" param: an explicit, non-indirect `@pytest.mark.parametrize`,
+    or a `pytest_generate_tests` hook parametrizing a plain name with no fixture behind it — the
+    same `DirectParamFixtureDef` case `_kind_of` reads as `Kind.GENERATED`. `axes` only reaches
+    for `_row_index`'s value-based recovery for these: an indirect mark or a real fixture's own
+    `params=` keeps its own index regardless of what else stacks on the test.
     """
     found: set[str] = set()
+    marked: set[str] = set()
     for mark in item.markers_with_origin:
-        if mark.name != "parametrize" or not mark.args or _is_indirect(mark.kwargs.get("indirect")):
+        if mark.name != "parametrize" or not mark.args:
             continue
-        found.update(_named(mark.args[0]))
+        names = _named(mark.args[0])
+        marked.update(names)
+        if not _is_indirect(mark.kwargs.get("indirect")):
+            found.update(names)
+    for name in specs[0].indices:
+        if name in marked:
+            continue
+        fixture = item.resolve(name)
+        if fixture is None or fixture.direct_param:
+            found.add(name)
     return frozenset(found)
 
 
