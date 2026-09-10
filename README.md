@@ -1,7 +1,9 @@
-# voci
-
 <p align="center">
   <img src="docs/static/voci-logo-2.svg" alt="" width="160">
+</p>
+
+<p align="center">
+  <b>voci: a concurrent test runner for async Python.</b>
 </p>
 
 <p align="center">
@@ -15,11 +17,14 @@
   <a href="https://github.com/facebook/pyrefly"><img src="https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json" alt="Pyrefly"></a>
 </p>
 
-**A concurrent test runner for async Python.** voci runs your whole suite in one process on one
-event loop, with every test as a concurrent `asyncio` task. For a suite that spends its time
-waiting — on a database, on an ASGI app, on a network stub — that turns wall-clock time from the
-sum of your tests into roughly the slowest one, with a single connection pool and a single set of
-imports behind it.
+<p align="center">
+  📖 <a href="https://ddedalus.github.io/voci/"><b>Documentation</b></a>
+</p>
+
+voci runs your whole suite in one process on one event loop, with every test as a concurrent
+`asyncio` task. For a suite that spends its time waiting — on a database, on an ASGI app, on a
+network stub — that turns wall-clock time from the sum of your tests into roughly the slowest one,
+with a single connection pool and a single set of imports behind it.
 
 Tests declare what they need as parameter defaults, the way FastAPI routes do. There is no
 `conftest.py` and no name-based lookup: a fixture is a function you import, so "go to definition"
