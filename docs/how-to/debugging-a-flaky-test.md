@@ -1,7 +1,7 @@
 # Debugging a flaky test
 
-A test that fails only sometimes, or only alongside the rest of the suite, is a concurrency
-question before it's anything else. Three flags narrow it down, cheapest first.
+A test that fails only sometimes, or only alongside the rest of the suite, is usually a
+concurrency problem. Three flags narrow it down, cheapest first.
 
 ## `--serial`
 
@@ -34,9 +34,8 @@ than its own budget suggests, is the only visible symptom.
 ## `--loop-watchdog`
 
 `--loop-watchdog SECONDS` (default 5.0) warns when the event loop has been blocked that long,
-naming the call holding it. Since a blocking call in one test's fixture or body stalls every task
-sharing that loop, this is the flag that turns "the suite got slower for no reason" into a
-specific stack:
+naming the call holding it. A blocking call in one test's fixture or body stalls every task
+sharing that loop, so this flag turns "the suite got slower for no reason" into a specific stack:
 
 ```
 voci: the event loop has been blocked for 6.3s
@@ -50,8 +49,8 @@ voci: the event loop has been blocked for 6.3s
 ```
 
 `test_blocking_call_stalls_the_loop` above calls `balance_blocking` against a local, near-empty
-SQLite file — far too quick to trip even a lowered threshold. The warning is what the same call
-looks like against a real, loaded database: the fix either way is the one the test already shows,
+SQLite file — far too quick to trip even a lowered threshold. Against a real, loaded database, the
+same call produces the warning above; the fix either way is the one the test already shows,
 `asyncio.to_thread(...)`. Lower `--loop-watchdog` below the default when chasing a stall shorter
 than 5 seconds; pass `0` to turn it off once you've found the call and don't want the warning on
 every run.
