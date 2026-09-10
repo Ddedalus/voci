@@ -20,6 +20,7 @@ nav = [
       "guide/capture.md",
       "guide/use.md",
       "guide/parametrize.md",
+      "guide/concurrency.md",
   ] },
   { "How-to" = [
       "how-to/index.md",

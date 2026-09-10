@@ -44,9 +44,7 @@ Guide                   ("" section, mirrors tutorial/)
   guide/use.md            done
   guide/parametrize.md    done
   guide/marks.md          done
-  guide/concurrency.md    the semaphore's admission model and the timeout budget
-                          (--concurrency, --timeout, @voci.timeout) — not --durations-reading or
-                          solo-cause diagnosis, which stay in the tuning-concurrency how-to
+  guide/concurrency.md    done
   guide/exclusive.md      exclusive=, @voci.solo, admission control
   guide/isolated.md       @voci.isolated's subprocess tier
   guide/mocking.md        unittest.mock: what's free, what costs a solo run
@@ -113,7 +111,7 @@ autodoc path. Generate it the way `voci/_assertions/_vendor/` is generated: a sc
 2. ~~**Reference**~~ — **done.**: mkdocstrings wired up, the five symbol-group pages,
    `reference/cli.md` plus its generator script and `just docs check`.
 3. **Guide** — in progress. `index.md`, `scopes.md`, `marks.md`, `assertions.md`, `capture.md`,
-   `use.md`, `parametrize.md` are done; `concurrency.md`, `exclusive.md`, `isolated.md`,
+   `use.md`, `parametrize.md`, `concurrency.md` are done; `exclusive.md`, `isolated.md`,
    `mocking.md`, `selection.md`, `config.md` remain, each with its inline snippet and a link into
    the matching `examples/` suite. No `fastapi.md` — see the how-to nav entry above.
 4. ~~**How-to**~~ — **done.**: the six recipe pages, each derived from a specific `examples/`
