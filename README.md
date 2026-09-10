@@ -76,7 +76,7 @@ PASS  tests/test_orders.py                       12 tests  Σ 7.29s
 22 tests · 22 passed · 1.14s wall (9.8x concurrency)
 ```
 
-The last line is the one to watch: the multiplier is what running concurrently bought you over
+The last line is the one to watch: the multiplier shows what running concurrently bought you over
 the sum of every test's own duration (each file's `Σ`, above).
 
 ## Install
@@ -121,7 +121,7 @@ voci -s                           # live, id-prefixed output instead of captured
   pure-async library, and shared resources under concurrency. Each is runnable.
 - **[ROADMAP.md](ROADMAP.md)** — what isn't built yet, and what's next.
 - **[plans/rationale.md](plans/rationale.md)** — why voci is shaped the way it is. Read this before
-  changing anything load-bearing.
+  changing anything central to it.
 
 ## Status
 
