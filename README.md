@@ -81,10 +81,10 @@ the sum of every test's own duration (each file's `Σ`, above).
 
 ## Install
 
-Python 3.13+. The core package has no dependencies.
+You only need Python 3.13+ - voci has no dependencies.
 
 ```bash
-uv pip install voci          # or: pip install voci
+uv add voci --dev          # or: pip install voci
 ```
 
 ## Configure

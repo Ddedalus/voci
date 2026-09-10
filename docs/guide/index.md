@@ -5,7 +5,7 @@ assumes the ones before it.
 
 ## Install
 
-voci needs Python 3.13 or newer. The core package has no dependencies.
+voci just needs Python 3.13 or newer - there are no other dependencies.
 
 ```bash
 uv pip install voci          # or: pip install voci
