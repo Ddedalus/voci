@@ -18,6 +18,9 @@ nav = [
       "guide/marks.md",
       "guide/assertions.md",
       "guide/capture.md",
+      "guide/use.md",
+      "guide/parametrize.md",
+      "guide/concurrency.md",
   ] },
   { "How-to" = [
       "how-to/index.md",
