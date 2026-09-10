@@ -38,28 +38,33 @@ docs/
 ```
 Home                    index.md
 Guide                   ("" section, mirrors tutorial/)
-  guide/index.md          install, first test, shape of a suite
-  guide/first-steps.md    a test file, `voci`, reading the report
-  guide/fixtures.md       @voci.fixture, Depends, injection syntax
-  guide/scopes.md         call/function/module/session, teardown order
+  guide/index.md          done — install, first test, shape of a suite, fixtures/Depends intro
+                          (folds in what first-steps.md/fixtures.md would otherwise have covered)
+  guide/scopes.md         done
   guide/use.md            voci.use(...) — side-effect fixtures on a module/package
   guide/parametrize.md    @voci.parametrize, stacking, params= on a fixture
-  guide/marks.md          skip, skipif, xfail, tag
-  guide/concurrency.md    the semaphore, per-test timeouts, @voci.timeout
+  guide/marks.md          done
+  guide/concurrency.md    the semaphore's admission model and the timeout budget
+                          (--concurrency, --timeout, @voci.timeout) — not --durations-reading or
+                          solo-cause diagnosis, which stay in the tuning-concurrency how-to
   guide/exclusive.md      exclusive=, @voci.solo, admission control
   guide/isolated.md       @voci.isolated's subprocess tier
   guide/mocking.md        unittest.mock: what's free, what costs a solo run
-  guide/assertions.md     rewritten assert, raises, approx
-  guide/capture.md        stdout/stderr/logging capture, tmp_path
+  guide/assertions.md     done
+  guide/capture.md        done
   guide/selection.md      ids, -k, -m/@voci.tag, -x/--maxfail, --serial, --collect-only
   guide/config.md         [tool.voci], CLI-over-config-over-defaults
-  guide/fastapi.md        voci.fastapi: per-test dependency overrides
 How-to                  (task recipes, assumes the guide; seeded from examples/)
   how-to/index.md
   how-to/sharing-a-database-engine.md      session-scoped engine, function-scoped rollback
-  how-to/testing-a-fastapi-app.md          voci.fastapi walkthrough
+  how-to/testing-a-fastapi-app.md          voci.fastapi walkthrough (carries the concept too —
+                                            no separate guide/fastapi.md; the how-to plus
+                                            reference/fastapi.md's API stub are enough for one
+                                            narrow mechanism)
   how-to/tuning-concurrency.md             reading --durations, setting concurrency
   how-to/debugging-a-flaky-test.md         --serial, -x, --loop-watchdog
+  how-to/measuring-coverage.md             coverage.py run around voci, no plugin/flag needed
+  how-to/sharing-code-across-test-files.md suite code vs. collected test files, split suites
 Reference               (mkdocstrings, one page per __init__.py export group)
   reference/index.md
   reference/fixtures.md    fixture, Fixture, Depends, Injection, Scope, use
@@ -107,9 +112,11 @@ autodoc path. Generate it the way `voci/_assertions/_vendor/` is generated: a sc
 1. ~~**Skeleton**~~ — **done.**: just recipes, config file, docs confirmed serving locally.
 2. ~~**Reference**~~ — **done.**: mkdocstrings wired up, the five symbol-group pages,
    `reference/cli.md` plus its generator script and `just docs check`.
-3. **Guide** — the 14 pages above, each with its inline snippet and a link into the matching
-   `examples/` suite.
-4. ~~**How-to**~~ — **done.**: the four recipe pages, each derived from a specific `examples/`
+3. **Guide** — in progress. `index.md`, `scopes.md`, `marks.md`, `assertions.md`, `capture.md` are
+   done; `use.md`, `parametrize.md`, `concurrency.md`, `exclusive.md`, `isolated.md`, `mocking.md`,
+   `selection.md`, `config.md` remain, each with its inline snippet and a link into the matching
+   `examples/` suite. No `fastapi.md` — see the how-to nav entry above.
+4. ~~**How-to**~~ — **done.**: the six recipe pages, each derived from a specific `examples/`
    file.
 5. **About** — `index.md`, `alternatives.md`. `rationale.md` is an internal document under
    `plans/`, so a public "why" page is written fresh rather than linked.
