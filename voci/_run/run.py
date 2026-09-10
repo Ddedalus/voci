@@ -290,6 +290,16 @@ async def _run_call(record: TestRecord, call_kwargs: dict[str, Any]) -> _CallRes
         )
 
 
+@dataclass(slots=True)
+class _TeardownResult:
+    """One test's teardown phase, folded to a result rather than left as an exception -- see
+    `_run_teardown`."""
+
+    module_keys: tuple[_di.CacheKey, ...] = ()
+    failure: str | None = None
+    summary: str | None = None
+
+
 async def _run_teardown(
     store: _di.ScopeStore,
     setup: _SetupResult,
@@ -299,18 +309,15 @@ async def _run_teardown(
     stop: StopController | None,
     record_id: str,
     partial_module_keys: list[_di.CacheKey],
-) -> tuple[tuple[_di.CacheKey, ...], str | None, str | None]:
-    """Release `setup`'s fixtures -- or, if setup never finished, whatever module-scope keys
-    it partially acquired (`_di.setup` leaves those unreleased on failure). Returns the
-    module-scope keys still held open for `run_suite`'s own accounting, plus a teardown
-    failure/summary pair folded to a note rather than raised, same contract as `_run_setup`/
-    `_run_call`.
-    """
+) -> _TeardownResult:
+    """Release `setup`'s fixtures, or whatever module-scope keys setup partially acquired if it
+    never finished. A teardown failure folds to a note rather than raising, same contract as
+    `_run_setup`/`_run_call`."""
     if not setup.done:
         # Gated on setup.done, not setup.failure is None: this also covers "the timeout
         # fired (or setup was cancelled) before setup returned", which leaves setup.failure
         # unset too.
-        return tuple(partial_module_keys), None, None
+        return _TeardownResult(module_keys=tuple(partial_module_keys))
 
     # key[0] is the scope tag every key _di.key_for returns starts with.
     module_keys = tuple(key for key in setup.keys if key[0] == "module")
@@ -338,7 +345,7 @@ async def _run_teardown(
         teardown_summary = f"teardown exceeded its {grace}s grace budget"
         if stop is not None:
             stop.note(f"voci: {record_id}: {teardown_failure}")
-        return module_keys, teardown_failure, teardown_summary
+        return _TeardownResult(module_keys, teardown_failure, teardown_summary)
     except (KeyboardInterrupt, SystemExit):
         raise
     except asyncio.CancelledError:
@@ -357,7 +364,7 @@ async def _run_teardown(
                 f"voci: {record_id}: teardown was cancelled when the run stopped -- "
                 f"the fixture may not have been fully torn down"
             )
-            return module_keys, None, None
+            return _TeardownResult(module_keys=module_keys)
         # A collateral cancellation instead: recorded as an ERROR, tagged
         # distinctly since it too may have left the fixture partially torn down.
         teardown_failure = (
@@ -368,10 +375,10 @@ async def _run_teardown(
         teardown_summary = (
             "CancelledError: teardown cancelled (collateral from a sibling interrupt)"
         )
-        return module_keys, teardown_failure, teardown_summary
+        return _TeardownResult(module_keys, teardown_failure, teardown_summary)
     except BaseException as exc:
-        return module_keys, traceback.format_exc(), _summarize_exception(exc)
-    return module_keys, None, None
+        return _TeardownResult(module_keys, traceback.format_exc(), _summarize_exception(exc))
+    return _TeardownResult(module_keys=module_keys)
 
 
 def _resolve_outcome(
@@ -382,19 +389,17 @@ def _resolve_outcome(
     timeout: float | None,
     setup: _SetupResult,
     call: _CallResult,
-    teardown_failure: str | None,
-    teardown_summary: str | None,
-    skip_reason: str | None,
+    teardown: _TeardownResult,
     xfail: XFail | None,
 ) -> tuple[Outcome, str | None, str | None]:
-    """This test's final disposition, once every phase has had its say. A timed-out envelope
-    is reported TIMEOUT ahead of any other phase's failure; a cancellation `stop` delivered is
-    CANCELLED; setup raising is ERROR; teardown raising is ERROR even over a passing call
-    (both tracebacks are kept if the call also failed); an imperative skip -- ahead of that
-    phase's own ERROR/FAILED, but behind a later teardown's ERROR -- is SKIPPED; otherwise
-    FAILED or PASSED (call raised or not), reread as XFAILED/XPASSED against `xfail`. See
-    `_run_one`'s own docstring for why `xfail` only ever reclassifies those last two.
+    """This test's final disposition, once every phase has had its say -- priority order
+    timed-out > cancelled > setup failure > teardown failure > skip > call outcome (reread
+    against `xfail`). See `_run_one`'s own docstring for why `xfail` only reclassifies pass/fail.
     """
+    teardown_failure, teardown_summary = teardown.failure, teardown.summary
+    # setup and call never both set a skip reason: a skip raised during setup means the call
+    # phase never ran (_run_one only invokes _run_call once setup comes back clean).
+    skip_reason = setup.skip_reason if setup.skip_reason is not None else call.skip_reason
     if timed_out:
         outcome = Outcome.TIMEOUT
         # Phrased without naming --timeout specifically: `timeout` here may be the
@@ -506,6 +511,10 @@ async def _run_one(
         if stop is not None and stop.claim():
             cancelled = True
         else:
+            # A collateral cancellation, not `stop`'s to claim: folded into whichever
+            # phase's result was still open when it arrived, the one case where a phase's
+            # result is written from outside the `_run_setup`/`_run_call` that returned it --
+            # neither saw this exception, since it only reaches `_run_one`'s own `try`.
             cancelled_failure = traceback.format_exc()
             cancelled_summary = _summarize_exception(exc)
             if setup.done:
@@ -523,7 +532,7 @@ async def _run_one(
         # discarded.
         timed_out = True
 
-    module_keys, teardown_failure, teardown_summary = await _run_teardown(
+    teardown = await _run_teardown(
         store,
         setup,
         cancelled=cancelled,
@@ -541,9 +550,7 @@ async def _run_one(
         timeout=timeout,
         setup=setup,
         call=call,
-        teardown_failure=teardown_failure,
-        teardown_summary=teardown_summary,
-        skip_reason=setup.skip_reason if setup.skip_reason is not None else call.skip_reason,
+        teardown=teardown,
         xfail=None if call.misused else record.marks.xfail,
     )
 
@@ -555,7 +562,7 @@ async def _run_one(
         failure=failure,
         failure_summary=summary,
     )
-    return result, module_keys
+    return result, teardown.module_keys
 
 
 def solo_for_patching(record: TestRecord) -> bool:
