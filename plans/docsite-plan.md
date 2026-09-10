@@ -41,7 +41,7 @@ Guide                   ("" section, mirrors tutorial/)
   guide/index.md          done — install, first test, shape of a suite, fixtures/Depends intro
                           (folds in what first-steps.md/fixtures.md would otherwise have covered)
   guide/scopes.md         done
-  guide/use.md            voci.use(...) — side-effect fixtures on a module/package
+  guide/use.md            done
   guide/parametrize.md    @voci.parametrize, stacking, params= on a fixture
   guide/marks.md          done
   guide/concurrency.md    the semaphore's admission model and the timeout budget
@@ -112,10 +112,10 @@ autodoc path. Generate it the way `voci/_assertions/_vendor/` is generated: a sc
 1. ~~**Skeleton**~~ — **done.**: just recipes, config file, docs confirmed serving locally.
 2. ~~**Reference**~~ — **done.**: mkdocstrings wired up, the five symbol-group pages,
    `reference/cli.md` plus its generator script and `just docs check`.
-3. **Guide** — in progress. `index.md`, `scopes.md`, `marks.md`, `assertions.md`, `capture.md` are
-   done; `use.md`, `parametrize.md`, `concurrency.md`, `exclusive.md`, `isolated.md`, `mocking.md`,
-   `selection.md`, `config.md` remain, each with its inline snippet and a link into the matching
-   `examples/` suite. No `fastapi.md` — see the how-to nav entry above.
+3. **Guide** — in progress. `index.md`, `scopes.md`, `marks.md`, `assertions.md`, `capture.md`,
+   `use.md` are done; `parametrize.md`, `concurrency.md`, `exclusive.md`, `isolated.md`,
+   `mocking.md`, `selection.md`, `config.md` remain, each with its inline snippet and a link into
+   the matching `examples/` suite. No `fastapi.md` — see the how-to nav entry above.
 4. ~~**How-to**~~ — **done.**: the six recipe pages, each derived from a specific `examples/`
    file.
 5. **About** — `index.md`, `alternatives.md`. `rationale.md` is an internal document under
