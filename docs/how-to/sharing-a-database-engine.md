@@ -23,14 +23,14 @@ async def engine(
 async def session(engine: AsyncEngine = Depends(engine)) -> AsyncIterator[AsyncSession]:
     """A real session inside a transaction that is always rolled back.
 
-    Every test sees the real schema and none of its neighbours' writes, which is what makes
-    hundreds of database tests safe to run at once against a single engine.
+    Every test sees the real schema and none of its neighbours' writes, so hundreds of database
+    tests run safely at once against a single engine.
     """
     async with database.transaction(engine) as s:
         yield s
 ```
 
-`scope="session"` is what makes `engine` a run-wide singleton rather than a per-test one — see
+`scope="session"` makes `engine` a run-wide singleton rather than a per-test one — see
 [Scopes](../guide/scopes.md) for the full set. Depending on it from `session` is enough to reach
 it — nothing about the dependent fixture needs to know its dependency is shared.
 
@@ -56,7 +56,7 @@ async def transaction(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 On SQLite specifically, the driver's own autocommit heuristics fight the rollback unless you take
 over `BEGIN` yourself — two `sqlalchemy.event` listeners on connect and on begin, applied once when
 the engine is built. A suite on Postgres or another server-backed database doesn't need them; they
-exist here because SQLite is what needs no server to `uv sync && voci`.
+exist here because SQLite needs no server of its own — nothing beyond `uv sync && voci`.
 
 The full fixtures, plus the SQLAlchemy plumbing behind them, are in
 `examples/01-fastapi-crud/tests/fixtures.py` and `examples/01-fastapi-crud/tests/database.py`.
