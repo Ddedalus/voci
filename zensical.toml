@@ -21,6 +21,9 @@ nav = [
       "guide/use.md",
       "guide/parametrize.md",
       "guide/concurrency.md",
+      "guide/exclusive.md",
+      "guide/isolated.md",
+      "guide/mocking.md",
   ] },
   { "How-to" = [
       "how-to/index.md",
