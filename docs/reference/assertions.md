@@ -1,8 +1,8 @@
 # Assertions
 
-Voci vendors pytest's assertion rewriter, so a plain `assert` statements are explained in case of a failure.
-
-Utilities for capturing exceptions and approximate comparisons are available:
+voci vendors pytest's assertion rewriter, so a plain `assert` statement is explained in case of a
+failure — see [Assertions](../guide/assertions.md) for how the rewrite is scoped and what a
+failure looks like.
 
 ## Capturing exceptions
 
