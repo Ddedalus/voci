@@ -129,6 +129,81 @@ def test_two_stacked_marks_over_plain_arguments_stay_two_axes() -> None:
     assert inner.ids == ("i1", "i2")
 
 
+def test_a_repeated_value_keeps_its_own_case() -> None:
+    # A lone axis is never touched by the direct-param fold `test_two_stacked_marks_...` covers
+    # above, so its own `indices` still tells two cases with the same value apart. Keying the
+    # recovered position on the repr of the row instead — value-based identity, needed only where
+    # the fold actually reaches — would fold the second `True` case onto the first and silently
+    # drop it.
+    gt = ground_truth(MECHANICAL)
+    cases = [item for item in gt.items if item.originalname == "test_parametrize_repeated_value"]
+    assert len(cases) == 3
+
+    (axis,) = parametrize.axes(cases)
+
+    assert axis.argnames == ("flag",)
+    assert axis.values == (("True",), ("False",), ("True",))
+    assert axis.ids == ("True0", "False", "True1")
+
+
+def test_a_hook_axis_stacked_with_a_mark_stays_its_own_axis() -> None:
+    # The direct-param fold `test_two_stacked_marks_...` covers isn't specific to
+    # `@pytest.mark.parametrize` -- a `pytest_generate_tests` hook parametrizing a plain name with
+    # no fixture behind it is exactly as "direct" to pytest as a mark is, so stacking it with
+    # another mark folds its own index into the shared counter too. Edited from
+    # `test_parametrize_stacked`'s own dump (real pytest-produced indices, `test_two_stacked_marks_
+    # ...` above): `inner`'s mark is stripped and its fixturedef swapped for a
+    # `DirectParamFixtureDef`, simulating a hook building it instead of a mark -- the fold pytest
+    # already recorded for these four cases doesn't care which, and is untouched. Before
+    # `_direct_names` recognised this shape, `inner`'s raw (folded) `indices` reported four
+    # single-case values instead of the two it actually has.
+    dump = json.loads((DUMPS / f"{MECHANICAL}-pytest-9.1.json").read_text(encoding="utf-8"))
+    cases = [
+        entry
+        for entry in dump["items"]
+        if entry["nodeid"].startswith("test_marks.py::test_parametrize_stacked")
+    ]
+    assert len(cases) == 4
+    dump["fixture_defs"]["hook_inner"] = {
+        "argname": "inner",
+        "scope": "function",
+        "params": None,
+        "ids": None,
+        "autouse": False,
+        "visibility": "",
+        "kind": "DirectParamFixtureDef",
+        "direct_param": True,
+        "argnames": ["request"],
+        "returns": "Any",
+        "func": {
+            "module": "_pytest.python",
+            "qualname": "get_direct_param_fixture_func",
+            "file": "${site_packages}/_pytest/python.py",
+            "lineno": 1154,
+            "wrapped": False,
+        },
+    }
+    for entry in cases:
+        entry["own_markers"] = [m for m in entry["own_markers"] if m["args"][:1] != ["'inner'"]]
+        entry["markers_with_origin"] = [
+            m for m in entry["markers_with_origin"] if m["args"][:1] != ["'inner'"]
+        ]
+        entry["name2fixturedefs"]["inner"] = ["hook_inner"]
+
+    gt = model.build(dump)
+    cases_built = [item for item in gt.items if item.originalname == "test_parametrize_stacked"]
+    for case in cases_built:
+        assert case.callspec is not None
+        assert case.callspec.indices["outer"] == case.callspec.indices["inner"]
+
+    inner, outer = sorted(parametrize.axes(cases_built), key=lambda axis: axis.key)
+
+    assert outer.argnames == ("outer",)
+    assert outer.values == (("'o1'",), ("'o2'",))
+    assert inner.argnames == ("inner",)
+    assert inner.values == (("'i1'",), ("'i2'",))
+
+
 # --- what each construct becomes ----------------------------------------------------------------
 
 

@@ -145,9 +145,18 @@ def axes(cases: Sequence[Item]) -> tuple[Axis, ...]:
     specs = [item.callspec for item in cases if item.callspec is not None]
     if len(specs) != len(cases) or not specs:
         return ()
+    groups = list(_grouped(specs, cases[0]))
+    # pytest only shares one counter across a test's "direct" (non-fixture, non-indirect)
+    # parametrized names once more than one axis stacks on it — see `_row_index`. A lone axis's
+    # own `indices` is never touched, whatever kind it is.
+    folded = _direct_names(specs, cases[0]) if len(groups) > 1 else frozenset[str]()
     found: list[Axis] = []
-    for argnames in _grouped(specs, cases[0]):
-        index = _row_index(specs, argnames)
+    for argnames in groups:
+        index = (
+            _row_index(specs, argnames)
+            if argnames[0] in folded
+            else tuple(spec.indices.get(argnames[0], -1) for spec in specs)
+        )
         position, ids = _position_of(specs, index)
         found.append(
             Axis(
@@ -570,15 +579,43 @@ def _mark_positions(item: Item) -> Mapping[str, int]:
     return found
 
 
+def _direct_names(specs: Sequence[CallSpec], item: Item) -> frozenset[str]:
+    """Names pytest calls a "direct" param: an explicit, non-indirect `@pytest.mark.parametrize`,
+    or a `pytest_generate_tests` hook parametrizing a plain name with no fixture behind it — the
+    same `DirectParamFixtureDef` case `_kind_of` reads as `Kind.GENERATED`. `axes` only reaches
+    for `_row_index`'s value-based recovery for these: an indirect mark or a real fixture's own
+    `params=` keeps its own index regardless of what else stacks on the test.
+    """
+    found: set[str] = set()
+    marked: set[str] = set()
+    for mark in item.markers_with_origin:
+        if mark.name != "parametrize" or not mark.args:
+            continue
+        names = _named(mark.args[0])
+        marked.update(names)
+        if not _is_indirect(mark.kwargs.get("indirect")):
+            found.update(names)
+    for name in specs[0].indices:
+        if name in marked:
+            continue
+        fixture = item.resolve(name)
+        if fixture is None or fixture.direct_param:
+            found.add(name)
+    return frozenset(found)
+
+
 def _row_index(specs: Sequence[CallSpec], argnames: tuple[str, ...]) -> tuple[int, ...]:
     """Each spec's position in this axis's own declared list, recovered from its whole row.
 
-    Reads the same evidence `_grouped` does for the same reason: pytest's own `indices` no longer
-    says anything once a "direct" param is stacked with another, so the row of values `argnames`
-    holds is what is left. Keyed on the whole row rather than on one argname, since a
-    `parametrize(("a", "b"), ...)` axis is only as wide as its distinct rows — one column
-    repeating a value across two different rows (a `bool`, a `None`) is not the same thing as the
-    row itself repeating.
+    Only called for an axis `axes` has already determined is a direct param stacked with another
+    axis — pytest's own `indices` for such a name is folded into one counter shared by the whole
+    callspec (see `axes`), so the row of values `argnames` holds is what is left. Keyed on the
+    whole row rather than on one argname, since a `parametrize(("a", "b"), ...)` axis is only as
+    wide as its distinct rows — one column repeating a value across two different rows (a `bool`,
+    a `None`) is not the same thing as the row itself repeating. Two distinct declared rows that
+    happen to repr-equal still collapse onto one position here, same as before this fell back to
+    it unconditionally; unlike an un-stacked axis, pytest leaves nothing else here to recover that
+    from.
     """
     seen: dict[tuple[str, ...], int] = {}
     return tuple(
