@@ -16,8 +16,8 @@ E       assert 201 == 200
 
 The rewrite happens at import time, for modules under a configured test root — a file imported
 from application code keeps a plain `assert`, which raises a bare `AssertionError` with no
-explanation. voci still underlines the failing expression from the traceback's own column info in
-that case; recovering the operands' actual values needs the rewrite.
+explanation. voci underlines the failing expression from the traceback's own column info in that
+case; recovering the operands' actual values needs the rewrite.
 
 ## Catching an expected exception
 

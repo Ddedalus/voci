@@ -2,6 +2,9 @@
 
 voci ships a handful of fixtures for the things most suites need from a runner. Use them just like any other fixture: `tmp: Annotated[Path, Depends(voci.tmp_path)]`.
 
+See [Capture](../guide/capture.md) for capture, log records and temporary directories walked
+through with examples.
+
 ## Temporary directories
 
 Every directory these allocate lives under one root per run, a fresh numbered directory in the
