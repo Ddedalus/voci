@@ -5,43 +5,50 @@
 [project]
 site_name = "voci"
 site_description = "A concurrent test runner for async Python."
+repo_url = "https://github.com/Ddedalus/voci"
+repo_name = "Ddedalus/voci"
 
 # A link to a page that doesn't exist, or to an anchor that doesn't, fails the build rather than
 # shipping a dead link.
 strict = true
 
 nav = [
-  { "Home" = "index.md" },
-  { "Guide" = [
-      "guide/index.md",
-      "guide/scopes.md",
-      "guide/marks.md",
-      "guide/assertions.md",
-      "guide/capture.md",
-      "guide/use.md",
-      "guide/parametrize.md",
-      "guide/concurrency.md",
-  ] },
-  { "How-to" = [
-      "how-to/index.md",
-      "how-to/sharing-a-database-engine.md",
-      "how-to/testing-a-fastapi-app.md",
-      "how-to/tuning-concurrency.md",
-      "how-to/debugging-a-flaky-test.md",
-      "how-to/measuring-coverage.md",
-  ] },
-  { "Migrating" = ["migrate/index.md", "migrate/matrix.md"] },
-  { "Reference" = [
-      "reference/index.md",
-      "reference/fixtures.md",
-      "reference/marks.md",
-      "reference/builtins.md",
-      "reference/assertions.md",
-      "reference/warnings.md",
-      "reference/fastapi.md",
-      "reference/cli.md",
-  ] },
-  { "About" = ["about/index.md"] },
+    { "Home" = "index.md" },
+    { "Guide" = [
+        "guide/index.md",
+        "guide/scopes.md",
+        "guide/marks.md",
+        "guide/assertions.md",
+        "guide/capture.md",
+        "guide/use.md",
+        "guide/parametrize.md",
+        "guide/concurrency.md",
+    ] },
+    { "How-to" = [
+        "how-to/index.md",
+        "how-to/sharing-a-database-engine.md",
+        "how-to/testing-a-fastapi-app.md",
+        "how-to/tuning-concurrency.md",
+        "how-to/debugging-a-flaky-test.md",
+        "how-to/measuring-coverage.md",
+    ] },
+    { "Migrating" = [
+        "migrate/index.md",
+        "migrate/matrix.md",
+    ] },
+    { "Reference" = [
+        "reference/index.md",
+        "reference/fixtures.md",
+        "reference/marks.md",
+        "reference/builtins.md",
+        "reference/assertions.md",
+        "reference/warnings.md",
+        "reference/fastapi.md",
+        "reference/cli.md",
+    ] },
+    { "About" = [
+        "about/index.md",
+    ] },
 ]
 
 [project.theme]
@@ -57,6 +64,9 @@ favicon = "static/voci-logo-2.png"
 # A section's `index.md` is the section itself, so "Guide" in the nav opens `guide/index.md`
 # rather than expanding to a lone child of the same name.
 features = ["navigation.indexes"]
+# The repo link in the header defaults to a generic git icon; the GitHub mark is what readers
+# expect for a github.com link.
+icon.repo = "fontawesome/brands/github"
 
 # Three palette entries are what puts a color-scheme toggle in the header: the first follows the
 # reader's system preference, the other two pin light and dark.
