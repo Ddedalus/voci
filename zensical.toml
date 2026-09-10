@@ -26,6 +26,8 @@ nav = [
         "guide/exclusive.md",
         "guide/isolated.md",
         "guide/mocking.md",
+        "guide/selection.md",
+        "guide/config.md",
     ] },
     { "How-to" = [
         "how-to/index.md",
@@ -51,6 +53,7 @@ nav = [
     ] },
     { "About" = [
         "about/index.md",
+        "about/alternatives.md",
     ] },
 ]
 

@@ -110,14 +110,10 @@ autodoc path. Generate it the way `voci/_assertions/_vendor/` is generated: a sc
 1. ~~**Skeleton**~~ — **done.**: just recipes, config file, docs confirmed serving locally.
 2. ~~**Reference**~~ — **done.**: mkdocstrings wired up, the five symbol-group pages,
    `reference/cli.md` plus its generator script and `just docs check`.
-3. **Guide** — in progress. `index.md`, `scopes.md`, `marks.md`, `assertions.md`, `capture.md`,
-   `use.md`, `parametrize.md`, `concurrency.md` are done; `exclusive.md`, `isolated.md`,
-   `mocking.md`, `selection.md`, `config.md` remain, each with its inline snippet and a link into
-   the matching `examples/` suite. No `fastapi.md` — see the how-to nav entry above.
+3. ~~**Guide**~~ — **done.**: all eleven pages. No `fastapi.md` — see the how-to nav entry above.
 4. ~~**How-to**~~ — **done.**: the six recipe pages, each derived from a specific `examples/`
    file.
-5. **About** — `index.md`, `alternatives.md`. `rationale.md` is an internal document under
-   `plans/`, so a public "why" page is written fresh rather than linked.
+5. ~~**About**~~ — **done.**: `index.md`, `alternatives.md`.
 6. **CI** — `docs-check` into `just check`; hosting (GitHub Pages or otherwise) is a follow-up decision once the repo is public — out of scope here.
 
 Each phase is a reviewable unit on its own branch, per the worktree workflow.
