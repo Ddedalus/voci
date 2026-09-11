@@ -83,12 +83,20 @@ item lands as its own PR rather than one big one, per the list below.
   class from the same `records` it also held — both fixed (the duplicate fields dropped,
   `remaining_by_module` derived in `__post_init__`); nothing else survived review.
 
-### To do
+- `voci/cli.py` `_prepare_run` (21 > 10) — split along the same linear phases its own
+  docstring already named (flag contradictions, targets, -k/-m, config, options, roots),
+  each into its own function returning `(problem, ...)` the same way `_prepare_run`
+  itself does; `_prepare_run` now just sequences them. All under 10; no behavior change.
+- `voci/cli.py` `main` (28 > 10) — most of its complexity was one `with _installed_session`
+  block doing discovery, collection, `--lf`/`--ff` narrowing, `--collect-only` reporting,
+  and the real run in sequence, each phase needing most of what the ones before it
+  produced. Pulled into a `_RunSession` dataclass built once (mirroring `run.py`'s own
+  `_Session`) and a chain of phase functions taking it, ending in `_execute`; `main`
+  itself now builds the session and calls `_execute`. All under 10; no behavior change —
+  `just check`, `just py run 3.13 pyrefly check`, and `tests/ -k cli` (both interpreters)
+  all green.
 
-- `voci/cli.py` `_prepare_run` (21 > 10) and `main` (28 > 10)
-
-Regression nets: whichever suite each file's own tests live under (`voci-migrate/tests/` for the
-first two, `tests/` for the rest).
+This was the plan's last item — the `C901` gate holds everywhere now, nothing left grandfathered.
 
 ---
 
