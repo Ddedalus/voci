@@ -31,8 +31,8 @@ JUnit XML and GitHub annotations
 **Testmon functionality** Allow for coverage-driven replay of only affected tests in a suite
 after code modification. Assessment and options in
 [plans/testmon-plan.md](plans/testmon-plan.md) — buildable, with both hard problems
-prototyped; the open question is whether voci wants a mode that can skip a test, since
-every existing cache only ever orders and predicts.
+prototyped. Departs from the rule every existing cache keeps (order and predict, never
+skip), so the trade to price is a silent false green against the time saved.
  
 **Benchmark** A published, reproducible benchmark against pytest and `pytest-xdist` on a real suite.
 

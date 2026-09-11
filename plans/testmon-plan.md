@@ -2,42 +2,50 @@
 
 Re-run only the tests a source change can reach, instead of the whole suite.
 
-Status: **awaiting a decision**, not started. ROADMAP lists this under "Needs human review — do
+Status: not started, pending a go/no-go. ROADMAP lists this under "Needs human review — do
 not start"; this document is the assessment that gate was waiting for. Nothing here is
 implemented.
 
 Two prototypes were run against the real interpreter to settle the questions that decide
 viability; both are recorded under "Prototype results" below.
 
-## The decision to make first
+## What this changes about voci's caching
+
+Buildable — the two questions that decided that were prototyped, see "Prototype results".
 
 Every existing cache in voci obeys one rule, stated in `spec/03-discovery-and-collection.md` §6
-and repeated in `_cache.py` and `index.py`: **the cache only ever orders and predicts, never skips
-a test.** `--lf` narrows discovery but a stale entry costs an import, never a wrong report. The
+and repeated in `_cache.py` and `index.py`: the cache only ever orders and predicts, never skips a
+test. `--lf` narrows discovery but a stale entry costs an import, never a wrong report. The
 collection index is never proactively invalidated because a stale entry is always safe.
 
-This feature breaks that rule. It skips tests on the strength of a recorded map, and when the map
-is wrong in the under-approximating direction the result is a green run that should have been red.
-That failure is silent, it is indistinguishable from a real pass, and it lands on the one signal
-the tool exists to produce.
+This feature departs from that. It skips tests on the strength of a recorded map, and a map that
+under-approximates produces a green run that should have been red — a failure that is silent and
+indistinguishable from a real pass.
 
-So the decision is not "is this buildable" — it is buildable, see below. The decision is whether
-voci wants a mode whose failure mode is a false green. If yes, the containment is: opt-in per
-invocation, never a default, never inherited from `[tool.voci]` alone, and a loud line in the
-report saying how many tests were skipped and on what basis.
+That is a property of the feature class, not an argument against it; pytest-testmon ships with it
+and is widely used. It does mean the cost of a wrong answer here is different in kind from the
+cost of a wrong `--lf`, which is worth pricing deliberately rather than by analogy to the existing
+caches.
 
-**Recommendation: build Option A (static import graph) first**, on the strength of its failure
-direction rather than its cost. It over-approximates — it can only run too many tests, never too
-few — and it needs no tracing and no per-test map. It is not, however, free: it adds an AST pass
-over first-party source that nothing currently pays for, and it needs a first-party source-root
-concept that voci does not have. Both are quantified below.
+Exposure is adjustable, and the levers are independent: which invocations can select (flag only,
+or also `[tool.voci]`), whether a skipped test is reported and how loudly, and how wide the
+bail-out set is — the conditions that force a full run regardless of the map. Where those land is
+a call about how much risk is worth the time saved, which depends on how the suite is used.
 
-Option B (tracing) is a precision upgrade, and its own risks are much easier to judge once the
-coarse version is in and its selectivity has been measured on a real suite.
+**Recommendation: Option A (static import graph) first**, on failure direction rather than cost.
+It over-approximates — it can only run too many tests, never too few — and needs no tracing and no
+per-test map. It is not free: it adds an AST pass over first-party source that nothing currently
+pays for, and needs a first-party source-root concept that voci does not have. Both are quantified
+below.
+
+Option B (tracing) is a precision upgrade, and its risks are easier to judge once the coarse
+version is in and its selectivity has been measured on a real suite. Going straight to B is
+reasonable if function-level precision is the point of doing this at all — the attribution
+mechanism it depends on is prototyped and works.
 
 ## Work to do
 
-Milestones are alternatives, not a sequence — pick one, per the decision above.
+Milestones are alternatives, not a sequence.
 
 ### Option A — static import graph (recommended first step)
 
@@ -161,11 +169,13 @@ beside `tests/`, a `src/` layout, several packages in a workspace (this repo has
 package installed non-editable, where the imported module resolves into `site-packages` and an
 edit to the working tree does not affect the run at all.
 
-That last case has to be detected and refused rather than silently mis-answered: a graph built
-over source files the tests are not actually importing selects confidently and wrongly.
+The non-editable case is the sharp one: a graph built over source files the tests are not actually
+importing selects confidently and wrongly, with no symptom to notice. Detecting it is cheap
+(compare the imported module's resolved file against the source root); what to do about it —
+refuse, warn, or fall back to a full run — is a judgement call.
 
-So Option A's real first task is a config surface plus a resolution rule, and its "cheap" billing
-should be read with that included. Option B sidesteps this entirely, which narrows the gap between
+So Option A's first task is a config surface plus a resolution rule, and its "cheap" billing reads
+differently with that included. Option B sidesteps this entirely, which narrows the gap between
 the two more than the original recommendation allowed for — Option A is still the safer direction
 because it over-approximates, but it is not the free one.
 
@@ -183,13 +193,14 @@ Ranked by how badly each one ends.
    input would have selected.
 4. **Source-root misresolution (Option A).** A graph built over files the tests are not really
    importing — a non-editable install, a shadowed package name, a path the resolution rule guessed
-   wrong — selects with full confidence and no symptom. Must fail loudly rather than guess.
+   wrong — selects with full confidence and no symptom. Cheap to detect; the response is a
+   design choice.
 5. **Non-Python inputs.** Fixture data files, templates, `.env`, schema files — nothing traces
    them, and a change to one must either force a full run or be declared. testmon has this hole
    too.
 6. **Environment drift.** An upgraded dependency, a different interpreter, a changed
-   `[tool.voci]`, a different `-k`/`-m` — each invalidates the map wholesale. This is the
-   "bail-out set", and it must be conservative and fingerprinted, not inferred.
+   `[tool.voci]`, a different `-k`/`-m` — each invalidates the map wholesale. How wide this
+   "bail-out set" is trades directly against how often the feature helps.
 7. **Assertion rewriting.** Fingerprints keyed to anything but source text will churn or, worse,
    fail to churn when they should.
 8. **Cache growth.** A per-test function map on a large suite is orders of magnitude bigger than
