@@ -43,8 +43,8 @@ import threading
 import time
 import traceback
 from collections import deque
-from collections.abc import Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Coroutine, Iterator, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO, cast, final
 
@@ -846,7 +846,332 @@ class StopController:
         return True
 
 
-def run_suite(  # noqa: C901
+def _validate_run_args(
+    records: list[TestRecord],
+    *,
+    concurrency: int,
+    maxfail: int | None,
+    timeout: float | None,
+    teardown_grace: float,
+    isolated: IsolatedConfig | None,
+    already_isolated: bool,
+) -> None:
+    """Reject a bad `run_suite` call before anything is installed. Raises `ValueError`
+    for an out-of-range numeric argument, or when a record needs `isolated=` and none
+    was given."""
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
+    if maxfail is not None and maxfail < 1:
+        raise ValueError(f"maxfail must be >= 1, got {maxfail}")
+    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError(f"timeout must be a positive, finite number of seconds, got {timeout}")
+    if not (math.isfinite(teardown_grace) and teardown_grace > 0):
+        raise ValueError(
+            f"teardown_grace must be a positive, finite number of seconds, got {teardown_grace}"
+        )
+    if isolated is None and not already_isolated:
+        needs_isolation = next((r for r in records if r.marks.isolated), None)
+        if needs_isolation is not None:
+            raise ValueError(
+                f"{needs_isolation.id!r} is marked @voci.isolated but run_suite was not given "
+                f"isolated=IsolatedConfig(...) -- its subprocess needs rootdir (and the parent's "
+                f"own assertion-rewrite decision) to re-collect it"
+            )
+
+
+@contextlib.contextmanager
+def _installed_for_run(session_filters: tuple[_warnings.WarningFilter, ...]) -> Iterator[None]:
+    """Install `_mocking`'s patch guard, `_warnings`'s filters, and `_safety`'s
+    unawaited-coroutine tracking for one `run_suite` call, and reverse only whichever of
+    the three actually turned on -- `install()` returning `False` means an enclosing run
+    already has it installed, whose uninstall is then not this call's to do. Pre-set to
+    `False`, like `cli.main`'s own hook bookkeeping: if one `install()` call raises, the
+    `finally` must not try to undo an install that never happened, but must still undo
+    whichever earlier one succeeded.
+    """
+    guard_installed = False
+    warnings_installed = False
+    unawaited_installed = False
+    try:
+        # After collection has imported every test module, so a suite that patches has
+        # already brought `unittest.mock` in and this finds it (`_mocking.install`).
+        guard_installed = _mocking.install()
+        # Before `_safety.install`, whose hook the shim this puts in place is what
+        # consults.
+        warnings_installed = _warnings.install(session_filters)
+        unawaited_installed = _safety.install()
+        yield
+    finally:
+        if guard_installed:
+            _mocking.uninstall()
+        if unawaited_installed:
+            _safety.uninstall()
+        if warnings_installed:
+            _warnings.uninstall()
+
+
+@final
+@dataclass(slots=True)
+class _Session:
+    """The state `dispatch_one`/`flush_module_scope`/`run_envelope`/`run_all` all read or
+    write while one `run_suite` call is in flight, carried on `self` instead of closed
+    over. `run_suite` builds exactly one of these and hands it to `asyncio.Runner.run`
+    via `.run_all()`."""
+
+    records: list[TestRecord]
+    store: _di.ScopeStore
+    gate: AdmissionGate
+    stop: StopController
+    worker_slots: _capture.WorkerSlots
+    capture_setup: _capture.CaptureSetup
+    executor: _capture.ContextPropagatingExecutor
+    watchdog: _safety.LoopWatchdog | None
+    on_result: Callable[[TestResult], None] | None
+    maxfail: int | None
+    isolated: IsolatedConfig | None
+    already_isolated: bool
+    loop_watchdog: float | None
+    filterwarnings: Sequence[str]
+    timeout: float | None
+    results: list[TestResult | None]
+    # `dict.fromkeys`-style default, computed from `records` in `__post_init__`: derived
+    # rather than taken as a constructor argument, so it can never disagree with `records`.
+    remaining_by_module: dict[Path, int] = field(init=False)
+    pending_module_keys: dict[Path, list[_di.CacheKey]] = field(default_factory=dict)
+    #: `maxfail`'s bookkeeping. Read and written only from `dispatch_one` bodies, which
+    #: never `await` between counting a failure and asking `stop` to act on it, so the
+    #: count can't be missed by a task admitted in between.
+    failures: int = 0
+
+    def __post_init__(self) -> None:
+        remaining_by_module: dict[Path, int] = {}
+        for record in self.records:
+            remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
+        self.remaining_by_module = remaining_by_module
+
+    async def dispatch_one(self, index: int, record: TestRecord) -> None:
+        # Every test's task is created up front, so a stop is enforced here, as each
+        # one is about to start, rather than by not creating the task at all. A test
+        # that returns without filling its results slot is what shortens the returned
+        # list.
+        if self.stop.stopping:
+            return
+        # The whole body lives between `gate.acquire()` and `gate.release()`, including
+        # the module-scope flush below, so concurrency=1 is a genuine exact-serial mode:
+        # the next test cannot start until this one's admission -- module teardown
+        # included -- is released.
+        # The record's, not the function's: one `@voci.parametrize` case can carry marks
+        # the next case does not (`voci.case(..., marks=...)`).
+        marks = record.marks
+        tokens = exclusive_tokens_of(record.plan)
+        # One value, computed once and passed to both acquire and release: the two must
+        # agree, or the gate's solo bookkeeping never unwinds.
+        solo = marks.solo or solo_for_patching(record)
+        await self.gate.acquire(tokens, solo=solo)
+        # A `@voci.timeout(...)` mark overrides the suite-wide budget for this test
+        # alone; `marks.timeout is None` is the common case of "no override", not "no
+        # limit" -- that's what the bare `timeout` parameter already means.
+        test_timeout = marks.timeout if marks.timeout is not None else self.timeout
+        started = time.monotonic()
+        try:
+            # Re-checked now that this test holds a slot, which is the moment that
+            # actually decides whether it runs: every task reaches the check above
+            # before the first result exists, since they are all created together and
+            # then queue on the gate. Registering for cancellation immediately after,
+            # with no `await` in between, is what leaves no window in which a test is
+            # running but a stop can't reach it.
+            if self.stop.stopping:
+                return
+            self.stop.register(record.id)
+            try:
+                result = await self.run_envelope(record, marks, test_timeout, solo=solo)
+            except asyncio.CancelledError:
+                # Only reached when the cancellation landed somewhere `_run_one` isn't
+                # -- between it and the module-scope flush below, or inside that flush
+                # -- since `_run_one` claims its own. Filling the slot here anyway is
+                # what keeps "every admitted test reports something" true.
+                if not self.stop.claim():
+                    raise
+                result = _cancelled_result(record, time.monotonic() - started, self.stop)
+            finally:
+                self.stop.unregister()
+
+            # Inside the gate, ahead of the release below, and with no `await`
+            # between this and the release: releasing is what admits the next
+            # waiting test, so counting the failure afterwards would race that
+            # test's own `stopping` check and let it start anyway.
+            if self.maxfail is not None and result.outcome in FAILING_OUTCOMES:
+                self.failures += 1
+                if self.failures >= self.maxfail:
+                    self.stop.request("maxfail")
+        finally:
+            # Skipped only when the run was aborted outright: this task is then being
+            # finalized by the garbage collector, long after the loop was closed -- and
+            # admitting a waiter means completing its future, which still needs that
+            # loop. There is no test left waiting on the gate to admit anyway.
+            if not self.stop.aborting:
+                self.gate.release(tokens, solo=solo)
+
+        # Fired in real completion order, before the logical-order results slot
+        # below is written, so a streaming reporter never sees a filled slot
+        # for a test it hasn't been told about yet.
+        if self.on_result is not None:
+            self.on_result(result)
+        self.results[index] = result
+
+    async def flush_module_scope(self, record: TestRecord) -> None:
+        """Release `record`'s module's fixtures, if `record` was the last of its module
+        to finish. A stop landing in here is claimed rather than allowed to propagate:
+        the test itself is already done and has a real result, which a cancellation
+        escaping this far would replace with a synthetic CANCELLED one."""
+        self.remaining_by_module[record.path] -= 1
+        if self.remaining_by_module[record.path] != 0:
+            return
+        keys = self.pending_module_keys.pop(record.path, None)
+        if not keys:
+            return
+        try:
+            await _teardown_module_scope(
+                self.store,
+                keys,
+                path=record.path,
+                real_stderr=self.capture_setup.real_stderr,
+                # Time-boxed once the run is stopping, for the same reason a cancelled
+                # test's own teardown is.
+                grace=self.stop.teardown_grace if self.stop.stopping else None,
+            )
+        except asyncio.CancelledError:
+            # Never re-raised: this test has already earned a result, and a cancellation
+            # escaping here would replace it with nothing at all. `claim` when the stop
+            # is what delivered it, so the task is left un-cancelled for the rest of its
+            # envelope; a sibling's collateral cancellation is simply reported.
+            self.stop.claim()
+            self.stop.note(
+                f"voci: module-scope fixtures ({record.path}) were left mid-teardown -- "
+                f"they may not have been fully released"
+            )
+
+    async def run_envelope(
+        self, record: TestRecord, marks: Marks, test_timeout: float | None, *, solo: bool
+    ) -> TestResult:
+        """One admitted test's whole setup/call/teardown envelope, including the
+        module-scope flush it owes its module if it turns out to be its last test.
+        Split out of `dispatch_one` so that everything a stop can cancel sits inside one
+        `try`, and everything that must still happen afterwards -- the gate release, the
+        result -- sits outside it."""
+        if marks.isolated and not self.already_isolated:
+            if self.isolated is None:
+                # Unreachable: run_suite checks this for every isolated-marked
+                # record before any test is dispatched.
+                raise RuntimeError(
+                    f"{record.id!r} is marked @voci.isolated with no IsolatedConfig -- "
+                    f"run_suite's own upfront check should have caught this"
+                )
+            # No Sink/TestContext here -- this test's whole setup/call/teardown
+            # envelope, capture included, runs inside the subprocess's own
+            # run_suite call and comes back already resolved.
+            result = _result_from_json(
+                await _isolated.run_isolated(
+                    record,
+                    config=self.isolated,
+                    timeout=test_timeout,
+                    basetemp_root=self.capture_setup.basetemp_root,
+                    scratch_dir=self.capture_setup.basetemp_root / ".voci-isolated",
+                    note=self.stop.note,
+                    loop_watchdog=self.loop_watchdog,
+                    teardown_grace=self.stop.teardown_grace,
+                    # The session's filters only: the subprocess re-collects the test
+                    # from its own source, so its `@voci.filterwarnings` mark comes
+                    # back with it rather than being handed over.
+                    filterwarnings=self.filterwarnings,
+                )
+            )
+            # `run_isolated` kills its subprocess and reports rather than propagating a
+            # cancellation, so a stop that reached this test arrives here as a returned
+            # error result. Claiming it turns that into the CANCELLED it actually is.
+            if self.stop.claim():
+                return _cancelled_result(record, result.duration, self.stop)
+            # No current_test_context to attribute this flush to -- it falls back to
+            # the session sink, same as any output with no test actively running would.
+            await self.flush_module_scope(record)
+            return result
+
+        # A fresh Sink and TestContext for this one test, published via
+        # current_test_context.set() for the duration of everything below --
+        # not just _run_one, but this test's own module-scope-fixture flush
+        # too, if it turns out to be the module's last test. _run_one itself
+        # never references _capture at all; every builtin-fixture provider and
+        # the installed Router/log handler read current_test_context for
+        # themselves, so wrapping the call is enough to attribute everything it
+        # does, transitively, to this test.
+        slot = self.worker_slots.acquire()
+        sink = _capture.Sink(label=record.id)
+        test_context = _capture.TestContext(
+            sink=sink,
+            tags=marks.tags,
+            timeout=test_timeout,
+            worker=slot,
+            # Solo holds the whole gate; an isolated mark reaching this branch at
+            # all means `already_isolated` -- this process was spawned for this one
+            # test. Either way nothing else is running to see a process-global
+            # patch, so `_mocking`'s guard lets one through.
+            patching_allowed=solo or marks.isolated,
+        )
+        token = _capture.current_test_context.set(test_context)
+        try:
+            # Opened over the same span as the sink, for the same reason: a warning
+            # raised by a fixture this test set up, or by the module teardown it owes
+            # its module, is this test's to answer for.
+            with _warnings.collecting(_warnings.parse_filters(marks.filterwarnings)) as warned:
+                try:
+                    result, module_keys = await _run_one(
+                        record, self.store, timeout=test_timeout, stop=self.stop
+                    )
+                finally:
+                    self.worker_slots.release(slot)
+
+                if module_keys:
+                    self.pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                # Inside this test's current_test_context: if this test is the module's
+                # last, a module-scope fixture's own teardown print is attributed to it.
+                await self.flush_module_scope(record)
+        finally:
+            # Reset only now that nothing else this test's envelope owns --
+            # including, for the module's last test, that module's own fixture
+            # teardown -- could still write into sink.
+            _capture.current_test_context.reset(token)
+
+        # Captured output is only worth keeping for a failing result; warnings are worth
+        # keeping whatever the test did.
+        if result.outcome in FAILING_OUTCOMES:
+            result = dataclasses.replace(
+                result,
+                captured_stdout=sink.out,
+                captured_stderr=sink.err,
+                log_records=tuple(sink.log_records),
+            )
+        recorded = warned.recorded()
+        return dataclasses.replace(result, warnings=recorded) if recorded else result
+
+    async def run_all(self) -> None:
+        asyncio.get_running_loop().set_default_executor(self.executor)
+        # Both of these need the running loop, which is why they are armed from in here
+        # rather than alongside the executor above, and both are undone before this
+        # returns so nothing outlives the call that installed it.
+        restore_sigint = _install_interrupt_handler(self.stop, note=self.stop.note)
+        if self.watchdog is not None:
+            self.watchdog.start()
+        try:
+            async with asyncio.TaskGroup() as tg:
+                for index, record in enumerate(self.records):
+                    tg.create_task(self.dispatch_one(index, record))
+        finally:
+            if self.watchdog is not None:
+                self.watchdog.stop()
+            restore_sigint()
+
+
+def run_suite(
     records: list[TestRecord],
     *,
     concurrency: int = DEFAULT_CONCURRENCY,
@@ -919,24 +1244,15 @@ def run_suite(  # noqa: C901
     `KeyboardInterrupt`/`SystemExit` raised by any test aborts the whole call and
     nothing is returned.
     """
-    if concurrency < 1:
-        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
-    if maxfail is not None and maxfail < 1:
-        raise ValueError(f"maxfail must be >= 1, got {maxfail}")
-    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
-        raise ValueError(f"timeout must be a positive, finite number of seconds, got {timeout}")
-    if not (math.isfinite(teardown_grace) and teardown_grace > 0):
-        raise ValueError(
-            f"teardown_grace must be a positive, finite number of seconds, got {teardown_grace}"
-        )
-    if isolated is None and not already_isolated:
-        needs_isolation = next((r for r in records if r.marks.isolated), None)
-        if needs_isolation is not None:
-            raise ValueError(
-                f"{needs_isolation.id!r} is marked @voci.isolated but run_suite was not given "
-                f"isolated=IsolatedConfig(...) -- its subprocess needs rootdir (and the parent's "
-                f"own assertion-rewrite decision) to re-collect it"
-            )
+    _validate_run_args(
+        records,
+        concurrency=concurrency,
+        maxfail=maxfail,
+        timeout=timeout,
+        teardown_grace=teardown_grace,
+        isolated=isolated,
+        already_isolated=already_isolated,
+    )
 
     # Parsed before anything is installed: a malformed spec is a usage error, and one that
     # surfaced after `_capture.install` had swapped out sys.stdout would print into nothing.
@@ -957,351 +1273,127 @@ def run_suite(  # noqa: C901
         test happens to be running -- or, from the watchdog's own thread, under none."""
         print(text, file=capture_setup.real_stderr, flush=True)
 
-    # Set before the try, like `cli.main`'s own hook bookkeeping: if `_mocking.install` itself
-    # raised, the finally must not try to undo something that was never done.
-    guard_installed = False
-    warnings_installed = False
-    unawaited_installed = False
-    #: Set below, once there is a loop to watch; named here so the outer `finally` can stop
-    #: it whatever happened in between.
+    #: Set below, once there is a loop to watch; named here so the inner `finally` below
+    #: can stop it whatever happened in between.
     watchdog: _safety.LoopWatchdog | None = None
     try:
-        # After collection has imported every test module, so a suite that patches has already
-        # brought `unittest.mock` in and this finds it (`_mocking.install`). False when an
-        # enclosing run already installed the guard, whose uninstall is then not ours to do.
-        guard_installed = _mocking.install()
-        # Before `_safety.install`, whose hook the shim this puts in place is what consults.
-        warnings_installed = _warnings.install(session_filters)
-        unawaited_installed = _safety.install()
-        worker_slots = _capture.WorkerSlots(concurrency)
-        gate = AdmissionGate(concurrency)
-        stop = StopController(teardown_grace=teardown_grace, note=note, on_interrupt=on_interrupt)
+        with _installed_for_run(session_filters):
+            worker_slots = _capture.WorkerSlots(concurrency)
+            gate = AdmissionGate(concurrency)
+            stop = StopController(
+                teardown_grace=teardown_grace, note=note, on_interrupt=on_interrupt
+            )
 
-        remaining_by_module: dict[Path, int] = {}
-        for record in records:
-            remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
-        pending_module_keys: dict[Path, list[_di.CacheKey]] = {}
-        #: `maxfail`'s bookkeeping. Read and written only from `dispatch_one` bodies, which
-        #: never `await` between counting a failure and asking `stop` to act on it, so the
-        #: count can't be missed by a task admitted in between.
-        failures = 0
+            # Constructed synchronously, outside the loop, so the finally below can shut
+            # this down directly without going through the loop at all. At least one worker
+            # thread per concurrency slot, so a sync test never waits for a thread while its own
+            # timeout budget runs -- and never fewer than Python's own default, since this is
+            # also the pool a test's `asyncio.to_thread(...)` lands in and a test that fans out
+            # over several threads must not be able to deadlock against itself.
+            executor = _capture.ContextPropagatingExecutor(
+                max_workers=max(concurrency, _default_max_workers()),
+                thread_name_prefix="voci-worker",
+            )
+            if loop_watchdog is not None and loop_watchdog > 0:
+                watchdog = _safety.LoopWatchdog(
+                    loop_watchdog,
+                    report=note,
+                    test_ids=_safety.code_index(records),
+                    in_flight=stop.in_flight,
+                )
 
-        async def dispatch_one(index: int, record: TestRecord) -> None:
-            nonlocal failures
-            # Every test's task is created up front, so a stop is enforced here, as each
-            # one is about to start, rather than by not creating the task at all. A test
-            # that returns without filling its results slot is what shortens the returned
-            # list.
-            if stop.stopping:
-                return
-            # The whole body lives between `gate.acquire()` and `gate.release()`, including
-            # the module-scope flush below, so concurrency=1 is a genuine exact-serial mode:
-            # the next test cannot start until this one's admission -- module teardown
-            # included -- is released.
-            # The record's, not the function's: one `@voci.parametrize` case can carry marks
-            # the next case does not (`voci.case(..., marks=...)`).
-            marks = record.marks
-            tokens = exclusive_tokens_of(record.plan)
-            # One value, computed once and passed to both acquire and release: the two must
-            # agree, or the gate's solo bookkeeping never unwinds.
-            solo = marks.solo or solo_for_patching(record)
-            await gate.acquire(tokens, solo=solo)
-            # A `@voci.timeout(...)` mark overrides the suite-wide budget for this test
-            # alone; `marks.timeout is None` is the common case of "no override", not "no
-            # limit" -- that's what the bare `timeout` parameter already means.
-            test_timeout = marks.timeout if marks.timeout is not None else timeout
-            started = time.monotonic()
+            session = _Session(
+                records=records,
+                store=store,
+                gate=gate,
+                stop=stop,
+                worker_slots=worker_slots,
+                capture_setup=capture_setup,
+                executor=executor,
+                watchdog=watchdog,
+                on_result=on_result,
+                maxfail=maxfail,
+                isolated=isolated,
+                already_isolated=already_isolated,
+                loop_watchdog=loop_watchdog,
+                filterwarnings=filterwarnings,
+                timeout=timeout,
+                results=results,
+            )
+
             try:
-                # Re-checked now that this test holds a slot, which is the moment that
-                # actually decides whether it runs: every task reaches the check above
-                # before the first result exists, since they are all created together and
-                # then queue on the gate. Registering for cancellation immediately after,
-                # with no `await` in between, is what leaves no window in which a test is
-                # running but a stop can't reach it.
-                if stop.stopping:
-                    return
-                stop.register(record.id)
+                # Not `with asyncio.Runner() as runner:` -- Runner.close()'s own automatic
+                # executor shutdown can raise RuntimeError when a custom default executor was
+                # installed (as `_Session.run_all` does) and the loop's last run propagated an
+                # uncaught KeyboardInterrupt/SystemExit. runner.close() is called explicitly
+                # below inside contextlib.suppress(RuntimeError) instead.
+                runner = asyncio.Runner()
+                # A KeyboardInterrupt/SystemExit raised by a test or fixture teardown escapes
+                # this runner's loop mid-flight (see the two comments below), which leaves the
+                # `run_all` task -- or one `asyncio.Runner.close()` resumes while cancelling
+                # leftovers -- holding an exception nothing ever calls `.exception()` on. Both
+                # exception types already propagate out of `run_suite` deliberately (that's the
+                # whole point of the two comments below); logging them again as "Task exception
+                # was never retrieved" is asyncio's bookkeeping noise, not a real error.
+                runner.get_loop().set_exception_handler(_ignore_retrieved_base_exceptions)
                 try:
-                    result = await run_envelope(record, marks, test_timeout, solo=solo)
-                except asyncio.CancelledError:
-                    # Only reached when the cancellation landed somewhere `_run_one` isn't
-                    # -- between it and the module-scope flush below, or inside that flush
-                    # -- since `_run_one` claims its own. Filling the slot here anyway is
-                    # what keeps "every admitted test reports something" true.
-                    if not stop.claim():
-                        raise
-                    result = _cancelled_result(record, time.monotonic() - started, stop)
-                finally:
-                    stop.unregister()
-
-                # Inside the gate, ahead of the release below, and with no `await`
-                # between this and the release: releasing is what admits the next
-                # waiting test, so counting the failure afterwards would race that
-                # test's own `stopping` check and let it start anyway.
-                if maxfail is not None and result.outcome in FAILING_OUTCOMES:
-                    failures += 1
-                    if failures >= maxfail:
-                        stop.request("maxfail")
-            finally:
-                # Skipped only when the run was aborted outright: this task is then being
-                # finalized by the garbage collector, long after the loop was closed -- and
-                # admitting a waiter means completing its future, which still needs that
-                # loop. There is no test left waiting on the gate to admit anyway.
-                if not stop.aborting:
-                    gate.release(tokens, solo=solo)
-
-            # Fired in real completion order, before the logical-order results slot
-            # below is written, so a streaming reporter never sees a filled slot
-            # for a test it hasn't been told about yet.
-            if on_result is not None:
-                on_result(result)
-            results[index] = result
-
-        async def flush_module_scope(record: TestRecord) -> None:
-            """Release `record`'s module's fixtures, if `record` was the last of its module
-            to finish. A stop landing in here is claimed rather than allowed to propagate:
-            the test itself is already done and has a real result, which a cancellation
-            escaping this far would replace with a synthetic CANCELLED one."""
-            remaining_by_module[record.path] -= 1
-            if remaining_by_module[record.path] != 0:
-                return
-            keys = pending_module_keys.pop(record.path, None)
-            if not keys:
-                return
-            try:
-                await _teardown_module_scope(
-                    store,
-                    keys,
-                    path=record.path,
-                    real_stderr=capture_setup.real_stderr,
-                    # Time-boxed once the run is stopping, for the same reason a cancelled
-                    # test's own teardown is.
-                    grace=stop.teardown_grace if stop.stopping else None,
-                )
-            except asyncio.CancelledError:
-                # Never re-raised: this test has already earned a result, and a cancellation
-                # escaping here would replace it with nothing at all. `claim` when the stop
-                # is what delivered it, so the task is left un-cancelled for the rest of its
-                # envelope; a sibling's collateral cancellation is simply reported.
-                stop.claim()
-                stop.note(
-                    f"voci: module-scope fixtures ({record.path}) were left mid-teardown -- "
-                    f"they may not have been fully released"
-                )
-
-        async def run_envelope(
-            record: TestRecord, marks: Marks, test_timeout: float | None, *, solo: bool
-        ) -> TestResult:
-            """One admitted test's whole setup/call/teardown envelope, including the
-            module-scope flush it owes its module if it turns out to be its last test.
-            Split out of `dispatch_one` so that everything a stop can cancel sits inside one
-            `try`, and everything that must still happen afterwards -- the gate release, the
-            result -- sits outside it."""
-            if marks.isolated and not already_isolated:
-                if isolated is None:
-                    # Unreachable: run_suite checks this for every isolated-marked
-                    # record before any test is dispatched.
-                    raise RuntimeError(
-                        f"{record.id!r} is marked @voci.isolated with no IsolatedConfig -- "
-                        f"run_suite's own upfront check should have caught this"
-                    )
-                # No Sink/TestContext here -- this test's whole setup/call/teardown
-                # envelope, capture included, runs inside the subprocess's own
-                # run_suite call and comes back already resolved.
-                result = _result_from_json(
-                    await _isolated.run_isolated(
-                        record,
-                        config=isolated,
-                        timeout=test_timeout,
-                        basetemp_root=capture_setup.basetemp_root,
-                        scratch_dir=capture_setup.basetemp_root / ".voci-isolated",
-                        note=note,
-                        loop_watchdog=loop_watchdog,
-                        teardown_grace=teardown_grace,
-                        # The session's filters only: the subprocess re-collects the test
-                        # from its own source, so its `@voci.filterwarnings` mark comes
-                        # back with it rather than being handed over.
-                        filterwarnings=filterwarnings,
-                    )
-                )
-                # `run_isolated` kills its subprocess and reports rather than propagating a
-                # cancellation, so a stop that reached this test arrives here as a returned
-                # error result. Claiming it turns that into the CANCELLED it actually is.
-                if stop.claim():
-                    return _cancelled_result(record, result.duration, stop)
-                # No current_test_context to attribute this flush to -- it falls back to
-                # the session sink, same as any output with no test actively running would.
-                await flush_module_scope(record)
-                return result
-
-            # A fresh Sink and TestContext for this one test, published via
-            # current_test_context.set() for the duration of everything below --
-            # not just _run_one, but this test's own module-scope-fixture flush
-            # too, if it turns out to be the module's last test. _run_one itself
-            # never references _capture at all; every builtin-fixture provider and
-            # the installed Router/log handler read current_test_context for
-            # themselves, so wrapping the call is enough to attribute everything it
-            # does, transitively, to this test.
-            slot = worker_slots.acquire()
-            sink = _capture.Sink(label=record.id)
-            test_context = _capture.TestContext(
-                sink=sink,
-                tags=marks.tags,
-                timeout=test_timeout,
-                worker=slot,
-                # Solo holds the whole gate; an isolated mark reaching this branch at
-                # all means `already_isolated` -- this process was spawned for this one
-                # test. Either way nothing else is running to see a process-global
-                # patch, so `_mocking`'s guard lets one through.
-                patching_allowed=solo or marks.isolated,
-            )
-            token = _capture.current_test_context.set(test_context)
-            try:
-                # Opened over the same span as the sink, for the same reason: a warning
-                # raised by a fixture this test set up, or by the module teardown it owes
-                # its module, is this test's to answer for.
-                with _warnings.collecting(_warnings.parse_filters(marks.filterwarnings)) as warned:
                     try:
-                        result, module_keys = await _run_one(
-                            record, store, timeout=test_timeout, stop=stop
-                        )
+                        runner.run(session.run_all())
                     finally:
-                        worker_slots.release(slot)
-
-                    if module_keys:
-                        pending_module_keys.setdefault(record.path, []).extend(module_keys)
-                    # Inside this test's current_test_context: if this test is the module's
-                    # last, a module-scope fixture's own teardown print is attributed to it.
-                    await flush_module_scope(record)
+                        _teardown_best_effort(
+                            runner,
+                            store.aclose(),
+                            what="session-scope fixtures",
+                            real_stderr=capture_setup.real_stderr,
+                            # Same reasoning as a cancelled test's own teardown: a stopped run
+                            # waits a bounded time for a clean release and then stops waiting.
+                            grace=stop.teardown_grace if stop.stopping else None,
+                        )
+                        # wait=False: blocking here to join worker threads would turn a Ctrl-C
+                        # into a hang if one of them is stuck. cancel_futures=True drops
+                        # whatever was still queued; nothing dispatched here ever needs to
+                        # finish once the run is over.
+                        executor.shutdown(wait=False, cancel_futures=True)
+                finally:
+                    # A separate, outer finally rather than folded into the one above: this
+                    # ordering was verified to avoid a subtle interaction where store.aclose()
+                    # could otherwise leave an abandoned task under certain interrupt shapes.
+                    #
+                    # close() can itself raise KeyboardInterrupt/SystemExit (not just the
+                    # documented RuntimeError) when sibling tasks were still pending -- letting
+                    # that propagate is correct, and still safe: the outer try below guarantees
+                    # _capture.uninstall() still runs regardless of what leaves this finally.
+                    with contextlib.suppress(RuntimeError):
+                        if stop.aborting:
+                            # `Runner.close()` cancels whatever is left and then waits for it,
+                            # which is the one thing a second Ctrl-C means not to do: the tasks
+                            # still here are the ones that ignored the first cancellation, and
+                            # waiting on them again would hang the abort. The loop is closed out
+                            # from under them instead, with its exception handler silenced first:
+                            # abandoning those tasks is what the abort *is*, so asyncio's reports
+                            # about them ("Task was destroyed but it is pending", a shielded
+                            # release that outlived its loop) describe the instruction rather than
+                            # a problem with it.
+                            aborted_loop = runner.get_loop()
+                            aborted_loop.set_exception_handler(lambda _loop, _context: None)
+                            _close_abandoned_tasks(aborted_loop)
+                            aborted_loop.close()
+                        else:
+                            runner.close()
             finally:
-                # Reset only now that nothing else this test's envelope owns --
-                # including, for the module's last test, that module's own fixture
-                # teardown -- could still write into sink.
-                _capture.current_test_context.reset(token)
-
-            # Captured output is only worth keeping for a failing result; warnings are worth
-            # keeping whatever the test did.
-            if result.outcome in FAILING_OUTCOMES:
-                result = dataclasses.replace(
-                    result,
-                    captured_stdout=sink.out,
-                    captured_stderr=sink.err,
-                    log_records=tuple(sink.log_records),
-                )
-            recorded = warned.recorded()
-            return dataclasses.replace(result, warnings=recorded) if recorded else result
-
-        # Constructed synchronously, outside the loop, so the finally below can shut
-        # this down directly without going through the loop at all. At least one worker
-        # thread per concurrency slot, so a sync test never waits for a thread while its own
-        # timeout budget runs -- and never fewer than Python's own default, since this is
-        # also the pool a test's `asyncio.to_thread(...)` lands in and a test that fans out
-        # over several threads must not be able to deadlock against itself.
-        executor = _capture.ContextPropagatingExecutor(
-            max_workers=max(concurrency, _default_max_workers()),
-            thread_name_prefix="voci-worker",
-        )
-        if loop_watchdog is not None and loop_watchdog > 0:
-            watchdog = _safety.LoopWatchdog(
-                loop_watchdog,
-                report=note,
-                test_ids=_safety.code_index(records),
-                in_flight=stop.in_flight,
-            )
-
-        async def run_all() -> None:
-            asyncio.get_running_loop().set_default_executor(executor)
-            # Both of these need the running loop, which is why they are armed from in here
-            # rather than alongside the executor above, and both are undone before this
-            # returns so nothing outlives the call that installed it.
-            restore_sigint = _install_interrupt_handler(stop, note=note)
-            if watchdog is not None:
-                watchdog.start()
-            try:
-                async with asyncio.TaskGroup() as tg:
-                    for index, record in enumerate(records):
-                        tg.create_task(dispatch_one(index, record))
-            finally:
+                # The watchdog is stopped here as well as in `run_all`: a `KeyboardInterrupt`
+                # raised by the signal handler leaves the loop without ever resuming `run_all`,
+                # so that coroutine's own `finally` never runs. Stopping twice is a no-op;
+                # leaving the thread behind would have it report the frozen heartbeat of a
+                # loop that no longer exists, into whatever runs next in this process. Nested
+                # inside `_installed_for_run` so it stops before that context's own uninstalls
+                # run, the same order this had before the split.
                 if watchdog is not None:
                     watchdog.stop()
-                restore_sigint()
-
-        # Not `with asyncio.Runner() as runner:` -- Runner.close()'s own automatic
-        # executor shutdown can raise RuntimeError when a custom default executor was
-        # installed (as run_all does above) and the loop's last run propagated an
-        # uncaught KeyboardInterrupt/SystemExit. runner.close() is called explicitly
-        # below inside contextlib.suppress(RuntimeError) instead.
-        runner = asyncio.Runner()
-        # A KeyboardInterrupt/SystemExit raised by a test or fixture teardown escapes
-        # this runner's loop mid-flight (see the two comments below), which leaves the
-        # `run_all` task -- or one `asyncio.Runner.close()` resumes while cancelling
-        # leftovers -- holding an exception nothing ever calls `.exception()` on. Both
-        # exception types already propagate out of `run_suite` deliberately (that's the
-        # whole point of the two comments below); logging them again as "Task exception
-        # was never retrieved" is asyncio's bookkeeping noise, not a real error.
-        runner.get_loop().set_exception_handler(_ignore_retrieved_base_exceptions)
-        try:
-            try:
-                runner.run(run_all())
-            finally:
-                _teardown_best_effort(
-                    runner,
-                    store.aclose(),
-                    what="session-scope fixtures",
-                    real_stderr=capture_setup.real_stderr,
-                    # Same reasoning as a cancelled test's own teardown: a stopped run
-                    # waits a bounded time for a clean release and then stops waiting.
-                    grace=stop.teardown_grace if stop.stopping else None,
-                )
-                # wait=False: blocking here to join worker threads would turn a Ctrl-C
-                # into a hang if one of them is stuck. cancel_futures=True drops
-                # whatever was still queued; nothing dispatched here ever needs to
-                # finish once the run is over.
-                executor.shutdown(wait=False, cancel_futures=True)
-        finally:
-            # A separate, outer finally rather than folded into the one above: this
-            # ordering was verified to avoid a subtle interaction where store.aclose()
-            # could otherwise leave an abandoned task under certain interrupt shapes.
-            #
-            # close() can itself raise KeyboardInterrupt/SystemExit (not just the
-            # documented RuntimeError) when sibling tasks were still pending -- letting
-            # that propagate is correct, and still safe: the outer try below guarantees
-            # _capture.uninstall() still runs regardless of what leaves this finally.
-            with contextlib.suppress(RuntimeError):
-                if stop.aborting:
-                    # `Runner.close()` cancels whatever is left and then waits for it,
-                    # which is the one thing a second Ctrl-C means not to do: the tasks
-                    # still here are the ones that ignored the first cancellation, and
-                    # waiting on them again would hang the abort. The loop is closed out
-                    # from under them instead, with its exception handler silenced first:
-                    # abandoning those tasks is what the abort *is*, so asyncio's reports
-                    # about them ("Task was destroyed but it is pending", a shielded
-                    # release that outlived its loop) describe the instruction rather than
-                    # a problem with it.
-                    aborted_loop = runner.get_loop()
-                    aborted_loop.set_exception_handler(lambda _loop, _context: None)
-                    _close_abandoned_tasks(aborted_loop)
-                    aborted_loop.close()
-                else:
-                    runner.close()
     finally:
-        # Guaranteed to run whether the try above completed normally, raised a real
+        # Guaranteed to run whether the run above completed normally, raised a real
         # KeyboardInterrupt/SystemExit, or raised for some other reason entirely --
-        # every statement between install() succeeding and here lives inside this try.
-        #
-        # The watchdog is stopped here as well as in `run_all`: a `KeyboardInterrupt`
-        # raised by the signal handler leaves the loop without ever resuming `run_all`,
-        # so that coroutine's own `finally` never runs. Stopping twice is a no-op;
-        # leaving the thread behind would have it report the frozen heartbeat of a loop
-        # that no longer exists, into whatever runs next in this process.
-        if watchdog is not None:
-            watchdog.stop()
-        if guard_installed:
-            _mocking.uninstall()
-        if unawaited_installed:
-            _safety.uninstall()
-        if warnings_installed:
-            _warnings.uninstall()
+        # everything from `_installed_for_run` down lives inside this try.
         if unattributed_output is not None:
             unattributed_output.extend(_capture.unattributed_sections(capture_setup.session_sink))
         # Before _capture.uninstall(), so `real_stderr` is still the stream nothing else is
