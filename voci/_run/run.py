@@ -931,17 +931,23 @@ class _Session:
     isolated: IsolatedConfig | None
     already_isolated: bool
     loop_watchdog: float | None
-    teardown_grace: float
     filterwarnings: Sequence[str]
     timeout: float | None
-    note: Callable[[str], None]
     results: list[TestResult | None]
-    remaining_by_module: dict[Path, int]
+    # `dict.fromkeys`-style default, computed from `records` in `__post_init__`: derived
+    # rather than taken as a constructor argument, so it can never disagree with `records`.
+    remaining_by_module: dict[Path, int] = field(init=False)
     pending_module_keys: dict[Path, list[_di.CacheKey]] = field(default_factory=dict)
     #: `maxfail`'s bookkeeping. Read and written only from `dispatch_one` bodies, which
     #: never `await` between counting a failure and asking `stop` to act on it, so the
     #: count can't be missed by a task admitted in between.
     failures: int = 0
+
+    def __post_init__(self) -> None:
+        remaining_by_module: dict[Path, int] = {}
+        for record in self.records:
+            remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
+        self.remaining_by_module = remaining_by_module
 
     async def dispatch_one(self, index: int, record: TestRecord) -> None:
         # Every test's task is created up front, so a stop is enforced here, as each
@@ -1071,9 +1077,9 @@ class _Session:
                     timeout=test_timeout,
                     basetemp_root=self.capture_setup.basetemp_root,
                     scratch_dir=self.capture_setup.basetemp_root / ".voci-isolated",
-                    note=self.note,
+                    note=self.stop.note,
                     loop_watchdog=self.loop_watchdog,
-                    teardown_grace=self.teardown_grace,
+                    teardown_grace=self.stop.teardown_grace,
                     # The session's filters only: the subprocess re-collects the test
                     # from its own source, so its `@voci.filterwarnings` mark comes
                     # back with it rather than being handed over.
@@ -1152,7 +1158,7 @@ class _Session:
         # Both of these need the running loop, which is why they are armed from in here
         # rather than alongside the executor above, and both are undone before this
         # returns so nothing outlives the call that installed it.
-        restore_sigint = _install_interrupt_handler(self.stop, note=self.note)
+        restore_sigint = _install_interrupt_handler(self.stop, note=self.stop.note)
         if self.watchdog is not None:
             self.watchdog.start()
         try:
@@ -1278,10 +1284,6 @@ def run_suite(
                 teardown_grace=teardown_grace, note=note, on_interrupt=on_interrupt
             )
 
-            remaining_by_module: dict[Path, int] = {}
-            for record in records:
-                remaining_by_module[record.path] = remaining_by_module.get(record.path, 0) + 1
-
             # Constructed synchronously, outside the loop, so the finally below can shut
             # this down directly without going through the loop at all. At least one worker
             # thread per concurrency slot, so a sync test never waits for a thread while its own
@@ -1314,12 +1316,9 @@ def run_suite(
                 isolated=isolated,
                 already_isolated=already_isolated,
                 loop_watchdog=loop_watchdog,
-                teardown_grace=teardown_grace,
                 filterwarnings=filterwarnings,
                 timeout=timeout,
-                note=note,
                 results=results,
-                remaining_by_module=remaining_by_module,
             )
 
             try:

@@ -76,7 +76,12 @@ item lands as its own PR rather than one big one, per the list below.
   `_mocking`/`_warnings`/`_safety` install/uninstall dance (including its partial-failure-cleanup
   case) split into a `_installed_for_run` context manager, nested so the watchdog still stops
   before those uninstalls run, preserving the original teardown order. All under 10; no behavior
-  change — `just check` and `just py run 3.13 pytest tests/run/ -k run_suite` both green.
+  change — `just check`, `just py run 3.13 pyrefly check`, and `just py run 3.13 pytest
+  tests/run/ -k run_suite` all green. An 8-angle `/code-review high` caught `_Session` carrying
+  `note`/`teardown_grace` fields that duplicated `self.stop.note`/`self.stop.teardown_grace`
+  (used inconsistently across its methods) and a `remaining_by_module` hand-built outside the
+  class from the same `records` it also held — both fixed (the duplicate fields dropped,
+  `remaining_by_module` derived in `__post_init__`); nothing else survived review.
 
 ### To do
 
