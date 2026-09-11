@@ -32,22 +32,30 @@ or also `[tool.voci]`), whether a skipped test is reported and how loudly, and h
 bail-out set is — the conditions that force a full run regardless of the map. Where those land is
 a call about how much risk is worth the time saved, which depends on how the suite is used.
 
-**Recommendation: Option A (static import graph) first**, on failure direction rather than cost.
-It over-approximates — it can only run too many tests, never too few — and needs no tracing and no
-per-test map. It is not free: it adds an AST pass over first-party source that nothing currently
-pays for, and needs a first-party source-root concept that voci does not have. Both are quantified
-below.
+**Recommendation: Option B (tracing), if this is built at all.** An earlier draft recommended
+Option A first, on the grounds that it over-approximates and so fails safely. Measuring its
+selectivity withdrew that: on `oss/fastapi` the median source change selects **56% of the suite**,
+because a re-export hub gives every importer of the package a dependency on everything behind it
+(see "The hub problem"). A 2x reduction does not pay for a new config surface, a new AST pass over
+first-party source, and a resolution rule that has to handle `src/` layouts, workspaces and
+non-editable installs.
 
-Option B (tracing) is a precision upgrade, and its risks are easier to judge once the coarse
-version is in and its selectivity has been measured on a real suite. Going straight to B is
-reasonable if function-level precision is the point of doing this at all — the attribution
-mechanism it depends on is prototyped and works.
+Option A's safety argument still stands and its failure direction is still the better one. It is
+the selectivity that does not hold up, and a selection feature that rarely deselects is not worth
+its own maintenance.
+
+Option B's attribution mechanism is prototyped and works, and the hub problem does not apply to it:
+importing a module is not executing it. Its exposure to under-approximation is real and is
+enumerated below — much of that list applies to both options.
+
+The third answer is **don't build it**, and it is not a weak one. `--watch` plus `--lf` already
+covers the fast inner loop, which is where most of the value is.
 
 ## Work to do
 
 Milestones are alternatives, not a sequence.
 
-### Option A — static import graph (recommended first step)
+### Option A — static import graph
 
 Over-approximating, no runtime instrumentation, no attribution problem.
 
@@ -85,7 +93,7 @@ Cold build is seconds on a large tree. Steady state is the warm column, because 
 is a hash comparison and never a reparse — the same fingerprinting discipline `index.py` already
 applies to collection.
 
-### Option B — traced per-test dependency map
+### Option B — traced per-test dependency map (recommended, if building)
 
 Function-level precision. Everything in Option A's bail-out set still applies.
 
@@ -178,6 +186,102 @@ So Option A's first task is a config surface plus a resolution rule, and its "ch
 differently with that included. Option B sidesteps this entirely, which narrows the gap between
 the two more than the original recommendation allowed for — Option A is still the safer direction
 because it over-approximates, but it is not the free one.
+
+## Failure modes
+
+Two directions, with very different costs. **Under-approximation** — a real dependency the graph
+cannot see — skips a test that should have run, and reports green. **Over-approximation** — a
+dependency that is in the graph but not in reality — runs tests that did not need to, costing time
+only.
+
+### Under-approximation: dependencies with no import statement
+
+- **`mock.patch` targets are strings.** A test patching `"myapp.services.client"` depends hard on
+  that module with no import naming it. voci already extracts these statically —
+  `_mocking.patching_of` returns `targets: tuple[str, ...]` — so they can be resolved and unioned
+  into the closure. This one is mitigable, and voci is better placed to do it than a plugin would
+  be.
+- **Dynamic imports.** `importlib.import_module(name)`, `__import__`, entry points, plugin
+  registries, anything assembling a module name at runtime. No static scan resolves these.
+- **Framework string references.** Django `INSTALLED_APPS`, SQLAlchemy registry names, pydantic
+  forward refs, any "dotted path in a config value" pattern.
+- **`voci.use(...)` on a package `__init__.py`.** The fixture is an imported object, so the
+  declaring module's own imports are visible — but only if the closure includes the enclosing
+  `__init__.py` chain (`requires.package_inits`). Miss that and a test loses a dependency it never
+  names.
+- **Subprocesses**, including `@voci.isolated`, whose imports happen somewhere the parent's graph
+  is not looking.
+
+### Under-approximation: dependencies that are not Python
+
+Nothing here is reachable by parsing imports, and each needs either a declared association or a
+rule that forces a full run:
+
+JSON/YAML/TOML fixture data · golden and snapshot files · SQL schema and migrations · Jinja and
+HTML templates · `.env` files · certificates and keys · binary assets · generated code, where the
+real dependency is the generator's input rather than its output.
+
+### Under-approximation: state outside the file tree
+
+- **`os.environ`** from the shell — invisible, and frequently what a test's behaviour turns on.
+- **`[tool.voci]` itself.** `env` injects environment variables, `filterwarnings` changes which
+  warnings are errors, `timeout` and `concurrency` change what fails — `concurrency` especially,
+  since it decides whether a race surfaces at all. A config edit changes outcomes with no `.py`
+  file touched.
+- **Installed dependencies.** A bumped version in `uv.lock` or a mutated `site-packages` is a real
+  behaviour change; the graph is rooted in first-party code and never sees it.
+- **Interpreter version.** voci supports 3.13 and 3.14 and they differ where it matters — PEP 649
+  annotations, warning filters. A map built under one is not valid under the other.
+- **Compiled extensions**, rebuilt with no `.py` change.
+- **Ambient machine state**: locale, timezone, platform, CPU count.
+- **External services**: database schema and seed data, network fixtures, container images.
+
+### Under-approximation: test-side semantics
+
+- **`skipif` conditions** are evaluated per run, so the set of tests that would run can change with
+  no file change at all.
+- **Parametrization over dynamic data** — cases read from a file, env, or a database — changes
+  both the case set and the ids that the map is keyed on.
+- **Order dependence**: a test that passes only because another ran first has a dependency the
+  graph has no way to express.
+
+### Over-approximation: cheap to be wrong, expensive to be useless
+
+- **mtime churn.** A branch switch or rebase rewrites mtimes without changing content. Content
+  hashing makes this a non-event; `(mtime, size)` alone does not.
+- **`if TYPE_CHECKING:` imports** are in the graph and absent at runtime.
+- **Re-export hubs** — the one that decides whether this feature is worth building.
+
+### The hub problem
+
+A package `__init__.py` that re-exports its submodules gives every importer of the package a
+dependency on all of them. Import-graph selection then degenerates, because import granularity
+cannot distinguish "imported the package" from "used this part of it".
+
+Measured on `oss/fastapi` — 593 test modules, 48 `fastapi/` modules, transitive closure per test
+file, asking what fraction of the suite a change to each source module selects:
+
+| | |
+| --- | --- |
+| median | **56.0%** |
+| mean | 38.3% |
+| modules selecting >50% of the suite | 32 / 48 |
+| modules selecting <10% of the suite | 16 / 48 |
+
+The clustering at exactly 56.0% is the hub: `fastapi/__init__.py` re-exports `routing`,
+`responses`, `requests`, `websockets`, `exceptions` and the rest, and 56% of test modules reach
+that hub, so every module behind it inherits the hub's entire fan-in. Changing `fastapi/routing.py`
+reruns 56% of the suite; so does changing `fastapi/types.py`.
+
+So on a hub-style package — which is the normal way to lay out a Python library — Option A buys
+roughly a 2x reduction, not the 10x the feature is usually sold on. On a suite whose tests import
+deep modules directly it does much better, and this repo's own `tests/` mostly import `voci._*`
+submodules rather than the `voci` hub.
+
+**This is specific to import granularity, and Option B does not share it.** Importing a module is
+not executing it: a test that imports the `fastapi` hub but only ever calls three functions in
+`routing` depends, under tracing, on those three functions. The hub collapses the graph precisely
+because it is a static relation over files rather than a record of what ran.
 
 ## Risks
 

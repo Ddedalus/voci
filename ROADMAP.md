@@ -32,7 +32,9 @@ JUnit XML and GitHub annotations
 after code modification. Assessment and options in
 [plans/testmon-plan.md](plans/testmon-plan.md) — buildable, with both hard problems
 prototyped. Departs from the rule every existing cache keeps (order and predict, never
-skip), so the trade to price is a silent false green against the time saved.
+skip), so the trade to price is a silent false green against the time saved. The static
+import-graph variant measured badly on selectivity (median change reruns 56% of fastapi's
+suite, re-export hubs), so it is tracing or nothing.
  
 **Benchmark** A published, reproducible benchmark against pytest and `pytest-xdist` on a real suite.
 
