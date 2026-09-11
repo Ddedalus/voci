@@ -20,8 +20,8 @@ Correctness gaps, duplication, and hardcoded plugin-specific mechanisms found by
 
 Code review of voci so far, coverage gaps, clean CI, drop fat, identify duplication etc.
 
-Complexity concentrated in a handful of `voci-migrate` functions (line-count + `ruff --select
-C901` sweep, general lint and pyrefly otherwise clean): `plans/complexity-reduction-plan.md`.
+The `C901` complexity sweep (`plans/complexity-reduction-plan.md`) is done — the gate is on and
+holds everywhere.
 
 ### Reporting
 JUnit XML and GitHub annotations
