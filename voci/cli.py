@@ -761,10 +761,12 @@ def _option_source(cli_value: object, cli_name: str, config: _config.Config, key
 
 def _resolve_options(
     args: argparse.Namespace, config: _config.Config
-) -> tuple[str | None, _ResolvedOptions | None]:
+) -> tuple[str | None, _ResolvedOptions]:
     """CLI > `[tool.voci]` > built-in default for concurrency/timeout/loop-watchdog, via
     `_resolve_layered` -- `--serial` joins the CLI tier, same rank as `--concurrency`
-    itself, whichever of the two spellings was used -- and the first one out of range."""
+    itself, whichever of the two spellings was used -- and the first one out of range.
+    The `_ResolvedOptions` alongside a usage error is meaningless and must not be read.
+    """
     effective_concurrency = _resolve_layered(
         1 if args.serial else args.concurrency, config.concurrency, _run.DEFAULT_CONCURRENCY
     )
@@ -772,16 +774,17 @@ def _resolve_options(
     effective_watchdog = _resolve_layered(
         args.loop_watchdog, config.loop_watchdog, _safety.DEFAULT_LOOP_WATCHDOG
     )
+    unset = _ResolvedOptions(0, None, 0)
     if effective_concurrency < 1:
         source = _option_source(args.concurrency, "--concurrency", config, "concurrency")
-        return f"{source} must be a positive integer, got {effective_concurrency}", None
+        return f"{source} must be a positive integer, got {effective_concurrency}", unset
     if effective_timeout is not None and not (
         math.isfinite(effective_timeout) and effective_timeout > 0
     ):
         source = _option_source(args.timeout, "--timeout", config, "timeout")
         return (
             f"{source} must be a positive, finite number of seconds, got {effective_timeout}",
-            None,
+            unset,
         )
     # 0 is a real value here (the diagnostic off) rather than a rejected one, so only
     # negative and non-finite values are usage errors.
@@ -790,17 +793,18 @@ def _resolve_options(
         return (
             f"{source} must be zero (off) or a positive, finite number of seconds, got "
             f"{effective_watchdog}",
-            None,
+            unset,
         )
     return None, _ResolvedOptions(effective_concurrency, effective_timeout, effective_watchdog)
 
 
 def _resolve_roots(
     targets: list[_targets.Target], config: _config.Config
-) -> tuple[str | None, list[Path] | None]:
-    """PATHS > configured testpaths > the rootdir, or the first invalid testpaths entry.
-    config.testpaths entries are written relative to wherever [tool.voci] was declared,
-    so they're resolved against config.rootdir here, not cwd().
+) -> tuple[str | None, list[Path]]:
+    """PATHS > configured testpaths > the rootdir, or the first invalid testpaths entry
+    (the `list[Path]` alongside it is then empty and must not be read). config.testpaths
+    entries are written relative to wherever [tool.voci] was declared, so they're
+    resolved against config.rootdir here, not cwd().
 
     is not None, not truthiness: testpaths = [] is a real, if unusual, thing to write
     and means "nothing" -- truthiness would silently run the built-in default instead.
@@ -813,7 +817,7 @@ def _resolve_roots(
         # entry must not silently look like an honest empty selection either.
         for root, raw in zip(roots, config.testpaths, strict=True):
             if not root.exists():
-                return f"{config.source}: testpaths entry does not exist: {raw!r}", None
+                return f"{config.source}: testpaths entry does not exist: {raw!r}", []
         return None, roots
     # config.source, not config.anchored: a configured project keeps resolving this tier
     # against its rootdir exactly as it always has -- a table that sets no testpaths is a
@@ -877,7 +881,6 @@ def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | N
     problem, options = _resolve_options(args, config)
     if problem is not None:
         return problem, None
-    assert options is not None
     # Both tiers, in precedence order rather than layered like the scalars above: warning
     # filters accumulate, and the last one to match a warning is the one that decides it,
     # so a `-W` on the command line simply follows what [tool.voci] already said. Parsed
@@ -888,7 +891,6 @@ def _prepare_run(args: argparse.Namespace) -> tuple[str | None, _PreparedRun | N
     problem, roots = _resolve_roots(targets, config)
     if problem is not None:
         return problem, None
-    assert roots is not None
 
     return None, _PreparedRun(
         id_selection=id_selection,
@@ -1067,13 +1069,41 @@ def _installed_session(
                 os.environ[key] = prev_value
 
 
-def _print_run_header(
-    args: argparse.Namespace,
-    config: _config.Config,
-    setup: _rewrite.AssertionSetup,
-    last_run: _cache.LastRun,
-    verbosity: int,
-) -> None:
+@dataclass
+class _RunSession:
+    """State the execute phase (everything `_installed_session` makes possible) threads
+    from one sub-phase to the next, one object passed around rather than the same
+    fields repeated at every call site -- built once `_prepare_run` and the header
+    print are done."""
+
+    args: argparse.Namespace
+    prepared: _PreparedRun
+    setup: _rewrite.AssertionSetup
+    last_run: _cache.LastRun
+    collection_index: _index.Index
+    wall_start: float
+
+    @property
+    def rootdir(self) -> Path:
+        return self.prepared.config.rootdir
+
+    @property
+    def verbosity(self) -> int:
+        return (1 if self.args.verbose else 0) - (1 if self.args.quiet else 0)
+
+    @property
+    def replay_last_failed(self) -> bool:
+        # An empty cache leaves both flags meaning "the whole suite, in logical order",
+        # which is what makes --lf safe to leave in a shell alias -- a first run, or one
+        # that went green, runs everything rather than nothing.
+        return self.args.last_failed and not self.last_run.is_empty()
+
+    @property
+    def replay_failed_first(self) -> bool:
+        return self.args.failed_first and not self.last_run.is_empty()
+
+
+def _print_run_header(session: _RunSession) -> None:
     """The two header lines a run at non-negative verbosity prints before it does
     anything else: the assertion-rewrite decision and which config (if any) it read --
     both transparency, so neither is silently inferred from behavior alone. Skipped
@@ -1081,47 +1111,26 @@ def _print_run_header(
     which is exactly the part a quiet run is asking to do without; --co-json because its
     contract is one line of JSON on stdout, nothing else, regardless of verbosity.
     """
-    if verbosity < 0 or args.co_json:
+    args = session.args
+    if session.verbosity < 0 or args.co_json:
         return
-    header = setup.header_line()
+    header = session.setup.header_line()
     if header is not None:
         print(header)
     # Same transparency plan's own header line gives the assertion-rewrite decision --
     # a run silently picking up config the user forgot was there is exactly the kind of
     # surprise this avoids. _friendly_path: this is usually a couple of directories
     # under cwd (or cwd itself), and the absolute form is just noise at that distance.
-    if config.source is not None:
-        print(f"config: {_friendly_path(config.source)}")
+    config_source = session.prepared.config.source
+    if config_source is not None:
+        print(f"config: {_friendly_path(config_source)}")
     else:
         print("config: none")
     # Said out loud rather than left to be inferred from the test count: the difference
     # between "--lf ran four tests" and "--lf ran the suite" is the whole point of asking.
-    if (args.last_failed or args.failed_first) and last_run.is_empty():
+    if (args.last_failed or args.failed_first) and session.last_run.is_empty():
         flag = "--lf" if args.last_failed else "--ff"
         print(f"{flag}: nothing recorded -- running the whole suite")
-
-
-@dataclass
-class _RunSession:
-    """State the execute phase (everything `_installed_session` makes possible) threads
-    from one sub-phase to the next -- built once `_prepare_run` and the header print are
-    done. Most of what follows needs most of what came before it, the same shape of
-    problem `_run.run`'s own `_Session` solves the same way: one object passed around
-    beats the same dozen fields repeated at every call site."""
-
-    args: argparse.Namespace
-    prepared: _PreparedRun
-    setup: _rewrite.AssertionSetup
-    last_run: _cache.LastRun
-    collection_index: _index.Index
-    verbosity: int
-    wall_start: float
-    replay_last_failed: bool
-    replay_failed_first: bool
-
-    @property
-    def rootdir(self) -> Path:
-        return self.prepared.config.rootdir
 
 
 def _discover(session: _RunSession) -> tuple[list[Path], list[Path]]:
@@ -1144,6 +1153,9 @@ def _discover(session: _RunSession) -> tuple[list[Path], list[Path]]:
     files = _discovery.discover_files(
         session.prepared.roots, patterns=patterns, ignore_dirs=ignore_dirs
     )
+    # The same list, deliberately: `discovered` is never rebound after this, while a
+    # caller under `--lf` rebinds its own `files` to a narrowed copy -- see
+    # `_collect_and_narrow`.
     return files, files
 
 
@@ -1241,13 +1253,13 @@ def _unmatched_id_status(session: _RunSession, collected: _collect.CollectionRes
 
 def _collect_and_narrow(
     session: _RunSession, files: list[Path], discovered: Sequence[Path]
-) -> tuple[int | None, _collect.CollectionResult, _collect.CollectionResult, list[Path]]:
+) -> tuple[_collect.CollectionResult, _collect.CollectionResult, list[Path]]:
     """Collection, then `--lf`/`--ff` narrowing on top of `-k`/`-m`/id-selection, applied
     after rather than instead of them: `--lf` narrows a selection the other flags
-    already made, so `voci --lf -k users` means both. Returns the usage-error exit code
-    for an id that matched nothing (if `id_selection` named one), `found` -- collection's
+    already made, so `voci --lf -k users` means both. Returns `found` -- collection's
     own unnarrowed result, kept for the cache write at the end -- `collected` -- what
-    this run actually runs -- and `files`, `--lf`-narrowed if that applied.
+    this run actually runs, before `_unmatched_id_status` has had a say -- and `files`,
+    `--lf`-narrowed if that applied.
     """
     rootdir = session.rootdir
     if session.replay_last_failed:
@@ -1284,10 +1296,29 @@ def _collect_and_narrow(
     elif session.replay_failed_first:
         collected = _lastfailed.reorder(collected, session.last_run)
 
-    status = _unmatched_id_status(session, collected)
-    if status is not None:
-        return status, found, collected, files
-    return None, found, collected, files
+    return found, collected, files
+
+
+def _maybe_save_collection_index(
+    session: _RunSession,
+    found: _collect.CollectionResult,
+    *,
+    files: Sequence[Path],
+    discovered: Sequence[Path],
+) -> None:
+    """Persist the collection index updated with what this run's real collection
+    established, unless something narrowed the request past what the index tracks --
+    called once from each of `_execute`'s two terminal branches."""
+    if session.prepared.narrowed_by_selection:
+        return
+    _save_collection_index(
+        session.rootdir,
+        session.collection_index,
+        found,
+        files=files,
+        discovered=discovered,
+        roots=session.prepared.roots,
+    )
 
 
 def _finish_collect_only(
@@ -1303,15 +1334,7 @@ def _finish_collect_only(
     returns the exit status -- this run never reaches `run_suite`."""
     args = session.args
     rootdir = session.rootdir
-    if not session.prepared.narrowed_by_selection:
-        _save_collection_index(
-            rootdir,
-            session.collection_index,
-            found,
-            files=files,
-            discovered=discovered,
-            roots=session.prepared.roots,
-        )
+    _maybe_save_collection_index(session, found, files=files, discovered=discovered)
     if args.co_json:
         _collect_json.print_report(
             tests=[
@@ -1521,15 +1544,7 @@ def _run_and_report(
         roots=session.prepared.roots,
         rootdir=rootdir,
     )
-    if not session.prepared.narrowed_by_selection:
-        _save_collection_index(
-            rootdir,
-            session.collection_index,
-            found,
-            files=files,
-            discovered=discovered,
-            roots=session.prepared.roots,
-        )
+    _maybe_save_collection_index(session, found, files=files, discovered=discovered)
     return exit_status
 
 
@@ -1543,7 +1558,8 @@ def _execute(session: _RunSession) -> int:
     if fast_status is not None:
         return fast_status
 
-    status, found, collected, files = _collect_and_narrow(session, files, discovered)
+    found, collected, files = _collect_and_narrow(session, files, discovered)
+    status = _unmatched_id_status(session, collected)
     if status is not None:
         return status
 
@@ -1607,11 +1623,6 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
     # without ever reaching `collect()`, and every other run still needs it to build the
     # updated index it writes back at the end.
     collection_index = _index.load(prepared.config.rootdir)
-    # An empty cache leaves both flags meaning "the whole suite, in logical order", which is
-    # what makes --lf safe to leave in a shell alias -- a first run, or one that went green,
-    # runs everything rather than nothing.
-    replay_last_failed = args.last_failed and not last_run.is_empty()
-    replay_failed_first = args.failed_first and not last_run.is_empty()
 
     # Resolved and probed up front so a silent fallback to plain mode is visible
     # before a run commits to it -- a benchmark that silently fell back would be a
@@ -1625,8 +1636,6 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
         cache_dir=args.rewrite_cache,
         rootdir=prepared.config.rootdir,
     )
-    verbosity = (1 if args.verbose else 0) - (1 if args.quiet else 0)
-    _print_run_header(args, prepared.config, setup, last_run, verbosity)
 
     session = _RunSession(
         args=args,
@@ -1634,11 +1643,9 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
         setup=setup,
         last_run=last_run,
         collection_index=collection_index,
-        verbosity=verbosity,
         wall_start=wall_start,
-        replay_last_failed=replay_last_failed,
-        replay_failed_first=replay_failed_first,
     )
+    _print_run_header(session)
 
     try:
         with _installed_session(
