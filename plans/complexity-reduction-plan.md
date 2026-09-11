@@ -68,10 +68,18 @@ item lands as its own PR rather than one big one, per the list below.
   `_run_teardown`) instead of mutating locals, and the final disposition logic into
   `_resolve_outcome`, leaving `_run_one` itself the sequencing: run each phase, then resolve.
   All under 10; no behavior change — `just check` (full suite) and `tests/run/` alone both green.
+- `voci/_run/run.py` `run_suite` (40 > 10) — mccabe folds a nested closure's own complexity into
+  its enclosing function's count, and `run_suite` had four (`dispatch_one`, `flush_module_scope`,
+  `run_envelope`, `run_all`) closed over most of its locals, which was the bulk of the 40. Pulled
+  those four out as methods on a new `_Session` dataclass built once per call and threaded through
+  explicitly instead of closed over; validation split into `_validate_run_args`; the
+  `_mocking`/`_warnings`/`_safety` install/uninstall dance (including its partial-failure-cleanup
+  case) split into a `_installed_for_run` context manager, nested so the watchdog still stops
+  before those uninstalls run, preserving the original teardown order. All under 10; no behavior
+  change — `just check` and `just py run 3.13 pytest tests/run/ -k run_suite` both green.
 
 ### To do
 
-- `voci/_run/run.py` `run_suite` (40 > 10) — the largest by far; its own PR.
 - `voci/cli.py` `_prepare_run` (21 > 10) and `main` (28 > 10)
 
 Regression nets: whichever suite each file's own tests live under (`voci-migrate/tests/` for the
