@@ -26,11 +26,14 @@ voci wants a mode whose failure mode is a false green. If yes, the containment i
 invocation, never a default, never inherited from `[tool.voci]` alone, and a loud line in the
 report saying how many tests were skipped and on what basis.
 
-**Recommendation: build Option A (static import graph) first.** It over-approximates, which is the
-safe direction — it can only run too many tests, never too few — and it needs no tracing, no
-per-test map, and no runtime cost at all. Option B (tracing) is a precision upgrade on top, and
-its own risks are much easier to judge once the coarse version is in and its selectivity has been
-measured on a real suite.
+**Recommendation: build Option A (static import graph) first**, on the strength of its failure
+direction rather than its cost. It over-approximates — it can only run too many tests, never too
+few — and it needs no tracing and no per-test map. It is not, however, free: it adds an AST pass
+over first-party source that nothing currently pays for, and it needs a first-party source-root
+concept that voci does not have. Both are quantified below.
+
+Option B (tracing) is a precision upgrade, and its own risks are much easier to judge once the
+coarse version is in and its selectivity has been measured on a real suite.
 
 ## Work to do
 
@@ -40,11 +43,15 @@ Milestones are alternatives, not a sequence — pick one, per the decision above
 
 Over-approximating, no runtime instrumentation, no attribution problem.
 
-- [ ] Module graph builder: parse each discovered file's imports (AST, no execution), resolve to
-      first-party modules under the rootdir, build the transitive closure per test file.
+- [ ] **Decide what "first-party source" means, and where it is configured.** voci has no such
+      concept today: `testpaths`, `ignore` and `test_file_patterns` are all test-side, and
+      `Config.source` is the path of `pyproject.toml`, not a source root. The graph cannot be
+      built without one, so this is the first task, not a detail — see "The source-root gap".
+- [ ] Module graph builder: parse each first-party file's imports (AST, no execution), resolve
+      module names to files, build the transitive closure per test file.
 - [ ] Fingerprint every first-party module by content hash; store the graph and hashes in
       `.voci_cache/` alongside the collection index, same schema-version and atomic-replace
-      discipline as `_cache.py`.
+      discipline as `_cache.py`. Reparse only the files whose hash moved.
 - [ ] Selection: a test file is affected when any module in its closure changed, plus the bail-out
       set below. Reuse the `lastfailed.candidate_files` seam so discovery never imports a file the
       run has no intention of running.
@@ -52,8 +59,23 @@ Over-approximating, no runtime instrumentation, no attribution problem.
 - [ ] Report line: how many tests were selected, how many skipped, and why a full run happened
       when it did.
 
-Granularity is the whole test *file*, since that is what an import graph resolves to. Cost is one
-AST parse per file, already paid by collection.
+Granularity is the whole test *file*, since that is what an import graph resolves to.
+
+**Cost is a new pass, not a free one.** The assertion rewriter parses every `.py` under the *test
+roots*, so test files and their helpers are already parsed — but first-party source is only ever
+imported, never parsed by voci, and that is most of what this graph is made of. Measured
+`ast.parse` + import walk over whole trees:
+
+| tree | files | LOC | cold parse | warm (stat + hash) |
+| --- | --- | --- | --- | --- |
+| `voci/` | 60 | 17k | 79ms | 2ms |
+| `oss/rich` | 213 | 52k | 250ms | 2ms |
+| `oss/pytest` | 352 | 151k | 715ms | 5ms |
+| `oss/marshmallow` | 1309 | 458k | 2.3s | 18ms |
+
+Cold build is seconds on a large tree. Steady state is the warm column, because an unchanged file
+is a hash comparison and never a reparse — the same fingerprinting discipline `index.py` already
+applies to collection.
 
 ### Option B — traced per-test dependency map
 
@@ -78,6 +100,10 @@ Function-level precision. Everything in Option A's bail-out set still applies.
       (`isolated.result_to_json`) and the parent merges — same shape as the coverage `harvest`
       path already carrying data across that boundary.
 - [ ] Decide the measurement mode (see "The DISABLE race" below).
+
+Option B needs no source-root configuration: `code.co_filename` names the real file at runtime, and
+"first-party" is decidable from it directly — under the rootdir, not under `site-packages`. The
+file set discovers itself.
 
 ### Option C — line/block level, true testmon parity
 
@@ -127,6 +153,22 @@ So the measurement run is a choice between:
 The second is the better trade. The first is worth keeping as an explicit flag for a cold build of
 the map on a large suite.
 
+## The source-root gap
+
+Option A resolves import statements to files, which means it has to know which modules are
+first-party and where they live. Nothing in `Config` says. A source layout can be a flat package
+beside `tests/`, a `src/` layout, several packages in a workspace (this repo has two), or a
+package installed non-editable, where the imported module resolves into `site-packages` and an
+edit to the working tree does not affect the run at all.
+
+That last case has to be detected and refused rather than silently mis-answered: a graph built
+over source files the tests are not actually importing selects confidently and wrongly.
+
+So Option A's real first task is a config surface plus a resolution rule, and its "cheap" billing
+should be read with that included. Option B sidesteps this entirely, which narrows the gap between
+the two more than the original recommendation allowed for — Option A is still the safer direction
+because it over-approximates, but it is not the free one.
+
 ## Risks
 
 Ranked by how badly each one ends.
@@ -139,15 +181,18 @@ Ranked by how badly each one ends.
    dependency that lives behind a C extension is invisible. `getattr`-driven dispatch, plugin
    registries and metaclass machinery record the frames they actually ran, not the ones a changed
    input would have selected.
-4. **Non-Python inputs.** Fixture data files, templates, `.env`, schema files — nothing traces
+4. **Source-root misresolution (Option A).** A graph built over files the tests are not really
+   importing — a non-editable install, a shadowed package name, a path the resolution rule guessed
+   wrong — selects with full confidence and no symptom. Must fail loudly rather than guess.
+5. **Non-Python inputs.** Fixture data files, templates, `.env`, schema files — nothing traces
    them, and a change to one must either force a full run or be declared. testmon has this hole
    too.
-5. **Environment drift.** An upgraded dependency, a different interpreter, a changed
+6. **Environment drift.** An upgraded dependency, a different interpreter, a changed
    `[tool.voci]`, a different `-k`/`-m` — each invalidates the map wholesale. This is the
    "bail-out set", and it must be conservative and fingerprinted, not inferred.
-6. **Assertion rewriting.** Fingerprints keyed to anything but source text will churn or, worse,
+7. **Assertion rewriting.** Fingerprints keyed to anything but source text will churn or, worse,
    fail to churn when they should.
-7. **Cache growth.** A per-test function map on a large suite is orders of magnitude bigger than
+8. **Cache growth.** A per-test function map on a large suite is orders of magnitude bigger than
    `lastfailed.json`.
 
 ## Where it pays off
