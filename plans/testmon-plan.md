@@ -388,8 +388,8 @@ their code is tracked as source and a hatch-vcs version changes on every commit.
   - `env(id, key, last_used)`
   - `record(id, env_id, test_id, outcome, untrusted, last_used)`, several per test
   - `record_dep(record_id, dep_set_id)`
-  - `dep_set(id, path, keyed_checksums, UNIQUE(path, keyed_checksums))`, shared across tests and records,
-    so a branch variant costs only the dep sets that differ
+  - `dep_set(id, path, keyed_checksums, UNIQUE(path, keyed_checksums))`, shared across tests
+    and records, so a branch variant costs only the dep sets that differ
   - `parsed(content_sha, blocks, last_used)`, the parse cache
   - adapter data: `record_request(record_id, method, path)`, the record's matched routes and
     enumerator flag, and `route_table(file, qualname, path, methods, name)` from the last run
