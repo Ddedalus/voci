@@ -1,331 +1,257 @@
 # Affected-test selection ("testmon")
 
-Re-run only the tests a source change can reach, instead of the whole suite.
+Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per passing test, the
+first-party functions, data files and environment variables it touched. The next run re-runs a
+test only when one of those no longer matches the tree.
 
-Status: not started, pending a go/no-go. ROADMAP lists this under "Needs human review — do
-not start"; this document is the assessment that gate was waiting for. Nothing here is
-implemented.
+Status: design settled, not started. ROADMAP holds it under "Needs human review" until the open
+decisions below are made. Reference implementation: `oss/pytest-testmon`.
 
-Two prototypes were run against the real interpreter to settle the questions that decide
-viability; both are recorded under "Prototype results" below.
+## Work done
 
-## What this changes about voci's caching
-
-Buildable — the two questions that decided that were prototyped, see "Prototype results".
-
-Every existing cache in voci obeys one rule, stated in `spec/03-discovery-and-collection.md` §6
-and repeated in `_cache.py` and `index.py`: the cache only ever orders and predicts, never skips a
-test. `--lf` narrows discovery but a stale entry costs an import, never a wrong report. The
-collection index is never proactively invalidated because a stale entry is always safe.
-
-This feature departs from that. It skips tests on the strength of a recorded map, and a map that
-under-approximates produces a green run that should have been red — a failure that is silent and
-indistinguishable from a real pass.
-
-That is a property of the feature class, not an argument against it; pytest-testmon ships with it
-and is widely used. It does mean the cost of a wrong answer here is different in kind from the
-cost of a wrong `--lf`, which is worth pricing deliberately rather than by analogy to the existing
-caches.
-
-Exposure is adjustable, and the levers are independent: which invocations can select (flag only,
-or also `[tool.voci]`), whether a skipped test is reported and how loudly, and how wide the
-bail-out set is — the conditions that force a full run regardless of the map. Where those land is
-a call about how much risk is worth the time saved, which depends on how the suite is used.
-
-**Recommendation: Option B (tracing), if this is built at all.** An earlier draft recommended
-Option A first, on the grounds that it over-approximates and so fails safely. Measuring its
-selectivity withdrew that: on `oss/fastapi` the median source change selects **56% of the suite**,
-because a re-export hub gives every importer of the package a dependency on everything behind it
-(see "The hub problem"). A 2x reduction does not pay for a new config surface, a new AST pass over
-first-party source, and a resolution rule that has to handle `src/` layouts, workspaces and
-non-editable installs.
-
-Option A's safety argument still stands and its failure direction is still the better one. It is
-the selectivity that does not hold up, and a selection feature that rarely deselects is not worth
-its own maintenance.
-
-Option B's attribution mechanism is prototyped and works, and the hub problem does not apply to it:
-importing a module is not executing it. Its exposure to under-approximation is real and is
-enumerated below — much of that list applies to both options.
-
-The third answer is **don't build it**, and it is not a weak one. `--watch` plus `--lf` already
-covers the fast inner loop, which is where most of the value is.
+- Prototypes. ContextVar attribution is correct under concurrency. A static import graph was
+  rejected: the median `oss/fastapi` change selects 56% of the suite, because
+  `fastapi/__init__.py` re-exports everything. Line-level tracing was rejected at 1.73x for
+  little gain.
+- Research pass, 2026-09-12: testmon's source, docs and issues, voci's seams, and probes. Findings
+  are folded into Design and Failure modes.
 
 ## Work to do
 
-Milestones are alternatives, not a sequence.
+Nothing deselects until M4 lands; before that, M1–M3 can ship with `verify` only.
 
-### Option A — static import graph
+**M0 — `--watch` bugs, independent of this feature**
 
-Over-approximating, no runtime instrumentation, no attribution problem.
+- [ ] First-party modules are never reloaded between iterations. `cli.main` runs in-process and
+      `collect._import_module` evicts only test modules. Probe: an edit to `myapp.f` wasn't seen
+      by the second `main()` call. Run each iteration in a child process.
+- [ ] `cli._watch_scope` polls the test roots only, so an edit under `src/` triggers nothing.
+      Poll every path in the store as well. `_watch._wait_for_change` must also return which
+      paths changed.
 
-- [ ] **Decide what "first-party source" means, and where it is configured.** voci has no such
-      concept today: `testpaths`, `ignore` and `test_file_patterns` are all test-side, and
-      `Config.source` is the path of `pyproject.toml`, not a source root. The graph cannot be
-      built without one, so this is the first task, not a detail — see "The source-root gap".
-- [ ] Module graph builder: parse each first-party file's imports (AST, no execution), resolve
-      module names to files, build the transitive closure per test file.
-- [ ] Fingerprint every first-party module by content hash; store the graph and hashes in
-      `.voci_cache/` alongside the collection index, same schema-version and atomic-replace
-      discipline as `_cache.py`. Reparse only the files whose hash moved.
-- [ ] Selection: a test file is affected when any module in its closure changed, plus the bail-out
-      set below. Reuse the `lastfailed.candidate_files` seam so discovery never imports a file the
-      run has no intention of running.
-- [ ] Union with last run's failures — a recorded failure always re-runs regardless of the graph.
-- [ ] Report line: how many tests were selected, how many skipped, and why a full run happened
-      when it did.
+**M1 — Recording** (see Tracer)
 
-Granularity is the whole test *file*, since that is what an import graph resolves to.
+- [ ] `voci/_affected/tracer.py`: tool id, callback, first-party classification.
+- [ ] Collectors: test (a field on `_capture.TestContext`, already set in
+      `run.py:_Session.run_envelope`), fixture (`_di/runtime.py` construct and teardown), and
+      collection (`collect._import_module`).
+- [ ] Context-propagating `threading.Thread.start` while a run is active; untrusted marking.
+- [ ] `@voci.isolated`: the worker ships its record in `result_to_json`, the way coverage's
+      `harvest` does.
 
-**Cost is a new pass, not a free one.** The assertion rewriter parses every `.py` under the *test
-roots*, so test files and their helpers are already parsed — but first-party source is only ever
-imported, never parsed by voci, and that is most of what this graph is made of. Measured
-`ast.parse` + import walk over whole trees:
+**M2 — Fingerprints and store** (see Fingerprints, Storage)
 
-| tree | files | LOC | cold parse | warm (stat + hash) |
-| --- | --- | --- | --- | --- |
-| `voci/` | 60 | 17k | 79ms | 2ms |
-| `oss/rich` | 213 | 52k | 250ms | 2ms |
-| `oss/pytest` | 352 | 151k | 715ms | 5ms |
-| `oss/marshmallow` | 1309 | 458k | 2.3s | 18ms |
+- [ ] `voci/_affected/blocks.py`: block checksums and import edges from one parse per file.
+- [ ] `code → block` resolution at session end. Records that touched a file which changed during
+      the run are dropped.
+- [ ] `voci/_affected/store.py`. Measure its size on voci's suite and on httpx2 first. If it's
+      small, a JSON file under `_cache.py`'s discipline replaces sqlite.
 
-Cold build is seconds on a large tree. Steady state is the warm column, because an unchanged file
-is a hash comparison and never a reparse — the same fingerprinting discipline `index.py` already
-applies to collection.
+**M3 — Selection and CLI** (see Selection)
 
-### Option B — traced per-test dependency map (recommended, if building)
+- [ ] Narrow through `lastfailed.candidate_files`, then filter per test like `lastfailed.select`.
+- [ ] `--affected` and `--affected=verify`. Report `N selected · M unaffected` as its own label,
+      because `deselected` already means `-k`/`-m`, plus `full run: <reason>`.
+- [ ] `--watch` integration (decision 2).
 
-Function-level precision. Everything in Option A's bail-out set still applies.
+**M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
-- [ ] Collector: a `sys.monitoring` tool (id 3 or 4 — 0/1/2/5 are reserved for debugger,
-      coverage, profiler, optimizer) on `PY_START`, whose callback reads a `ContextVar` holding
-      the running test id and records `(filename, qualname)`.
-- [ ] Set that `ContextVar` in `_run.run._run_one`'s envelope so setup, call and teardown are all
-      attributed; `ContextPropagatingExecutor` already carries it into the threads sync tests run
-      on, so no change is needed there.
-- [ ] Static fixture union: for each record, add the source fingerprint of every `Fixture._func`
-      reachable through `record.plan.steps`. This is what closes the shared-scope hole — a
-      `scope="session"` fixture executes once and traces only to the first test that triggered it,
-      but voci knows the whole graph statically and does not have to discover it by tracing.
-- [ ] Fingerprints over *source text* per function (`qualname` -> hash), not line numbers and not
-      code objects: assertion rewriting changes both, and an edit elsewhere in a file shifts every
-      line below it.
-- [ ] Storage: per-test sets are much larger than the existing caches. Measure before choosing
-      JSON; sqlite is the likely answer, as it is for testmon and coverage.py.
-- [ ] `@voci.isolated`: the subprocess writes its map into the existing result JSON
-      (`isolated.result_to_json`) and the parent merges — same shape as the coverage `harvest`
-      path already carrying data across that boundary.
-- [ ] Decide the measurement mode (see "The DISABLE race" below).
+- [ ] Audit hook, `os.environ` recorder, environment key.
 
-Option B needs no source-root configuration: `code.co_filename` names the real file at runtime, and
-"first-party" is decidable from it directly — under the rootdir, not under `site-packages`. The
-file set discovers itself.
+**M5 — Measure before recommending it**
 
-### Option C — line/block level, true testmon parity
+- [ ] Overhead on voci's suite and httpx2, alone and with `COVERAGE_CORE=sysmon` coverage.
+- [ ] Replay ~200 commits each of `oss/fastapi` and `oss/httpx` under `verify`. Record the
+      fraction selected, the share of module-block edits, and any false greens.
 
-Not recommended. `LINE` events measured 1.73x on a call-heavy loop, the mapping from executed
-lines back to source blocks has to survive assertion rewriting, and the precision gain over
-function-level granularity is small for the complexity it costs.
+## Decisions
 
-## Prototype results
+Settled:
 
-Both probes were run on CPython 3.14.7 and are the reason this is judged buildable.
+- Function-level tracing. Each test is compared against its own stored fingerprint, never
+  against "what changed since the last run". Branch switches, partial runs, interrupted runs, and
+  `-k`/`-m` therefore cost re-runs, never a missed test. testmon has bugs here (#78, #204).
+- Only passed tests get a record. Failed, errored, timed-out, skipped, untrusted and new tests
+  always run; skips are cheap.
+- Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
+  at runtime.
 
-**Per-test attribution under concurrency — solved.** This was the open question: voci runs at
-concurrency 16 by default, async tests interleave on one event loop thread and sync tests run in a
-shared executor pool, so nothing about a thread or a stack frame identifies which test is running.
-A global `sys.monitoring` callback that reads a `ContextVar` attributes correctly anyway, because
-asyncio enters each task's own context before stepping it and `ContextPropagatingExecutor` copies
-that context into worker threads. Three tests — two interleaved async, one sync in the pool, each
-calling a different function — were attributed with no cross-contamination and no serialization.
+Open:
 
-**Overhead, on a deliberately call-heavy microbenchmark** (worst case for `PY_START`; a real suite
-spends far more time in I/O, imports and C code where these events never fire):
+1. **Exposure.** Recommend the `--affected` flag only, no `[tool.voci]` key, so the false-green
+   risk stays opt-in.
+2. **`--watch`.** Recommend applying `--affected` after a green run. That's the gap `--lf`
+   leaves, and a watch session ends in a real full run.
+3. **Process-spawning tests.** Recommend always running them. The alternative is tracing
+   children through an env-var bootstrap, the way `COVERAGE_PROCESS_START` works. testmon shipped
+   that once, then removed it (#16, #192).
 
-| mode | overhead |
-| --- | --- |
-| `PY_START`, every call | 2.56x |
-| `PY_START`, `DISABLE` after first hit | 1.03x |
-| `LINE`, every line | 1.73x |
+## Design
 
-### The DISABLE race
+### Tracer
 
-`DISABLE` makes tracing nearly free by retiring each code location after its first hit, and
-`sys.monitoring.restart_events()` re-arms everything between tests, which preserves per-test
-attribution — verified: two tests calling one shared function both recorded it.
+- **Tool id:** the first free of 3 and 4. If neither is free, report it and don't select.
+- **Callback:** a `PY_START` callback classifies `co_filename` once, through a dict cache.
+  Non-first-party code returns `DISABLE`. That's sound at any concurrency because the answer
+  doesn't depend on which test is running.
+- **Recording:** first-party code goes into the innermost collector, keyed by `id(code)` with a
+  keep-alive dict, since hashing code objects is slow. `restart_events()` is never called.
+- **Which collector:** the test's collector covers setup, call, teardown and function-scope
+  fixtures. A `module`/`session` fixture gets its own collector around construction *and*
+  teardown. Session teardown runs in `store.aclose()` with no test context (`run.py:1345`).
+- **Collection:** each test file's import has a collector, which catches module bodies,
+  decorator application and class creation.
+- **Threads:** neither 3.13 nor 3.14 passes context to new threads (probed). A patched
+  `Thread.start` runs the target in the creator's context (`Thread(context=)` on 3.14, a
+  wrapped `run` on 3.13). A server thread started by a session fixture then reports to that
+  fixture. First-party code that runs with no collector while tests are in flight marks those
+  tests untrusted.
+- **First-party:** a real file under rootdir, and not under `sys.prefix`, a directory holding
+  `pyvenv.cfg` (testmon #206: a venv inside rootdir), or `.voci_cache`. `<string>`, zipimport and
+  pyc-only names fail this and are ignored.
+- **Cost:** measured on a trivial function over 2M calls (3.14, WSL2, noisy). An empty callback
+  costs ~1.8x, a recording one ~3x, and `DISABLE` ~1x. A dedup check doesn't help. Stdlib and
+  third-party calls become free after their first hit; first-party hot loops pay ~3x.
+- **Why not `DISABLE` everywhere:** for first-party code, `DISABLE` is unsound at concurrency
+  > 1 (reproduced with a barrier). Re-arming it whenever the set of running tests changes is
+  unsound too, because the race happens inside the window where that set stays the same.
 
-It is **unsound at concurrency > 1**. `restart_events()` is global and interleaving is not: test A
-hits a function and retires it, test B — already started, its own restart long past — calls the
-same function, receives no event, and never records the dependency. The map silently
-under-approximates, which is exactly the failure that turns into a false green.
+### Fingerprints
 
-So the measurement run is a choice between:
+Each block is hashed as `ast.dump(include_attributes=False)` with blake2b-8, qualname included.
+Each file has:
 
-- **concurrency 1 with `DISABLE`** — near-free tracing (1.03x), but a serial run, which gives up
-  voci's main advantage for every run that refreshes the map.
-- **full concurrency without `DISABLE`** — parallel, correct, and pays up to 2.56x on call-heavy
-  code, less on anything realistic.
+- **Module block:** module and class-body statements, plus every def's name and decorators.
+- **Def blocks:** one per def, covering its arguments, returns, type params and body. A nested
+  def's name and decorators stay in the enclosing block; its body gets a block of its own.
 
-The second is the better trade. The first is worth keeping as an explicit flag for a cold build of
-the map on a large suite.
+Mapping a code object to a block:
 
-## The source-root gap
+- A def matches on `co_qualname` plus its first line (the first decorator's line, if any).
+- Anything else maps to the innermost block containing `co_firstlineno`: `<lambda>`,
+  `<genexpr>`, 3.14's `__annotate__`, `<generic parameters of …>`, class bodies, `<module>`.
+- Comprehensions have no code object since 3.12.
+- Assertion rewriting leaves qualname, line and filename untouched. The probes confirmed all
+  of this.
 
-Option A resolves import statements to files, which means it has to know which modules are
-first-party and where they live. Nothing in `Config` says. A source layout can be a flat package
-beside `tests/`, a `src/` layout, several packages in a workspace (this repo has two), or a
-package installed non-editable, where the imported module resolves into `site-packages` and an
-edit to the working tree does not affect the run at all.
+A record passes while every checksum it holds for a file is still among that file's current
+checksums (testmon `process_code.py:280`). Line shifts and edits to unexecuted functions are
+therefore invisible, and nothing looks up a qualname at selection time. A cold parse plus hash of
+`oss/pytest/src` (39k LOC) takes ~0.5s; after that, only files whose content hash moved are
+re-parsed. Don't use `ast.get_source_segment`, which measured 3–5x slower.
 
-The non-editable case is the sharp one: a graph built over source files the tests are not actually
-importing selects confidently and wrongly, with no symptom to notice. Detecting it is cheap
-(compare the imported module's resolved file against the source root); what to do about it —
-refuse, warn, or fall back to a full run — is a judgement call.
+### What a passing test depends on
 
-So Option A's first task is a config surface plus a resolution rule, and its "cheap" billing reads
-differently with that included. Option B sidesteps this entirely, which narrows the gap between
-the two more than the original recommendation allowed for — Option A is still the safer direction
-because it over-approximates, but it is not the free one.
+A set of `(path, checksum)` pairs:
+
+1. Blocks its own collector traced.
+2. Blocks traced by each `module`/`session` fixture in `record.plan.steps`, which already
+   includes `voci.use(...)` fixtures.
+3. The module block, and the collection-traced blocks, of every first-party file in the import
+   closure of its test file and of the files in 1–2:
+   - Edges come from the same parse, with names resolved through `sys.modules`; no source-root
+     config is needed.
+   - This covers code that runs only at import: constants read without calling into their module
+     (testmon #191, unsolved there), decorator bodies, metaclasses, and dataclass or attrs
+     `__init__`s, which trace to `<string>` filenames.
+   - It brings the hub problem back for module-block edits only. About 38% of voci's source is
+     module block. If M5 shows most commits touch one, narrow this rule to direct imports and
+     accept missing constants reached through re-exports.
+4. `data:`, `dir:` and `env:` entries from M4.
+
+### Selection
+
+- **Current checksums** for every stored path. Content is always hashed; `(mtime_ns, size)`
+  never decides a skip. `.py` files are re-parsed only when that hash moved.
+- **Selected:** tests whose record is stale, plus those with none. That covers new tests, last
+  failures, untrusted tests, and tests in files that had collection errors. A record is pruned
+  only when its id is missing from a *fully* collected file.
+- **Full run**, with its reason printed:
+  - no stored environment key matches;
+  - the store is missing or its schema has changed;
+  - a non-test `.py` file under rootdir was added or removed (`pkgutil`, `importlib` by name,
+    registries);
+  - no tool id is free.
+
+  testmon's `configure.py` reasons table is the pattern.
+
+### Non-code dependencies
+
+The audit hook is installed once per process: it can't be removed, and it's a no-op without a
+collector. Probes confirmed on 3.13 and 3.14 that it sees `open`, `os.listdir`, `os.scandir`,
+`subprocess.Popen` and `sqlite3.connect`.
+
+- **Read-mode `open`** under rootdir → `data:<path>` = content sha. Skipped: `.py` files,
+  `__pycache__`, the cache, venvs, and files modified after the session started (outputs the
+  suite wrote). Opens during collection land on the file's collector, which covers parametrize
+  cases loaded from data.
+- **`os.listdir`/`os.scandir`** → `dir:<path>` = hash of the sorted names.
+- **`sqlite3.connect`** → treated as a data file.
+- **Process spawns** (`subprocess.Popen`, `os.posix_spawn`, `os.exec`, `os.system`, `os.fork`)
+  → the test is untrusted.
+
+`os.environ` gets swapped to a recording subclass for the run. Its `__getitem__` sees `getenv`,
+`get`, `in`, `copy()` and iteration (probed). Each key read becomes `env:<KEY>` = hash of its
+value, or "absent". Volatile keys (`PWD`, `SHLVL`, …) only cost re-runs.
+
+### Environment key
+
+A mismatch means a full run. The last 4 keys are kept, so alternating 3.13 and 3.14 wipes
+nothing; testmon deletes on every change. The key covers:
+
+- interpreter implementation, full version, ABI flags, and `sys.platform`;
+- installed distributions as `(name, version)`, excluding those whose files resolve under
+  rootdir. An editable hatch-vcs install, voci included, changes version on every commit, and its
+  code is tracked as source anyway;
+- the resolved `[tool.voci]`, plus `-W`, `--timeout`, concurrency and assert mode;
+- `LANG`, `LC_*` and `TZ`, which C reads without going through `os.environ`;
+- hashes of extension modules loaded from under rootdir.
+
+Per-test third-party tracking is out: `DISABLE` leaves no record of which package ran. Any
+`uv lock --upgrade` is therefore a full run.
+
+### Storage
+
+- `.voci_cache/affected.sqlite3`, schema version in `user_version`; a mismatch deletes and
+  rebuilds it.
+- `journal_mode=DELETE`, so it stays one file. CI caches that copied only the main file lost WAL
+  data (testmon #233, #236).
+- Explicit close, `busy_timeout`, and rootdir-relative paths.
+- One write transaction at session end, from the parent only. That's testmon's single-writer
+  lesson (#245, #259).
+- Tables, after testmon's `db.py:340`: `env(id, key, last_used)`,
+  `test(env_id, test_id, outcome, untrusted)`, `test_dep(test_rowid, dep_set_id)`, and
+  `dep_set(id, path, checksums, UNIQUE(path, checksums))`, which is shared across tests.
 
 ## Failure modes
 
-Two directions, with very different costs. **Under-approximation** — a real dependency the graph
-cannot see — skips a test that should have run, and reports green. **Over-approximation** — a
-dependency that is in the graph but not in reality — runs tests that did not need to, costing time
-only.
+Gaps are what `verify` and a CI full run are for.
 
-### Under-approximation: dependencies with no import statement
-
-- **`mock.patch` targets are strings.** A test patching `"myapp.services.client"` depends hard on
-  that module with no import naming it. voci already extracts these statically —
-  `_mocking.patching_of` returns `targets: tuple[str, ...]` — so they can be resolved and unioned
-  into the closure. This one is mitigable, and voci is better placed to do it than a plugin would
-  be.
-- **Dynamic imports.** `importlib.import_module(name)`, `__import__`, entry points, plugin
-  registries, anything assembling a module name at runtime. No static scan resolves these.
-- **Framework string references.** Django `INSTALLED_APPS`, SQLAlchemy registry names, pydantic
-  forward refs, any "dotted path in a config value" pattern.
-- **`voci.use(...)` on a package `__init__.py`.** The fixture is an imported object, so the
-  declaring module's own imports are visible — but only if the closure includes the enclosing
-  `__init__.py` chain (`requires.package_inits`). Miss that and a test loses a dependency it never
-  names.
-- **Subprocesses**, including `@voci.isolated`, whose imports happen somewhere the parent's graph
-  is not looking.
-
-### Under-approximation: dependencies that are not Python
-
-Nothing here is reachable by parsing imports, and each needs either a declared association or a
-rule that forces a full run:
-
-JSON/YAML/TOML fixture data · golden and snapshot files · SQL schema and migrations · Jinja and
-HTML templates · `.env` files · certificates and keys · binary assets · generated code, where the
-real dependency is the generator's input rather than its output.
-
-### Under-approximation: state outside the file tree
-
-- **`os.environ`** from the shell — invisible, and frequently what a test's behaviour turns on.
-- **`[tool.voci]` itself.** `env` injects environment variables, `filterwarnings` changes which
-  warnings are errors, `timeout` and `concurrency` change what fails — `concurrency` especially,
-  since it decides whether a race surfaces at all. A config edit changes outcomes with no `.py`
-  file touched.
-- **Installed dependencies.** A bumped version in `uv.lock` or a mutated `site-packages` is a real
-  behaviour change; the graph is rooted in first-party code and never sees it.
-- **Interpreter version.** voci supports 3.13 and 3.14 and they differ where it matters — PEP 649
-  annotations, warning filters. A map built under one is not valid under the other.
-- **Compiled extensions**, rebuilt with no `.py` change.
-- **Ambient machine state**: locale, timezone, platform, CPU count.
-- **External services**: database schema and seed data, network fixtures, container images.
-
-### Under-approximation: test-side semantics
-
-- **`skipif` conditions** are evaluated per run, so the set of tests that would run can change with
-  no file change at all.
-- **Parametrization over dynamic data** — cases read from a file, env, or a database — changes
-  both the case set and the ids that the map is keyed on.
-- **Order dependence**: a test that passes only because another ran first has a dependency the
-  graph has no way to express.
-
-### Over-approximation: cheap to be wrong, expensive to be useless
-
-- **mtime churn.** A branch switch or rebase rewrites mtimes without changing content. Content
-  hashing makes this a non-event; `(mtime, size)` alone does not.
-- **`if TYPE_CHECKING:` imports** are in the graph and absent at runtime.
-- **Re-export hubs** — the one that decides whether this feature is worth building.
-
-### The hub problem
-
-A package `__init__.py` that re-exports its submodules gives every importer of the package a
-dependency on all of them. Import-graph selection then degenerates, because import granularity
-cannot distinguish "imported the package" from "used this part of it".
-
-Measured on `oss/fastapi` — 593 test modules, 48 `fastapi/` modules, transitive closure per test
-file, asking what fraction of the suite a change to each source module selects:
-
-| | |
-| --- | --- |
-| median | **56.0%** |
-| mean | 38.3% |
-| modules selecting >50% of the suite | 32 / 48 |
-| modules selecting <10% of the suite | 16 / 48 |
-
-The clustering at exactly 56.0% is the hub: `fastapi/__init__.py` re-exports `routing`,
-`responses`, `requests`, `websockets`, `exceptions` and the rest, and 56% of test modules reach
-that hub, so every module behind it inherits the hub's entire fan-in. Changing `fastapi/routing.py`
-reruns 56% of the suite; so does changing `fastapi/types.py`.
-
-So on a hub-style package — which is the normal way to lay out a Python library — Option A buys
-roughly a 2x reduction, not the 10x the feature is usually sold on. On a suite whose tests import
-deep modules directly it does much better, and this repo's own `tests/` mostly import `voci._*`
-submodules rather than the `voci` hub.
-
-**This is specific to import granularity, and Option B does not share it.** Importing a module is
-not executing it: a test that imports the `fastapi` hub but only ever calls three functions in
-`routing` depends, under tracing, on those three functions. The hub collapses the graph precisely
-because it is a static relation over files rather than a record of what ran.
-
-## Risks
-
-Ranked by how badly each one ends.
-
-1. **Silent under-approximation.** The whole feature class. See "The decision to make first".
-2. **Import-time and module-level code.** Executes once for the first test that imports the
-   module and never again, so tracing attributes it to that test alone. Option A does not have
-   this problem; Option B needs module-level edits treated as whole-file invalidation.
-3. **C extensions and dynamic dispatch.** `PY_START` fires for Python frames only, so a
-   dependency that lives behind a C extension is invisible. `getattr`-driven dispatch, plugin
-   registries and metaclass machinery record the frames they actually ran, not the ones a changed
-   input would have selected.
-4. **Source-root misresolution (Option A).** A graph built over files the tests are not really
-   importing — a non-editable install, a shadowed package name, a path the resolution rule guessed
-   wrong — selects with full confidence and no symptom. Cheap to detect; the response is a
-   design choice.
-5. **Non-Python inputs.** Fixture data files, templates, `.env`, schema files — nothing traces
-   them, and a change to one must either force a full run or be declared. testmon has this hole
-   too.
-6. **Environment drift.** An upgraded dependency, a different interpreter, a changed
-   `[tool.voci]`, a different `-k`/`-m` — each invalidates the map wholesale. How wide this
-   "bail-out set" is trades directly against how often the feature helps.
-7. **Assertion rewriting.** Fingerprints keyed to anything but source text will churn or, worse,
-   fail to churn when they should.
-8. **Cache growth.** A per-test function map on a large suite is orders of magnitude bigger than
-   `lastfailed.json`.
-
-## Where it pays off
-
-`--watch` is the strongest case: the loop is already red, fix, rerun, and it already applies `--lf`
-automatically from the second run on. Affected-test selection is the same idea extended to the
-green case — after a passing run, an edit currently reruns everything. That is the gap worth
-closing, and it is also the lowest-risk place to put the feature, since a `--watch` session is
-interactive, short-lived, and always followed by a real full run.
+| Failure mode | Answer | Gap |
+| --- | --- | --- |
+| Function body edit | Def block | — |
+| Constant, import, class attribute, base, decorator | Module block, rule 3 | Hub-coarse |
+| Import-time code (decorators, dataclass, metaclass) | Collection collector, rule 3 | Modules first imported inside a test |
+| Shared-scope fixture | Fixture collector, rule 2 | — |
+| Threads | Propagating `Thread.start` | C-started threads → untrusted |
+| `mock.patch` string targets | Target module reached through imports, rule 3 | Never imported anywhere |
+| Dynamic imports, registries | New or removed file → full run | Existing module picked by a runtime value |
+| Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
+| Subprocesses, `multiprocessing` | Untrusted; isolated tests merge their record | Decision 3 |
+| Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
+| Packages, interpreter, config, extensions | Environment key | — |
+| Positional parametrize ids reordered | Test file's module block; data cases via audit | — |
+| `skipif`, new tests, failures | Always selected | — |
+| File edited mid-run | Records dropped | — |
+| Branch switch, mtime churn, moved cache | Content hashes, per-test comparison, relative paths | — |
+| Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |
 
 ## References
 
-- `voci/_cache.py` — schema versioning, atomic replace, and the merge discipline any new cache
-  here should copy.
-- `voci/_collection/index.py` — `(mtime_ns, size)` fingerprinting, and the "never proactively
-  invalidate" rule this feature cannot keep.
-- `voci/_collection/lastfailed.py` — `candidate_files` is the discovery-narrowing seam.
-- `voci/_run/coverage.py` — the existing pattern for carrying measurement across the
-  `@voci.isolated` boundary and merging it back.
-- `voci/_builtins/capture.py` — `ContextPropagatingExecutor`, which is what makes `ContextVar`
-  attribution work for sync tests.
+- `oss/pytest-testmon/testmon/`:
+  - `process_code.py`: blocks (`:111`), membership check (`:280`).
+  - `db.py`: schema (`:340`), environments (`:647`).
+  - `testmon_core.py`: sentinel for new tests (`:329`).
+  - `configure.py`: no-select reasons.
+- testmon issues: #191, #192, #204, #206, #233, #236, #89. #89 is the verify mode users asked
+  for and never got.

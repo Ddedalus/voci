@@ -34,3 +34,6 @@
 [submodule "oss/uvicorn"]
 	path = oss/uvicorn
 	url = https://github.com/encode/uvicorn.git
+[submodule "oss/pytest-testmon"]
+	path = oss/pytest-testmon
+	url = https://github.com/tarpas/pytest-testmon.git
