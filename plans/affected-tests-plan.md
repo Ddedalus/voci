@@ -162,10 +162,7 @@ dependencies, selection could skip a test it shouldn't.
 
 ### Tracer
 
-- **Tool id:** the first free of 3 and 4. If neither is free, report it and don't select.
-- **Callback:** a `PY_START` callback classifies `co_filename` once, through a dict cache.
-  Non-first-party code returns `DISABLE`. That's sound at any concurrency because the answer
-  doesn't depend on which test is running.
+- **Tool id, callback and first-party classification:** built, `voci/_affected/tracer.py`.
 - **Recording:** first-party code goes into the innermost collector, keyed by `id(code)` with a
   keep-alive dict, since hashing code objects is slow. `restart_events()` is never called.
 - **Which collector:** the test's collector covers setup, call, teardown and function-scope
@@ -201,9 +198,6 @@ dependencies, selection could skip a test it shouldn't.
   tracing agrees. Stacks with the rest of the marks; the reason is for whoever reads the test
   next, not read by voci. Because an untrusted test is always selected, it never gets a skip
   prediction to check, so `--affected-verify` reports nothing for it either.
-- **First-party:** a real file under rootdir, and not under `sys.prefix`, a directory holding
-  `pyvenv.cfg` (testmon #206: a venv inside rootdir), or `.voci_cache`. `<string>`, zipimport and
-  pyc-only names fail this and are ignored.
 - **Cost:** measured on a trivial function over 2M calls (3.14, WSL2, noisy). An empty callback
   costs ~1.8x, a recording one ~3x, and `DISABLE` ~1x. A dedup check doesn't help. Stdlib and
   third-party calls become free after their first hit; first-party hot loops pay ~3x.

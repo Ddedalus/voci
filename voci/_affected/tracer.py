@@ -37,10 +37,13 @@ _TOOL_NAME = "voci-affected"
 class Tracer:
     """Owns one `sys.monitoring` tool id for the life of a run.
 
-    `on_first_party(code)` runs the first time each first-party code object starts running --
-    once per code object, since a later `PY_START` for the same one is indistinguishable from
-    the first and would only repeat work its caller already did. Everything else returns
-    `DISABLE` and is never seen again.
+    `on_first_party(code)` runs every time a first-party code object starts running -- once per
+    `PY_START`, not once per code object, since `DISABLE`-ing first-party code is unsound under
+    concurrency (see the plan's "Why not DISABLE everywhere"). A hot loop's def therefore calls
+    it on every iteration; a caller that only cares about which code objects ran at all, not how
+    often, dedupes by `id(code)` on its own side (the plan's Recording bullet), which a plain
+    dict assignment already does for free. Everything non-first-party returns `DISABLE` instead
+    and is never seen again.
     """
 
     def __init__(self, rootdir: Path, on_first_party: Callable[[CodeType], None]) -> None:
@@ -99,8 +102,11 @@ def is_first_party(filename: str, rootdir: Path) -> bool:
 
     Excluded: anything that isn't a real file on disk (`<string>`, a zipimport member, a
     pyc-only module with no source left); anything under the running interpreter's own
-    `sys.prefix`/`sys.base_prefix`; anything under a directory holding a `pyvenv.cfg` between
-    it and `rootdir` (a venv nested inside rootdir -- pytest-testmon #206); and `.voci_cache`.
+    `sys.prefix`/`sys.base_prefix`/`sys.exec_prefix` (distinct on Debian-family systems, which
+    split platform-specific stdlib into `exec_prefix` -- `_assertions/rewrite.py`'s own
+    `skip_roots` checks the same three); anything under a directory holding a `pyvenv.cfg`
+    between it and `rootdir` (a venv nested inside rootdir -- pytest-testmon #206); and
+    `.voci_cache`.
     """
     if not filename or filename[0] == "<":
         return False
@@ -115,9 +121,8 @@ def is_first_party(filename: str, rootdir: Path) -> bool:
         return False
     if CACHE_DIR_NAME in resolved.relative_to(rootdir).parts:
         return False
-    if resolved.is_relative_to(Path(sys.prefix).resolve()):
-        return False
-    if resolved.is_relative_to(Path(sys.base_prefix).resolve()):
+    interpreter_roots = (sys.prefix, sys.base_prefix, sys.exec_prefix)
+    if any(resolved.is_relative_to(Path(root).resolve()) for root in interpreter_roots):
         return False
     return not _venv_between(resolved.parent, rootdir)
 

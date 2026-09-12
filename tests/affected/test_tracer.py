@@ -89,6 +89,19 @@ def test_a_file_under_sys_base_prefix_is_not_first_party() -> None:
     assert tracer.is_first_party(json.__file__, rootdir) is False
 
 
+def test_a_file_under_exec_prefix_is_not_first_party(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Debian-family systems split platform-specific stdlib into exec_prefix, distinct from
+    # prefix/base_prefix -- this interpreter's own exec_prefix usually isn't, so it's faked here.
+    exec_prefix = tmp_path / "exec-prefix"
+    mod = exec_prefix / "platform_dep.py"
+    mod.parent.mkdir()
+    mod.write_text("x = 1\n")
+    monkeypatch.setattr(sys, "exec_prefix", str(exec_prefix))
+    assert tracer.is_first_party(str(mod), tmp_path) is False
+
+
 def test_a_file_under_a_nested_venv_is_not_first_party(tmp_path: Path) -> None:
     # pytest-testmon #206: a venv checked out inside rootdir, not the interpreter's own.
     venv = tmp_path / ".venv"
