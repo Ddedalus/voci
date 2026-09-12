@@ -1,8 +1,8 @@
 # Running only what changed
 
-`--affected` re-runs only the tests a change can reach, instead of the whole suite. For every test
-that passes, voci records which first-party functions, data files, and environment variables it
-touched; the next run skips a test only when none of those have changed since.
+Run `voci --affected` to re-run only the tests a change can reach, instead of the whole suite. For
+every test that passes, voci records which first-party functions, data files, and environment
+variables it touched; the next run skips a test only when none of those have changed since.
 
 ```console
 $ voci --affected
@@ -55,16 +55,16 @@ a repository — or under `.voci_cache/` outside one. Deleting it is always safe
 
 ## Checking the selection before trusting it
 
-Plain `--affected` skips a test the moment its stored dependencies match — it never actually runs
-the test to check that the skip was safe. `--affected=verify` does that checking: it runs every
-test, skipping none of them, but for each one it still computes what plain `--affected` would have
-decided, then compares that prediction against the outcome the test just produced for real.
+Run `voci --affected-verify` to check that `--affected`'s skips are actually safe, instead of
+trusting them blind. It runs every test, skipping none of them, but for each one it still
+computes what `--affected` would have decided, then compares that prediction against the outcome
+the test just produced for real.
 
 When every prediction holds up, the report just adds a count of how many would have been
 skipped, alongside the usual totals:
 
 ```console
-$ voci --affected=verify
+$ voci --affected-verify
 config: pyproject.toml
 ...
 352 tests · 12 would have been skipped · 3.4s wall
@@ -75,7 +75,7 @@ same dependencies — comes back with a different outcome this time, voci names 
 instead of silently counting it:
 
 ```console
-$ voci --affected=verify
+$ voci --affected-verify
 config: pyproject.toml
 ...
 MISMATCH  tests/test_users.py::test_create_user
@@ -89,8 +89,8 @@ timing, randomness, a network call, or data in an external database that changed
 this checkout. It isn't necessarily a bug in the tracking itself; a genuinely flaky or
 order-dependent test will mismatch here on its own, change or no change. Either way, a mismatched
 test is one you shouldn't trust `--affected` to skip correctly until you've tracked down why —
-`verify` is what to run periodically, or in CI, to find these before a plain `--affected` run
-skips a test that needed to fail.
+`--affected-verify` is what to run periodically, or in CI, to find these before a plain
+`--affected` run skips a test that needed to fail.
 
 ## Threads and subprocesses
 
@@ -101,26 +101,27 @@ tracked, each opt-in because it changes something a test could in principle obse
 
 ```toml
 [tool.voci]
-trace_threads = true
-trace_subprocesses = true
+affected_trace_threads = true
+affected_trace_subprocesses = true
 ```
 
-`trace_threads` patches `Thread.start` for the run's duration so a thread's work is attributed to
-whichever test or fixture started it. `trace_subprocesses` traces same-interpreter children —
-`subprocess` calls that launch the venv's own interpreter, and all three `multiprocessing` start
-methods — and needs the separate `voci[subprocesses]` extra installed, so a plain `voci` install
-patches nothing at interpreter start. Anything else that spawns a child — another interpreter, a
-shell command, `git`, `docker` — still just marks the test untrusted.
+Set `affected_trace_threads` to patch `Thread.start` for the run's duration, attributing a
+thread's work to whichever test or fixture started it. Set `affected_trace_subprocesses` to trace
+same-interpreter children instead — `subprocess` calls that launch the venv's own interpreter,
+and all three `multiprocessing` start methods; it needs the separate `voci[subprocesses]` extra
+installed, so a plain `voci` install patches nothing at interpreter start. Anything else that
+spawns a child — another interpreter, a shell command, `git`, `docker` — still just marks the
+test untrusted.
 
 ## `--watch` runs on `--affected`
 
-`--watch` starts with whatever `--affected` would select, then keeps re-running failures plus
-whatever each further change affects:
+Run `voci --watch` to start with whatever `--affected` would select, then keep re-running
+failures plus whatever each further change affects:
 
 ```console
 $ voci --watch
 ```
 
-[Command line](../reference/cli.md#affected-test-selection) has the full reference for both
-flags, and [Configuration](config.md) lists `trace_threads` and `trace_subprocesses` alongside
-the rest of `[tool.voci]`.
+[Command line](../reference/cli.md#affected-test-selection) has the full reference for
+`--affected`, `--affected-verify`, and `--watch`. [Configuration](config.md) lists
+`affected_trace_threads` and `affected_trace_subprocesses` alongside the rest of `[tool.voci]`.

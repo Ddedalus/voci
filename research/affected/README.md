@@ -34,6 +34,9 @@ Each report is a subagent's final write-up, kept verbatim with a short header.
   - `testclient_context.py`: anyio carries the caller's ContextVar into `TestClient` handlers,
     including through a persistent portal. Needs `fastapi`, `httpx`.
   - `watch_reload.sh`: today's `--watch` running stale first-party code.
+  - `async_file_io_context.py`: whether `asyncio.to_thread`, `loop.run_in_executor`, and
+    `anyio.to_thread.run_sync` carry the caller's context into the worker thread, per call, when
+    the same thread is reused for a later, unrelated call. Needs `anyio` (already a dependency).
 - [`fingerprint-probes/`](fingerprint-probes/): `q1`–`q8` scripts plus their sample modules.
   They cover qualname correspondence, duplicate qualnames, which fingerprint catches which edit,
   `ast.dump` vs text hashing cost, module-level attribution, assertion rewriting,

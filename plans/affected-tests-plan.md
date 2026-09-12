@@ -19,9 +19,14 @@ built on this. Reference implementation: `oss/pytest-testmon`.
   backs.
 - User docs drafted early, from the settled design, for review before implementation:
   [docs/guide/affected.md](../docs/guide/affected.md), the "Affected-test selection" section of
-  [docs/reference/cli.md](../docs/reference/cli.md), and the `trace_threads`/`trace_subprocesses`
-  entries in [docs/guide/config.md](../docs/guide/config.md). M3, M6 and M8 below reconcile these
-  with whatever implementation changes.
+  [docs/reference/cli.md](../docs/reference/cli.md), and the `affected_trace_threads`/
+  `affected_trace_subprocesses` entries in [docs/guide/config.md](../docs/guide/config.md). M3,
+  M6 and M8 below reconcile these with whatever implementation changes.
+- Probed which async file/DB primitives propagate the caller's context into their worker thread:
+  `asyncio.to_thread` and `anyio.to_thread.run_sync` do, on their own; `loop.run_in_executor`
+  does not, at all, which is what `aiofiles` calls internally. Folded into Tracer, Non-code
+  dependencies and Failure modes.
+  [research/affected/probes/async_file_io_context.py](../research/affected/probes/async_file_io_context.py).
 
 ## Work to do
 
@@ -34,7 +39,9 @@ dependencies, selection could skip a test it shouldn't.
 - [ ] Collectors: test (a field on `_capture.TestContext`, already set in
       `run.py:_Session.run_envelope`), fixture (`_di/runtime.py` construct and teardown), and
       collection (`collect._import_module`).
-- [ ] Untrusted marking for unattributed first-party code; opt-in `trace_threads`.
+- [ ] Untrusted marking for unattributed first-party code; opt-in `affected_trace_threads`
+      (`Thread.start` and `loop.run_in_executor`); `@voci.untrusted(reason)` for a test to
+      declare it manually.
 - [ ] `@voci.isolated`: the worker ships its record in `result_to_json`, the way coverage's
       `harvest` does.
 
@@ -54,10 +61,11 @@ dependencies, selection could skip a test it shouldn't.
 **M3 — Selection and CLI** (see Selection)
 
 - [ ] Narrow through `lastfailed.candidate_files`, then filter per test like `lastfailed.select`.
-- [ ] `--affected` and `--affected=verify`. Report `N selected · M unaffected` as its own label,
-      because `deselected` already means `-k`/`-m`, plus `full run: <reason>`. Matches the draft
-      in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's generated
-      block afterward.
+- [ ] `--affected` and its sibling `--affected-verify`. Report `N selected · M unaffected` as its
+      own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
+      reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
+      the draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
+      generated block afterward.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
@@ -73,7 +81,7 @@ dependencies, selection could skip a test it shouldn't.
 
 **M6 — Child-process tracing, opt-in** (see Child processes)
 
-- [ ] `[tool.voci] trace_subprocesses = true`, off by default. Setting it without the extra
+- [ ] `[tool.voci] affected_trace_subprocesses = true`, off by default. Setting it without the extra
       installed is a config error that names the extra. Matches the draft in
       `docs/guide/config.md`.
 - [ ] A `voci-subprocesses` workspace distribution, installed as `voci[subprocesses]`. It holds
@@ -120,12 +128,23 @@ dependencies, selection could skip a test it shouldn't.
   timeouts, skips, untrusted tests, and new tests always run (see Selection).
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
   at runtime.
-- **`--affected` is a flag only,** with no `[tool.voci]` key for now.
+- **`--affected` and `--affected-verify` are flags only,** with no `[tool.voci]` key for either.
+- **`--affected-verify` is a sibling flag, not a value of `--affected`.** Verify is a distinct run
+  mode — run everything and check predictions — not a variant reading of the same option, and an
+  optional-value flag (`--affected` alone, or with `=verify`) would be a new argparse pattern this
+  CLI doesn't otherwise use. `-x`/`--maxfail`, `--lf`/`--ff`, and pytest-testmon's own
+  `--testmon`/`--testmon-forceselect` are all separate flags for the same reason.
 - **No surprise patching by default.** Anything that changes behaviour user code could observe
-  is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
-  `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted; the default
-  path only observes, so code sees no difference in values or types (see Tracer, Non-code
-  dependencies).
+  is an opt-in `[tool.voci]` key: `affected_trace_subprocesses` (`Popen`, `multiprocessing`) and
+  `affected_trace_threads` (`Thread.start`, and `loop.run_in_executor` for the sake of `aiofiles`
+  and other direct callers). Both are flat keys, prefixed rather than nested under a new
+  `[tool.voci.affected]` table, since nothing else in `[tool.voci]` nests. Off, the affected
+  tests are simply untrusted; the default path only observes, so code sees no difference in
+  values or types (see Tracer, Non-code dependencies).
+- **A test can assert its own untrusted status:** `@voci.untrusted(reason)`, alongside the
+  automatic marking from an unattributed thread, subprocess, or dynamic import. It always runs
+  under `--affected`, and it never produces a skip prediction for `--affected-verify` to check
+  against, so a known gap doesn't need re-discovering on every `verify` run (see Tracer).
 - **`--watch` is rebuilt on `--affected`, not patched.** Today's `--watch` runs `cli.main`
   in-process and evicts only test modules, so an edited first-party module keeps running its old
   code (probed), and it polls only the test roots. The replacement starts with the tests that
@@ -133,7 +152,7 @@ dependencies, selection could skip a test it shouldn't.
   `--watch`).
 - **Child processes are untrusted by default:** a spawn marks the test untrusted via the audit
   hook, and nothing is patched. Tracing a bounded subset — same-interpreter `subprocess` and all
-  three `multiprocessing` start methods — is an opt-in (`trace_subprocesses`, M6), shipped as a
+  three `multiprocessing` start methods — is an opt-in (`affected_trace_subprocesses`, M6), shipped as a
   separate `voci[subprocesses]` extra so a base install runs nothing extra at interpreter start.
   It excludes abrupt-exit patching, signal handlers, and foreign interpreters, where coverage.py's
   subprocess bug history concentrates (#310, #1101, #1892, #2137) (see Child processes).
@@ -158,11 +177,29 @@ dependencies, selection could skip a test it shouldn't.
     those tests untrusted. It's safe, and it's cheap for FastAPI: anyio copies the calling
     test's context into `TestClient` handler calls, including through a persistent portal
     (probed), so those need no help.
-  - Opt-in `[tool.voci] trace_threads = true` patches `Thread.start` for the duration of a run,
-    so the target runs in the creator's context (`Thread(context=)` on 3.14, a wrapped `run` on
-    3.13). A server thread started by a session fixture then reports to that fixture.
-  - It's opt-in for the same reason as `trace_subprocesses`: threads can observe the change,
-    because they see their creator's ContextVars.
+  - Opt-in `[tool.voci] affected_trace_threads = true` patches `Thread.start` for the duration
+    of a run, so the target runs in the creator's context (`Thread(context=)` on 3.14, a wrapped
+    `run` on 3.13). A server thread started by a session fixture then reports to that fixture.
+  - It's opt-in for the same reason as `affected_trace_subprocesses`: threads can observe the
+    change, because they see their creator's ContextVars.
+- **Async offload:** `asyncio.to_thread` and `anyio.to_thread.run_sync` (so `anyio.Path` too)
+  copy the caller's context into the worker thread on their own, per call, needing no help
+  (probed). `loop.run_in_executor` does not, at all — a thread pool worker gets a blank context
+  regardless of who submitted the call (probed). `aiofiles` calls exactly that primitive
+  internally (`loop.run_in_executor(self._executor, cb)`, no context copy), so its reads are
+  untrusted by default like any other no-collector code, and correctly attributed once
+  `affected_trace_threads` also wraps `run_in_executor` to copy the caller's context per
+  submission — a narrower patch than `Thread.start`'s, since the pool's own worker threads are
+  long-lived and shared across unrelated tests, not created fresh per call.
+  - `aiosqlite` needs no such fix: each `Connection` runs one dedicated worker `Thread` for its
+    own lifetime, queueing calls to it, so `Thread.start`'s existing creator-context capture
+    already attributes every query to whoever opened the connection — a test if it opens its
+    own, a fixture if the connection is shared, same as any other shared-scope resource.
+- **Self-declared untrusted:** `@voci.untrusted(reason)` forces the same `untrusted=1` record
+  Storage already keeps for an automatically-detected case, skipping the question of whether
+  tracing agrees. Stacks with the rest of the marks; the reason is for whoever reads the test
+  next, not read by voci. Because an untrusted test is always selected, it never gets a skip
+  prediction to check, so `--affected-verify` reports nothing for it either.
 - **First-party:** a real file under rootdir, and not under `sys.prefix`, a directory holding
   `pyvenv.cfg` (testmon #206: a venv inside rootdir), or `.voci_cache`. `<string>`, zipimport and
   pyc-only names fail this and are ignored.
@@ -312,8 +349,10 @@ Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/ht
     record and re-runs everything, #78).
   - A flake that failed on the same tree as an older pass still runs, because the newer record
     wins.
-- **Always selected:** new tests, untrusted tests, and tests in files with collection errors. A
-  record is pruned only when its id is missing from a *fully* collected file.
+- **Always selected:** new tests, untrusted tests — automatically, from an unattributed thread,
+  subprocess, or dynamic import, or self-declared with `@voci.untrusted(reason)` — and tests in
+  files with collection errors. A record is pruned only when its id is missing from a *fully*
+  collected file.
 - **Added and removed files need no special rule.**
   - A removed file takes its checksums with it, and its `module:` key goes absent.
   - An added file matters only if some test's `module:` key now resolves differently. That
@@ -333,7 +372,13 @@ Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/ht
 
 The audit hook is installed once per process: it can't be removed, and it's a no-op without a
 collector. Probes confirmed on 3.13 and 3.14 that it sees `open`, `os.listdir`, `os.scandir`,
-`subprocess.Popen` and `sqlite3.connect`.
+`subprocess.Popen` and `sqlite3.connect`. It reads the same "current collector" as the
+`sys.monitoring` callback, so the async-offload findings under Tracer's Threads bullet apply here
+unchanged: a file read through `aiofiles`, or any other direct `loop.run_in_executor` caller, has
+no collector to attribute to by default and so falls under the same no-collector-while-in-flight
+rule, making the test untrusted rather than recording nothing silently; `affected_trace_threads`
+attributes it correctly once set. `asyncio.to_thread`, `anyio.to_thread.run_sync`, `anyio.Path`,
+and `aiosqlite` need no such help.
 
 - **Read-mode `open`** under rootdir → `data:<path>` = content sha. Skipped: `.py` files,
   `__pycache__`, the cache, venvs, and files modified after the session started (outputs the
@@ -343,7 +388,7 @@ collector. Probes confirmed on 3.13 and 3.14 that it sees `open`, `os.listdir`, 
 - **`sqlite3.connect`** → treated as a data file.
 - **Process spawns** → the spawning collector is untrusted. The hook sees `subprocess.Popen`,
   `_posixsubprocess.fork_exec` (which `multiprocessing` calls directly), `os.posix_spawn`,
-  `os.exec`, `os.system` and `os.fork`. With `trace_subprocesses` on, only spawns that Child
+  `os.exec`, `os.system` and `os.fork`. With `affected_trace_subprocesses` on, only spawns that Child
   processes can't trace count.
 
 `os.environ` gets swapped to a recording subclass for the run. Its `__getitem__` sees `getenv`,
@@ -462,7 +507,7 @@ Litestar would each need their own adapter; not planned.
 
 ### Child processes
 
-This whole section applies only with `[tool.voci] trace_subprocesses = true`. Without it, spawns
+This whole section applies only with `[tool.voci] affected_trace_subprocesses = true`. Without it, spawns
 just mark tests untrusted. A child's trace is attributed to the collector that spawned it: the
 test's, or a fixture's, as with a server subprocess started by a session fixture. Every patch
 below is installed at run start and restored at run end.
@@ -551,13 +596,15 @@ Gaps are what `verify` and a CI full run are for.
 | Import-time code (decorator bodies, metaclass) | Collection collector, module-global (rule 3) | Modules first imported inside a test |
 | Unresolvable reference, `__getattr__`, `dir(module)` | Whole-module (rule 4) | — |
 | Shared-scope fixture | Fixture collector (rule 1) | — |
-| Threads | Untrusted by default; opt-in `trace_threads`; `TestClient` needs neither | C-started threads → untrusted |
+| `TestClient`, `asyncio.to_thread`, `anyio.to_thread.run_sync`/`Path`, `aiosqlite` | Sound by default — each copies or inherits the caller's context on its own | — |
+| A bare `Thread`, `aiofiles`, or a direct `loop.run_in_executor` call | Untrusted by default; opt-in `affected_trace_threads` attributes both | C-started threads → untrusted regardless |
+| A known untraceable dependency | `@voci.untrusted(reason)`, always runs, no `verify` prediction to mismatch | — |
 | `mock.patch("pkg.mod.name")`, ORM and forward-ref strings | String references (rule 5) | Strings assembled at runtime |
 | Dynamic imports, plugin discovery | `import_module` wrapped (rule 6); directory listings are `dir:` deps | Module picked by a runtime value with no import call and no listing |
 | Missing module added (cherry-pick fixing an `ImportError`), shadowing, optional dependency installed | `module:` keys (rule 7) | — |
 | Process-wide setup at import (`logging`, `warnings`, `load_dotenv`, loop policy) | Session-global effects (rule 3) | Setup done inside a function no test depends on |
 | Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
-| Subprocesses, `multiprocessing` | Untrusted by default; opt-in `trace_subprocesses` traces same-interpreter children; isolated tests merge their record | Other executables → untrusted |
+| Subprocesses, `multiprocessing` | Untrusted by default; opt-in `affected_trace_subprocesses` traces same-interpreter children; isolated tests merge their record | Other executables → untrusted |
 | Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
 | Package upgrades | Per-test `module:` keys with requirement closure (rule 7) | Third-party code loaded dynamically outside entry points and requirements |
 | Interpreter, config, extensions, plugins | Environment key | — |
