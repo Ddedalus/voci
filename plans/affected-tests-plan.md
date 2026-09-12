@@ -35,7 +35,8 @@ dependencies, selection could skip a test it shouldn't.
 
 **M1 — Recording** (see Tracer)
 
-- [ ] `voci/_affected/tracer.py`: tool id, callback, first-party classification.
+- [x] `voci/_affected/tracer.py`: tool id, callback, first-party classification. Nothing calls
+      `Tracer` yet -- the next bullets wire it to a collector.
 - [ ] Collectors: test (a field on `_capture.TestContext`, already set in
       `run.py:_Session.run_envelope`), fixture (`_di/runtime.py` construct and teardown), and
       collection (`collect._import_module`).
