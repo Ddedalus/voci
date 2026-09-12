@@ -54,7 +54,15 @@ without the non-code dependencies deselects unsafely.
 
 - [ ] Audit hook, `os.environ` recorder, environment key.
 
-**M5 — Child-process tracing, opt-in** (see Child processes)
+**M5 — Starlette/FastAPI adapter** (see Starlette/FastAPI adapter)
+
+- [ ] `voci/_affected/adapters/starlette.py`: request recorder, matched-route capture, route
+      table extraction, and the enumeration hooks.
+- [ ] Static route parser, prefix derivation, and claimed effects in `resolve.py`.
+- [ ] Selection rules. Port the probe's 16 edits as tests against a synthetic app, checking that
+      the changed tests are a subset of the predicted ones.
+
+**M6 — Child-process tracing, opt-in** (see Child processes)
 
 - [ ] `[tool.voci] trace_subprocesses = true`, off by default. Setting it without the extra
       installed is a config error that names the extra.
@@ -67,7 +75,7 @@ without the non-code dependencies deselects unsafely.
 - [ ] Tests for every row of the child table below, on 3.13 and 3.14, including two concurrent
       tests spawning children at the same time.
 
-**M6 — Measure before recommending it**
+**M7 — Measure before recommending it**
 
 - [ ] Overhead on voci's suite and httpx2, alone and with `COVERAGE_CORE=sysmon` coverage.
 - [ ] Replay ~200 commits each of `oss/fastapi`, `oss/httpx`, and a real FastAPI *application*
@@ -79,7 +87,7 @@ without the non-code dependencies deselects unsafely.
       a switch should select only the tests whose dependencies differ from every stored state.
       Every full run is a bug to explain.
 
-**M7 — Replace `--watch`** (see `--watch`)
+**M8 — Replace `--watch`** (see `--watch`)
 
 - [ ] Delete `voci/_watch.py`, `cli._watch_scope`, the in-process re-invocation wiring in
       `cli.main` (the `wall_start` parameter and the argv filtering), and `tests/test_watch.py`.
@@ -101,7 +109,7 @@ Settled:
   - Returning to a tree that already ran selects nothing.
   - Nothing a checkout does triggers a full run. A lockfile change re-runs only the tests whose
     imports reach a changed distribution.
-  - The mechanisms are in Selection, Environment key and Storage; M6 measures it.
+  - The mechanisms are in Selection, Environment key and Storage; M7 measures it.
 - Passes and failures both get records, and only a matching pass skips. Errored, timed-out,
   skipped, untrusted and new tests always run; skips are cheap.
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
@@ -111,9 +119,9 @@ Settled:
   is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
   `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted.
   - The default path only observes: `sys.monitoring`, an audit hook, a recording `os.environ`
-    subclass, and pass-through wrappers on `importlib.import_module`, `importlib.util.find_spec`
-    and `importlib.metadata.entry_points`. Code sees no difference in values or types from any
-    of them.
+    subclass, and pass-through wrappers on `importlib.import_module`, `importlib.util.find_spec`,
+    `importlib.metadata.entry_points` and, when present, Starlette's `Router.__call__`,
+    `openapi()` and `url_path_for`. Code sees no difference in values or types from any of them.
 - **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
   re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
   than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
@@ -121,7 +129,7 @@ Settled:
   replacement is small, and it depends on the store anyway.
 - **Child processes: off by default.** A test that spawns a process is untrusted and always
   runs. Only the audit hook observes the spawn; nothing is patched.
-  - Tracing a bounded subset of children is an advanced opt-in (`trace_subprocesses`, M5). It
+  - Tracing a bounded subset of children is an advanced opt-in (`trace_subprocesses`, M6). It
     patches `Popen` and `multiprocessing`, which users mustn't meet unannounced, and its `.pth`
     ships in an extra, so a default install has nothing that runs at interpreter start.
   - The subset: same-interpreter `subprocess` and all three `multiprocessing` start methods,
@@ -224,7 +232,7 @@ costs nothing.
 3. **Effects:** a statement that mutates rather than binds folds into the binding of every
    first-party name it references. Examples: `app.include_router(r)`, `@app.get(...)`,
    `REGISTRY[k] = v`, or a call that passes a first-party name. In test files, effects fold
-   only within that file.
+   only within that file. Statements claimed by the Starlette/FastAPI adapter don't fold.
    - A decorator that is a call to a first-party factory also folds onto whatever that factory's
      body mutates, following first-party calls to a bounded depth. The probe's
      `@register("key")` registry was unsound without this.
@@ -383,8 +391,73 @@ their code is tracked as source and a hatch-vcs version changes on every commit.
   - `dep_set(id, path, keyed_checksums, UNIQUE(path, keyed_checksums))`, shared across tests and records,
     so a branch variant costs only the dep sets that differ
   - `parsed(content_sha, blocks, last_used)`, the parse cache
+  - adapter data: `record_request(record_id, method, path)`, the record's matched routes and
+    enumerator flag, and `route_table(file, qualname, path, methods, name)` from the last run
 
   Least-recently-used rows are pruned at write time.
+
+### Starlette/FastAPI adapter
+
+FastAPI apps are the core audience. Under rule 3, every `@router.get` folds into `app`, so adding
+an endpoint would re-run every test that uses the app. The adapter narrows route registrations to
+the tests a route can actually reach. It's active whenever `starlette` is imported during a run.
+
+- **Recording is observation only.** A pass-through wrapper on `starlette.routing.Router.__call__`
+  (FastAPI uses the same one) records, per collector:
+  - each request's `(method, path)`, from the outermost call. `scope["path"]` survives `Mount`
+    nesting. The outermost-call guard lives in a ContextVar, never in `scope`, because the app
+    would see an extra scope key.
+  - the matched route, read from `scope["route"]` or `scope["endpoint"]` after dispatch. That
+    works for 405s, for 422s where pydantic rejects the body before the handler runs, and for a
+    `Depends` that raises, because Starlette writes those keys before `handle()` runs. Only a
+    true 404 has no route, and its path is still recorded.
+
+  Attribution held for module-level `TestClient`, a persistent `with TestClient(app)` from a
+  fixture, `httpx.AsyncClient(transport=ASGITransport(app))` interleaved on one loop, sync tests
+  in threads, and websockets. Cost is ~1.7% per request once the endpoint-to-def mapping is cached
+  by `id(endpoint)`. Uncached, it was 42%, because of `inspect.getsourcelines`.
+- **A matched route counts as traced.** Its endpoint's def block joins rule 1's seeds even if
+  the handler never ran. So a 422 test depends on the handler signature and, through rule 2, on
+  the body model's `Field(gt=...)`. No new dependency kind is needed.
+- **Route table,** stored from the last run: `(file, endpoint qualname) → path with converters,
+  methods, name`.
+  - It's read from `fastapi.routing.iter_route_contexts()`, which flattens `include_router`
+    lazily, recursing into `Mount` sub-apps, and falls back to walking `.routes` for bare
+    Starlette.
+  - For `Mount`/websocket entries, the real values are on the nested `starlette_route`.
+- **Claimed statements.** The static parser recognises route decorators
+  (`get/post/put/patch/delete/head/options/api_route/route/websocket`), `add_api_route`,
+  `add_route` and `include_router`. It claims one when its receiver is a plain name, its path
+  is a literal, and the receiver registered routes in the last run's table. Claimed statements
+  are left out of rule 3's folding and handled below; anything unclaimed folds as before.
+- **Selection for a changed claimed statement.** Route identity is `(file, endpoint qualname)`.
+  - **Added, removed, path or method changed:** re-run the tests whose recorded requests match
+    the old or new pattern (FULL or PARTIAL, via `starlette.routing.compile_path`). A new
+    route's full path is its receiver's runtime prefix, derived from a sibling route of the
+    same file and receiver, plus the literal path.
+  - **Behavioural keyword arguments** (`response_model`, `status_code`, `dependencies`, …):
+    re-run the tests whose matched route it is.
+  - **OpenAPI-only keyword arguments** (`tags`, `summary`, `description`, `deprecated`,
+    `operation_id`, `include_in_schema`, `responses`, `openapi_extra`) and `name=`: re-run the
+    route-table enumerators.
+  - **Enumerators:** tests that called `app.openapi()` (so `/openapi.json` and the docs) or
+    `url_path_for`/`url_for`, recorded by wrapping those. They depend on every claimed statement.
+- **Coarse fallback** (every test using the app):
+  - a non-literal path or non-simple receiver;
+  - a `Mount` of a non-Starlette app, for that prefix;
+  - a pure reorder of two routes (matching is first-wins, and neither route changed);
+  - app-level effects: middleware, exception handlers, lifespan, `dependency_overrides` set at
+    import. These really do affect every request.
+
+Probe (a 32-test synthetic app, 16 edits, each run before and after): every test whose outcome
+changed was predicted, and the adapter predicted 2–7 tests per edit against 32 for the coarse
+rule. The edits included an unrelated route, a shadowing route, a new method on an existing path,
+path, `response_model`, `status_code`, `dependencies`, tags, removal, rename, an `include_router`
+prefix, a body model's `Field` constraint, a query default, and a raising dependency. The
+Starlette pieces relied on (`compile_path`, the `scope["endpoint"]` contract, `Router.__call__`)
+have been stable since 2019–2023. An unmerged route-index branch keeps them and also sets
+`scope["route"]` for plain Starlette. Django (`resolver_match`), Flask (Werkzeug `Rule`) and
+Litestar would each need their own adapter; not planned.
 
 ### Child processes
 
@@ -459,7 +532,7 @@ below is installed at run start and restored at run end.
 - **A change during a run:** the run finishes, and its mid-run stat guard drops the records of
   files that moved. The next iteration then starts immediately. Ctrl-C goes to the child first,
   which reports its partial results; a second Ctrl-C, or one while idle, exits.
-- **Warm fork mode (only if M7 measures it's needed):** the parent pre-imports the third-party
+- **Warm fork mode (only if M8 measures it's needed):** the parent pre-imports the third-party
   modules the last run imported, which the store records. It checks that no first-party module
   slipped into `sys.modules` (falling back to spawning if one did), then calls `os.fork()` per
   iteration. It forks before any thread exists, and only on POSIX.
@@ -472,7 +545,8 @@ Gaps are what `verify` and a CI full run are for.
 | --- | --- | --- |
 | Function body edit | Def block | — |
 | Constant, alias, pydantic/dataclass field, enum member, base, `__slots__` | Statement blocks, name closure (rule 2) | — |
-| Decorators, registrations, `include_router` | Effects fold into their target (rule 3) | FastAPI routes: coarse until the Starlette adapter |
+| Decorators, registrations | Effects fold into their target (rule 3) | Coarse for frameworks without an adapter |
+| FastAPI/Starlette routes, including 405/422/401 where the handler never runs | Starlette adapter: request patterns, matched route, enumerators | Non-literal paths, opaque mounts, app-level effects → coarse |
 | Import-time code (decorator bodies, metaclass) | Collection collector, module-global (rule 3) | Modules first imported inside a test |
 | Unresolvable reference, `__getattr__`, `dir(module)` | Whole-module (rule 4) | — |
 | Shared-scope fixture | Fixture collector (rule 1) | — |
