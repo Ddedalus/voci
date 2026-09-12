@@ -26,21 +26,14 @@ holds everywhere.
 ### Reporting
 JUnit XML and GitHub annotations
 
-### `--watch` misses source edits
-It reruns `cli.main` in-process, and only test modules are evicted from `sys.modules`, so an
-edited first-party module keeps running its old code. It also polls only the test roots, so an
-edit under `src/` never triggers a rerun. Both are M0 in
-[plans/testmon-plan.md](plans/testmon-plan.md), but they are bugs today regardless of that plan.
+### Affected-test selection, and a new `--watch`
+[plans/testmon-plan.md](plans/testmon-plan.md). `--affected` re-runs only the tests a change can
+reach, using function-level `sys.monitoring` tracing. `--watch` is rebuilt on top of it as the
+final milestone. Until then, today's `--watch` misses source edits: first-party modules stay
+cached between its in-process iterations, and it polls only the test roots.
 
 ### Needs human review - do not start
 
-**Testmon functionality** Allow for coverage-driven replay of only affected tests in a suite
-after code modification. Assessment and options in
-[plans/testmon-plan.md](plans/testmon-plan.md) — function-level `sys.monitoring` tracing,
-with a concrete answer or a named gap for each failure mode. Departs from the rule every existing
-cache keeps (order and predict, never skip), so the trade to price is a silent false green against
-the time saved. Three open decisions in the plan (exposure, `--watch`, subprocess tests) gate it.
- 
 **Benchmark** A published, reproducible benchmark against pytest and `pytest-xdist` on a real suite.
 
 **Injection ergonomics.** Lazy or optional dependencies, and overriding one fixture for a subtree

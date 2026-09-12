@@ -4,8 +4,8 @@ Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per
 first-party functions, data files and environment variables it touched. The next run re-runs a
 test only when one of those no longer matches the tree.
 
-Status: design settled, not started. ROADMAP holds it under "Needs human review" until the open
-decisions below are made. Reference implementation: `oss/pytest-testmon`.
+Status: design settled, not started. The final milestone replaces today's `--watch` with one
+built on this. Reference implementation: `oss/pytest-testmon`.
 
 ## Work done
 
@@ -18,16 +18,8 @@ decisions below are made. Reference implementation: `oss/pytest-testmon`.
 
 ## Work to do
 
-Nothing deselects until M4 lands; before that, M1–M3 can ship with `verify` only.
-
-**M0 — `--watch` bugs, independent of this feature**
-
-- [ ] First-party modules are never reloaded between iterations. `cli.main` runs in-process and
-      `collect._import_module` evicts only test modules. Probe: an edit to `myapp.f` wasn't seen
-      by the second `main()` call. Run each iteration in a child process.
-- [ ] `cli._watch_scope` polls the test roots only, so an edit under `src/` triggers nothing.
-      Poll every path in the store as well. `_watch._wait_for_change` must also return which
-      paths changed.
+Milestones are in build order. `--affected` stays hidden until M4 lands, because selection
+without the non-code dependencies deselects unsafely.
 
 **M1 — Recording** (see Tracer)
 
@@ -52,17 +44,34 @@ Nothing deselects until M4 lands; before that, M1–M3 can ship with `verify` on
 - [ ] Narrow through `lastfailed.candidate_files`, then filter per test like `lastfailed.select`.
 - [ ] `--affected` and `--affected=verify`. Report `N selected · M unaffected` as its own label,
       because `deselected` already means `-k`/`-m`, plus `full run: <reason>`.
-- [ ] `--watch` integration (decision 2).
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
 - [ ] Audit hook, `os.environ` recorder, environment key.
 
-**M5 — Measure before recommending it**
+**M5 — Child processes** (see Child processes)
+
+- [ ] `voci/_affected/child.py` and a `voci-affected.pth` in the wheel. Check that the `.pth`
+      lands in both a regular install and an editable one (hatchling `force-include`).
+- [ ] Parent side: patch `subprocess.Popen` and `multiprocessing.process.BaseProcess.start`, add
+      the fork hook, sort spawns into traced and untrusted, and merge child files at session end.
+- [ ] Tests for every row of the child table below, on 3.13 and 3.14, including two concurrent
+      tests spawning children at the same time.
+
+**M6 — Measure before recommending it**
 
 - [ ] Overhead on voci's suite and httpx2, alone and with `COVERAGE_CORE=sysmon` coverage.
 - [ ] Replay ~200 commits each of `oss/fastapi` and `oss/httpx` under `verify`. Record the
       fraction selected, the share of module-block edits, and any false greens.
+
+**M7 — Replace `--watch`** (see `--watch`)
+
+- [ ] Delete `voci/_watch.py`, `cli._watch_scope`, the in-process re-invocation wiring in
+      `cli.main` (the `wall_start` parameter and the argv filtering), and `tests/test_watch.py`.
+- [ ] New parent loop, watched set, and debounce.
+- [ ] Measure per-iteration startup on httpx2. Add the warm fork mode only if third-party
+      imports dominate.
+- [ ] Rewrite the `--watch` sections of `docs/reference/cli.md` and `spec/02-cli-and-config.md`.
 
 ## Decisions
 
@@ -75,16 +84,20 @@ Settled:
   always run; skips are cheap.
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
   at runtime.
-
-Open:
-
-1. **Exposure.** Recommend the `--affected` flag only, no `[tool.voci]` key, so the false-green
-   risk stays opt-in.
-2. **`--watch`.** Recommend applying `--affected` after a green run. That's the gap `--lf`
-   leaves, and a watch session ends in a real full run.
-3. **Process-spawning tests.** Recommend always running them. The alternative is tracing
-   children through an env-var bootstrap, the way `COVERAGE_PROCESS_START` works. testmon shipped
-   that once, then removed it (#16, #192).
+- **Exposure:** the `--affected` flag only, with no `[tool.voci]` key for now.
+- **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
+  re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
+  than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
+  first-party module keeps its old code (probed). It also polls only the test roots. The
+  replacement is small, and it depends on the store anyway.
+- **Child processes: trace the bounded subset** and mark everything else untrusted (see Child
+  processes). The rule was to build it if finite effort buys better UX, not if it's a bug
+  hellscape.
+  - Same-interpreter `subprocess` and all three `multiprocessing` start methods were prototyped
+    end to end. They cover the common cases: a CLI under test, and worker pools.
+  - Deliberately excluded, because they are where coverage.py's subprocess bug history
+    concentrates (#310, #1101, #1892, #2137): abrupt-exit patching, signal handlers, and
+    foreign interpreters.
 
 ## Design
 
@@ -155,7 +168,7 @@ A set of `(path, checksum)` pairs:
      (testmon #191, unsolved there), decorator bodies, metaclasses, and dataclass or attrs
      `__init__`s, which trace to `<string>` filenames.
    - It brings the hub problem back for module-block edits only. About 38% of voci's source is
-     module block. If M5 shows most commits touch one, narrow this rule to direct imports and
+     module block. If M6 shows most commits touch one, narrow this rule to direct imports and
      accept missing constants reached through re-exports.
 4. `data:`, `dir:` and `env:` entries from M4.
 
@@ -187,8 +200,9 @@ collector. Probes confirmed on 3.13 and 3.14 that it sees `open`, `os.listdir`, 
   cases loaded from data.
 - **`os.listdir`/`os.scandir`** → `dir:<path>` = hash of the sorted names.
 - **`sqlite3.connect`** → treated as a data file.
-- **Process spawns** (`subprocess.Popen`, `os.posix_spawn`, `os.exec`, `os.system`, `os.fork`)
-  → the test is untrusted.
+- **Process spawns** that Child processes doesn't trace → the test is untrusted. The hook sees
+  `subprocess.Popen`, `_posixsubprocess.fork_exec` (which `multiprocessing` calls directly),
+  `os.posix_spawn`, `os.exec`, `os.system` and `os.fork`.
 
 `os.environ` gets swapped to a recording subclass for the run. Its `__getitem__` sees `getenv`,
 `get`, `in`, `copy()` and iteration (probed). Each key read becomes `env:<KEY>` = hash of its
@@ -223,6 +237,80 @@ Per-test third-party tracking is out: `DISABLE` leaves no record of which packag
   `test(env_id, test_id, outcome, untrusted)`, `test_dep(test_rowid, dep_set_id)`, and
   `dep_set(id, path, checksums, UNIQUE(path, checksums))`, which is shared across tests.
 
+### Child processes
+
+A child's trace is attributed to the collector that spawned it: the test's, or a fixture's, as
+with a server subprocess started by a session fixture.
+
+- **Bootstrap:** a `.pth` in voci's wheel runs one `os.getenv` and does nothing unless
+  `VOCI_AFFECTED_DIR` is set. coverage ships the same thing as `a1_coverage.pth`. Measured cost:
+  ~0.4ms per interpreter start when unset, ~4ms when set. `VOCI_AFFECTED_DIR` is set in
+  `os.environ` for the whole run. It's a run-wide constant, so spawns that inherit the
+  environment (`multiprocessing`'s `env=None`, the forkserver) pick it up without a race.
+- **Write-through:** the child tracer appends each first-seen code object to
+  `$VOCI_AFFECTED_DIR/<pid>` immediately, with an unbuffered `os.write`.
+  - A child killed by SIGTERM or SIGKILL, or ending in `os._exit`, has still recorded everything
+    it ran, so no exit patching, `atexit` or signal handlers are needed.
+  - Children never touch the sqlite store (coverage #1101: sqlite in a signal handler deadlocks).
+    The parent merges the files at session end.
+- **Per-spawn attribution:**
+  - `subprocess.Popen` is patched to pass a *copy* of the env (its own `env=` or `os.environ`)
+    with `VOCI_AFFECTED_TEST=<collector token>` added. Mutating the shared `os.environ` instead
+    misattributed 11% of 400 concurrent spawns; the copy misattributed none. An `env=` that
+    scrubs the environment gets the variables added too.
+  - `BaseProcess.start` is patched to put the token on the `Process` object, which travels
+    pickled to spawn and forkserver children. A child-side patch of `_bootstrap`, installed by
+    `child.py`, reads it back.
+    - The env or ContextVar alone isn't enough for forkserver: it is started once and reused,
+      and in the probe it attributed three tests' workers to the first one.
+    - 3.14 made forkserver the Linux default.
+  - `os.register_at_fork(after_in_child=...)` switches a forked child to write-through into its
+    own file, keeping the ContextVar it inherited. The `sys.monitoring` registration survives
+    `fork` (probed).
+- **Traced or untrusted:** a spawn is traced when both hold:
+  - argv[0] resolves to `sys.executable`, or to a script whose shebang is that interpreter
+    (console scripts in the venv);
+  - argv has no `-I`/`-S`, which would skip the `.pth`.
+
+  Everything else makes the spawning collector untrusted: other executables (including `sh -c`,
+  `git`, `docker` and foreign interpreters, since any of them can run first-party code out of
+  sight), plus `os.system`, `os.posix_spawn` and `os.exec*` called directly. At session end, a
+  traced spawn that left no file (the child died before `site` ran) makes the collector
+  untrusted.
+
+| Child | Result |
+| --- | --- |
+| `subprocess` → `sys.executable`, a venv console script | Traced |
+| `multiprocessing` spawn / fork / forkserver, `ProcessPoolExecutor` | Traced |
+| raw `os.fork()` | Traced (fork hook) |
+| Child killed, timed out, or ended in `os._exit` | Traced up to the kill |
+| `sh -c`, `git`, other interpreters, `-I`/`-S`, `os.system` | Untrusted |
+
+### `--watch`
+
+- **The parent never imports test or first-party code.** Each iteration is a child
+  `python -m voci --affected <argv>`, so a first-party edit is always seen. `--affected` already
+  selects failures, new tests and stale tests, so `--lf` is no longer appended. The first
+  iteration runs immediately: a full run when there's no store, the affected set otherwise.
+- **Watched set,** recomputed from the store (read-only) after each child exits:
+  - every `*.py` under the test roots, to catch new tests;
+  - every path the store records: first-party `.py`, `data:` and `dir:` entries;
+  - non-test `.py` files anywhere under rootdir, so an added or removed file triggers the child's
+    full-run bail-out;
+  - `pyproject.toml`, `uv.lock`, and the site-packages directory's own mtime. These are
+    environment-key inputs that can change during a session.
+
+  Directories are pruned the way discovery prunes them.
+- **Polling:** stat-based every 0.3s, with no new dependency. A run starts only after 150ms with
+  no further change, so an editor saving several files triggers one run.
+- **A change during a run:** the run finishes, and its mid-run stat guard drops the records of
+  files that moved. The next iteration then starts immediately. Ctrl-C goes to the child first,
+  which reports its partial results; a second Ctrl-C, or one while idle, exits.
+- **Warm fork mode (only if M7 measures it's needed):** the parent pre-imports the third-party
+  modules the last run imported, which the store records. It checks that no first-party module
+  slipped into `sys.modules` (falling back to spawning if one did), then calls `os.fork()` per
+  iteration. It forks before any thread exists, and only on POSIX.
+
 ## Failure modes
 
 Gaps are what `verify` and a CI full run are for.
@@ -237,7 +325,7 @@ Gaps are what `verify` and a CI full run are for.
 | `mock.patch` string targets | Target module reached through imports, rule 3 | Never imported anywhere |
 | Dynamic imports, registries | New or removed file → full run | Existing module picked by a runtime value |
 | Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
-| Subprocesses, `multiprocessing` | Untrusted; isolated tests merge their record | Decision 3 |
+| Subprocesses, `multiprocessing` | Same-interpreter children traced; isolated tests merge their record | Other executables → untrusted |
 | Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
 | Packages, interpreter, config, extensions | Environment key | — |
 | Positional parametrize ids reordered | Test file's module block; data cases via audit | — |
