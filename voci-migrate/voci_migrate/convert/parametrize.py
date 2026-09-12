@@ -488,9 +488,10 @@ def _kind_of(item: Item, axis: Axis) -> Kind:
         if name not in _named(mark.args[0]):
             continue
         return Kind.INDIRECT if _is_indirect(mark.kwargs.get("indirect")) else Kind.MARK
-    fixture = item.resolve(name)
-    if fixture is None or fixture.direct_param:
+    if _hook_direct(item, name):
         return Kind.GENERATED
+    fixture = item.resolve(name)
+    assert fixture is not None  # `_hook_direct` already ruled out no fixture at all
     if _carries(fixture, axis):
         return Kind.FIXTURE
     return Kind.INDIRECT
@@ -553,19 +554,56 @@ def _grouped(specs: Sequence[CallSpec], item: Item) -> Iterator[tuple[str, ...]]
     synthetic per-call fixture it builds for a plain argument caches correctly), so the index alone
     can no longer tell two marks' argnames apart — nor even one mark's own argnames from a name a
     low-cardinality column (a `bool`, a `None`) happens to repeat in step with. A name no mark on
-    this item covers — a hook-built axis, or a fixture's own `params=` — has no such ground truth
-    to fall back on, so it keeps the index signature, which is what those are still correct for
-    (the fold only touches "direct" params).
+    this item covers is either a hook-built axis or a fixture's own `params=`; a fixture's `params=`
+    is untouched by the fold (it is not a "direct" param at all), so it keeps its index signature. A
+    hook-built axis is folded exactly like a mark's, and has no mark position to fall back on
+    either, so `_hook_grouped` reaches for the one thing the fold leaves alone: the values
+    themselves.
     """
     marks = _mark_positions(item)
+    hooked = [name for name in specs[0].indices if name not in marks and _hook_direct(item, name)]
+    axis_of = _hook_grouped(specs, hooked)
     grouped: dict[object, list[str]] = {}
     for name in specs[0].indices:
-        key: object = marks.get(name)
+        key: object = marks.get(name, axis_of.get(name))
         if key is None:
             key = tuple(spec.indices.get(name, -1) for spec in specs)
         grouped.setdefault(key, []).append(name)
     for group in grouped.values():
         yield tuple(group)
+
+
+def _hook_grouped(specs: Sequence[CallSpec], names: Sequence[str]) -> Mapping[str, str]:
+    """Which of `names` (all hook-built, per `_hook_direct`) vary together as one axis.
+
+    Two names one hook call parametrized together vary as one row, so a case's value for one
+    narrows what the other can be — the number of distinct `(a, b)` pairs across every case is
+    fewer than `distinct(a) * distinct(b)`. Two names built by separate hook calls stack as an
+    independent product instead, so every combination the product allows actually occurs and that
+    count is exactly `distinct(a) * distinct(b)`. Names are unioned into one axis wherever the pair
+    falls short of the product — the same principle `_row_index` applies to a row already known to
+    be one axis, run here pairwise across every candidate pair to find which rows are one axis in
+    the first place. A composite axis whose own pair of columns happens to realize every
+    combination the product allows — a coincidence, not a sign of two independent axes — still
+    splits under this test; nothing in the dump distinguishes the two, but a full-product row
+    converts the same way whichever the two decorators voci writes, so no case is lost.
+    """
+    values = {name: tuple(spec.params.get(name, "") for spec in specs) for name in names}
+    widths = {name: len(set(values[name])) for name in names}
+    parent = {name: name for name in names}
+
+    def find(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    for position, a in enumerate(names):
+        for b in names[position + 1 :]:
+            paired = len(set(zip(values[a], values[b], strict=True)))
+            if paired < widths[a] * widths[b]:
+                parent[find(a)] = find(b)
+    return {name: find(name) for name in names}
 
 
 def _mark_positions(item: Item) -> Mapping[str, int]:
@@ -579,12 +617,22 @@ def _mark_positions(item: Item) -> Mapping[str, int]:
     return found
 
 
+def _hook_direct(item: Item, name: str) -> bool:
+    """Whether `name` is a `pytest_generate_tests` hook parametrizing a plain name with no fixture
+    behind it — the same `DirectParamFixtureDef` case `_kind_of` reads as `Kind.GENERATED`. Called
+    only for a name no mark on `item` covers, since a marked name is already known "direct" without
+    asking what it resolves to.
+    """
+    fixture = item.resolve(name)
+    return fixture is None or fixture.direct_param
+
+
 def _direct_names(specs: Sequence[CallSpec], item: Item) -> frozenset[str]:
     """Names pytest calls a "direct" param: an explicit, non-indirect `@pytest.mark.parametrize`,
-    or a `pytest_generate_tests` hook parametrizing a plain name with no fixture behind it — the
-    same `DirectParamFixtureDef` case `_kind_of` reads as `Kind.GENERATED`. `axes` only reaches
-    for `_row_index`'s value-based recovery for these: an indirect mark or a real fixture's own
-    `params=` keeps its own index regardless of what else stacks on the test.
+    or a `pytest_generate_tests` hook parametrizing a plain name with no fixture behind it (see
+    `_hook_direct`). `axes` only reaches for `_row_index`'s value-based recovery for these: an
+    indirect mark or a real fixture's own `params=` keeps its own index regardless of what else
+    stacks on the test.
     """
     found: set[str] = set()
     marked: set[str] = set()
@@ -598,8 +646,7 @@ def _direct_names(specs: Sequence[CallSpec], item: Item) -> frozenset[str]:
     for name in specs[0].indices:
         if name in marked:
             continue
-        fixture = item.resolve(name)
-        if fixture is None or fixture.direct_param:
+        if _hook_direct(item, name):
             found.add(name)
     return frozenset(found)
 

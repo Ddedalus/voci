@@ -204,6 +204,103 @@ def test_a_hook_axis_stacked_with_a_mark_stays_its_own_axis() -> None:
     assert inner.values == (("'i1'",), ("'i2'",))
 
 
+def test_two_stacked_hook_axes_stay_two_axes() -> None:
+    # The sibling gap `test_a_hook_axis_stacked_with_a_mark_stays_its_own_axis` didn't reach:
+    # both `outer` and `inner` built by hooks, with no mark on either to fall back on. Both fold
+    # to the same raw index (asserted below, as that test does) *and* neither has a
+    # `_mark_positions` entry, so `_grouped` used to key both on that identical raw-index tuple
+    # and fuse them into one `("inner", "outer")` group. Edited the same way as the hook+mark
+    # test above, but stripping both marks: every `(inner, outer)` pair actually occurs across the
+    # four cases, so `_hook_grouped` reads that as the independent product two separate axes would
+    # produce, not the fewer-than-the-product pairing one shared axis would leave.
+    dump = json.loads((DUMPS / f"{MECHANICAL}-pytest-9.1.json").read_text(encoding="utf-8"))
+    cases = [
+        entry
+        for entry in dump["items"]
+        if entry["nodeid"].startswith("test_marks.py::test_parametrize_stacked")
+    ]
+    assert len(cases) == 4
+    for name in ("inner", "outer"):
+        dump["fixture_defs"][f"hook_{name}"] = {
+            "argname": name,
+            "scope": "function",
+            "params": None,
+            "ids": None,
+            "autouse": False,
+            "visibility": "",
+            "kind": "DirectParamFixtureDef",
+            "direct_param": True,
+            "argnames": ["request"],
+            "returns": "Any",
+            "func": {
+                "module": "_pytest.python",
+                "qualname": "get_direct_param_fixture_func",
+                "file": "${site_packages}/_pytest/python.py",
+                "lineno": 1154,
+                "wrapped": False,
+            },
+        }
+    for entry in cases:
+        entry["own_markers"] = [
+            m for m in entry["own_markers"] if m["args"][:1] not in (["'inner'"], ["'outer'"])
+        ]
+        entry["markers_with_origin"] = [
+            m
+            for m in entry["markers_with_origin"]
+            if m["args"][:1] not in (["'inner'"], ["'outer'"])
+        ]
+        entry["name2fixturedefs"]["inner"] = ["hook_inner"]
+        entry["name2fixturedefs"]["outer"] = ["hook_outer"]
+
+    gt = model.build(dump)
+    cases_built = [item for item in gt.items if item.originalname == "test_parametrize_stacked"]
+    for case in cases_built:
+        assert case.callspec is not None
+        assert case.callspec.indices["outer"] == case.callspec.indices["inner"]
+
+    inner, outer = sorted(parametrize.axes(cases_built), key=lambda axis: axis.key)
+
+    assert outer.argnames == ("outer",)
+    assert outer.values == (("'o1'",), ("'o2'",))
+    assert inner.argnames == ("inner",)
+    assert inner.values == (("'i1'",), ("'i2'",))
+
+
+def test_a_composite_hook_axis_with_a_repeated_column_stays_one_axis() -> None:
+    # `width`/`height` (`test_an_axis_carries_its_values_ids_and_place_in_the_composed_id` above)
+    # is one hook call's own composite axis, its two dumped rows -- (2, 3), (5, 8) -- never
+    # repeating either column's value. A third case reusing `width`'s first value alongside
+    # `height`'s second -- (2, 8) -- repeats a value in each column without the rows themselves
+    # repeating: `width` alone now reads 2, 5, 2 and `height` alone 3, 8, 8, so a recovery keyed on
+    # each column's own distinct values would tell them apart instead of pairing them.
+    # `_hook_grouped` reads the pair instead: (2, 3), (5, 8), (2, 8) are three distinct pairs,
+    # fewer than the four `2 * 2` distinct values in each column would produce if the columns
+    # varied independently, so they stay one axis.
+    dump = json.loads((DUMPS / f"{PARAMETRIZE}-pytest-9.1.json").read_text(encoding="utf-8"))
+    large = next(
+        entry for entry in dump["items"] if entry["nodeid"] == "test_generated.py::test_area[large]"
+    )
+    third = json.loads(json.dumps(large))
+    third["nodeid"] = "test_generated.py::test_area[medium]"
+    third["callspec"] = {
+        "id": "medium",
+        "idlist": ["medium"],
+        "params": {"width": "2", "height": "8"},
+        "indices": {"width": 2, "height": 2},
+        "marks": [],
+    }
+    dump["items"].append(third)
+
+    gt = model.build(dump)
+    cases = [item for item in gt.items if item.originalname == "test_area"]
+    assert len(cases) == 3
+
+    (axis,) = parametrize.axes(cases)
+
+    assert axis.argnames == ("width", "height")
+    assert axis.values == (("2", "3"), ("5", "8"), ("2", "8"))
+
+
 # --- what each construct becomes ----------------------------------------------------------------
 
 
