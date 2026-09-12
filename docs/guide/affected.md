@@ -55,11 +55,42 @@ a repository — or under `.voci_cache/` outside one. Deleting it is always safe
 
 ## Checking the selection before trusting it
 
-`--affected=verify` runs every test regardless of what the plain flag would have skipped, and
-reports which ones that would have been, flagging any whose actual outcome disagreed with what its
-stored record predicted. Run it in CI, or whenever a suite has tests that touch things voci can't
-see — order dependence, timing, randomness, the network, an external database — to confirm the
-selection isn't skipping something it shouldn't.
+Plain `--affected` skips a test the moment its stored dependencies match — it never actually runs
+the test to check that the skip was safe. `--affected=verify` does that checking: it runs every
+test, skipping none of them, but for each one it still computes what plain `--affected` would have
+decided, then compares that prediction against the outcome the test just produced for real.
+
+When every prediction holds up, the report just adds a count of how many would have been
+skipped, alongside the usual totals:
+
+```console
+$ voci --affected=verify
+config: pyproject.toml
+...
+352 tests · 12 would have been skipped · 3.4s wall
+```
+
+When a test that was predicted to skip — because its stored record says it last passed with these
+same dependencies — comes back with a different outcome this time, voci names it as a mismatch
+instead of silently counting it:
+
+```console
+$ voci --affected=verify
+config: pyproject.toml
+...
+MISMATCH  tests/test_users.py::test_create_user
+    predicted a skip (recorded passing) — this run: FAILED
+352 tests · 12 would have been skipped · 1 mismatch · 3.4s wall
+```
+
+A mismatch means this test's real outcome depends on something voci's tracking doesn't see — the
+same handful of things any run of `--affected` can miss: an earlier test leaving behind state,
+timing, randomness, a network call, or data in an external database that changed independently of
+this checkout. It isn't necessarily a bug in the tracking itself; a genuinely flaky or
+order-dependent test will mismatch here on its own, change or no change. Either way, a mismatched
+test is one you shouldn't trust `--affected` to skip correctly until you've tracked down why —
+`verify` is what to run periodically, or in CI, to find these before a plain `--affected` run
+skips a test that needed to fail.
 
 ## Threads and subprocesses
 
