@@ -1,6 +1,6 @@
 # Affected-test selection ("testmon")
 
-Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per passing test, the
+Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per test result, the
 first-party functions, data files and environment variables it touched. The next run re-runs a
 test only when one of those no longer matches the tree.
 
@@ -40,8 +40,9 @@ without the non-code dependencies deselects unsafely.
       tests before writing selection.
 - [ ] `code → block` resolution at session end. Records that touched a file which changed during
       the run are dropped.
-- [ ] `voci/_affected/store.py`. Measure its size on voci's suite and on httpx2 first. If it's
-      small, a JSON file under `_cache.py`'s discipline replaces sqlite.
+- [ ] `voci/_affected/store.py`: several records per test, the parse cache, the import map, the
+      git-common-dir location, and LRU pruning. Measure size on voci's suite and httpx2 after 20
+      branch switches.
 
 **M3 — Selection and CLI** (see Selection)
 
@@ -73,6 +74,10 @@ without the non-code dependencies deselects unsafely.
       whose tests run without external services, added as an `oss/` submodule (fastapi's own
       suite tests the library, not an app). Run each under `verify` and record the fraction
       selected, which rule selected each test, and any false greens.
+- [ ] Branch churn: on each corpus, alternate among 3 branches 20 times, one of them with a
+      lockfile change. After the first visit to each tree, a return should select nothing, and
+      a switch should select only the tests whose dependencies differ from every stored state.
+      Every full run is a bug to explain.
 
 **M7 — Replace `--watch`** (see `--watch`)
 
@@ -87,11 +92,18 @@ without the non-code dependencies deselects unsafely.
 
 Settled:
 
-- Function-level tracing. Each test is compared against its own stored fingerprint, never
-  against "what changed since the last run". Branch switches, partial runs, interrupted runs, and
-  `-k`/`-m` therefore cost re-runs, never a missed test. testmon has bugs here (#78, #204).
-- Only passed tests get a record. Failed, errored, timed-out, skipped, untrusted and new tests
-  always run; skips are cheap.
+- Function-level tracing. Each test is compared against its own stored records, never against
+  "what changed since the last run". Partial runs, interrupted runs, and `-k`/`-m` therefore
+  cost re-runs, never a missed test. testmon has bugs here (#78, #204).
+- **Switching between a few branches all day is the main workload,** not an edge case. A test's
+  result is cached by the content of its dependencies, like a build cache, not by what the
+  previous run saw.
+  - Returning to a tree that already ran selects nothing.
+  - Nothing a checkout does triggers a full run, except a lockfile whose imported packages
+    differ from every state kept, and only the first time.
+  - The mechanisms are in Selection, Environment key and Storage; M6 measures it.
+- Passes and failures both get records, and only a matching pass skips. Errored, timed-out,
+  skipped, untrusted and new tests always run; skips are cheap.
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
   at runtime.
 - **Exposure:** `--affected` is a flag only, with no `[tool.voci]` key for now.
@@ -99,8 +111,9 @@ Settled:
   is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
   `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted.
   - The default path only observes: `sys.monitoring`, an audit hook, a recording `os.environ`
-    subclass, and a pass-through wrapper on `importlib.import_module`. Code sees no difference
-    in values or types from any of them.
+    subclass, and pass-through wrappers on `importlib.import_module` and
+    `importlib.metadata.entry_points`. Code sees no difference in values or types from any of
+    them.
 - **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
   re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
   than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
@@ -174,16 +187,28 @@ Mapping a code object to a block:
 - Assertion rewriting leaves qualname, line and filename untouched. The probes confirmed all
   of this.
 
-A record passes while every checksum it holds for a file is still among that file's current
-checksums (testmon `process_code.py:280`). Line shifts and edits to unexecuted functions are
-therefore invisible, and nothing looks up a qualname at selection time. A cold parse plus hash of
-`oss/pytest/src` (39k LOC) takes ~0.5s; after that, only files whose content hash moved are
-re-parsed. Don't use `ast.get_source_segment`, which measured 3–5x slower.
+**Records are keyed, not positional.** A record maps dependency keys to checksums, and it's stale
+when any key's current checksum differs or the key has gone. The keys:
+
+- `(path, qualname)` for def blocks. The checksum covers every def with that qualname, which
+  handles redefinitions and `if/else` defs.
+- `(path, name)` for module-level names. The checksum covers every statement in that module
+  binding the name, plus every effect folded onto it from any file.
+  - Keying on names rather than statements matters for soundness. A new `x = 2` further down a
+    module leaves `x = 1` untouched but changes `x`.
+  - A new `@app.get` in another file changes `app` too. Selection re-resolves the effect
+    statements of changed files to find what they fold onto.
+- `data:`, `dir:` and `env:` keys, from M4.
+
+Line shifts and edits to unexecuted functions are invisible. Selection needs the parse, cached
+by content, of changed files only. A cold parse plus hash of `oss/pytest/src` (39k LOC) takes
+~0.5s. Don't use `ast.get_source_segment`, which measured 3–5x slower.
 
 ### What a passing test depends on
 
-A set of `(path, checksum)` pairs. Tracing supplies the functions that ran; the statements they
-reach are resolved statically, per name rather than per file, so a re-export hub costs nothing.
+A set of dependency keys, each with its checksum. Tracing supplies the functions that ran; the
+names they reach are resolved statically, per name rather than per file, so a re-export hub
+costs nothing.
 
 1. **Traced:** def blocks its own collector recorded, plus those of each `module`/`session`
    fixture in `record.plan.steps` (which already includes `voci.use(...)` fixtures). The
@@ -245,15 +270,30 @@ Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/ht
 ### Selection
 
 - **Current checksums** for every stored path. Content is always hashed; `(mtime_ns, size)`
-  never decides a skip. `.py` files are re-parsed only when that hash moved.
-- **Selected:** tests whose record is stale, plus those with none. That covers new tests, last
-  failures, untrusted tests, and tests in files that had collection errors. A record is pruned
-  only when its id is missing from a *fully* collected file.
+  never decides a skip. Parse results are cached by content hash, not path, so a file returning
+  to a version seen on another branch isn't re-parsed.
+- **A test keeps several records,** one per distinct dependency state it ran under: the 8 most
+  recently used, per environment.
+  - The most recent record whose checksums all match the current tree decides. If it's a pass,
+    the test is skipped; if it's a failure, or nothing matches, the test runs.
+  - Returning to a branch whose tree was already run therefore runs nothing (testmon keeps one
+    record and re-runs everything, #78).
+  - A flake that failed on the same tree as an older pass still runs, because the newer record
+    wins.
+- **Always selected:** new tests, untrusted tests, and tests in files with collection errors. A
+  record is pruned only when its id is missing from a *fully* collected file.
+- **Added and removed files need no special rule.**
+  - A removed file takes its checksums with it, so every test that used it runs.
+  - An added file can only matter if something reaches it. A static import means some importing
+    file changed, which is caught. `pkgutil` and glob discovery list a directory, which is a
+    `dir:` dependency. `importlib.import_module` is rule 6.
+  - The one case that needs a rule is shadowing: an added module or package whose dotted name,
+    under the recorded import roots, was imported last run from somewhere else (a new
+    `app/json.py`, or an `__init__.py` that turns a namespace package into a regular one). Only
+    the tests that imported that name run.
 - **Full run**, with its reason printed:
   - no stored environment key matches;
   - the store is missing or its schema has changed;
-  - a non-test `.py` file under rootdir was added or removed (`pkgutil`, `importlib` by name,
-    registries);
   - no tool id is free.
 
   testmon's `configure.py` reasons table is the pattern.
@@ -281,32 +321,49 @@ value, or "absent". Volatile keys (`PWD`, `SHLVL`, …) only cost re-runs.
 
 ### Environment key
 
-A mismatch means a full run. The last 4 keys are kept, so alternating 3.13 and 3.14 wipes
-nothing; testmon deletes on every change. The key covers:
+A mismatch means a full run. The last 8 keys are kept, so alternating interpreters, or branches
+with different lockfiles, wipes nothing; testmon deletes on every change. The key covers:
 
 - interpreter implementation, full version, ABI flags, and `sys.platform`;
-- installed distributions as `(name, version)`, excluding those whose files resolve under
-  rootdir. An editable hatch-vcs install, voci included, changes version on every commit, and its
-  code is tracked as source anyway;
+- `(name, version)` of the distributions that **provided a module imported during the run**,
+  mapped through `importlib.metadata.packages_distributions()`.
+  - A bump to ruff, pyrefly, or anything else the tests never import changes nothing, so a
+    dependabot branch for a dev tool isn't a full run.
+  - First-party distributions are excluded, because their code is tracked as source and a
+    hatch-vcs version changes on every commit, voci's included. Their entry points are included.
+- the entry points of every group queried during the run, through a pass-through wrapper on
+  `importlib.metadata.entry_points`, so a newly installed plugin counts;
 - the resolved `[tool.voci]`, plus `-W`, `--timeout`, concurrency and assert mode;
 - `LANG`, `LC_*` and `TZ`, which C reads without going through `os.environ`;
 - hashes of extension modules loaded from under rootdir.
 
-Per-test third-party tracking is out: `DISABLE` leaves no record of which package ran. Any
-`uv lock --upgrade` is therefore a full run.
+Per-test third-party tracking is out: `DISABLE` leaves no record of which package ran. Upgrading
+a package the tests import is therefore a full run, once per lockfile state.
 
 ### Storage
 
-- `.voci_cache/affected.sqlite3`, schema version in `user_version`; a mismatch deletes and
-  rebuilds it.
+- **Location:** `<git common dir>/voci/affected.sqlite3` inside a git repository, from
+  `git rev-parse --git-common-dir`; `.voci_cache/affected.sqlite3` otherwise.
+  - Every worktree of a repo shares one store. Records are content-addressed and paths are
+    rootdir-relative, so a test that passed in one worktree needn't rerun in another on the
+    same tree.
+  - If git is missing or fails, fall back to `.voci_cache/`; never error (testmon #214).
+- **Schema** version in `user_version`; a mismatch deletes and rebuilds the file.
 - `journal_mode=DELETE`, so it stays one file. CI caches that copied only the main file lost WAL
   data (testmon #233, #236).
 - Explicit close, `busy_timeout`, and rootdir-relative paths.
 - One write transaction at session end, from the parent only. That's testmon's single-writer
   lesson (#245, #259).
-- Tables, after testmon's `db.py:340`: `env(id, key, last_used)`,
-  `test(env_id, test_id, outcome, untrusted)`, `test_dep(test_rowid, dep_set_id)`, and
-  `dep_set(id, path, checksums, UNIQUE(path, checksums))`, which is shared across tests.
+- **Tables**, after testmon's `db.py:340`:
+  - `env(id, key, last_used)`
+  - `record(id, env_id, test_id, outcome, untrusted, last_used)`, several per test
+  - `record_dep(record_id, dep_set_id)`
+  - `dep_set(id, path, keyed_checksums, UNIQUE(path, keyed_checksums))`, shared across tests and records,
+    so a branch variant costs only the dep sets that differ
+  - `parsed(content_sha, blocks, last_used)`, the parse cache
+  - `import_map(module, origin)` from the last run, for shadowing detection.
+
+  Least-recently-used rows are pruned at write time.
 
 ### Child processes
 
@@ -369,14 +426,15 @@ below is installed at run start and restored at run end.
 - **Watched set,** recomputed from the store (read-only) after each child exits:
   - every `*.py` under the test roots, to catch new tests;
   - every path the store records: first-party `.py`, `data:` and `dir:` entries;
-  - non-test `.py` files anywhere under rootdir, so an added or removed file triggers the child's
-    full-run bail-out;
+  - the mtime of every first-party package directory, so an added module that could shadow an
+    imported name is noticed;
   - `pyproject.toml`, `uv.lock`, and the site-packages directory's own mtime. These are
     environment-key inputs that can change during a session.
 
   Directories are pruned the way discovery prunes them.
 - **Polling:** stat-based every 0.3s, with no new dependency. A run starts only after 150ms with
-  no further change, so an editor saving several files triggers one run.
+  no further change, so an editor saving several files, or a `git checkout` rewriting a hundred,
+  triggers one run. After switching back to a branch already run, that run selects nothing.
 - **A change during a run:** the run finishes, and its mid-run stat guard drops the records of
   files that moved. The next iteration then starts immediately. Ctrl-C goes to the child first,
   which reports its partial results; a second Ctrl-C, or one while idle, exits.
@@ -399,7 +457,7 @@ Gaps are what `verify` and a CI full run are for.
 | Shared-scope fixture | Fixture collector (rule 1) | — |
 | Threads | Untrusted by default; opt-in `trace_threads`; `TestClient` needs neither | C-started threads → untrusted |
 | `mock.patch("pkg.mod.name")`, ORM and forward-ref strings | String references (rule 5) | Strings assembled at runtime |
-| Dynamic imports | `import_module` wrapped (rule 6); new or removed file → full run | Module picked by a runtime value with no import call |
+| Dynamic imports, plugin discovery | `import_module` wrapped (rule 6); directory listings are `dir:` deps; shadowing check | Module picked by a runtime value with no import call and no listing |
 | Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
 | Subprocesses, `multiprocessing` | Untrusted by default; opt-in `trace_subprocesses` traces same-interpreter children; isolated tests merge their record | Other executables → untrusted |
 | Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
@@ -407,13 +465,14 @@ Gaps are what `verify` and a CI full run are for.
 | Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
 | File edited mid-run | Records dropped | — |
-| Branch switch, mtime churn, moved cache | Content hashes, per-test comparison, relative paths | — |
+| Branch switching all day | Several records per test, parse cache by content, env keys kept per lockfile, store shared across worktrees | The first visit to each new tree, or each new lockfile |
+| mtime churn, moved cache | Content hashes, relative paths | — |
 | Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |
 
 ## References
 
 - `oss/pytest-testmon/testmon/`:
-  - `process_code.py`: blocks (`:111`), membership check (`:280`).
+  - `process_code.py`: blocks (`:111`); its membership check (`:280`) is replaced here by keyed records.
   - `db.py`: schema (`:340`), environments (`:647`).
   - `testmon_core.py`: sentinel for new tests (`:329`).
   - `configure.py`: no-select reasons.
