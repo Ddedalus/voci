@@ -40,9 +40,9 @@ without the non-code dependencies deselects unsafely.
       tests before writing selection.
 - [ ] `code → block` resolution at session end. Records that touched a file which changed during
       the run are dropped.
-- [ ] `voci/_affected/store.py`: several records per test, the parse cache, the import map, the
-      git-common-dir location, and LRU pruning. Measure size on voci's suite and httpx2 after 20
-      branch switches.
+- [ ] `voci/_affected/store.py`: several records per test, the parse cache, `module:` key
+      resolution, the git-common-dir location, and LRU pruning. Measure size on voci's suite and
+      httpx2 after 20 branch switches.
 
 **M3 — Selection and CLI** (see Selection)
 
@@ -99,8 +99,8 @@ Settled:
   result is cached by the content of its dependencies, like a build cache, not by what the
   previous run saw.
   - Returning to a tree that already ran selects nothing.
-  - Nothing a checkout does triggers a full run, except a lockfile whose imported packages
-    differ from every state kept, and only the first time.
+  - Nothing a checkout does triggers a full run. A lockfile change re-runs only the tests whose
+    imports reach a changed distribution.
   - The mechanisms are in Selection, Environment key and Storage; M6 measures it.
 - Passes and failures both get records, and only a matching pass skips. Errored, timed-out,
   skipped, untrusted and new tests always run; skips are cheap.
@@ -111,9 +111,9 @@ Settled:
   is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
   `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted.
   - The default path only observes: `sys.monitoring`, an audit hook, a recording `os.environ`
-    subclass, and pass-through wrappers on `importlib.import_module` and
-    `importlib.metadata.entry_points`. Code sees no difference in values or types from any of
-    them.
+    subclass, and pass-through wrappers on `importlib.import_module`, `importlib.util.find_spec`
+    and `importlib.metadata.entry_points`. Code sees no difference in values or types from any
+    of them.
 - **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
   re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
   than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
@@ -228,9 +228,14 @@ costs nothing.
    - A decorator that is a call to a first-party factory also folds onto whatever that factory's
      body mutates, following first-party calls to a bounded depth. The probe's
      `@register("key")` registry was unsound without this.
-   - An effect with no first-party target, every import statement (importing runs the target
-     module), and collection-traced blocks (decorator bodies, metaclasses) are *module-global*:
-     depending on anything in a module pulls them in.
+   - Every import statement (importing runs the target module) and collection-traced blocks
+     (decorator bodies, metaclasses) are *module-global*: depending on anything in a module pulls
+     them in.
+   - An effect with no first-party target mutates process-wide state: `logging.basicConfig`,
+     `warnings.filterwarnings`, `load_dotenv()`, an event-loop policy, a patched third-party
+     attribute. Those are *session-global*: every test run in a process where that module was
+     imported depends on them, because they apply to every test that runs afterwards. They are
+     rarely edited, so this costs little.
 4. **Fail safe to whole-module.** A reference the resolver can't follow (past the bound, or an
    attribute of an unknown object) becomes a dependency on the whole module where resolution
    stopped, expanded through that module's re-exports. The same happens for a module with a
@@ -244,7 +249,25 @@ costs nothing.
    collector imports through it becomes a whole-module dependency. 27% of fastapi's test files
    load tutorial modules this way. A non-literal `__import__(...)` in an executed block marks
    the test untrusted.
-7. `data:`, `dir:` and `env:` entries from M4.
+7. **Imports resolve to keys.** Every import in the closure adds a `module:<dotted>` key whose
+   checksum is where that name resolved at record time. So does every module a collector imports
+   or probes at runtime (`import_module`, `importlib.util.find_spec`). The possible origins:
+   - a first-party path;
+   - a namespace package's directories;
+   - "absent";
+   - for third-party, the distribution's version plus the versions, or absence, of its
+     requirement closure, extras included.
+
+   This covers:
+   - an import made to work by adding the missing file (a cherry-pick). If the `ImportError` was
+     caught (`try: from app.utils import helper except ImportError: helper = None`), the test
+     passed on the fallback, and nothing it depends on changes except `module:app.utils`, which
+     goes from absent to a path;
+   - optional dependencies (`try: import orjson`) getting installed;
+   - shadowing (a new `app/json.py`);
+   - third-party upgrades, per test: a pydantic bump re-runs the tests whose closure imports
+     pydantic, directly or through a dependent distribution, not the whole suite.
+8. `data:`, `dir:` and `env:` entries from M4.
 
 Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/httpx`):
 
@@ -283,14 +306,13 @@ Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/ht
 - **Always selected:** new tests, untrusted tests, and tests in files with collection errors. A
   record is pruned only when its id is missing from a *fully* collected file.
 - **Added and removed files need no special rule.**
-  - A removed file takes its checksums with it, so every test that used it runs.
-  - An added file can only matter if something reaches it. A static import means some importing
-    file changed, which is caught. `pkgutil` and glob discovery list a directory, which is a
-    `dir:` dependency. `importlib.import_module` is rule 6.
-  - The one case that needs a rule is shadowing: an added module or package whose dotted name,
-    under the recorded import roots, was imported last run from somewhere else (a new
-    `app/json.py`, or an `__init__.py` that turns a namespace package into a regular one). Only
-    the tests that imported that name run.
+  - A removed file takes its checksums with it, and its `module:` key goes absent.
+  - An added file matters only if some test's `module:` key now resolves differently. That
+    covers a previously missing import, shadowing, and an `__init__.py` turning a namespace
+    package into a regular one. The alternative is a listed directory (a `dir:` key).
+  - Each distinct `module:` key is re-resolved once per run: first-party ones by path existence
+    under the recorded import roots, third-party ones with `find_spec` on the top-level name
+    plus metadata, which executes nothing.
 - **Full run**, with its reason printed:
   - no stored environment key matches;
   - the store is missing or its schema has changed;
@@ -321,24 +343,24 @@ value, or "absent". Volatile keys (`PWD`, `SHLVL`, …) only cost re-runs.
 
 ### Environment key
 
-A mismatch means a full run. The last 8 keys are kept, so alternating interpreters, or branches
-with different lockfiles, wipes nothing; testmon deletes on every change. The key covers:
+A mismatch means a full run. The last 8 keys are kept, so alternating interpreters wipes
+nothing; testmon deletes on every change. The key covers only what can't be attributed to a test:
 
 - interpreter implementation, full version, ABI flags, and `sys.platform`;
-- `(name, version)` of the distributions that **provided a module imported during the run**,
-  mapped through `importlib.metadata.packages_distributions()`.
-  - A bump to ruff, pyrefly, or anything else the tests never import changes nothing, so a
-    dependabot branch for a dev tool isn't a full run.
-  - First-party distributions are excluded, because their code is tracked as source and a
-    hatch-vcs version changes on every commit, voci's included. Their entry points are included.
 - the entry points of every group queried during the run, through a pass-through wrapper on
   `importlib.metadata.entry_points`, so a newly installed plugin counts;
 - the resolved `[tool.voci]`, plus `-W`, `--timeout`, concurrency and assert mode;
 - `LANG`, `LC_*` and `TZ`, which C reads without going through `os.environ`;
 - hashes of extension modules loaded from under rootdir.
 
-Per-test third-party tracking is out: `DISABLE` leaves no record of which package ran. Upgrading
-a package the tests import is therefore a full run, once per lockfile state.
+Installed packages aren't in the key; they're per-test `module:` keys (rule 7). A lockfile
+change therefore re-runs the tests whose imports reach a changed distribution:
+- a dev-tool bump (ruff, pyrefly) re-runs nothing;
+- a feature branch adding a dependency re-runs the tests that import it.
+
+`DISABLE` means third-party code is never traced, and it doesn't need to be: the imports in a
+test's closure name the entry points into it. First-party distributions are skipped, because
+their code is tracked as source and a hatch-vcs version changes on every commit.
 
 ### Storage
 
@@ -361,7 +383,6 @@ a package the tests import is therefore a full run, once per lockfile state.
   - `dep_set(id, path, keyed_checksums, UNIQUE(path, keyed_checksums))`, shared across tests and records,
     so a branch variant costs only the dep sets that differ
   - `parsed(content_sha, blocks, last_used)`, the parse cache
-  - `import_map(module, origin)` from the last run, for shadowing detection.
 
   Least-recently-used rows are pruned at write time.
 
@@ -457,15 +478,18 @@ Gaps are what `verify` and a CI full run are for.
 | Shared-scope fixture | Fixture collector (rule 1) | — |
 | Threads | Untrusted by default; opt-in `trace_threads`; `TestClient` needs neither | C-started threads → untrusted |
 | `mock.patch("pkg.mod.name")`, ORM and forward-ref strings | String references (rule 5) | Strings assembled at runtime |
-| Dynamic imports, plugin discovery | `import_module` wrapped (rule 6); directory listings are `dir:` deps; shadowing check | Module picked by a runtime value with no import call and no listing |
+| Dynamic imports, plugin discovery | `import_module` wrapped (rule 6); directory listings are `dir:` deps | Module picked by a runtime value with no import call and no listing |
+| Missing module added (cherry-pick fixing an `ImportError`), shadowing, optional dependency installed | `module:` keys (rule 7) | — |
+| Process-wide setup at import (`logging`, `warnings`, `load_dotenv`, loop policy) | Session-global effects (rule 3) | Setup done inside a function no test depends on |
 | Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
 | Subprocesses, `multiprocessing` | Untrusted by default; opt-in `trace_subprocesses` traces same-interpreter children; isolated tests merge their record | Other executables → untrusted |
 | Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
-| Packages, interpreter, config, extensions | Environment key | — |
+| Package upgrades | Per-test `module:` keys with requirement closure (rule 7) | Third-party code loaded dynamically outside entry points and requirements |
+| Interpreter, config, extensions, plugins | Environment key | — |
 | Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
 | File edited mid-run | Records dropped | — |
-| Branch switching all day | Several records per test, parse cache by content, env keys kept per lockfile, store shared across worktrees | The first visit to each new tree, or each new lockfile |
+| Branch switching all day | Several records per test, parse cache by content, per-test package keys, store shared across worktrees | The first visit to each new tree |
 | mtime churn, moved cache | Content hashes, relative paths | — |
 | Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |
 
