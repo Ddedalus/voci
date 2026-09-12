@@ -14,7 +14,8 @@ built on this. Reference implementation: `oss/pytest-testmon`.
   `fastapi/__init__.py` re-exports everything. Line-level tracing was rejected at 1.73x for
   little gain.
 - Research pass, 2026-09-12: testmon's source, docs and issues, voci's seams, and probes. Findings
-  are folded into Design and Failure modes.
+  are folded into Design and Failure modes. The prototypes and full reports are in
+  [research/testmon/](../research/testmon/README.md), indexed by the plan section each one backs.
 
 ## Work to do
 
@@ -568,6 +569,10 @@ Gaps are what `verify` and a CI full run are for.
 | Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |
 
 ## References
+
+- [research/testmon/](../research/testmon/README.md): the prototypes behind every "probe" and
+  "probed" above, including the name-level analyzer, the Starlette adapter with its 16-edit
+  soundness harness, the child tracer, and the subagent reports they came from.
 
 - `oss/pytest-testmon/testmon/`:
   - `process_code.py`: blocks (`:111`); its membership check (`:280`) is replaced here by keyed records.

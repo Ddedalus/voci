@@ -1,0 +1,11 @@
+[project]
+name = "tinypkg"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[project.scripts]
+tinytool = "tinypkg.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
