@@ -27,7 +27,7 @@ holds everywhere.
 JUnit XML and GitHub annotations
 
 ### Affected-test selection, and a new `--watch`
-[plans/testmon-plan.md](plans/testmon-plan.md). `--affected` re-runs only the tests a change can
+[plans/affected-tests-plan.md](plans/affected-tests-plan.md). `--affected` re-runs only the tests a change can
 reach, using function-level `sys.monitoring` tracing. `--watch` is rebuilt on top of it as the
 final milestone. Until then, today's `--watch` misses source edits: first-party modules stay
 cached between its in-process iterations, and it polls only the test roots.

@@ -27,6 +27,7 @@ nav = [
         "guide/isolated.md",
         "guide/mocking.md",
         "guide/selection.md",
+        "guide/affected.md",
         "guide/config.md",
     ] },
     { "How-to" = [

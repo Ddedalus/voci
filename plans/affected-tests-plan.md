@@ -1,4 +1,4 @@
-# Affected-test selection ("testmon")
+# Affected-test selection
 
 Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per test result, the
 first-party functions, data files and environment variables it touched. The next run re-runs a
@@ -13,14 +13,20 @@ built on this. Reference implementation: `oss/pytest-testmon`.
   rejected: the median `oss/fastapi` change selects 56% of the suite, because
   `fastapi/__init__.py` re-exports everything. Line-level tracing was rejected at 1.73x for
   little gain.
-- Research pass, 2026-09-12: testmon's source, docs and issues, voci's seams, and probes. Findings
-  are folded into Design and Failure modes. The prototypes and full reports are in
-  [research/testmon/](../research/testmon/README.md), indexed by the plan section each one backs.
+- Research pass, 2026-09-12: pytest-testmon's source, docs and issues, voci's seams, and probes.
+  Findings are folded into Design and Failure modes. The prototypes and full reports are in
+  [research/affected/](../research/affected/README.md), indexed by the plan section each one
+  backs.
+- User docs drafted early, from the settled design, for review before implementation:
+  [docs/guide/affected.md](../docs/guide/affected.md), the "Affected-test selection" section of
+  [docs/reference/cli.md](../docs/reference/cli.md), and the `trace_threads`/`trace_subprocesses`
+  entries in [docs/guide/config.md](../docs/guide/config.md). M3, M6 and M8 below reconcile these
+  with whatever implementation changes.
 
 ## Work to do
 
-Milestones are in build order. `--affected` stays hidden until M4 lands, because selection
-without the non-code dependencies deselects unsafely.
+Milestones are in build order. `--affected` stays hidden until M4 lands: without the non-code
+dependencies, selection could skip a test it shouldn't.
 
 **M1 — Recording** (see Tracer)
 
@@ -49,7 +55,9 @@ without the non-code dependencies deselects unsafely.
 
 - [ ] Narrow through `lastfailed.candidate_files`, then filter per test like `lastfailed.select`.
 - [ ] `--affected` and `--affected=verify`. Report `N selected · M unaffected` as its own label,
-      because `deselected` already means `-k`/`-m`, plus `full run: <reason>`.
+      because `deselected` already means `-k`/`-m`, plus `full run: <reason>`. Matches the draft
+      in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's generated
+      block afterward.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
@@ -66,7 +74,8 @@ without the non-code dependencies deselects unsafely.
 **M6 — Child-process tracing, opt-in** (see Child processes)
 
 - [ ] `[tool.voci] trace_subprocesses = true`, off by default. Setting it without the extra
-      installed is a config error that names the extra.
+      installed is a config error that names the extra. Matches the draft in
+      `docs/guide/config.md`.
 - [ ] A `voci-subprocesses` workspace distribution, installed as `voci[subprocesses]`. It holds
       only the `.pth` and the child bootstrap. Check that the `.pth` lands in both a regular
       install and an editable one.
@@ -95,48 +104,39 @@ without the non-code dependencies deselects unsafely.
 - [ ] New parent loop, watched set, and debounce.
 - [ ] Measure per-iteration startup on httpx2. Add the warm fork mode only if third-party
       imports dominate.
-- [ ] Rewrite the `--watch` sections of `docs/reference/cli.md` and `spec/02-cli-and-config.md`.
+- [ ] Regenerate `docs/reference/cli.md`'s generated block for the new `--watch`, reconcile it
+      and `docs/guide/affected.md` with whatever changed since the draft, and update
+      `spec/02-cli-and-config.md`.
 
 ## Decisions
 
-Settled:
-
-- Function-level tracing. Each test is compared against its own stored records, never against
-  "what changed since the last run". Partial runs, interrupted runs, and `-k`/`-m` therefore
-  cost re-runs, never a missed test. testmon has bugs here (#78, #204).
-- **Switching between a few branches all day is the main workload,** not an edge case. A test's
-  result is cached by the content of its dependencies, like a build cache, not by what the
-  previous run saw.
-  - Returning to a tree that already ran selects nothing.
-  - Nothing a checkout does triggers a full run. A lockfile change re-runs only the tests whose
-    imports reach a changed distribution.
-  - The mechanisms are in Selection, Environment key and Storage; M7 measures it.
-- Passes and failures both get records, and only a matching pass skips. Errored, timed-out,
-  skipped, untrusted and new tests always run; skips are cheap.
+- **Function-level tracing.** Each test is checked against its own stored records, never against
+  what changed since the last run, so partial runs, interrupted runs, and `-k`/`-m` cost extra
+  re-runs but never a missed test (testmon bugs #78, #204).
+- **Branch switching among a handful of branches all day is the main workload,** not an edge
+  case: a test's result is cached by the content of its dependencies, like a build cache, not by
+  what the previous run saw. Mechanism: Selection, Environment key, Storage; M7 measures it.
+- **A pass skips a test only when it's the most recent matching record;** failures, errors,
+  timeouts, skips, untrusted tests, and new tests always run (see Selection).
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
   at runtime.
-- **Exposure:** `--affected` is a flag only, with no `[tool.voci]` key for now.
+- **`--affected` is a flag only,** with no `[tool.voci]` key for now.
 - **No surprise patching by default.** Anything that changes behaviour user code could observe
   is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
-  `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted.
-  - The default path only observes: `sys.monitoring`, an audit hook, a recording `os.environ`
-    subclass, and pass-through wrappers on `importlib.import_module`, `importlib.util.find_spec`,
-    `importlib.metadata.entry_points` and, when present, Starlette's `Router.__call__`,
-    `openapi()` and `url_path_for`. Code sees no difference in values or types from any of them.
-- **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
-  re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
-  than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
-  first-party module keeps its old code (probed). It also polls only the test roots. The
-  replacement is small, and it depends on the store anyway.
-- **Child processes: off by default.** A test that spawns a process is untrusted and always
-  runs. Only the audit hook observes the spawn; nothing is patched.
-  - Tracing a bounded subset of children is an advanced opt-in (`trace_subprocesses`, M6). It
-    patches `Popen` and `multiprocessing`, which users mustn't meet unannounced, and its `.pth`
-    ships in an extra, so a default install has nothing that runs at interpreter start.
-  - The subset: same-interpreter `subprocess` and all three `multiprocessing` start methods,
-    prototyped end to end.
-  - Excluded, because they are where coverage.py's subprocess bug history concentrates (#310,
-    #1101, #1892, #2137): abrupt-exit patching, signal handlers, and foreign interpreters.
+  `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted; the default
+  path only observes, so code sees no difference in values or types (see Tracer, Non-code
+  dependencies).
+- **`--watch` is rebuilt on `--affected`, not patched.** Today's `--watch` runs `cli.main`
+  in-process and evicts only test modules, so an edited first-party module keeps running its old
+  code (probed), and it polls only the test roots. The replacement starts with the tests that
+  need running, then keeps re-running failures plus whatever each change affects (see
+  `--watch`).
+- **Child processes are untrusted by default:** a spawn marks the test untrusted via the audit
+  hook, and nothing is patched. Tracing a bounded subset — same-interpreter `subprocess` and all
+  three `multiprocessing` start methods — is an opt-in (`trace_subprocesses`, M6), shipped as a
+  separate `voci[subprocesses]` extra so a base install runs nothing extra at interpreter start.
+  It excludes abrupt-exit patching, signal handlers, and foreign interpreters, where coverage.py's
+  subprocess bug history concentrates (#310, #1101, #1892, #2137) (see Child processes).
 
 ## Design
 
@@ -327,7 +327,7 @@ Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/ht
   - the store is missing or its schema has changed;
   - no tool id is free.
 
-  testmon's `configure.py` reasons table is the pattern.
+  Modeled on testmon's `configure.py` reasons table.
 
 ### Non-code dependencies
 
@@ -383,9 +383,9 @@ their code is tracked as source and a hatch-vcs version changes on every commit.
 - `journal_mode=DELETE`, so it stays one file. CI caches that copied only the main file lost WAL
   data (testmon #233, #236).
 - Explicit close, `busy_timeout`, and rootdir-relative paths.
-- One write transaction at session end, from the parent only. That's testmon's single-writer
-  lesson (#245, #259).
-- **Tables**, after testmon's `db.py:340`:
+- One write transaction at session end, from the parent only, avoiding the concurrent-writer
+  bugs testmon hit (#245, #259).
+- **Tables**, modeled on testmon's `db.py:340`:
   - `env(id, key, last_used)`
   - `record(id, env_id, test_id, outcome, untrusted, last_used)`, several per test
   - `record_dep(record_id, dep_set_id)`
@@ -570,7 +570,7 @@ Gaps are what `verify` and a CI full run are for.
 
 ## References
 
-- [research/testmon/](../research/testmon/README.md): the prototypes behind every "probe" and
+- [research/affected/](../research/affected/README.md): the prototypes behind every "probe" and
   "probed" above, including the name-level analyzer, the Starlette adapter with its 16-edit
   soundness harness, the child tracer, and the subagent reports they came from.
 

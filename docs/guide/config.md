@@ -95,6 +95,22 @@ produces.
 three tiers `-W` and `@voci.filterwarnings` also contribute to — see
 [Warnings](../reference/warnings.md) for the full picture.
 
+## `trace_threads` and `trace_subprocesses`
+
+Config-only keys with no CLI flag, for `--affected`. Off by default, a test that starts a thread
+or a subprocess is untrusted and always runs, since voci can't attribute what ran in it to that
+test. Turning either on makes voci patch the corresponding start mechanism for the run so it can:
+
+```toml
+[tool.voci]
+trace_threads = true
+trace_subprocesses = true
+```
+
+`trace_subprocesses` traces only same-interpreter children and needs the `voci[subprocesses]`
+extra installed. [Running only what changed](affected.md#threads-and-subprocesses) covers what
+each one changes and why it isn't the default.
+
 ## The rest
 
 [Command line](../reference/cli.md) lists every flag alongside its `[tool.voci]` key, for the

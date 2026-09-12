@@ -78,4 +78,6 @@ $ voci -k "users and not slow" --collect-only
 ```
 
 [Command line](../reference/cli.md) has the full reference for every flag here, plus the rest of
-`voci`'s options.
+`voci`'s options. [Running only what changed](affected.md) covers `--affected`, which narrows a
+run the same way `-k`/`-m` do but picks its subset from what a change touched rather than from an
+expression you write.

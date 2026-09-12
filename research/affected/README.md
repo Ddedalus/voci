@@ -1,7 +1,7 @@
 # Research behind the affected-test selection plan
 
 Throwaway prototypes, probes and subagent reports from the 2026-09-12 research pass behind
-[plans/testmon-plan.md](../../plans/testmon-plan.md). Reference material only: excluded from
+[plans/affected-tests-plan.md](../../plans/affected-tests-plan.md). Reference material only: excluded from
 ruff and pyrefly (`pyproject.toml`), never collected by voci, never imported by it. The code was
 written to answer one question each, fast; don't copy it into `voci/` without rewriting it.
 
