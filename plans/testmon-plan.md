@@ -27,13 +27,17 @@ without the non-code dependencies deselects unsafely.
 - [ ] Collectors: test (a field on `_capture.TestContext`, already set in
       `run.py:_Session.run_envelope`), fixture (`_di/runtime.py` construct and teardown), and
       collection (`collect._import_module`).
-- [ ] Context-propagating `threading.Thread.start` while a run is active; untrusted marking.
+- [ ] Untrusted marking for unattributed first-party code; opt-in `trace_threads`.
 - [ ] `@voci.isolated`: the worker ships its record in `result_to_json`, the way coverage's
       `harvest` does.
 
 **M2 — Fingerprints and store** (see Fingerprints, Storage)
 
-- [ ] `voci/_affected/blocks.py`: block checksums and import edges from one parse per file.
+- [ ] `voci/_affected/blocks.py`: statement and def blocks, with binds, references and effects,
+      from one parse per file.
+- [ ] `voci/_affected/resolve.py`: the name closure, effect folding, string index and
+      whole-module fallback. Write the soundness cases listed under "Probe results" as voci
+      tests before writing selection.
 - [ ] `code → block` resolution at session end. Records that touched a file which changed during
       the run are dropped.
 - [ ] `voci/_affected/store.py`. Measure its size on voci's suite and on httpx2 first. If it's
@@ -49,20 +53,26 @@ without the non-code dependencies deselects unsafely.
 
 - [ ] Audit hook, `os.environ` recorder, environment key.
 
-**M5 — Child processes** (see Child processes)
+**M5 — Child-process tracing, opt-in** (see Child processes)
 
-- [ ] `voci/_affected/child.py` and a `voci-affected.pth` in the wheel. Check that the `.pth`
-      lands in both a regular install and an editable one (hatchling `force-include`).
-- [ ] Parent side: patch `subprocess.Popen` and `multiprocessing.process.BaseProcess.start`, add
-      the fork hook, sort spawns into traced and untrusted, and merge child files at session end.
+- [ ] `[tool.voci] trace_subprocesses = true`, off by default. Setting it without the extra
+      installed is a config error that names the extra.
+- [ ] A `voci-subprocesses` workspace distribution, installed as `voci[subprocesses]`. It holds
+      only the `.pth` and the child bootstrap. Check that the `.pth` lands in both a regular
+      install and an editable one.
+- [ ] Parent side, active only with the key set and only for the duration of a run: patch
+      `subprocess.Popen` and `multiprocessing.process.BaseProcess.start`, add the fork hook, sort
+      spawns into traced and untrusted, and merge child files at session end.
 - [ ] Tests for every row of the child table below, on 3.13 and 3.14, including two concurrent
       tests spawning children at the same time.
 
 **M6 — Measure before recommending it**
 
 - [ ] Overhead on voci's suite and httpx2, alone and with `COVERAGE_CORE=sysmon` coverage.
-- [ ] Replay ~200 commits each of `oss/fastapi` and `oss/httpx` under `verify`. Record the
-      fraction selected, the share of module-block edits, and any false greens.
+- [ ] Replay ~200 commits each of `oss/fastapi`, `oss/httpx`, and a real FastAPI *application*
+      whose tests run without external services, added as an `oss/` submodule (fastapi's own
+      suite tests the library, not an app). Run each under `verify` and record the fraction
+      selected, which rule selected each test, and any false greens.
 
 **M7 — Replace `--watch`** (see `--watch`)
 
@@ -84,20 +94,27 @@ Settled:
   always run; skips are cheap.
 - Comment and whitespace edits invalidate nothing. Docstring edits do, since `__doc__` is read
   at runtime.
-- **Exposure:** the `--affected` flag only, with no `[tool.voci]` key for now.
+- **Exposure:** `--affected` is a flag only, with no `[tool.voci]` key for now.
+- **No surprise patching by default.** Anything that changes behaviour user code could observe
+  is an opt-in `[tool.voci]` key: `trace_subprocesses` (`Popen`, `multiprocessing`) and
+  `trace_threads` (`Thread.start`). Off, the affected tests are simply untrusted.
+  - The default path only observes: `sys.monitoring`, an audit hook, a recording `os.environ`
+    subclass, and a pass-through wrapper on `importlib.import_module`. Code sees no difference
+    in values or types from any of them.
 - **`--watch` implies `--affected`.** It starts with the tests that need running, then keeps
   re-running failures plus whatever each change affects. Today's `--watch` is replaced rather
   than fixed. It runs `cli.main` in-process and evicts only test modules, so an edited
   first-party module keeps its old code (probed). It also polls only the test roots. The
   replacement is small, and it depends on the store anyway.
-- **Child processes: trace the bounded subset** and mark everything else untrusted (see Child
-  processes). The rule was to build it if finite effort buys better UX, not if it's a bug
-  hellscape.
-  - Same-interpreter `subprocess` and all three `multiprocessing` start methods were prototyped
-    end to end. They cover the common cases: a CLI under test, and worker pools.
-  - Deliberately excluded, because they are where coverage.py's subprocess bug history
-    concentrates (#310, #1101, #1892, #2137): abrupt-exit patching, signal handlers, and
-    foreign interpreters.
+- **Child processes: off by default.** A test that spawns a process is untrusted and always
+  runs. Only the audit hook observes the spawn; nothing is patched.
+  - Tracing a bounded subset of children is an advanced opt-in (`trace_subprocesses`, M5). It
+    patches `Popen` and `multiprocessing`, which users mustn't meet unannounced, and its `.pth`
+    ships in an extra, so a default install has nothing that runs at interpreter start.
+  - The subset: same-interpreter `subprocess` and all three `multiprocessing` start methods,
+    prototyped end to end.
+  - Excluded, because they are where coverage.py's subprocess bug history concentrates (#310,
+    #1101, #1892, #2137): abrupt-exit patching, signal handlers, and foreign interpreters.
 
 ## Design
 
@@ -114,11 +131,16 @@ Settled:
   teardown. Session teardown runs in `store.aclose()` with no test context (`run.py:1345`).
 - **Collection:** each test file's import has a collector, which catches module bodies,
   decorator application and class creation.
-- **Threads:** neither 3.13 nor 3.14 passes context to new threads (probed). A patched
-  `Thread.start` runs the target in the creator's context (`Thread(context=)` on 3.14, a
-  wrapped `run` on 3.13). A server thread started by a session fixture then reports to that
-  fixture. First-party code that runs with no collector while tests are in flight marks those
-  tests untrusted.
+- **Threads:** neither 3.13 nor 3.14 passes context to new threads (probed).
+  - By default, first-party code that runs with no collector while tests are in flight marks
+    those tests untrusted. It's safe, and it's cheap for FastAPI: anyio copies the calling
+    test's context into `TestClient` handler calls, including through a persistent portal
+    (probed), so those need no help.
+  - Opt-in `[tool.voci] trace_threads = true` patches `Thread.start` for the duration of a run,
+    so the target runs in the creator's context (`Thread(context=)` on 3.14, a wrapped `run` on
+    3.13). A server thread started by a session fixture then reports to that fixture.
+  - It's opt-in for the same reason as `trace_subprocesses`: threads can observe the change,
+    because they see their creator's ContextVars.
 - **First-party:** a real file under rootdir, and not under `sys.prefix`, a directory holding
   `pyvenv.cfg` (testmon #206: a venv inside rootdir), or `.voci_cache`. `<string>`, zipimport and
   pyc-only names fail this and are ignored.
@@ -134,9 +156,14 @@ Settled:
 Each block is hashed as `ast.dump(include_attributes=False)` with blake2b-8, qualname included.
 Each file has:
 
-- **Module block:** module and class-body statements, plus every def's name and decorators.
-- **Def blocks:** one per def, covering its arguments, returns, type params and body. A nested
-  def's name and decorators stay in the enclosing block; its body gets a block of its own.
+- **Statement blocks:** one per top-level statement. Each records the names it binds, the names
+  it references, and whether it's an effect (see below).
+  - A `def` statement block covers the name and decorators, the part that runs at import.
+  - A `class` statement block covers bases, keywords, decorators, class-level statements
+    (fields, `model_config`, `__slots__`, enum members), and each method's name and decorators.
+- **Def blocks:** one per function or method, covering its arguments, returns, type params and
+  body. A nested def's name and decorators stay in the enclosing block; its body gets a block
+  of its own.
 
 Mapping a code object to a block:
 
@@ -155,22 +182,65 @@ re-parsed. Don't use `ast.get_source_segment`, which measured 3–5x slower.
 
 ### What a passing test depends on
 
-A set of `(path, checksum)` pairs:
+A set of `(path, checksum)` pairs. Tracing supplies the functions that ran; the statements they
+reach are resolved statically, per name rather than per file, so a re-export hub costs nothing.
 
-1. Blocks its own collector traced.
-2. Blocks traced by each `module`/`session` fixture in `record.plan.steps`, which already
-   includes `voci.use(...)` fixtures.
-3. The module block, and the collection-traced blocks, of every first-party file in the import
-   closure of its test file and of the files in 1–2:
-   - Edges come from the same parse, with names resolved through `sys.modules`; no source-root
-     config is needed.
-   - This covers code that runs only at import: constants read without calling into their module
-     (testmon #191, unsolved there), decorator bodies, metaclasses, and dataclass or attrs
-     `__init__`s, which trace to `<string>` filenames.
-   - It brings the hub problem back for module-block edits only. About 38% of voci's source is
-     module block. If M6 shows most commits touch one, narrow this rule to direct imports and
-     accept missing constants reached through re-exports.
-4. `data:`, `dir:` and `env:` entries from M4.
+1. **Traced:** def blocks its own collector recorded, plus those of each `module`/`session`
+   fixture in `record.plan.steps` (which already includes `voci.use(...)` fixtures). The
+   test's own `def` statement block is always included; it holds the parametrize decorators.
+2. **Name closure:** every name a block references resolves to the statement blocks that bind
+   it, and so on transitively.
+   - `from m import x` is followed into `m`'s binding of `x`, through re-exports, including
+     relative and star imports (star imports resolve to `__all__` or the public names).
+   - A method that ran pulls in its class block.
+   - Annotations are references, including string annotations, which get parsed. So a handler
+     signature reaches the pydantic models, nested models and type aliases it names.
+   - Imports inside a function body are references of that def block.
+3. **Effects:** a statement that mutates rather than binds folds into the binding of every
+   first-party name it references. Examples: `app.include_router(r)`, `@app.get(...)`,
+   `REGISTRY[k] = v`, or a call that passes a first-party name. In test files, effects fold
+   only within that file.
+   - A decorator that is a call to a first-party factory also folds onto whatever that factory's
+     body mutates, following first-party calls to a bounded depth. The probe's
+     `@register("key")` registry was unsound without this.
+   - An effect with no first-party target, every import statement (importing runs the target
+     module), and collection-traced blocks (decorator bodies, metaclasses) are *module-global*:
+     depending on anything in a module pulls them in.
+4. **Fail safe to whole-module.** A reference the resolver can't follow (past the bound, or an
+   attribute of an unknown object) becomes a dependency on the whole module where resolution
+   stopped, expanded through that module's re-exports. The same happens for a module with a
+   module-level `__getattr__`, `exec`/`eval`/`globals()`/`vars()` at module level, or one
+   referenced bare as a value (`dir(httpx)`). It must never fall through silently.
+5. **Strings:** literals shaped like identifiers or dotted paths reference every first-party
+   top-level name matching any segment. String constants assigned in class bodies are indexed
+   too. This covers `relationship("Address")`, `"User"` forward refs, and Django
+   `"app.Model"`; `__tablename__ = "addresses"` lets `ForeignKey("addresses.id")` find its class.
+6. **Runtime imports:** `importlib.import_module` is wrapped during a run. Each module a
+   collector imports through it becomes a whole-module dependency. 27% of fastapi's test files
+   load tutorial modules this way. A non-literal `__import__(...)` in an executed block marks
+   the test untrusted.
+7. `data:`, `dir:` and `env:` entries from M4.
+
+Probe results (a static analyzer over synthetic cases, `oss/fastapi` and `oss/httpx`):
+
+- All 21 soundness cases came out right. They covered constants, derived constants, both kinds
+  of alias, and pydantic fields, constraints, `model_config` and string forward refs. They also
+  covered dataclass defaults, enum members, bases, `__slots__`, registries, cross-file route
+  decorators, `TYPE_CHECKING`, `try/except ImportError`, `__all__` and `del`.
+- The expected misses are dynamic import by f-string, now rule 6, and table-name strings, now
+  rule 5.
+- Fraction of fastapi test files pulling in each of its 740 top-level statements:
+  - median 54% per-file vs 0.17% per-statement;
+  - a new function: 54% → 0;
+  - a `_compat` constant: 55% → 0.2%;
+  - `openapi/models.py` classes: 54.5% → 35%, which is real fan-in.
+
+  Seeding came from test-file text, not from tracing, so hot-path code will select more once it
+  runs for real.
+- httpx median: 97% → 0%.
+- Resolution over fastapi, 1,102 modules, takes ~1–1.7s cold; results are cached per content
+  hash.
+- No fastapi module needed the whole-module fallback. One httpx test module did (`dir(httpx)`).
 
 ### Selection
 
@@ -200,9 +270,10 @@ collector. Probes confirmed on 3.13 and 3.14 that it sees `open`, `os.listdir`, 
   cases loaded from data.
 - **`os.listdir`/`os.scandir`** → `dir:<path>` = hash of the sorted names.
 - **`sqlite3.connect`** → treated as a data file.
-- **Process spawns** that Child processes doesn't trace → the test is untrusted. The hook sees
-  `subprocess.Popen`, `_posixsubprocess.fork_exec` (which `multiprocessing` calls directly),
-  `os.posix_spawn`, `os.exec`, `os.system` and `os.fork`.
+- **Process spawns** → the spawning collector is untrusted. The hook sees `subprocess.Popen`,
+  `_posixsubprocess.fork_exec` (which `multiprocessing` calls directly), `os.posix_spawn`,
+  `os.exec`, `os.system` and `os.fork`. With `trace_subprocesses` on, only spawns that Child
+  processes can't trace count.
 
 `os.environ` gets swapped to a recording subclass for the run. Its `__getitem__` sees `getenv`,
 `get`, `in`, `copy()` and iteration (probed). Each key read becomes `env:<KEY>` = hash of its
@@ -239,14 +310,17 @@ Per-test third-party tracking is out: `DISABLE` leaves no record of which packag
 
 ### Child processes
 
-A child's trace is attributed to the collector that spawned it: the test's, or a fixture's, as
-with a server subprocess started by a session fixture.
+This whole section applies only with `[tool.voci] trace_subprocesses = true`. Without it, spawns
+just mark tests untrusted. A child's trace is attributed to the collector that spawned it: the
+test's, or a fixture's, as with a server subprocess started by a session fixture. Every patch
+below is installed at run start and restored at run end.
 
-- **Bootstrap:** a `.pth` in voci's wheel runs one `os.getenv` and does nothing unless
-  `VOCI_AFFECTED_DIR` is set. coverage ships the same thing as `a1_coverage.pth`. Measured cost:
-  ~0.4ms per interpreter start when unset, ~4ms when set. `VOCI_AFFECTED_DIR` is set in
-  `os.environ` for the whole run. It's a run-wide constant, so spawns that inherit the
-  environment (`multiprocessing`'s `env=None`, the forkserver) pick it up without a race.
+- **Bootstrap:** the `voci[subprocesses]` extra installs a `.pth` that runs one `os.getenv` and
+  does nothing unless `VOCI_AFFECTED_DIR` is set. coverage ships the same thing as
+  `a1_coverage.pth`. Measured cost: ~0.4ms per interpreter start when unset, ~4ms when set.
+  `VOCI_AFFECTED_DIR` is set in `os.environ` for the whole run. It's a run-wide constant, so
+  spawns that inherit the environment (`multiprocessing`'s `env=None`, the forkserver) pick it
+  up without a race.
 - **Write-through:** the child tracer appends each first-seen code object to
   `$VOCI_AFFECTED_DIR/<pid>` immediately, with an unbuffered `os.write`.
   - A child killed by SIGTERM or SIGKILL, or ending in `os._exit`, has still recorded everything
@@ -318,17 +392,19 @@ Gaps are what `verify` and a CI full run are for.
 | Failure mode | Answer | Gap |
 | --- | --- | --- |
 | Function body edit | Def block | — |
-| Constant, import, class attribute, base, decorator | Module block, rule 3 | Hub-coarse |
-| Import-time code (decorators, dataclass, metaclass) | Collection collector, rule 3 | Modules first imported inside a test |
-| Shared-scope fixture | Fixture collector, rule 2 | — |
-| Threads | Propagating `Thread.start` | C-started threads → untrusted |
-| `mock.patch` string targets | Target module reached through imports, rule 3 | Never imported anywhere |
-| Dynamic imports, registries | New or removed file → full run | Existing module picked by a runtime value |
+| Constant, alias, pydantic/dataclass field, enum member, base, `__slots__` | Statement blocks, name closure (rule 2) | — |
+| Decorators, registrations, `include_router` | Effects fold into their target (rule 3) | FastAPI routes: coarse until the Starlette adapter |
+| Import-time code (decorator bodies, metaclass) | Collection collector, module-global (rule 3) | Modules first imported inside a test |
+| Unresolvable reference, `__getattr__`, `dir(module)` | Whole-module (rule 4) | — |
+| Shared-scope fixture | Fixture collector (rule 1) | — |
+| Threads | Untrusted by default; opt-in `trace_threads`; `TestClient` needs neither | C-started threads → untrusted |
+| `mock.patch("pkg.mod.name")`, ORM and forward-ref strings | String references (rule 5) | Strings assembled at runtime |
+| Dynamic imports | `import_module` wrapped (rule 6); new or removed file → full run | Module picked by a runtime value with no import call |
 | Data files, templates, snapshots | Audit `data:`/`dir:` | C reads with no audit event |
-| Subprocesses, `multiprocessing` | Same-interpreter children traced; isolated tests merge their record | Other executables → untrusted |
+| Subprocesses, `multiprocessing` | Untrusted by default; opt-in `trace_subprocesses` traces same-interpreter children; isolated tests merge their record | Other executables → untrusted |
 | Env vars | Recorder; `LANG`/`LC_*`/`TZ` in the key | C `getenv` of other keys |
 | Packages, interpreter, config, extensions | Environment key | — |
-| Positional parametrize ids reordered | Test file's module block; data cases via audit | — |
+| Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
 | File edited mid-run | Records dropped | — |
 | Branch switch, mtime churn, moved cache | Content hashes, per-test comparison, relative paths | — |
