@@ -17,9 +17,12 @@ file's own parse into statement and def blocks; `resolve.py`'s `World` resolves 
 references into dependency keys (the name closure, effect folding, string index and whole-module
 fallback) and, via `resolve_code`, maps a `CollectorRecord`'s bare `(filename, qualname)` pairs
 back to those keys in the first place; `seeds.py` drives that per record, dropping one outright if
-it names a file that changed mid-run. Still to come: where the resulting seeds are stored and
-checksummed (`store.py`), and the `--affected`/`--affected-verify` flags that read it back; none
-of that exists yet, so the parent's own run still starts no `Tracer` of its own, and
+it names a file that changed mid-run; `store.py` is where the resulting seeds are checksummed
+(`Fingerprints`, `module_checksum`) and stored (`store_record`, in a sqlite3 file shared across a
+repository's worktrees). Still to come: the session-end driver that calls all of the above for
+every finished test, the environment-key computation `store_record`'s `env_key` takes as an opaque
+string today, and the `--affected`/`--affected-verify` flags that read the store back; none of
+that exists yet, so the parent's own run still starts no `Tracer` of its own, and
 `cli._installed_session` doesn't call `threads.install` yet either.
 """
 

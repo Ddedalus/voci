@@ -70,11 +70,9 @@ dependencies, selection could skip a test it shouldn't.
 - [x] `code → block` resolution at session end: `World.resolve_code` (`resolve.py`) maps one
       `CollectorRecord` code identifier to seed keys; `seeds.py`'s `seeds_for_record` drives it
       per record and drops one outright if it touched a file that changed mid-run.
-- [ ] `voci/_affected/store.py`: several records per test, the parse cache, `module:` key
-      resolution, the git-common-dir location, and LRU pruning. A key's checksum must call
-      `World.effect_fold_target` over every effect statement in the corpus that targets it, per
-      resolve.py's own module docstring. Measure size on voci's suite and httpx2 after 20 branch
-      switches.
+- [x] `voci/_affected/store.py`: location, schema, parse cache, checksum computation
+      (`Fingerprints`, `module_checksum`) and `store_record`. Sizing on voci's suite and httpx2
+      after 20 branch switches is M7's job.
 
 **M3 — Selection and CLI** (see Selection)
 
