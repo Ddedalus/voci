@@ -289,3 +289,87 @@ def test_a_relative_import_resolves_within_the_package() -> None:
     )
     closure = world.closure([DefKey(paths["pkg.app"], "handler")])
     assert NameKey(paths["pkg.config"], "TIMEOUT") in closure
+
+
+# A nested import is a reference of its own def block
+# ------------------------------------------------------------------------
+
+
+def test_a_nested_import_inside_a_function_resolves_to_its_own_module() -> None:
+    world, paths = _world(
+        {
+            "helpers": "X = 1\n",
+            "app": "def handler():\n    import helpers\n    return helpers.X\n",
+        }
+    )
+    closure = world.closure([DefKey(paths["app"], "handler")])
+    assert NameKey(paths["helpers"], "X") in closure
+
+
+def test_a_nested_import_shadows_a_same_named_top_level_binding() -> None:
+    """`shared` means two different things depending on scope: a plain module-level name in
+    `app` itself when read at module level, and `inner`'s import alias inside `handler` -- the
+    nested import must resolve to the latter when `handler`'s own body is what's asking."""
+    world, paths = _world(
+        {
+            "inner": "X = 2\n",
+            "app": (
+                "shared = object()\n"
+                "def handler():\n"
+                "    import inner as shared\n"
+                "    return shared.X\n"
+            ),
+        }
+    )
+    closure = world.closure([DefKey(paths["app"], "handler")])
+    assert NameKey(paths["inner"], "X") in closure
+    assert NameKey(paths["app"], "shared") not in closure
+
+
+# Every statement (and def) binding a name matters, not just the first
+# ------------------------------------------------------------------------
+
+
+def test_an_if_else_reassignment_pulls_in_both_branches_own_references() -> None:
+    world, paths = _world(
+        {
+            "flag_a": "A = 1\n",
+            "flag_b": "B = 1\n",
+            "config": (
+                "from flag_a import A\n"
+                "from flag_b import B\n"
+                "if A:\n"
+                "    DEBUG = A\n"
+                "else:\n"
+                "    DEBUG = B\n"
+            ),
+            "app": "from config import DEBUG\ndef handler():\n    return DEBUG\n",
+        }
+    )
+    closure = world.closure([DefKey(paths["app"], "handler")])
+    assert NameKey(paths["flag_a"], "A") in closure
+    assert NameKey(paths["flag_b"], "B") in closure
+
+
+def test_an_if_else_def_pulls_in_both_branches_own_references() -> None:
+    world, paths = _world(
+        {
+            "flag_a": "A = 1\n",
+            "flag_b": "B = 1\n",
+            "app": (
+                "from flag_a import A\n"
+                "from flag_b import B\n"
+                "if True:\n"
+                "    def dup():\n"
+                "        return A\n"
+                "else:\n"
+                "    def dup():\n"
+                "        return B\n"
+                "def handler():\n"
+                "    return dup()\n"
+            ),
+        }
+    )
+    closure = world.closure([DefKey(paths["app"], "handler")])
+    assert NameKey(paths["flag_a"], "A") in closure
+    assert NameKey(paths["flag_b"], "B") in closure

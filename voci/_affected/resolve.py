@@ -139,6 +139,7 @@ class _File:
     raw_nodes: dict[Block, ast.stmt]  # a top-level Block -> the ast.stmt it came from
     class_names: frozenset[str]
     imports: dict[str, _Import]
+    nested_imports: dict[str, dict[str, _Import]]  # def qualname -> its own local imports
     strings: dict[str, frozenset[str]]  # a top-level bound name -> string literals under it
     dunder_all: list[str] | None
     module_global: frozenset[str]  # top-level names bound by an Import/ImportFrom statement
@@ -247,8 +248,8 @@ class World:
         for file in self._files.values():
             for name in file.top_level_names():
                 self._string_index.setdefault(name, []).append((file.dotted, name))
-        self._cache: dict[tuple[str, str, bool], frozenset[_DepItem]] = {}
-        self._resolving: set[tuple[str, str, bool]] = set()
+        self._cache: dict[tuple[str, str, str | None, bool], frozenset[_DepItem]] = {}
+        self._resolving: set[tuple[str, str, str | None, bool]] = set()
 
     def _file(self, dotted: str) -> _File | None:
         return self._files.get(dotted)
@@ -271,41 +272,55 @@ class World:
     # -- binding resolution ----------------------------------------------
 
     def _resolve_binding(
-        self, dotted: str, name: str, *, ignore_fallback: bool = False
+        self,
+        dotted: str,
+        name: str,
+        *,
+        qualname: str | None = None,
+        ignore_fallback: bool = False,
     ) -> frozenset[_DepItem]:
-        cache_key = (dotted, name, ignore_fallback)
+        cache_key = (dotted, name, qualname, ignore_fallback)
         if cache_key in self._cache:
             return self._cache[cache_key]
         if cache_key in self._resolving:
             return frozenset()  # import cycle guard
         self._resolving.add(cache_key)
         try:
-            result = self._resolve_binding_uncached(dotted, name, ignore_fallback=ignore_fallback)
+            result = self._resolve_binding_uncached(
+                dotted, name, qualname=qualname, ignore_fallback=ignore_fallback
+            )
         finally:
             self._resolving.discard(cache_key)
         self._cache[cache_key] = result
         return result
 
     def _resolve_binding_uncached(
-        self, dotted: str, name: str, *, ignore_fallback: bool
+        self, dotted: str, name: str, *, qualname: str | None, ignore_fallback: bool
     ) -> frozenset[_DepItem]:
         file = self._file(dotted)
         if file is None:
             return frozenset({ModuleKey(dotted)})
         if file.whole_module_reason is not None and not ignore_fallback:
             return frozenset({_WholeModule(dotted)})
+        # Rule 2: "imports inside a function body are references of that def block" -- a nested
+        # import's own binding is scoped to the def it's in, so it shadows a same-named
+        # module-level import or binding, the same way it would at runtime.
+        if qualname is not None and name in file.nested_imports.get(qualname, {}):
+            return self._resolve_import(file.nested_imports[qualname][name])
         if name in file.imports:
-            imp = file.imports[name]
-            if imp.module is None:
-                return frozenset()  # relative import past the package root -- documented gap
-            if imp.attr is None:
-                if self._file(imp.module) is not None:
-                    return frozenset({_WholeModule(imp.module)})
-                return frozenset({ModuleKey(imp.module)})
-            return self._resolve_binding(imp.module, imp.attr)
+            return self._resolve_import(file.imports[name])
         if name not in file.top_level_names():
             return frozenset()  # not bound in this module at all
         return self._local_binding_keys(file, name)
+
+    def _resolve_import(self, imp: _Import) -> frozenset[_DepItem]:
+        if imp.module is None:
+            return frozenset()  # relative import past the package root -- documented gap
+        if imp.attr is None:
+            if self._file(imp.module) is not None:
+                return frozenset({_WholeModule(imp.module)})
+            return frozenset({ModuleKey(imp.module)})
+        return self._resolve_binding(imp.module, imp.attr)
 
     def _local_binding_keys(self, file: _File, name: str) -> frozenset[_DepItem]:
         items: set[_DepItem] = {NameKey(file.path, name)}
@@ -316,7 +331,9 @@ class World:
                     break
         return frozenset(items)
 
-    def _resolve_refs(self, dotted: str, references: Iterable[str]) -> set[_DepItem]:
+    def _resolve_refs(
+        self, dotted: str, references: Iterable[str], *, qualname: str | None = None
+    ) -> set[_DepItem]:
         file = self._file(dotted)
         if file is None:
             return set()
@@ -324,7 +341,7 @@ class World:
             return {_WholeModule(dotted)}
         out: set[_DepItem] = set()
         for name in references:
-            out |= self._resolve_binding(dotted, name)
+            out |= self._resolve_binding(dotted, name, qualname=qualname)
         return out
 
     def _resolve_strings(self, strings: Iterable[str]) -> set[_DepItem]:
@@ -379,10 +396,9 @@ class World:
         if dotted not in touched:
             touched.add(dotted)
             out |= {NameKey(file.path, name) for name in file.module_global | file.session_global}
-        block = _find_block(file, item)
-        if block is None:
-            return out
-        out |= self._resolve_refs(dotted, block.references)
+        qualname = item.qualname if isinstance(item, DefKey) else None
+        for block in _find_blocks(file, item):
+            out |= self._resolve_refs(dotted, block.references, qualname=qualname)
         out |= self._resolve_strings(file.strings.get(_own_name(item), frozenset()))
         if isinstance(item, DefKey):
             first_segment = item.qualname.split(".", 1)[0]
@@ -446,16 +462,15 @@ def _own_name(item: DefKey | NameKey) -> str:
     return item.name if isinstance(item, NameKey) else item.qualname.split(".", 1)[0]
 
 
-def _find_block(file: _File, item: DefKey | NameKey) -> Block | None:
+def _find_blocks(file: _File, item: DefKey | NameKey) -> list[Block]:
+    """Every block `item` names -- not just the first. A `NameKey`'s own docstring promises
+    "every top-level statement ... binding `name`" (an `if`/`else` reassignment binds the same
+    name from two separate statements), and a `DefKey`'s qualname isn't unique either: an
+    `if`/`else` def shares one qualname across two distinct def blocks (see blocks.py's own
+    docstring), each with its own references."""
     if isinstance(item, DefKey):
-        for block in file.blocks:
-            if block.qualname == item.qualname:
-                return block
-        return None
-    for block in file.top_level:
-        if item.name in block.binds:
-            return block
-    return None
+        return [block for block in file.blocks if block.qualname == item.qualname]
+    return [block for block in file.top_level if item.name in block.binds]
 
 
 # -- decorator-factory widening (rule 3's registry heuristic) ------------------------------------
@@ -557,26 +572,16 @@ def _scan_statement(
         scan.whole_module_reason = "exec()/eval()/globals()/vars() at module level"
 
 
-def _scan_class_body_strings(scan: _Scan, tree: ast.Module) -> None:
-    """Rule 5: "String constants assigned in class bodies are indexed too" -- a class's own
-    statement block already covers its whole (carved) body, so this only needs the class's own
-    name to key the literals by, not a separate per-member identity."""
-    for stmt in tree.body:
-        if not isinstance(stmt, ast.ClassDef):
-            continue
-        for member in stmt.body:
-            literals = _string_literals(member) if isinstance(member, ast.Assign) else frozenset()
-            if literals:
-                scan.strings[stmt.name] = scan.strings.get(stmt.name, frozenset()) | literals
-
-
 def _scan_top_level(
     tree: ast.Module, top_level: tuple[Block, ...], dotted: str, known: frozenset[str]
 ) -> _Scan:
+    """Rule 5's "string constants assigned in class bodies are indexed too" needs no separate
+    pass: `_scan_statement`'s own `_string_literals(stmt)` already walks a class's *whole*
+    subtree -- resolve.py's own raw, uncarved node, not `blocks.py`'s carved stub -- so a
+    class-body string is already indexed under the class's own name."""
     scan = _Scan()
     for stmt, block in zip(tree.body, top_level, strict=True):
         _scan_statement(scan, stmt, block, dotted, known)
-    _scan_class_body_strings(scan, tree)
     return scan
 
 
@@ -602,6 +607,7 @@ def _parse_file(
         raw_nodes=scan.raw_nodes,
         class_names=frozenset(scan.class_names),
         imports=scan.imports,
+        nested_imports=_nested_imports(tree, dotted, known),
         strings=scan.strings,
         dunder_all=scan.dunder_all,
         module_global=frozenset(scan.module_global),
@@ -609,6 +615,36 @@ def _parse_file(
         whole_module_reason=scan.whole_module_reason,
     )
     return file, scan.star_targets
+
+
+def _nested_imports(
+    tree: ast.Module, dotted: str, known: frozenset[str]
+) -> dict[str, dict[str, _Import]]:
+    """Rule 2: "imports inside a function body are references of that def block". `blocks.py`'s
+    `_collect_references` already puts a nested import's bound name into its def block's
+    `references`; this builds the other half, where that name actually resolves to, keyed by
+    the enclosing def's own qualname (built the same way `blocks.py`'s carving does: a nested
+    `def`'s own qualname joins its enclosing scope, and its *body* is walked under that scope
+    plus a trailing `<locals>`). A class body isn't its own scope here -- a bare `import` inside
+    one is rare, and blocks.py doesn't carve a class body into a separate reference scope for
+    imports either, so it stays attributed to whichever def (if any) encloses the class."""
+    out: dict[str, dict[str, _Import]] = {}
+
+    def visit(node: ast.AST, qualname: str | None, scope: tuple[str, ...]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner_qualname = ".".join((*scope, child.name))
+                visit(child, inner_qualname, (*scope, child.name, "<locals>"))
+            elif isinstance(child, ast.ClassDef):
+                visit(child, qualname, (*scope, child.name))
+            elif isinstance(child, (ast.Import, ast.ImportFrom)):
+                if qualname is not None:
+                    out.setdefault(qualname, {}).update(_import_sources(child, dotted, known))
+            else:
+                visit(child, qualname, scope)
+
+    visit(tree, None, ())
+    return out
 
 
 def _session_global_names(
