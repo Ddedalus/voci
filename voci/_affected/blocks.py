@@ -110,7 +110,7 @@ def _carve_nested(stmt: ast.stmt, scope: tuple[str, ...], blocks: list[Block]) -
         rebuilt = copy.copy(stmt)
         rebuilt.body = _carve_body(stmt.body, scope, blocks)
         return rebuilt
-    if isinstance(stmt, ast.Try):
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
         rebuilt = copy.copy(stmt)
         rebuilt.body = _carve_body(stmt.body, scope, blocks)
         rebuilt.orelse = _carve_body(stmt.orelse, scope, blocks)
@@ -297,7 +297,7 @@ def _bound_names_compound(stmt: ast.stmt) -> frozenset[str]:
     `Continue`, `Raise` -- binds nothing."""
     if isinstance(stmt, ast.If):
         return _bound_names_body(stmt.body) | _bound_names_body(stmt.orelse)
-    if isinstance(stmt, ast.Try):
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
         return _bound_names_try(stmt)
     if isinstance(stmt, (ast.For, ast.AsyncFor)):
         return (
@@ -324,7 +324,7 @@ def _bound_names_compound(stmt: ast.stmt) -> frozenset[str]:
     return frozenset()
 
 
-def _bound_names_try(stmt: ast.Try) -> frozenset[str]:
+def _bound_names_try(stmt: ast.Try | ast.TryStar) -> frozenset[str]:
     names = set(_bound_names_body(stmt.body))
     for handler in stmt.handlers:
         if handler.name:
@@ -355,6 +355,7 @@ _COMPOUND_STMTS = (
     ast.With,
     ast.AsyncWith,
     ast.Try,
+    ast.TryStar,
     ast.Match,
 )
 
@@ -368,8 +369,13 @@ def _is_effect(stmt: ast.stmt) -> bool:
         return any(_is_effect_target(target) for target in stmt.targets)
     if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)):
         return _is_effect_target(stmt.target)
-    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return bool(stmt.decorator_list)
+    if isinstance(stmt, ast.ClassDef):
+        # Unlike a def's body -- its own, separate def block -- a class's (carved) body is part
+        # of this same statement block, so a decorated method or an effect statement among its
+        # class-level statements makes the class itself an effect too.
+        return bool(stmt.decorator_list) or _is_effect_compound(stmt)
     if isinstance(stmt, _COMPOUND_STMTS):
         return _is_effect_compound(stmt)
     return False

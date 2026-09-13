@@ -84,6 +84,22 @@ def test_an_if_else_def_produces_two_def_blocks_sharing_a_qualname() -> None:
     assert sum(1 for b in blocks if b.qualname is None) == 1
 
 
+# except* (PEP 654) carves the same way as a plain try/except
+# ------------------------------------------------------------------------
+
+
+def test_a_def_nested_under_except_star_gets_its_own_block() -> None:
+    blocks = parse_blocks("try:\n    def dup():\n        return 1\nexcept* ValueError:\n    pass\n")
+    assert _by_qualname(blocks, "dup") is not None
+    assert sum(1 for b in blocks if b.qualname is None) == 1
+
+
+def test_an_effect_inside_except_star_makes_the_statement_an_effect() -> None:
+    blocks = parse_blocks("try:\n    pass\nexcept* ValueError:\n    app.state = 1\n")
+    assert len(blocks) == 1
+    assert blocks[0].effect is True
+
+
 # Classes and methods
 # ------------------------------------------------------------------------
 
@@ -124,6 +140,21 @@ def test_a_methods_decorator_is_visible_in_the_class_statement_block() -> None:
     after = parse_blocks("class C:\n    @a.get('/y')\n    def m(self):\n        return 1\n")
     assert _statement_binding(before, "C").checksum != _statement_binding(after, "C").checksum
     assert _by_qualname(before, "C.m").checksum == _by_qualname(after, "C.m").checksum
+
+
+def test_a_class_with_a_decorated_method_but_no_class_decorator_is_an_effect() -> None:
+    blocks = parse_blocks("class C:\n    @app.get('/x')\n    def m(self):\n        return 1\n")
+    assert _statement_binding(blocks, "C").effect is True
+
+
+def test_a_class_with_an_effect_statement_in_its_body_is_an_effect() -> None:
+    blocks = parse_blocks("class C:\n    REGISTRY[C] = 1\n")
+    assert _statement_binding(blocks, "C").effect is True
+
+
+def test_a_plain_class_with_no_decorators_or_effects_is_not_an_effect() -> None:
+    blocks = parse_blocks("class C:\n    x = 1\n    def m(self):\n        return 1\n")
+    assert _statement_binding(blocks, "C").effect is False
 
 
 # Nesting
