@@ -16,7 +16,8 @@ import pytest
 from _support import make_record as _record
 from _support import run_async
 
-from voci._run.isolated import IsolatedConfig, result_to_json, run_isolated
+from voci._affected.collector import CollectorRecord
+from voci._run.isolated import IsolatedConfig, collector_from_json, result_to_json, run_isolated
 from voci._run.run import Outcome
 from voci._run.run import TestResult as Result
 
@@ -99,7 +100,43 @@ def test_result_to_json_round_trips_a_test_result() -> None:
         "captured_stderr": "err",
         "log_records": [{"name": "pkg.mod", "levelname": "WARNING", "message": "disk nearly full"}],
         "warnings": [],
+        "collector": None,
     }
+
+
+def test_result_to_json_includes_the_collector_record_when_given() -> None:
+    result = Result(
+        id="mod.py::test_thing",
+        index=0,
+        outcome=Outcome.PASSED,
+        duration=0.1,
+        failure=None,
+        failure_summary=None,
+    )
+    record = CollectorRecord(codes=frozenset({("mod.py", "test_thing")}), untrusted="a reason")
+
+    data = result_to_json(result, collector=record)
+
+    assert data["collector"] == {"codes": [("mod.py", "test_thing")], "untrusted": "a reason"}
+
+
+def test_collector_from_json_is_empty_for_a_dict_with_no_collector_key() -> None:
+    # A crash result, or an older worker's -- result_to_json's own shape without "collector".
+    assert collector_from_json({}) == CollectorRecord.empty()
+
+
+def test_collector_from_json_is_the_inverse_of_result_to_json() -> None:
+    result = Result(
+        id="mod.py::test_thing",
+        index=0,
+        outcome=Outcome.PASSED,
+        duration=0.1,
+        failure=None,
+        failure_summary=None,
+    )
+    record = CollectorRecord(codes=frozenset({("mod.py", "test_thing")}), untrusted=None)
+
+    assert collector_from_json(result_to_json(result, collector=record)) == record
 
 
 def test_run_isolated_reports_the_worker_written_result(

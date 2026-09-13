@@ -928,6 +928,7 @@ class _Session:
     executor: _capture.ContextPropagatingExecutor
     watchdog: _safety.LoopWatchdog | None
     on_result: Callable[[TestResult], None] | None
+    on_collector: Callable[[str, _collector.CollectorRecord], None] | None
     maxfail: int | None
     isolated: IsolatedConfig | None
     already_isolated: bool
@@ -985,7 +986,9 @@ class _Session:
                 return
             self.stop.register(record.id)
             try:
-                result = await self.run_envelope(record, marks, test_timeout, solo=solo)
+                result, collector_record = await self.run_envelope(
+                    record, marks, test_timeout, solo=solo
+                )
             except asyncio.CancelledError:
                 # Only reached when the cancellation landed somewhere `_run_one` isn't
                 # -- between it and the module-scope flush below, or inside that flush
@@ -994,6 +997,9 @@ class _Session:
                 if not self.stop.claim():
                     raise
                 result = _cancelled_result(record, time.monotonic() - started, self.stop)
+                # Cancelled before run_envelope could return anything of its own --
+                # nothing was recorded for a test that never got to run.
+                collector_record = _collector.CollectorRecord.empty()
             finally:
                 self.stop.unregister()
 
@@ -1018,6 +1024,8 @@ class _Session:
         # for a test it hasn't been told about yet.
         if self.on_result is not None:
             self.on_result(result)
+        if self.on_collector is not None:
+            self.on_collector(record.id, collector_record)
         self.results[index] = result
 
     async def flush_module_scope(self, record: TestRecord) -> None:
@@ -1054,12 +1062,17 @@ class _Session:
 
     async def run_envelope(
         self, record: TestRecord, marks: Marks, test_timeout: float | None, *, solo: bool
-    ) -> TestResult:
+    ) -> tuple[TestResult, _collector.CollectorRecord]:
         """One admitted test's whole setup/call/teardown envelope, including the
         module-scope flush it owes its module if it turns out to be its last test.
         Split out of `dispatch_one` so that everything a stop can cancel sits inside one
         `try`, and everything that must still happen afterwards -- the gate release, the
-        result -- sits outside it."""
+        result -- sits outside it.
+
+        The `CollectorRecord` alongside the result is this test's own -- a `@voci.isolated`
+        test's subprocess ships one back (`_isolated_worker.py`'s own `Tracer`); an ordinary
+        test's collector, live in this process the whole time, is finished here instead.
+        """
         if marks.isolated and not self.already_isolated:
             if self.isolated is None:
                 # Unreachable: run_suite checks this for every isolated-marked
@@ -1071,31 +1084,31 @@ class _Session:
             # No Sink/TestContext here -- this test's whole setup/call/teardown
             # envelope, capture included, runs inside the subprocess's own
             # run_suite call and comes back already resolved.
-            result = _result_from_json(
-                await _isolated.run_isolated(
-                    record,
-                    config=self.isolated,
-                    timeout=test_timeout,
-                    basetemp_root=self.capture_setup.basetemp_root,
-                    scratch_dir=self.capture_setup.basetemp_root / ".voci-isolated",
-                    note=self.stop.note,
-                    loop_watchdog=self.loop_watchdog,
-                    teardown_grace=self.stop.teardown_grace,
-                    # The session's filters only: the subprocess re-collects the test
-                    # from its own source, so its `@voci.filterwarnings` mark comes
-                    # back with it rather than being handed over.
-                    filterwarnings=self.filterwarnings,
-                )
+            json_result = await _isolated.run_isolated(
+                record,
+                config=self.isolated,
+                timeout=test_timeout,
+                basetemp_root=self.capture_setup.basetemp_root,
+                scratch_dir=self.capture_setup.basetemp_root / ".voci-isolated",
+                note=self.stop.note,
+                loop_watchdog=self.loop_watchdog,
+                teardown_grace=self.stop.teardown_grace,
+                # The session's filters only: the subprocess re-collects the test
+                # from its own source, so its `@voci.filterwarnings` mark comes
+                # back with it rather than being handed over.
+                filterwarnings=self.filterwarnings,
             )
+            result = _result_from_json(json_result)
+            collector_record = _isolated.collector_from_json(json_result)
             # `run_isolated` kills its subprocess and reports rather than propagating a
             # cancellation, so a stop that reached this test arrives here as a returned
             # error result. Claiming it turns that into the CANCELLED it actually is.
             if self.stop.claim():
-                return _cancelled_result(record, result.duration, self.stop)
+                return _cancelled_result(record, result.duration, self.stop), collector_record
             # No current_test_context to attribute this flush to -- it falls back to
             # the session sink, same as any output with no test actively running would.
             await self.flush_module_scope(record)
-            return result
+            return result, collector_record
 
         # A fresh Sink and TestContext for this one test, published via
         # current_test_context.set() for the duration of everything below --
@@ -1159,7 +1172,8 @@ class _Session:
                 log_records=tuple(sink.log_records),
             )
         recorded = warned.recorded()
-        return dataclasses.replace(result, warnings=recorded) if recorded else result
+        final = dataclasses.replace(result, warnings=recorded) if recorded else result
+        return final, collector.finish()
 
     async def run_all(self) -> None:
         asyncio.get_running_loop().set_default_executor(self.executor)
@@ -1189,6 +1203,7 @@ def run_suite(
     basetemp: Path | None = None,
     unattributed_output: list[str] | None = None,
     on_result: Callable[[TestResult], None] | None = None,
+    on_collector: Callable[[str, _collector.CollectorRecord], None] | None = None,
     on_interrupt: Callable[[], None] | None = None,
     loop_watchdog: float | None = _safety.DEFAULT_LOOP_WATCHDOG,
     teardown_grace: float = DEFAULT_TEARDOWN_GRACE,
@@ -1216,6 +1231,13 @@ def run_suite(
     streaming reporter uses it to flush a file's block the moment that file's last test
     completes. An exception raised by `on_result` itself aborts the run, the same as a
     bug in test execution would.
+
+    `on_collector`, if given, is called once per test right alongside `on_result` (same order,
+    same guarantee), with that test's id and its finished `CollectorRecord` -- empty when nothing
+    was recording, never `None`, whether the test ran in this process or, via `@voci.isolated`,
+    shipped one back from its own subprocess (`_isolated_worker.py`, `isolated.py`). This is
+    `_isolated_worker`'s own call's hook for grabbing the one collector it cares about; nothing
+    else calls it yet (see the plan's M1, "Recording").
 
     `maxfail`, if given, stops the run once that many results have a failing outcome:
     tests not yet started are dropped, and every test still in flight is cancelled and
@@ -1320,6 +1342,7 @@ def run_suite(
                 executor=executor,
                 watchdog=watchdog,
                 on_result=on_result,
+                on_collector=on_collector,
                 maxfail=maxfail,
                 isolated=isolated,
                 already_isolated=already_isolated,

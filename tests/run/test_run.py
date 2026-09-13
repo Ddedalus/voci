@@ -1314,6 +1314,44 @@ def test_on_result_sees_captured_output_already_folded_on() -> None:
     assert "captured-before-callback" in seen[0].captured_stdout
 
 
+# `on_collector`: called once per test, alongside `on_result`, with that test's own
+# CollectorRecord -- see the plan's M1, "Recording".
+# --------------------------------------------------------------------------------------------
+
+
+def test_on_collector_fires_once_per_test_with_an_empty_record_when_nothing_traces() -> None:
+    """No `Tracer` runs for an in-process `run_suite` call today, so every test's own collector
+    stays empty -- `on_collector` still fires once per test, the same guarantee `on_result`
+    gives."""
+    records = [_record(0, _passes, "test_a"), _record(1, _passes, "test_b")]
+    seen: list[tuple[str, _collector.CollectorRecord]] = []
+
+    run_suite(records, on_collector=lambda test_id, record: seen.append((test_id, record)))
+
+    assert [test_id for test_id, _ in seen] == [r.id for r in records]
+    assert all(record == _collector.CollectorRecord.empty() for _, record in seen)
+
+
+def test_on_collector_records_code_a_tracer_attributed_to_the_test() -> None:
+    """A `Tracer` started around the whole call attributes the test's own body to whichever
+    collector `run_envelope` made current -- `on_collector` is what gets that record out."""
+    from voci._affected.tracer import Tracer
+
+    seen: list[_collector.CollectorRecord] = []
+    tracer = Tracer(Path(__file__).parent, _collector.record_first_party)
+    assert tracer.start() is None
+    try:
+        run_suite(
+            [_record(0, _passes, "test_passes")],
+            on_collector=lambda test_id, record: seen.append(record),
+        )
+    finally:
+        tracer.stop()
+
+    assert len(seen) == 1
+    assert any(qualname == "_passes" for _filename, qualname in seen[0].codes)
+
+
 def test_maxfail_stops_dispatching_after_the_threshold() -> None:
     """`concurrency=1` so the stop point is exact: tests start in logical order, so nothing
     after the first failure ever runs."""

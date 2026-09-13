@@ -134,6 +134,48 @@ def test_record_first_party_leaves_a_collector_untrusted_once_marked() -> None:
     assert c.untrusted is not None
 
 
+def test_finish_snapshots_recorded_codes_as_filename_qualname_pairs() -> None:
+    c = collector.Collector()
+    code = _sample.__code__
+    c.record(code)
+    record = c.finish()
+    assert record.codes == {(code.co_filename, code.co_qualname)}
+    assert record.untrusted is None
+
+
+def test_finish_carries_the_untrusted_reason() -> None:
+    c = collector.Collector()
+    c.mark_untrusted("started a subprocess")
+    assert c.finish().untrusted == "started a subprocess"
+
+
+def test_collector_record_empty_has_no_codes_or_untrusted_reason() -> None:
+    record = collector.CollectorRecord.empty()
+    assert record.codes == frozenset()
+    assert record.untrusted is None
+
+
+def test_collector_record_json_round_trips() -> None:
+    code = _sample.__code__
+    record = collector.CollectorRecord(
+        codes=frozenset({(code.co_filename, code.co_qualname)}), untrusted="a reason"
+    )
+    assert collector.CollectorRecord.from_json(record.to_json()) == record
+
+
+def test_collector_record_to_json_is_json_safe() -> None:
+    import json
+
+    code = _sample.__code__
+    c = collector.Collector()
+    c.record(code)
+    data = c.finish().to_json()
+    # A frozenset of tuples isn't JSON-safe on its own -- to_json must have already converted
+    # it to something json.dumps accepts without raising.
+    reloaded = json.loads(json.dumps(data))
+    assert reloaded == {"codes": [[code.co_filename, code.co_qualname]], "untrusted": None}
+
+
 def test_active_no_longer_counts_as_in_flight_once_the_block_exits() -> None:
     c = collector.Collector()
     with collector.active(c):

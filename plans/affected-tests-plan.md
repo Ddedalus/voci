@@ -48,8 +48,13 @@ dependencies, selection could skip a test it shouldn't.
       `affected_trace_threads` (`_affected/threads.py`, patching `Thread.start` and
       `loop.run_in_executor`); `@voci.untrusted(reason)` (`_marks.py`) for a test to declare it
       manually. None of the three is wired into a real run yet.
-- [ ] `@voci.isolated`: the worker ships its record in `result_to_json`, the way coverage's
-      `harvest` does.
+- [x] `@voci.isolated`: the worker starts its own `Tracer` (`_isolated_worker.py`, one per
+      subprocess -- a fresh interpreter shares no tool id or ContextVar with the parent) and ships
+      what it saw back as a `CollectorRecord` through `result_to_json`'s `collector` key
+      (`isolated.py`), the way coverage's `harvest` carries measurement data across the same
+      boundary. `run_suite` gained `on_collector` (`run.py`) to get a test's finished collector
+      out of `run_envelope` either way, isolated or not. Nothing yet resolves a `CollectorRecord`
+      into dependency keys or stores it -- that's M2.
 
 **M2 — Fingerprints and store** (see Fingerprints, Storage)
 

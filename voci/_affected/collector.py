@@ -11,15 +11,20 @@ file's import (`_collection.collect._import_module`). Whichever was `active()`d 
 for the running task is "current" -- a module fixture built during a test's setup shadows that
 test's own collector for the span of its construction, then hands control back on `reset`.
 
-`record_first_party` is `Tracer.on_first_party`'s eventual callback (nothing calls `Tracer` yet,
-see `_affected/__init__.py`): first-party code with a current collector is attributed to it, same
-as always. First-party code with *no* current collector -- an unattributed thread or executor
-worker running while tests are still in flight -- can't say which of them it belongs to, so it
-marks *every* collector currently `active()` anywhere untrusted instead: conservative, but sound,
-since an untrusted test always runs (see the plan's "Self-declared untrusted" and Selection).
+`record_first_party` is `Tracer.on_first_party`'s callback (only `_isolated_worker.py` starts a
+real `Tracer` with it so far, one per `@voci.isolated` subprocess -- see `_affected/__init__.py`):
+first-party code with a current collector is attributed to it, same as always. First-party code
+with *no* current collector -- an unattributed thread or executor worker running while tests are
+still in flight -- can't say which of them it belongs to, so it marks *every* collector currently
+`active()` anywhere untrusted instead: conservative, but sound, since an untrusted test always
+runs (see the plan's "Self-declared untrusted" and Selection).
 `_affected.threads`' opt-in patches are what keep a collector current across a thread or executor
 hop in the first place, so this path is only hit without them, or for a case they don't cover
 (a bare `os.fork`-based worker, a C-started thread, ...).
+
+`CollectorRecord` is a finished collector's contents distilled to what survives a `@voci.isolated`
+subprocess boundary -- `(filename, qualname)` pairs rather than the `CodeType`s themselves, which
+never leave the process that ran them (`Collector.finish`, `_run/isolated.py`).
 """
 
 from __future__ import annotations
@@ -28,9 +33,49 @@ import contextlib
 import threading
 from collections.abc import Iterator
 from contextvars import ContextVar
+from dataclasses import dataclass
 from types import CodeType
+from typing import Any
 
-__all__ = ["Collector", "active", "current_collector", "record_first_party"]
+__all__ = [
+    "Collector",
+    "CollectorRecord",
+    "active",
+    "current_collector",
+    "record_first_party",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class CollectorRecord:
+    """A finished `Collector`'s contents, JSON-safe: every first-party code object it saw,
+    reduced to `(filename, qualname)`, plus the untrusted reason if any. This is what
+    `@voci.isolated`'s subprocess ships back across its process boundary
+    (`isolated.result_to_json`), the way `coverage.py`'s own `harvest` carries measurement data
+    across the same boundary (`_run/coverage.py`) -- `Collector.codes`' keep-alive `CodeType`s
+    themselves never leave the process that ran them; a `(filename, qualname)` pair is all M2's
+    resolution will need to look one up again.
+    """
+
+    codes: frozenset[tuple[str, str]]
+    untrusted: str | None = None
+
+    @classmethod
+    def empty(cls) -> CollectorRecord:
+        """Nothing recorded, no untrusted mark -- a test whose run never had a `Tracer` feeding
+        its collector, or a `@voci.isolated` result with no `collector` key at all (a crash, or
+        an older worker)."""
+        return cls(codes=frozenset())
+
+    def to_json(self) -> dict[str, Any]:
+        return {"codes": sorted(self.codes), "untrusted": self.untrusted}
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> CollectorRecord:
+        return cls(
+            codes=frozenset((filename, qualname) for filename, qualname in data["codes"]),
+            untrusted=data["untrusted"],
+        )
 
 
 class Collector:
@@ -55,6 +100,15 @@ class Collector:
 
     def record(self, code: CodeType) -> None:
         self.codes[id(code)] = code
+
+    def finish(self) -> CollectorRecord:
+        """A JSON-safe snapshot of this collector, for a caller that is done with it: `run.py`'s
+        `run_envelope`, for both an ordinary test and a `@voci.isolated` one's own subprocess-side
+        run (`_isolated_worker.py`), which is what actually crosses back to the parent."""
+        return CollectorRecord(
+            codes=frozenset((code.co_filename, code.co_qualname) for code in self.codes.values()),
+            untrusted=self.untrusted,
+        )
 
     def mark_untrusted(self, reason: str) -> None:
         """Distrust everything this collector recorded, with `reason` for whoever reads it next.

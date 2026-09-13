@@ -11,6 +11,12 @@ A run that is itself under coverage.py hands each subprocess the environment tha
 the same measurement, and merges what it wrote back into the parent's data once it exits --
 `coverage.py` next door owns both halves and is inert when nothing is measuring.
 
+Affected-test recording rides the same shape rather than a second IPC channel: the subprocess
+runs its own `Tracer` (`_isolated_worker.py`), and `result_to_json`'s `collector` key carries the
+resulting `CollectorRecord` back, `collector_from_json`'s job to read again. Unlike coverage.py
+there is no live measurement on this side to merge into yet -- `run.py`'s `on_collector` is where
+a caller gets it (see the plan's M1, "Recording").
+
 Each subprocess gets its own `tmp_path` root, nested under the parent run's own basetemp so it is
 swept by the same retention policy, never the parent's root directly -- `_capture.install`'s
 explicit-`basetemp` path unconditionally clears whatever already exists there, and the parent's
@@ -30,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from voci._affected.collector import CollectorRecord
 from voci._builtins.capture import sanitize_test_id
 from voci._run import coverage as _coverage
 
@@ -37,7 +44,7 @@ if TYPE_CHECKING:
     from voci._assertions.rewrite import AssertMode
     from voci._collection.collect import TestRecord
 
-__all__ = ["IsolatedConfig", "result_to_json", "run_isolated"]
+__all__ = ["IsolatedConfig", "collector_from_json", "result_to_json", "run_isolated"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,12 +62,17 @@ class IsolatedConfig:
     rewrite_roots: tuple[Path, ...] = field(default=())
 
 
-def result_to_json(result: Any) -> dict[str, Any]:
+def result_to_json(result: Any, *, collector: CollectorRecord | None = None) -> dict[str, Any]:
     """A `TestResult` (see `run.py`), as the JSON dict `_isolated_worker` writes to its result
     file. `log_records` keeps only the three fields `_report.terminal` ever reads off a
     `LogRecord` -- `name`, `levelname`, and the already-rendered message -- since the rest of
     `logging.LogRecord` isn't reliably JSON-safe (arbitrary `args`, exception objects) and
     nothing downstream of a `TestResult` needs it.
+
+    `collector`, if given, is the worker's own `CollectorRecord` for this one test -- see
+    `_isolated_worker.py`'s own `Tracer` and `collector_from_json`, this function's inverse for
+    that key. `None` (a crash, or a caller with nothing to report) round-trips to
+    `CollectorRecord.empty()` rather than `None` itself, so a reader never has to handle both.
     """
     return {
         "id": result.id,
@@ -76,7 +88,16 @@ def result_to_json(result: Any) -> dict[str, Any]:
             for r in result.log_records
         ],
         "warnings": [asdict(w) for w in result.warnings],
+        "collector": collector.to_json() if collector is not None else None,
     }
+
+
+def collector_from_json(data: dict[str, Any]) -> CollectorRecord:
+    """The inverse of `result_to_json`'s `collector` key: `CollectorRecord.empty()` for a dict
+    with none -- a crash report, an older worker, or a caller that passed nothing -- rather than
+    `None`, so `run.py`'s `on_collector` always has a real record to hand its caller."""
+    raw = data.get("collector")
+    return CollectorRecord.empty() if raw is None else CollectorRecord.from_json(raw)
 
 
 def _crash_result(record: TestRecord, start: float, message: str) -> dict[str, Any]:
@@ -92,6 +113,7 @@ def _crash_result(record: TestRecord, start: float, message: str) -> dict[str, A
         "captured_stdout": "",
         "captured_stderr": "",
         "log_records": [],
+        "collector": None,
     }
 
 
