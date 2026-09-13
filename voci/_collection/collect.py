@@ -34,7 +34,9 @@ module never touching `sys.path`, an exception during `exec_module` becomes a `C
 attributed to that file rather than aborting the run. The assertion-rewriting meta-path hook, when
 installed, is consulted explicitly (`_import_module`) — `spec_from_file_location` alone never
 gives it the chance to run. The packages above a test file go through the same import, ahead of
-the file itself.
+the file itself. Every such import also gets its own affected-test collector
+(`CollectionResult.collectors`) -- unused so far, alongside `_di.runtime` and `_run.run`'s own two
+(`plans/affected-tests-plan.md`).
 
 Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
 ones on the context-propagating executor rather than inline. A `class Test*` is pure namespacing:
@@ -64,6 +66,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from voci._affected.collector import Collector
+from voci._affected.collector import active as _collector_active
 from voci._assertions import rewrite as _rewrite
 from voci._collection.parametrize import Case, cases_for, known_params_of
 from voci._collection.requires import REQUIRES_ATTR, combined, package_inits, requires_of
@@ -170,6 +174,12 @@ class CollectionResult:
     `test_name[case]` selector against these ids need to know they stop short of the `[case]`
     part (`IdSelection.unmatched`); nothing else does.
     """
+    collectors: Mapping[Path, Collector] = field(default_factory=dict)
+    """Every file `_import_module` imported for this call -- a test file or a package
+    `__init__.py` alike -- keyed by its resolved path, with the affected-test collector that was
+    current for that one import (`plans/affected-tests-plan.md`, Tracer's "Collection" bullet).
+    Nothing reads this yet; `_di.runtime` and `_run.run` wire the other two collectors the same
+    way, and a later milestone is what resolves any of the three into a dependency."""
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -358,6 +368,9 @@ def collect(
     #: and therefore the one `Fixture` object: two imports would be two identities, and a
     #: `scope="session"` declared fixture would then build once per importing subtree.
     package_declarations: dict[Path, tuple[Fixture[Any], ...] | None] = {}
+    #: One collector per file `_import_module` actually imports -- test files and package
+    #: `__init__.py`s alike -- keyed by resolved path; see `CollectionResult.collectors`.
+    collectors: dict[Path, Collector] = {}
 
     for path in files:
         resolved_path = Path(path).resolve()
@@ -371,6 +384,7 @@ def collect(
             keyword_expr=keyword_expr,
             id_selection=id_selection,
             package_declarations=package_declarations,
+            collectors=collectors,
             records=records,
             errors=errors,
             skipped=skipped,
@@ -387,6 +401,7 @@ def collect(
         skipped=skipped,
         deselected=deselected,
         unexpanded=unexpanded,
+        collectors=collectors,
     )
 
 
@@ -400,6 +415,7 @@ def _collect_file(
     keyword_expr: KeywordExpression | None,
     id_selection: IdSelection | None,
     package_declarations: dict[Path, tuple[Fixture[Any], ...] | None],
+    collectors: dict[Path, Collector],
     records: list[TestRecord],
     errors: list[CollectionError],
     skipped: list[Skipped],
@@ -413,7 +429,7 @@ def _collect_file(
     relpath = display_path(path, resolved_rootdir)
 
     inherited = _package_declarations(
-        path, rootdir=rootdir, cache=package_declarations, errors=errors
+        path, rootdir=rootdir, cache=package_declarations, errors=errors, collectors=collectors
     )
     if inherited is None:
         # A package above this file failed to import; the error naming it is already
@@ -422,7 +438,7 @@ def _collect_file(
 
     module_name = module_name_for(path, rootdir)
     try:
-        module = _import_module(path, module_name)
+        module = _import_module(path, module_name, collectors=collectors)
     except Exception as error:
         # Attributed to the file, not raised: one broken test module must not take the
         # rest of the suite down with it.
@@ -714,6 +730,7 @@ def _package_declarations(
     rootdir: Path,
     cache: dict[Path, tuple[Fixture[Any], ...] | None],
     errors: list[CollectionError],
+    collectors: dict[Path, Collector],
 ) -> tuple[Fixture[Any], ...] | None:
     """What every package containing `path` declared with `voci.use(...)`, outermost first.
 
@@ -726,7 +743,8 @@ def _package_declarations(
     for init in package_inits(path, rootdir):
         if init not in cache:
             try:
-                cache[init] = requires_of(_import_module(init, module_name_for(init, rootdir)))
+                module = _import_module(init, module_name_for(init, rootdir), collectors=collectors)
+                cache[init] = requires_of(module)
             except Exception as error:
                 cache[init] = None
                 errors.append(
@@ -803,7 +821,7 @@ def _no_dependencies() -> None:
     nothing else."""
 
 
-def _import_module(path: Path, module_name: str) -> object:
+def _import_module(path: Path, module_name: str, *, collectors: dict[Path, Collector]) -> object:
     """Import `path` under `module_name`, giving the installed rewrite hook first refusal.
 
     `importlib.util.spec_from_file_location` alone never consults `sys.meta_path` — only
@@ -819,6 +837,11 @@ def _import_module(path: Path, module_name: str) -> object:
     importlib-only, no `sys.path` insertion. Any exception during `exec_module` propagates to the
     caller, which turns it into a `CollectionError`; the half-initialized module is removed from
     `sys.modules` first so a later, unrelated import of the same dotted name can't observe it.
+
+    `collectors[path.resolve()]` gets a fresh `Collector`, current for the span of `exec_module`
+    alone -- the module body, decorator application and class creation it runs, per
+    `plans/affected-tests-plan.md` (Tracer's "Collection" bullet) -- whether or not that call
+    raises, so a broken module's partial top-level effects are still attributed to it.
     """
     hook = _rewrite.installed_hook()
     spec = hook.find_spec(module_name, [str(path.parent)]) if hook is not None else None
@@ -829,8 +852,10 @@ def _import_module(path: Path, module_name: str) -> object:
 
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
+    collector = collectors[path.resolve()] = Collector()
     try:
-        spec.loader.exec_module(module)
+        with _collector_active(collector):
+            spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(module_name, None)
         raise

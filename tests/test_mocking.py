@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from voci import _mocking
+from voci._affected.collector import Collector
 from voci._builtins import capture as _capture
 
 
@@ -31,7 +32,12 @@ def running_test() -> Iterator[None]:
     dispatched test's is."""
     token = _capture.current_test_context.set(
         _capture.TestContext(
-            sink=_capture.Sink(label="t"), tags=(), timeout=None, worker=0, patching_allowed=False
+            sink=_capture.Sink(label="t"),
+            tags=(),
+            timeout=None,
+            worker=0,
+            collector=Collector(),
+            patching_allowed=False,
         )
     )
     try:
@@ -44,7 +50,12 @@ def running_test() -> Iterator[None]:
 def running_solo_test() -> Iterator[None]:
     token = _capture.current_test_context.set(
         _capture.TestContext(
-            sink=_capture.Sink(label="t"), tags=(), timeout=None, worker=0, patching_allowed=True
+            sink=_capture.Sink(label="t"),
+            tags=(),
+            timeout=None,
+            worker=0,
+            collector=Collector(),
+            patching_allowed=True,
         )
     )
     try:

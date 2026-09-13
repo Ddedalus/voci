@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast, final
 
+from voci._affected.collector import Collector
 from voci._builtins import fixtures as _builtins
 from voci._di.fixtures import BuiltinContext
 
@@ -225,6 +226,10 @@ class TestContext:
     tags: tuple[str, ...]
     timeout: float | None
     worker: int
+    collector: Collector
+    """This test's own affected-test collector (`_affected.collector`), set as the current one
+    for the same span as this whole `TestContext` -- a `module`/`session`-scope fixture built or
+    torn down during that span gets its own collector instead, nested inside this one."""
     patching_allowed: bool = False
     """Whether this test has the process to itself -- it runs solo, or in its own
     subprocess -- and may therefore install a process-global patch. Read by `_mocking`'s

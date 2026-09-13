@@ -5,6 +5,7 @@ exercised directly against `ScopeStore`/`setup`/`teardown`/`_construct`.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 import pytest
@@ -12,6 +13,7 @@ from _support import run_async as run
 
 import voci
 from voci import Depends
+from voci._affected import collector as _collector
 from voci._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for
 from voci._di.runtime import ScopeStore, _construct, key_for, setup, teardown
 
@@ -745,3 +747,102 @@ def test_setup_never_shares_a_construction_across_two_independent_parametrized_f
     values = run(scenario())
     assert sorted(values) == ["a-1", "a-2", "b-1", "b-2"]
     assert len(built) == 4  # one construction per combination, never shared
+
+
+# Collectors: a module/session-scope entry gets its own, current for its construction and its
+# later teardown; function/call scope leaves whichever collector is already ambient in place
+# (`plans/affected-tests-plan.md`, Tracer's "Which collector" bullet).
+# ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+def test_module_or_session_scope_construction_gets_its_own_current_collector(scope: str) -> None:
+    seen: list[_collector.Collector | None] = []
+
+    async def build() -> tuple[str, None]:
+        seen.append(_collector.current_collector.get())
+        return "value", None
+
+    async def scenario() -> None:
+        store = ScopeStore()
+        fx = voci.fixture(scope=cast(Scope, scope))(lambda: None)
+        outer = _collector.Collector()
+        with _collector.active(outer):
+            await store.acquire(("k",), cast(Scope, scope), fx, build)
+        # Its own collector, not the ambient one the requesting caller happened to have active.
+        assert seen[0] is not outer
+
+    run(scenario())
+    assert seen[0] is not None
+
+
+@pytest.mark.parametrize("scope", ["function", "call"])
+def test_function_or_call_scope_construction_leaves_the_ambient_collector_in_place(
+    scope: str,
+) -> None:
+    seen: list[_collector.Collector | None] = []
+
+    async def build() -> tuple[str, None]:
+        seen.append(_collector.current_collector.get())
+        return "value", None
+
+    async def scenario() -> None:
+        store = ScopeStore()
+        fx = voci.fixture(scope=cast(Scope, scope))(lambda: None)
+        outer = _collector.Collector()
+        with _collector.active(outer):
+            await store.acquire(("k",), cast(Scope, scope), fx, build)
+        assert seen == [outer]
+
+    run(scenario())
+
+
+def test_module_scope_fixture_uses_the_same_collector_for_construction_and_teardown() -> None:
+    seen: dict[str, _collector.Collector | None] = {}
+
+    async def build() -> tuple[str, Callable[[], Awaitable[None]]]:
+        seen["build"] = _collector.current_collector.get()
+
+        async def closer() -> None:
+            seen["teardown"] = _collector.current_collector.get()
+
+        return "value", closer
+
+    async def scenario() -> None:
+        store = ScopeStore()
+        fx = voci.fixture(scope="module")(lambda: None)
+        key = ("k",)
+        await store.acquire(key, "module", fx, build)
+        await store.release(key)
+
+    run(scenario())
+    assert seen["build"] is not None
+    assert seen["build"] is seen["teardown"]
+
+
+def test_session_scope_teardown_via_aclose_uses_its_own_collector_with_no_ambient_one() -> None:
+    """`aclose` tears session scope down with no test in flight at all (`run.py`'s own end of
+    run) -- the entry's own collector must still be what's current for its closer, not nothing."""
+    seen: dict[str, _collector.Collector | None] = {}
+
+    async def build() -> tuple[str, Callable[[], Awaitable[None]]]:
+        seen["build"] = _collector.current_collector.get()
+
+        async def closer() -> None:
+            seen["teardown"] = _collector.current_collector.get()
+
+        return "value", closer
+
+    async def scenario() -> None:
+        store = ScopeStore()
+        fx = voci.fixture(scope="session")(lambda: None)
+        outer = _collector.Collector()
+        with _collector.active(outer):
+            await store.acquire(("k",), "session", fx, build)
+        # Outside any `active()` span now -- exactly aclose's own situation.
+        assert _collector.current_collector.get() is None
+        await store.aclose()
+
+    run(scenario())
+    assert seen["build"] is not None
+    assert seen["build"] is seen["teardown"]

@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, TextIO, cast, final
 
 from voci import _mocking, _warnings
+from voci._affected import collector as _collector
 from voci._builtins import capture as _capture
 from voci._collection.collect import CollectionError, TestRecord
 from voci._di import runtime as _di
@@ -1106,11 +1107,13 @@ class _Session:
         # does, transitively, to this test.
         slot = self.worker_slots.acquire()
         sink = _capture.Sink(label=record.id)
+        collector = _collector.Collector()
         test_context = _capture.TestContext(
             sink=sink,
             tags=marks.tags,
             timeout=test_timeout,
             worker=slot,
+            collector=collector,
             # Solo holds the whole gate; an isolated mark reaching this branch at
             # all means `already_isolated` -- this process was spawned for this one
             # test. Either way nothing else is running to see a process-global
@@ -1118,28 +1121,33 @@ class _Session:
             patching_allowed=solo or marks.isolated,
         )
         token = _capture.current_test_context.set(test_context)
-        try:
-            # Opened over the same span as the sink, for the same reason: a warning
-            # raised by a fixture this test set up, or by the module teardown it owes
-            # its module, is this test's to answer for.
-            with _warnings.collecting(_warnings.parse_filters(marks.filterwarnings)) as warned:
-                try:
-                    result, module_keys = await _run_one(
-                        record, self.store, timeout=test_timeout, stop=self.stop
-                    )
-                finally:
-                    self.worker_slots.release(slot)
+        # This test's own collector, current for the same span as test_context -- a
+        # module/session-scope fixture built or torn down anywhere inside that span (including
+        # by flush_module_scope below) shadows it with its own, nested collector instead
+        # (`_di.runtime.ScopeStore`).
+        with _collector.active(collector):
+            try:
+                # Opened over the same span as the sink, for the same reason: a warning
+                # raised by a fixture this test set up, or by the module teardown it owes
+                # its module, is this test's to answer for.
+                with _warnings.collecting(_warnings.parse_filters(marks.filterwarnings)) as warned:
+                    try:
+                        result, module_keys = await _run_one(
+                            record, self.store, timeout=test_timeout, stop=self.stop
+                        )
+                    finally:
+                        self.worker_slots.release(slot)
 
-                if module_keys:
-                    self.pending_module_keys.setdefault(record.path, []).extend(module_keys)
-                # Inside this test's current_test_context: if this test is the module's
-                # last, a module-scope fixture's own teardown print is attributed to it.
-                await self.flush_module_scope(record)
-        finally:
-            # Reset only now that nothing else this test's envelope owns --
-            # including, for the module's last test, that module's own fixture
-            # teardown -- could still write into sink.
-            _capture.current_test_context.reset(token)
+                    if module_keys:
+                        self.pending_module_keys.setdefault(record.path, []).extend(module_keys)
+                    # Inside this test's current_test_context: if this test is the module's
+                    # last, a module-scope fixture's own teardown print is attributed to it.
+                    await self.flush_module_scope(record)
+            finally:
+                # Reset only now that nothing else this test's envelope owns --
+                # including, for the module's last test, that module's own fixture
+                # teardown -- could still write into sink.
+                _capture.current_test_context.reset(token)
 
         # Captured output is only worth keeping for a failing result; warnings are worth
         # keeping whatever the test did.

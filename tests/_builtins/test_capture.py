@@ -20,6 +20,7 @@ import pytest
 from _support import make_record as _record
 
 import voci
+from voci._affected.collector import Collector
 from voci._builtins import capture as _capture
 from voci._di.fixtures import plan_for
 from voci._run.run import Outcome, run_suite
@@ -99,7 +100,7 @@ def test_router_routes_to_whichever_sink_is_currently_set() -> None:
     test_sink = _capture.Sink("some::test")
 
     token = _capture.current_test_context.set(
-        _capture.TestContext(sink=test_sink, tags=(), timeout=None, worker=0)
+        _capture.TestContext(sink=test_sink, tags=(), timeout=None, worker=0, collector=Collector())
     )
     try:
         router.write("attributed output\n")
@@ -125,7 +126,7 @@ def test_router_passthrough_prefixes_each_line_with_the_sink_label() -> None:
     sink = _capture.Sink(label)
 
     token = _capture.current_test_context.set(
-        _capture.TestContext(sink=sink, tags=(), timeout=None, worker=0)
+        _capture.TestContext(sink=sink, tags=(), timeout=None, worker=0, collector=Collector())
     )
     try:
         router.write("line one\n")
@@ -163,7 +164,9 @@ def test_capture_isolates_concurrent_tests_stdout() -> None:
             sink = _capture.Sink(label)
             sinks[label] = sink
             token = _capture.current_test_context.set(
-                _capture.TestContext(sink=sink, tags=(), timeout=None, worker=0)
+                _capture.TestContext(
+                    sink=sink, tags=(), timeout=None, worker=0, collector=Collector()
+                )
             )
             try:
                 for i in range(30):

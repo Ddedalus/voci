@@ -1535,3 +1535,53 @@ def test_an_xfail_condition_is_evaluated_at_collection_not_at_import(tmp_path: P
 
     assert record.marks.xfail is not None
     assert record.marks.xfail.reason == "computed"
+
+
+# Collectors: one per file `_import_module` imports (`plans/affected-tests-plan.md`, Tracer's
+# "Collection" bullet). Nothing consumes these yet -- only that each import gets its own, current
+# for the span of `exec_module` alone, is under test here.
+# ------------------------------------------------------------------------------------------
+
+
+def test_collect_records_one_collector_per_imported_file(tmp_path: Path) -> None:
+    path = _write(tmp_path / "test_sample.py", "def test_a():\n    pass\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert set(result.collectors) == {path.resolve()}
+
+
+def test_two_files_get_two_distinct_collectors(tmp_path: Path) -> None:
+    path_a = _write(tmp_path / "test_a.py", "def test_a():\n    pass\n")
+    path_b = _write(tmp_path / "test_b.py", "def test_b():\n    pass\n")
+
+    result = collect([path_a, path_b], rootdir=tmp_path)
+
+    assert result.collectors[path_a.resolve()] is not result.collectors[path_b.resolve()]
+
+
+def test_a_file_s_collector_is_current_while_it_is_being_imported(tmp_path: Path) -> None:
+    """A module-level statement -- here, reading `current_collector.get()` straight into a
+    global -- runs during `exec_module`, inside `_import_module`'s own collector span."""
+    path = _write(
+        tmp_path / "test_sample.py",
+        "from voci._affected.collector import current_collector\n"
+        "seen = current_collector.get()\n"
+        "\n"
+        "def test_a():\n"
+        "    pass\n",
+    )
+
+    result = collect([path], rootdir=tmp_path)
+
+    module_globals = result.records[0].func.__globals__
+    assert module_globals["seen"] is result.collectors[path.resolve()]
+
+
+def test_a_package_init_s_import_also_gets_its_own_collector(tmp_path: Path) -> None:
+    _write(tmp_path / "pkg" / "__init__.py", "")
+    path = _write(tmp_path / "pkg" / "test_sample.py", "def test_a():\n    pass\n")
+
+    result = collect([path], rootdir=tmp_path)
+
+    assert set(result.collectors) == {(tmp_path / "pkg" / "__init__.py").resolve(), path.resolve()}

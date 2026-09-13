@@ -37,9 +37,13 @@ dependencies, selection could skip a test it shouldn't.
 
 - [x] `voci/_affected/tracer.py`: tool id, callback, first-party classification. Nothing calls
       `Tracer` yet -- the next bullets wire it to a collector.
-- [ ] Collectors: test (a field on `_capture.TestContext`, already set in
-      `run.py:_Session.run_envelope`), fixture (`_di/runtime.py` construct and teardown), and
-      collection (`collect._import_module`).
+- [x] `voci/_affected/collector.py`: `Collector` + a `current_collector` ContextVar, nested the
+      way `_capture.current_test_context` is. Wired at the three call sites -- a test's own
+      (`_capture.TestContext.collector`, set in `run.py:_Session.run_envelope`), a
+      `module`/`session`-scope fixture's own, shared between construction and teardown
+      (`_di.runtime._Entry.collector`), and one per file import
+      (`CollectionResult.collectors`, keyed by resolved path). Still nothing starts a real
+      `Tracer` for a run, so nothing is recorded into any of these yet.
 - [ ] Untrusted marking for unattributed first-party code; opt-in `affected_trace_threads`
       (`Thread.start` and `loop.run_in_executor`); `@voci.untrusted(reason)` for a test to
       declare it manually.

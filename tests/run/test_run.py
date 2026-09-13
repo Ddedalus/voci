@@ -17,6 +17,7 @@ from _support import make_record as _record
 from _support import run_async
 
 import voci
+from voci._affected import collector as _collector
 from voci._collection.collect import CollectionError
 from voci._di.fixtures import expand_cases, plan_for
 from voci._marks import marks_of
@@ -376,6 +377,56 @@ def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
     run_suite([_record(0, test_func, "test_func", plan=plan_for(test_func))])
 
     assert torn_down == ["db"]
+
+
+# Collectors: run_envelope makes a fresh, per-test collector current for a test's whole envelope
+# (`plans/affected-tests-plan.md`, Tracer's "Which collector" bullet); a module/session-scope
+# fixture built or torn down along the way gets its own instead (`_di.runtime` covers that half
+# directly -- these are the end-to-end proof through `run_suite`).
+# ------------------------------------------------------------------------------------------
+
+
+def test_run_envelope_makes_a_fresh_collector_current_for_each_test() -> None:
+    seen: dict[str, object] = {}
+
+    async def test_a() -> None:
+        seen["a"] = _collector.current_collector.get()
+
+    async def test_b() -> None:
+        seen["b"] = _collector.current_collector.get()
+
+    results = run_suite([_record(0, test_a, "test_a"), _record(1, test_b, "test_b")])
+
+    assert [r.outcome for r in results] == [Outcome.PASSED, Outcome.PASSED]
+    assert seen["a"] is not None
+    assert seen["b"] is not None
+    assert seen["a"] is not seen["b"]
+
+
+def test_no_collector_is_current_once_the_tests_own_envelope_has_ended() -> None:
+    assert _collector.current_collector.get() is None
+    run_suite([_record(0, _passes, "test_passes")])
+    assert _collector.current_collector.get() is None
+
+
+def test_a_module_scope_fixtures_construction_gets_its_own_collector() -> None:
+    """Not the triggering test's own -- built during that test's setup, but attributed
+    separately since the instance outlives it (`_di.runtime.ScopeStore`)."""
+    seen: dict[str, object] = {}
+
+    @voci.fixture(scope="module")
+    def per_module() -> int:
+        seen["fixture"] = _collector.current_collector.get()
+        return 1
+
+    async def test_a(x: int = voci.Depends(per_module)) -> None:
+        seen["test_a"] = _collector.current_collector.get()
+
+    (result,) = run_suite([_record(0, test_a, "test_a", plan=plan_for(test_a))])
+
+    assert result.outcome == Outcome.PASSED
+    assert seen["fixture"] is not None
+    assert seen["fixture"] is not seen["test_a"]
 
 
 def test_fixture_setup_failure_produces_error_not_failed() -> None:

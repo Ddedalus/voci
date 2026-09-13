@@ -8,17 +8,26 @@ back to release them, which is what produces dependent-before-dependency orderin
 The plans themselves are built in `_fixtures.py`, already flattened over a test's entire
 transitive fixture graph, so every fixture a test touches — however deep — is its own entry in
 `steps`, acquired and released by that one loop.
+
+A `module`/`session`-scope entry also gets its own affected-test collector (`_Entry.collector`,
+`_construction_context`), current for its construction in `acquire` and its later teardown in
+`release`/`aclose` — whichever test's task those happen to run on. `function`/`call` scope needs
+none of its own: both only ever run inside the one test's envelope that owns them, whose collector
+is already current (see `plans/affected-tests-plan.md`, Tracer's "Which collector").
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, final
 
+from voci._affected import collector as _collector
 from voci._di.fixtures import BuiltinContext, Fixture, PlanStep, ResolutionPlan, Scope
 from voci._outcomes import Failed, Skipped
 
@@ -85,6 +94,21 @@ class _Entry:
     future: asyncio.Future[Any]
     closer: Closer | None = None
     refcount: int = 0
+    collector: _collector.Collector | None = None
+    """This entry's own affected-test collector, for a `module`/`session`-scope fixture only
+    (`_construction_context` below) -- shared between its construction, in `acquire`, and its
+    later teardown, in `release`/`aclose`, however long after and on whatever task that runs.
+    `function`/`call` scope leaves this `None`, so construction and teardown stay attributed to
+    whichever collector is already current -- the requesting test's own."""
+
+
+def _construction_context(entry: _Entry) -> AbstractContextManager[None]:
+    """The context `entry`'s own construction (`acquire`) and teardown (`release`/`aclose`) code
+    runs under: `entry.collector` made current, or nothing -- leaving whatever collector is
+    already ambient in place -- when this entry has none of its own."""
+    if entry.collector is None:
+        return contextlib.nullcontext()
+    return _collector.active(entry.collector)
 
 
 @final
@@ -127,10 +151,18 @@ class ScopeStore:
             entry = self._entries.get(key)
             if entry is None:
                 entry = self._entries[key] = _Entry(
-                    scope=scope, fixture=fixture, future=asyncio.get_running_loop().create_future()
+                    scope=scope,
+                    fixture=fixture,
+                    future=asyncio.get_running_loop().create_future(),
+                    # Only a module/session-scope fixture is shared across tests -- and so can
+                    # be torn down anywhere from that scope's actual owner (this test's own
+                    # envelope, a sibling's, or no test at all, in `aclose`) -- so only these
+                    # get a collector of their own; see `_Entry.collector`.
+                    collector=_collector.Collector() if scope in ("module", "session") else None,
                 )
                 try:
-                    value, closer = await build()
+                    with _construction_context(entry):
+                        value, closer = await build()
                 except asyncio.CancelledError:
                     self._forget(key, entry)
                     raise
@@ -197,7 +229,8 @@ class ScopeStore:
         # whose contract is "exactly one".
         try:
             if entry.closer is not None:
-                await entry.closer()
+                with _construction_context(entry):
+                    await entry.closer()
         finally:
             del self._entries[key]
 
@@ -216,7 +249,8 @@ class ScopeStore:
             if entry is None or entry.closer is None:
                 continue
             try:
-                await entry.closer()
+                with _construction_context(entry):
+                    await entry.closer()
             except (Exception, Skipped, Failed) as exc:
                 # `Exception`, not `BaseException`: a KeyboardInterrupt/SystemExit/CancelledError
                 # raised by a closer must propagate immediately rather than being folded into the
