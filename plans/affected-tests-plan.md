@@ -52,7 +52,7 @@ dependencies, selection could skip a test it shouldn't.
 
 **M2 — Fingerprints and store** (see Fingerprints, Storage)
 
-- [ ] `voci/_affected/blocks.py`: statement and def blocks, with binds, references and effects,
+- [x] `voci/_affected/blocks.py`: statement and def blocks, with binds, references and effects,
       from one parse per file.
 - [ ] `voci/_affected/resolve.py`: the name closure, effect folding, string index and
       whole-module fallback. Write the soundness cases listed under "Probe results" as voci
