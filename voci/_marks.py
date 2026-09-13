@@ -38,6 +38,7 @@ __all__ = [
     "solo",
     "tag",
     "timeout",
+    "untrusted",
     "xfail",
 ]
 
@@ -85,6 +86,15 @@ class XFail:
 
 
 @dataclass(frozen=True, slots=True)
+class Untrusted:
+    """A test's own declaration that affected-test selection can't vouch for it (see
+    `plans/affected-tests-plan.md`, "Self-declared untrusted"). `reason` is for whoever reads the
+    test next -- selection stacks this with any automatic mark and never reads `reason` back."""
+
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class ParamSet:
     """One `@parametrize` application, normalized.
 
@@ -114,6 +124,7 @@ class Marks:
     text is what a report about it quotes."""
     solo: bool = False
     isolated: bool = False
+    untrusted: Untrusted | None = None
     parametrizations: tuple[ParamSet, ...] = ()
     """Outermost decorator first, which is also slowest-varying: feed straight to `product()`."""
 
@@ -161,6 +172,7 @@ def merged(base: Marks, extra: Marks) -> Marks:
         filterwarnings=(*base.filterwarnings, *extra.filterwarnings),
         solo=base.solo or extra.solo,
         isolated=base.isolated or extra.isolated,
+        untrusted=extra.untrusted or base.untrusted,
         parametrizations=base.parametrizations,
     )
 
@@ -190,7 +202,7 @@ def decided(marks: Marks) -> Marks:
 # applied twice to the same object is almost always a mistake — a duplicate `@skip`/`@xfail`/
 # `@timeout` with two different reasons/timeouts has no sensible "last one wins" reading — so
 # that case raises instead of overwriting silently.
-_SCALAR_MARKS = frozenset({"skip", "xfail", "timeout"})
+_SCALAR_MARKS = frozenset({"skip", "xfail", "timeout", "untrusted"})
 
 
 def _amend[F: Callable[..., Any]](fn: F, **changes: Any) -> F:
@@ -303,6 +315,21 @@ def isolated[F: Callable[..., Any]](fn: F) -> F:
     separately inside the subprocess, not shared with them.
     """
     return _amend(fn, isolated=True)
+
+
+def untrusted[F: Callable[..., Any]](reason: str) -> Callable[[F], F]:
+    """Declare that affected-test selection can't vouch for this test: it always runs under
+    `--affected`, the way an automatically-detected untrusted test does (an unattributed thread,
+    subprocess, or dynamic import -- see `plans/affected-tests-plan.md`, "Self-declared
+    untrusted"), and produces no skip prediction for `--affected-verify` to check against, so a
+    known gap doesn't need re-discovering on every `verify` run. `reason` is never read back by
+    voci; it's there for whoever reads the test next.
+    """
+
+    def decorate(fn: F) -> F:
+        return _amend(fn, untrusted=Untrusted(reason))
+
+    return decorate
 
 
 def parametrize[F: Callable[..., Any]](
