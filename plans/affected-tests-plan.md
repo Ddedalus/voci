@@ -44,9 +44,10 @@ dependencies, selection could skip a test it shouldn't.
       (`_di.runtime._Entry.collector`), and one per file import
       (`CollectionResult.collectors`, keyed by resolved path). Still nothing starts a real
       `Tracer` for a run, so nothing is recorded into any of these yet.
-- [ ] Untrusted marking for unattributed first-party code; opt-in `affected_trace_threads`
-      (`Thread.start` and `loop.run_in_executor`); `@voci.untrusted(reason)` for a test to
-      declare it manually.
+- [x] Untrusted marking for unattributed first-party code (`collector.py`); opt-in
+      `affected_trace_threads` (`_affected/threads.py`, patching `Thread.start` and
+      `loop.run_in_executor`); `@voci.untrusted(reason)` (`_marks.py`) for a test to declare it
+      manually. None of the three is wired into a real run yet.
 - [ ] `@voci.isolated`: the worker ships its record in `result_to_json`, the way coverage's
       `harvest` does.
 
