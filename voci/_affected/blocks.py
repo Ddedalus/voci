@@ -24,8 +24,8 @@ names) -- comment- and whitespace-insensitive by construction, and cheap at scal
 Fingerprints probe report, `research/affected/reports/fingerprint-probes.md`).
 
 Resolving these into dependency keys -- the name closure, effect folding, string index, and
-whole-module fallback -- is `resolve.py`, not built yet. `binds`/`references`/`effect` are
-therefore unused so far outside this module's own tests.
+whole-module fallback -- is `resolve.py`'s `World`, which also maps a `CollectorRecord`'s bare
+`(filename, qualname)` pairs back to blocks in the first place (`World.resolve_code`).
 """
 
 from __future__ import annotations

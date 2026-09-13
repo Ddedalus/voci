@@ -67,9 +67,9 @@ dependencies, selection could skip a test it shouldn't.
       `effect_fold_target` itself. Soundness cases from "Probe results" are
       `tests/affected/test_resolve.py`. `blocks.py`'s `_collect_references` gained nested-import
       references (a real gap: it only walked `Name` loads) along the way.
-- [ ] `code → block` resolution at session end: matches a `CollectorRecord`'s `(filename,
-      qualname)` pairs to `Block`s, to build `resolve.World.closure`'s seeds. Records that
-      touched a file which changed during the run are dropped.
+- [x] `code → block` resolution at session end: `World.resolve_code` (`resolve.py`) maps one
+      `CollectorRecord` code identifier to seed keys; `seeds.py`'s `seeds_for_record` drives it
+      per record and drops one outright if it touched a file that changed mid-run.
 - [ ] `voci/_affected/store.py`: several records per test, the parse cache, `module:` key
       resolution, the git-common-dir location, and LRU pruning. A key's checksum must call
       `World.effect_fold_target` over every effect statement in the corpus that targets it, per

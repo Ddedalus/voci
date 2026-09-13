@@ -351,6 +351,64 @@ def test_an_if_else_reassignment_pulls_in_both_branches_own_references() -> None
     assert NameKey(paths["flag_b"], "B") in closure
 
 
+# Code -> block resolution (`World.resolve_code`)
+# ------------------------------------------------------------------------
+
+
+def test_resolve_code_matches_a_def_by_qualname() -> None:
+    world, paths = _world({"app": "class C:\n    def m(self):\n        return 1\n"})
+    assert world.resolve_code(paths["app"], "C.m") == frozenset({DefKey(paths["app"], "C.m")})
+
+
+def test_resolve_code_matches_a_module_level_def_by_qualname() -> None:
+    world, paths = _world({"app": "def handler():\n    return 1\n"})
+    assert world.resolve_code(paths["app"], "handler") == frozenset(
+        {DefKey(paths["app"], "handler")}
+    )
+
+
+def test_resolve_code_matches_a_top_level_class_body_by_its_own_name() -> None:
+    """A class body's own `co_qualname` is the class's plain name, not a def's -- it has no
+    dedicated `Block`, so it resolves to the top-level class's `NameKey` instead."""
+    world, paths = _world({"app": "class C:\n    x = 1\n"})
+    assert world.resolve_code(paths["app"], "C") == frozenset({NameKey(paths["app"], "C")})
+
+
+def test_resolve_code_matches_a_nested_class_body_to_its_top_level_class() -> None:
+    world, paths = _world({"app": "class Outer:\n    class Inner:\n        pass\n"})
+    assert world.resolve_code(paths["app"], "Outer.Inner") == frozenset(
+        {NameKey(paths["app"], "Outer")}
+    )
+
+
+def test_resolve_code_falls_back_to_the_whole_file_for_a_lambda() -> None:
+    """`<lambda>` (and `<genexpr>`, `__annotate__`, `<generic parameters of ...>`) carries no
+    `co_firstlineno` once `Collector.finish` has reduced it to a bare qualname, so there's no way
+    to pin it to one block -- this depends on everything the file binds at its own top level
+    instead, same as an unresolvable reference falls back to the whole module."""
+    world, paths = _world({"app": "f = lambda: 1\nCONST = 2\ndef g():\n    return 3\n"})
+    seeds = world.resolve_code(paths["app"], "<lambda>")
+    assert NameKey(paths["app"], "f") in seeds
+    assert NameKey(paths["app"], "CONST") in seeds
+    assert NameKey(paths["app"], "g") in seeds
+    assert DefKey(paths["app"], "g") in seeds
+
+
+def test_resolve_code_module_seeds_pull_in_module_global_effects_through_closure() -> None:
+    """A bare `<module>` firing needs no dedicated case: seeding *any* of the file's top-level
+    names is enough for `closure`'s own per-module `touch()` to pull in that file's
+    `module_global` effects (its own imports) once the seed enters the closure."""
+    world, paths = _world({"app": "import logging\nCONST = 1\n"})
+    seeds = world.resolve_code(paths["app"], "<module>")
+    closure = world.closure(seeds)
+    assert NameKey(paths["app"], "logging") in closure
+
+
+def test_resolve_code_on_an_unknown_path_seeds_nothing() -> None:
+    world, _paths = _world({"app": "CONST = 1\n"})
+    assert world.resolve_code(Path("/proj/gone.py"), "CONST") == frozenset()
+
+
 def test_an_if_else_def_pulls_in_both_branches_own_references() -> None:
     world, paths = _world(
         {

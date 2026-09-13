@@ -38,10 +38,10 @@ prototype analyzer (`research/affected/name-deps/`), but sound, and exactly rule
 mechanism rather than a special case bolted onto it.
 
 `code -> block` resolution -- matching a `CollectorRecord`'s `(filename, qualname)` pairs back to
-`Block` objects at session end -- is a different, not-yet-built piece (M2's next item); `closure`
-here takes already-identified seed blocks, not raw collector output. Turning the returned keys
-and fold targets into checksums, and merging several statements under one `(path, name)` key's
-hash, is `store.py`'s job, not built either.
+seed keys at session end -- is `World.resolve_code` below, driven per record by `seeds.py`'s
+`seeds_for_record`; `closure` here takes already-identified seed blocks, not raw collector output.
+Turning the returned keys and fold targets into checksums, and merging several statements under
+one `(path, name)` key's hash, is `store.py`'s job, not built either.
 
 Known gaps, matching the plan's own Failure modes table: `importlib.import_module` and other
 runtime imports (rule 6) are the tracer's job, not this module's, and aren't reflected here.
@@ -250,6 +250,7 @@ class World:
                 self._string_index.setdefault(name, []).append((file.dotted, name))
         self._cache: dict[tuple[str, str, str | None, bool], frozenset[_DepItem]] = {}
         self._resolving: set[tuple[str, str, str | None, bool]] = set()
+        self._resolve_code_cache: dict[tuple[Path, str], frozenset[DefKey | NameKey]] = {}
 
     def _file(self, dotted: str) -> _File | None:
         return self._files.get(dotted)
@@ -355,6 +356,64 @@ class World:
             for dotted, name in self._string_index.get(segment, ()):
                 out |= self._resolve_binding(dotted, name)
         return out
+
+    # -- code -> block resolution (M2's "at session end" bullet) ----------
+
+    def resolve_code(self, path: Path, qualname: str) -> frozenset[DefKey | NameKey]:
+        """Maps one `CollectorRecord` code identifier -- `(path, qualname)`, `Collector.finish`'s
+        own reduction of a traced `CodeType` -- to the seed keys it stands for, per the
+        Fingerprints "Mapping a code object to a block" rule. `path` unknown to this `World` (a
+        file this run touched that no longer exists in the tree `World` was built from) seeds
+        nothing; whatever else in the closure needed that file already carries a `ModuleKey` for
+        it through the ordinary import-resolution path, which doesn't go through here.
+
+        A def's own `co_qualname` matches a `DefKey` directly -- one lookup, not a search keyed
+        by identity, since `DefKey` is `(path, qualname)` already. A class body's `co_qualname` is
+        the class's own dotted path (`"Outer"`, `"Outer.Inner"` for a nested class); unlike a def
+        it has no dedicated `Block` of its own (blocks.py's own docstring: only a *top-level*
+        class gets one), so it resolves through its outermost segment to that top-level class's
+        `NameKey` instead. Everything else -- `<lambda>`, `<genexpr>`, 3.14's `__annotate__`,
+        `<generic parameters of ...>`, and `<module>` itself -- would need the `co_firstlineno`
+        `Collector.finish`'s reduction already discarded to locate the one block it belongs to;
+        rather than guess, this depends on every name the file binds at its own top level instead,
+        the same fail-safe posture rule 4 uses for a reference this module's static model can't
+        follow. For `<module>` this is exactly the outcome wanted: it fires once, when the file's
+        own import actually ran, and seeding any of its top-level keys is what makes `closure`'s
+        own per-module `touch()` pull in that file's `module_global`/`session_global` effects
+        (see `closure`'s own docstring) -- without needing a `<module>`-specific case at all.
+
+        Cached by `(path, qualname)`: a shared helper many tests trace would otherwise repeat the
+        same block scan, and for the whole-file fallback case, the same per-name walk over every
+        top-level binding, once per test rather than once per distinct code identifier.
+        """
+        cache_key = (path, qualname)
+        if cache_key in self._resolve_code_cache:
+            return self._resolve_code_cache[cache_key]
+        result = self._resolve_code_uncached(path, qualname)
+        self._resolve_code_cache[cache_key] = result
+        return result
+
+    def _resolve_code_uncached(self, path: Path, qualname: str) -> frozenset[DefKey | NameKey]:
+        dotted = self._dotted_for_path.get(path)
+        if dotted is None:
+            return frozenset()
+        file = self._file(dotted)
+        if file is None:
+            return frozenset()
+        def_key = DefKey(path, qualname)
+        if _find_blocks(file, def_key):
+            return frozenset({def_key})
+        first_segment = qualname.split(".", 1)[0]
+        if first_segment in file.class_names:
+            return frozenset({NameKey(path, first_segment)})
+        seeds: set[DefKey | NameKey] = set()
+        for name in file.top_level_names():
+            seeds |= {
+                item
+                for item in self._local_binding_keys(file, name)
+                if isinstance(item, (DefKey, NameKey))
+            }
+        return frozenset(seeds)
 
     # -- closure (rules 2, 4, 5) ------------------------------------------
 
