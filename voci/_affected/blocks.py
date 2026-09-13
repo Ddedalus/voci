@@ -222,10 +222,22 @@ def _collect_references(node: ast.AST) -> frozenset[str]:
     """Every name `node` reads -- an attribute chain `a.b.c` is covered by its root `Name` node
     alone, without walking the chain, since `a` is exactly what a reference to it needs to
     resolve. String literals (rule 5) and dotted-import resolution (rule 7) are `resolve.py`'s,
-    not collected here."""
-    return frozenset(
+    not collected here.
+
+    A nested `import`/`from ... import` -- inside a function body, since a module-level one is
+    itself a statement block, not a reference -- binds a name no other module can see, but
+    running it still resolves the imported module (rule 7), so its bound name(s) count as
+    references of whatever block contains it, the same as a name read from the surrounding
+    scope."""
+    names = {
         n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-    )
+    }
+    for n in ast.walk(node):
+        if isinstance(n, ast.Import):
+            names.update((alias.asname or alias.name).split(".")[0] for alias in n.names)
+        elif isinstance(n, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in n.names if alias.name != "*")
+    return frozenset(names)
 
 
 def _checksum(node: ast.AST, salt: str) -> bytes:

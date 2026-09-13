@@ -60,14 +60,21 @@ dependencies, selection could skip a test it shouldn't.
 
 - [x] `voci/_affected/blocks.py`: statement and def blocks, with binds, references and effects,
       from one parse per file.
-- [ ] `voci/_affected/resolve.py`: the name closure, effect folding, string index and
-      whole-module fallback. Write the soundness cases listed under "Probe results" as voci
-      tests before writing selection.
-- [ ] `code → block` resolution at session end. Records that touched a file which changed during
-      the run are dropped.
+- [x] `voci/_affected/resolve.py`: `World.closure` (name closure, string index, whole-module
+      fallback -- rules 2, 4, 5) and `World.effect_fold_target` (rule 3), as two separate
+      queries rather than one BFS: a checksum's own effect-fold is a property of the *key*
+      (computed by whoever hashes it), never of one test's closure, so `closure` never calls
+      `effect_fold_target` itself. Soundness cases from "Probe results" are
+      `tests/affected/test_resolve.py`. `blocks.py`'s `_collect_references` gained nested-import
+      references (a real gap: it only walked `Name` loads) along the way.
+- [ ] `code → block` resolution at session end: matches a `CollectorRecord`'s `(filename,
+      qualname)` pairs to `Block`s, to build `resolve.World.closure`'s seeds. Records that
+      touched a file which changed during the run are dropped.
 - [ ] `voci/_affected/store.py`: several records per test, the parse cache, `module:` key
-      resolution, the git-common-dir location, and LRU pruning. Measure size on voci's suite and
-      httpx2 after 20 branch switches.
+      resolution, the git-common-dir location, and LRU pruning. A key's checksum must call
+      `World.effect_fold_target` over every effect statement in the corpus that targets it, per
+      resolve.py's own module docstring. Measure size on voci's suite and httpx2 after 20 branch
+      switches.
 
 **M3 — Selection and CLI** (see Selection)
 
