@@ -89,6 +89,19 @@ def test_open_store_rebuilds_on_a_schema_version_mismatch(tmp_path: Path) -> Non
         store.close_store(conn)
 
 
+def test_open_store_reopens_cleanly_after_a_rebuild(tmp_path: Path) -> None:
+    """The rebuild path (`open_store` -> version mismatch -> temp file -> `os.replace`) must
+    leave a store a later `open_store` call in the same process, or a fresh one, can open again
+    without tripping another rebuild."""
+    store.close_store(store.open_store(tmp_path))
+    conn = store.open_store(tmp_path)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == store._SCHEMA_VERSION
+    finally:
+        store.close_store(conn)
+
+
 # -- Parse cache ----------------------------------------------------------------------------
 
 
@@ -114,6 +127,21 @@ def test_parsed_blocks_reparses_on_content_change(tmp_path: Path) -> None:
         assert count == 2
     finally:
         store.close_store(conn)
+
+
+def test_parsed_blocks_survive_close_store_and_reopen(tmp_path: Path) -> None:
+    """A caller that only ever parses (never `store_record`s) must not lose that work the moment
+    the connection closes -- `close_store` is the one place a write is guaranteed to commit."""
+    conn = store.open_store(tmp_path)
+    store.parsed_blocks(conn, "def a():\n    return 1\n", "a.py")
+    store.close_store(conn)
+
+    reopened = store.open_store(tmp_path)
+    try:
+        (count,) = reopened.execute("SELECT COUNT(*) FROM parsed").fetchone()
+        assert count == 1
+    finally:
+        store.close_store(reopened)
 
 
 # -- Checksums ------------------------------------------------------------------------------
@@ -174,6 +202,18 @@ def test_module_checksum_marks_a_missing_module_absent() -> None:
     )
     assert checksum == store.module_checksum(
         "also_not_a_real_package_abc", first_party={}, rootdir=Path("/proj")
+    )
+
+
+def test_module_checksum_marks_a_dotted_name_with_a_missing_parent_absent() -> None:
+    """`find_spec` raises `ModuleNotFoundError` rather than returning `None` when a dotted name's
+    *parent* package isn't installed -- the case a `try: import optional_pkg.extra except
+    ImportError` for an uninstalled optional dependency hits."""
+    checksum = store.module_checksum(
+        "definitely_not_a_real_package_xyz.submodule", first_party={}, rootdir=Path("/proj")
+    )
+    assert checksum == store.module_checksum(
+        "definitely_not_a_real_package_xyz", first_party={}, rootdir=Path("/proj")
     )
 
 

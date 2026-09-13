@@ -70,15 +70,9 @@ dependencies, selection could skip a test it shouldn't.
 - [x] `code → block` resolution at session end: `World.resolve_code` (`resolve.py`) maps one
       `CollectorRecord` code identifier to seed keys; `seeds.py`'s `seeds_for_record` drives it
       per record and drops one outright if it touched a file that changed mid-run.
-- [x] `voci/_affected/store.py`: the git-common-dir location (`store_path`, shared across
-      worktrees), schema and `open_store` (version-keyed whole-file rebuild), the parse cache
-      (`parsed_blocks`, by content sha256), checksum computation (`Fingerprints` for a
-      `DefKey`/`NameKey`, folding every effect in the corpus once rather than per key;
-      `module_checksum` for rule 7 -- first-party path, namespace directories, absent, or a
-      hand-rolled requirement-closure walk over `importlib.metadata` since voci ships zero
-      runtime dependencies), and `store_record` (dep sets shared across tests via
-      `UNIQUE(path, keyed_checksums)`, 8 records per test per environment, LRU pruning of both).
-      Sizing on voci's suite and httpx2 after 20 branch switches is M7's job, not this bullet's.
+- [x] `voci/_affected/store.py`: location, schema, parse cache, checksum computation
+      (`Fingerprints`, `module_checksum`) and `store_record`. Sizing on voci's suite and httpx2
+      after 20 branch switches is M7's job.
 
 **M3 — Selection and CLI** (see Selection)
 

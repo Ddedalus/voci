@@ -36,6 +36,7 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -143,19 +144,32 @@ def open_store(rootdir: Path) -> sqlite3.Connection:
     """The store at `store_path(rootdir)`, creating its directory and schema if needed, or
     rebuilding the file whole if its `user_version` doesn't match `_SCHEMA_VERSION`. Callers own
     the returned connection and must `close_store` it -- one write transaction at session end,
-    from the parent only, per the Storage design section."""
+    from the parent only, per the Storage design section.
+
+    A rebuild writes the fresh schema into a private temporary file and `os.replace`s it over
+    `path`, rather than unlinking `path` and recreating it in place: the store is explicitly
+    shared across a repository's worktrees, so two processes racing on the very first run, or
+    right after a `_SCHEMA_VERSION` bump, both take this branch at once, and an unlink-then-
+    recreate would let the second process delete the file the first just built its schema into.
+    `os.replace` is atomic on the platforms voci supports, so whichever process's replace runs
+    last simply wins outright -- both temp files hold an equally fresh, empty schema, so there is
+    nothing to lose by discarding the loser's."""
     path = store_path(rootdir)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version != _SCHEMA_VERSION:
-        conn.close()
-        path.unlink(missing_ok=True)
-        conn = _connect(path)
-        conn.executescript(_SCHEMA)
-        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        conn.commit()
-    return conn
+    if version == _SCHEMA_VERSION:
+        return conn
+    conn.close()
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp_path.unlink(missing_ok=True)
+    temp_conn = _connect(temp_path)
+    temp_conn.executescript(_SCHEMA)
+    temp_conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    temp_conn.commit()
+    temp_conn.close()
+    os.replace(temp_path, path)
+    return _connect(path)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -169,6 +183,12 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def close_store(conn: sqlite3.Connection) -> None:
+    """Commit whatever this connection hasn't yet, then close it. `sqlite3.Connection.close`
+    silently rolls back an uncommitted transaction rather than committing it, so this is the one
+    place that write is guaranteed to happen -- a caller that only ever calls `parsed_blocks`
+    (never `store_record`, whose own `with conn:` commits eagerly) would otherwise lose every
+    parse it just cached the moment the connection closes."""
+    conn.commit()
     conn.close()
 
 
@@ -184,14 +204,18 @@ def parsed_blocks(conn: sqlite3.Connection, source: str, filename: str) -> list[
     now = time.time()
     row = conn.execute("SELECT blocks FROM parsed WHERE content_sha = ?", (content_sha,)).fetchone()
     if row is not None:
-        conn.execute("UPDATE parsed SET last_used = ? WHERE content_sha = ?", (now, content_sha))
+        with conn:
+            conn.execute(
+                "UPDATE parsed SET last_used = ? WHERE content_sha = ?", (now, content_sha)
+            )
         return _blocks_from_json(json.loads(row[0]))
     blocks = parse_blocks(source, filename)
-    conn.execute(
-        "INSERT OR REPLACE INTO parsed(content_sha, blocks, last_used) VALUES (?, ?, ?)",
-        (content_sha, json.dumps(_blocks_to_json(blocks)), now),
-    )
-    _prune_parsed(conn)
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO parsed(content_sha, blocks, last_used) VALUES (?, ?, ?)",
+            (content_sha, json.dumps(_blocks_to_json(blocks)), now),
+        )
+        _prune_parsed(conn)
     return blocks
 
 
@@ -317,7 +341,15 @@ def module_checksum(dotted: str, *, first_party: Mapping[str, Path], rootdir: Pa
         path = first_party[dotted]
         rel = path.relative_to(rootdir) if path.is_relative_to(rootdir) else path
         return _combine([_string_checksum(str(rel))])
-    spec = importlib.util.find_spec(dotted)
+    try:
+        spec = importlib.util.find_spec(dotted)
+    except ModuleNotFoundError:
+        # `find_spec` imports `dotted`'s parent packages to resolve a dotted name (though never
+        # `dotted` itself), and raises rather than returning `None` when one of them isn't
+        # installed -- unlike a plain top-level absent name, which it reports the ordinary way.
+        # A `try: import optional_pkg.extra except ImportError` for an uninstalled optional
+        # dependency hits exactly this.
+        spec = None
     if spec is not None and spec.origin is None and spec.submodule_search_locations is not None:
         # A namespace package: no `__init__.py`, so no single file's checksum stands for it --
         # rule 7's "a namespace package's directories".
@@ -429,8 +461,13 @@ def store_record(
             "INSERT INTO record_dep(record_id, dep_set_id) VALUES (?, ?)",
             [(record_id, dep_set_id) for dep_set_id in dep_set_ids],
         )
-        _prune_records(conn, env_id, test_id)
-        _prune_orphan_dep_sets(conn)
+        if _prune_records(conn, env_id, test_id):
+            # Only when a record was actually evicted above -- a full anti-join scan of `dep_set`
+            # on every call, even the common case where this test hasn't yet reached
+            # `_RECORDS_PER_TEST`, would turn N `store_record` calls into O(N * dep_sets) work
+            # for no reason: nothing this call did can have orphaned a `dep_set` row otherwise,
+            # since `_dep_set_ids` only ever adds references, never removes them.
+            _prune_orphan_dep_sets(conn)
 
 
 def _env_id(conn: sqlite3.Connection, env_key: str, now: float) -> int:
@@ -483,7 +520,11 @@ def _key_id(key: DependencyKey) -> str:
     return "module"
 
 
-def _prune_records(conn: sqlite3.Connection, env_id: int, test_id: str) -> None:
+def _prune_records(conn: sqlite3.Connection, env_id: int, test_id: str) -> bool:
+    """Delete every record for `(env_id, test_id)` beyond the `_RECORDS_PER_TEST` most recently
+    used, and report whether anything was deleted -- so a caller only pays for
+    `_prune_orphan_dep_sets`' own full-table scan on the calls that could actually have orphaned
+    a `dep_set` row."""
     survivors = (
         "SELECT id FROM record WHERE env_id = ? AND test_id = ? "
         "ORDER BY last_used DESC, id DESC LIMIT ?"
@@ -494,10 +535,11 @@ def _prune_records(conn: sqlite3.Connection, env_id: int, test_id: str) -> None:
         f"(SELECT id FROM record WHERE env_id = ? AND test_id = ? AND id NOT IN ({survivors}))",
         (env_id, test_id, *args),
     )
-    conn.execute(
+    cursor = conn.execute(
         f"DELETE FROM record WHERE env_id = ? AND test_id = ? AND id NOT IN ({survivors})",
         (env_id, test_id, *args),
     )
+    return cursor.rowcount > 0
 
 
 def _prune_orphan_dep_sets(conn: sqlite3.Connection) -> None:
