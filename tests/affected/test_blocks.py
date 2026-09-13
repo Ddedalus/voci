@@ -241,6 +241,11 @@ def test_from_import_as_binds_the_alias() -> None:
     assert _statement_binding(blocks, "c") is not None
 
 
+def test_a_nested_import_is_a_reference_of_its_def_block() -> None:
+    blocks = parse_blocks("def f():\n    import json\n    return json.dumps(1)\n")
+    assert "json" in _by_qualname(blocks, "f").references
+
+
 # Whitespace and comments
 # ------------------------------------------------------------------------
 
