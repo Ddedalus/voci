@@ -5,10 +5,10 @@ stopping at the git root, and turns that table into a validated `Config`. The di
 becomes the run's rootdir. One file, one table — there is no inheritance and no per-directory
 config.
 
-Eight keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
-`test_file_patterns`, `ignore`, `env` and `filterwarnings`. Anything else is an error, as is a
-value of the wrong type or shape. `cli.py` merges the resulting `Config` against the command line
-and the built-in defaults.
+Nine keys are recognized: `testpaths`, `concurrency`, `timeout`, `loop_watchdog`,
+`test_file_patterns`, `ignore`, `env`, `filterwarnings` and `affected_trace_threads`. Anything else
+is an error, as is a value of the wrong type or shape. `cli.py` merges the resulting `Config`
+against the command line and the built-in defaults.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ _KNOWN_KEYS = frozenset(
         "ignore",
         "env",
         "filterwarnings",
+        "affected_trace_threads",
     }
 )
 
@@ -93,6 +94,12 @@ class Config:
     #: business happening while the config that says where that code lives is still being read.
     #: `cli.py` parses them once `rootdir` is on `sys.path`.
     filterwarnings: tuple[str, ...] | None = None
+    #: Opt-in: patch `Thread.start` and `loop.run_in_executor` for the run's duration, so a
+    #: thread or executor call inherits its creator's affected-test collector instead of leaving
+    #: every test in flight untrusted (`voci._affected.threads`). No CLI flag and no other
+    #: default to merge against -- unlike the fields above, `False` here already is the final
+    #: answer, not a placeholder for `cli.py` to replace.
+    affected_trace_threads: bool = False
 
 
 def resolve(explicit_paths: Sequence[Path]) -> Config:
@@ -229,6 +236,9 @@ def _parse(table: dict[str, object], *, rootdir: Path, source: Path) -> Config:
         ignore=_str_list(table.get("ignore"), key="ignore", source=source),
         env=_str_dict(table.get("env"), key="env", source=source),
         filterwarnings=_str_list(table.get("filterwarnings"), key="filterwarnings", source=source),
+        affected_trace_threads=_bool(
+            table.get("affected_trace_threads"), key="affected_trace_threads", source=source
+        ),
     )
 
 
@@ -262,6 +272,14 @@ def _seconds(value: object, *, key: str, source: Path) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigError(f"{source}: {key!r} must be a number, got {value!r}")
     return float(value)
+
+
+def _bool(value: object, *, key: str, source: Path) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ConfigError(f"{source}: {key!r} must be a boolean, got {value!r}")
+    return value
 
 
 def _str_list(value: object, *, key: str, source: Path) -> tuple[str, ...] | None:

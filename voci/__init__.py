@@ -42,6 +42,7 @@ from voci._marks import (
     solo,
     tag,
     timeout,
+    untrusted,
     xfail,
 )
 from voci._outcomes import Failed, Skipped
@@ -85,6 +86,7 @@ __all__ = [
     "tmp_path_factory",
     "tmpdir",
     "tmpdir_factory",
+    "untrusted",
     "use",
     "xfail",
 ]

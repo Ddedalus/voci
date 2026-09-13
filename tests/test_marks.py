@@ -14,6 +14,7 @@ from voci._marks import Marks, decided, marks_of, merged
         ("skip", "first", "second"),
         ("timeout", 10, 20),
         ("xfail", "flaky", "flaky again"),
+        ("untrusted", "first reason", "second reason"),
     ],
 )
 def test_repeated_mark_raises_instead_of_overwriting(
@@ -260,3 +261,24 @@ def test_a_cases_filters_are_folded_in_after_the_tests_own() -> None:
     folded = merged(marks_of(target), voci.case(1, marks=voci.filterwarnings("error")).marks)
 
     assert folded.filterwarnings == ("ignore::UserWarning", "error")
+
+
+def test_untrusted_records_its_reason() -> None:
+    @voci.untrusted("hits an external service")
+    def target() -> None: ...
+
+    marks = marks_of(target)
+    assert marks.untrusted is not None
+    assert marks.untrusted.reason == "hits an external service"
+
+
+def test_a_cases_untrusted_mark_wins_over_the_tests_own() -> None:
+    """Like `skip`/`xfail`/`timeout`, a case's own `untrusted` is the specific one."""
+
+    @voci.untrusted("test-level reason")
+    def target() -> None: ...
+
+    folded = merged(marks_of(target), voci.case(1, marks=voci.untrusted("case-level reason")).marks)
+
+    assert folded.untrusted is not None
+    assert folded.untrusted.reason == "case-level reason"

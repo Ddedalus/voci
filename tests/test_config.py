@@ -308,3 +308,22 @@ def test_watchdog_threshold_is_not_yet_a_known_key(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="watchdog_threshold"):
         resolve([tmp_path])
+
+
+def test_affected_trace_threads_defaults_to_false(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.voci]\ntestpaths = ['tests']\n")
+
+    assert resolve([tmp_path]).affected_trace_threads is False
+
+
+def test_affected_trace_threads_round_trips(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.voci]\naffected_trace_threads = true\n")
+
+    assert resolve([tmp_path]).affected_trace_threads is True
+
+
+def test_affected_trace_threads_must_be_a_boolean(tmp_path: Path) -> None:
+    Project(tmp_path).write_pyproject("[tool.voci]\naffected_trace_threads = 1\n")
+
+    with pytest.raises(ConfigError, match="affected_trace_threads"):
+        resolve([tmp_path])
