@@ -14,6 +14,11 @@ from voci._affected import threads
 _var: contextvars.ContextVar[str] = contextvars.ContextVar("test_threads_var", default="outer")
 
 
+def _add(a: int, b: int) -> int:
+    """Module-level, not a lambda: `ProcessPoolExecutor` needs to pickle this."""
+    return a + b
+
+
 @pytest.fixture
 def installed() -> Iterator[None]:
     assert threads.install()
@@ -146,3 +151,19 @@ def test_installed_run_in_executor_captures_context_per_call_on_a_shared_pool(
     with ThreadPoolExecutor(max_workers=1) as pool:
         result = asyncio.run(body(pool))
     assert result == ("first-caller", "second-caller")
+
+
+def test_installed_run_in_executor_leaves_a_process_pool_untouched(installed: None) -> None:
+    """A `ProcessPoolExecutor` call item is pickled to the worker process, and a
+    `contextvars.Context` can't be pickled at all -- wrapping `func` for one would turn a call
+    that worked before this patch into a submission-time `TypeError` (see the plan's Child
+    processes section: a separate process needs `affected_trace_subprocesses`, not this)."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    async def body(pool: ProcessPoolExecutor) -> int:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(pool, _add, 1, 2)
+
+    with ProcessPoolExecutor(max_workers=1) as pool:
+        result = asyncio.run(body(pool))
+    assert result == 3

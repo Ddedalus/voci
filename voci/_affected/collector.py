@@ -59,9 +59,14 @@ class Collector:
     def mark_untrusted(self, reason: str) -> None:
         """Distrust everything this collector recorded, with `reason` for whoever reads it next.
         Idempotent past the first call -- see `untrusted`'s own docstring for why the first
-        reason wins rather than the latest."""
-        if self.untrusted is None:
-            self.untrusted = reason
+        reason wins rather than the latest. Locked on the module's shared `_in_flight_lock`,
+        not a lock of its own, because the only concurrent caller today is
+        `record_first_party`'s in-flight loop -- two threads racing to distrust the same
+        collector at once -- and a check-then-set with no lock at all would let the later of the
+        two overwrite the earlier one's reason instead of losing to it."""
+        with _in_flight_lock:
+            if self.untrusted is None:
+                self.untrusted = reason
 
 
 current_collector: ContextVar[Collector | None] = ContextVar("voci_current_collector", default=None)
@@ -88,19 +93,24 @@ def active(collector: Collector) -> Iterator[None]:
     in-flight for the same span, for `record_first_party` to find from a context that has no
     current collector of its own."""
     token = current_collector.set(collector)
-    key = id(collector)
-    with _in_flight_lock:
-        _in_flight_refcounts[key] = _in_flight_refcounts.get(key, 0) + 1
-        _in_flight_collectors[key] = collector
     try:
-        yield
-    finally:
-        current_collector.reset(token)
+        key = id(collector)
         with _in_flight_lock:
-            _in_flight_refcounts[key] -= 1
-            if _in_flight_refcounts[key] <= 0:
-                del _in_flight_refcounts[key]
-                del _in_flight_collectors[key]
+            _in_flight_refcounts[key] = _in_flight_refcounts.get(key, 0) + 1
+            _in_flight_collectors[key] = collector
+        try:
+            yield
+        finally:
+            with _in_flight_lock:
+                _in_flight_refcounts[key] -= 1
+                if _in_flight_refcounts[key] <= 0:
+                    del _in_flight_refcounts[key]
+                    del _in_flight_collectors[key]
+    finally:
+        # Its own finally, outermost: current_collector must be reset even if registering or
+        # unregistering the in-flight entry above raised, so a mid-`active()` exception can never
+        # leave current_collector permanently pointing at a collector no one is using anymore.
+        current_collector.reset(token)
 
 
 def record_first_party(code: CodeType) -> None:

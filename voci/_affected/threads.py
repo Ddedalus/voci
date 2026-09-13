@@ -25,7 +25,7 @@ import contextvars
 import functools
 import threading
 from collections.abc import Callable
-from concurrent.futures import Executor
+from concurrent.futures import Executor, ThreadPoolExecutor
 from typing import Any
 
 __all__ = ["install", "uninstall"]
@@ -94,7 +94,19 @@ def _traced_run_in_executor(
     """Copy the calling task's context into `func` per call, not per worker thread: unlike a
     thread `Thread.start` creates fresh, a `ThreadPoolExecutor`'s workers are long-lived and
     shared across whichever unrelated tests submit to them next, so the context has to travel
-    with each submission instead of living on the thread."""
+    with each submission instead of living on the thread.
+
+    Left untouched for anything but a thread pool (`executor is None`, `run_in_executor`'s own
+    default, or an explicit `ThreadPoolExecutor`): a `ProcessPoolExecutor` call item is pickled
+    to the worker process, and `functools.partial(ctx.run, ...)` would carry a
+    `contextvars.Context` into that pickle, which can't be pickled at all -- turning a call that
+    worked before this patch into a `TypeError` at submission time. A process pool shares no
+    memory with this one regardless, so there is no context for it to inherit in the first
+    place; tracing a same-interpreter child process is `affected_trace_subprocesses`'s job
+    (M6), not this one's.
+    """
     assert _original_run_in_executor is not None  # install() always sets this before patching
+    if executor is not None and not isinstance(executor, ThreadPoolExecutor):
+        return _original_run_in_executor(self, executor, func, *args)
     ctx = contextvars.copy_context()
     return _original_run_in_executor(self, executor, functools.partial(ctx.run, func, *args))
