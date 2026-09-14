@@ -11,11 +11,13 @@ A run that is itself under coverage.py hands each subprocess the environment tha
 the same measurement, and merges what it wrote back into the parent's data once it exits --
 `coverage.py` next door owns both halves and is inert when nothing is measuring.
 
-Affected-test recording rides the same shape rather than a second IPC channel: the subprocess
-runs its own `Tracer` (`_isolated_worker.py`), and `result_to_json`'s `collector` key carries the
-resulting `CollectorRecord` back, `collector_from_json`'s job to read again. Unlike coverage.py
-there is no live measurement on this side to merge into yet -- `run.py`'s `on_collector` is where
-a caller gets it (see the plan's M1, "Recording").
+Affected-test recording rides the same shape rather than a second IPC channel: the subprocess runs
+its own `Tracer` (`_isolated_worker.py`), already folded together with that subprocess's own
+module/session-scope fixture collectors (`run_suite`'s `on_test_dependencies`, over the
+subprocess's own fresh `ScopeStore`), and `result_to_json`'s `collector` key carries the resulting
+`CollectorRecord` back, `collector_from_json`'s job to read again. Unlike coverage.py there is no
+live measurement on this side to merge into yet -- `run.py`'s `on_collector`/`on_test_dependencies`
+callbacks are where a caller gets it (see the plan's M1, "Recording", and M3's driver).
 
 Each subprocess gets its own `tmp_path` root, nested under the parent run's own basetemp so it is
 swept by the same retention policy, never the parent's root directly -- `_capture.install`'s
@@ -95,7 +97,8 @@ def result_to_json(result: Any, *, collector: CollectorRecord | None = None) -> 
 def collector_from_json(data: dict[str, Any]) -> CollectorRecord:
     """The inverse of `result_to_json`'s `collector` key: `CollectorRecord.empty()` for a dict
     with none -- a crash report, an older worker, or a caller that passed nothing -- rather than
-    `None`, so `run.py`'s `on_collector` always has a real record to hand its caller."""
+    `None`, so `run.py`'s `on_collector`/`on_test_dependencies` callbacks always have a real
+    record to hand their caller."""
     raw = data.get("collector")
     return CollectorRecord.empty() if raw is None else CollectorRecord.from_json(raw)
 

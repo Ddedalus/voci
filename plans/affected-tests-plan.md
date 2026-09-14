@@ -91,9 +91,10 @@ dependencies, selection could skip a test it shouldn't.
       `prior_selection`/`record_test` are the actual session-start/end calls over `select.py`/
       `seeds.py`/`store.py`, both tested in isolation; `environment.py`'s `placeholder_env_key` is
       a deliberately coarse stand-in for M4's real one (too coarse only costs extra full runs,
-      never an unsound skip). Still needed: starting a real `Tracer` for the parent's own run
-      (today only `@voci.isolated`'s subprocess starts one, and its own inner `run_suite` call
-      doesn't pass `on_test_dependencies` yet either); and the CLI flags themselves, hidden from
+      never an unsound skip); `@voci.isolated`'s own subprocess now ships back the same
+      fixture-folded shape too. Still needed: starting a real `Tracer` for the *parent's* own run
+      -- nothing does that yet, so none of the above runs during a real invocation; and the CLI
+      flags themselves, hidden from
       `--help` until M4 (see
       the M4 note
       above). Report `N selected · M unaffected` as its

@@ -11,8 +11,10 @@ found on re-collection -- the file changed underfoot, most likely -- is reported
 Under a `coverage run` the parent asks for this process to be measured too, through the
 environment; `coverage.py` next door explains how the two halves meet. Affected-test recording
 rides the same idea: this process starts its own `Tracer`, since a fresh interpreter shares no
-tool id or ContextVar with the parent's, and `result_to_json`'s `collector` key carries what it
-saw back across the same boundary (`isolated.py`).
+tool id or ContextVar with the parent's, and `result_to_json`'s `collector` key carries back what
+it saw -- already folded together with this subprocess's own module/session-scope fixture
+collectors (`run_suite`'s `on_test_dependencies`, over the fresh `ScopeStore` this call gets, not
+the parent's) -- across the same boundary (`isolated.py`).
 """
 
 from __future__ import annotations
@@ -107,8 +109,12 @@ def main(argv: list[str] | None = None) -> int:
                     already_isolated=True,
                     # Exactly one call for the one test this subprocess runs -- what
                     # result_to_json ships back below, the way coverage.py's own measurement
-                    # crosses the same boundary (see this module's docstring).
-                    on_collector=lambda _id, record: collected_records.append(record),
+                    # crosses the same boundary (see this module's docstring). on_test_dependencies,
+                    # not on_collector: this subprocess's own module/session-scope fixtures (its
+                    # ResolutionPlan is re-resolved fresh here, sharing nothing with the parent's)
+                    # need folding in exactly the way an in-process run does, and the merged record
+                    # is what a store_record call downstream should see either way.
+                    on_test_dependencies=lambda _record, merged: collected_records.append(merged),
                 )
                 data = result_to_json(
                     results[0],

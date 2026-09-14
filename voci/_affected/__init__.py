@@ -23,25 +23,22 @@ repository's worktrees) and read back (`load_records`). M3 "Selection and CLI" b
 `select.py`'s `decide` answers, per test, whether its most recent record still matches the tree's
 current checksums, and `Selection` holds every test's answer for `candidate_files` (which files
 are worth importing) and `select` (which of their tests actually run) to share --
-`_collection.lastfailed`'s own two-step shape, over the store instead of `LastRun`. `world.py`'s
-`build_world` is the first piece of the session-start/end driver M3 still needs: every first-party
-file under rootdir (`is_first_party`'s own criterion, not just `discover_files`' `ignore_dirs`),
-turned into the `World`/`files` mapping `store.checksums` and `seeds.seeds_for_record` both need.
-`_run.run.run_suite`'s `on_test_dependencies` is the other piece already landed: a test's own
-`CollectorRecord`, folded together with every `module`/`session`-scope fixture its plan reaches
-(`_di.runtime.ScopeStore.collectors_for`), once the whole run -- session teardown included -- is
-otherwise done. `driver.py` is the session-start/end driver itself: `prior_selection` builds a
-`Selection` against a stored `env_key`, or names `FULL_RUN_NO_MATCHING_ENV` if that environment
-has nothing stored yet; `record_test` runs `seeds.seeds_for_record`/`World.closure`/
-`store.checksums`/`store_record` for one finished test, skipping a CANCELLED outcome (which never
-got to say anything about the code under test) or a record `seeds_for_record` itself dropped.
-`environment.py`'s `placeholder_env_key` is a deliberately coarse stand-in for M4's real
-environment key -- interpreter implementation/version/platform only, safe to ship ahead of the
-real one because being too coarse only costs extra full runs, never an unsound skip. Still to
-come: starting a real `Tracer` around the parent's own run (today only `@voci.isolated`'s
-subprocess starts one, and its own inner `run_suite` call doesn't pass `on_test_dependencies`
-either); and the `--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
-None of that exists yet, so the parent's own run still starts no `Tracer` of its own, and
+`_collection.lastfailed`'s own two-step shape, over the store instead of `LastRun`.
+
+The session-start/end driver M3 still needs is mostly built, just not wired into a real run yet:
+`world.py`'s `build_world` turns every first-party file under rootdir (`is_first_party`'s own
+criterion, not just `discover_files`' `ignore_dirs`) into the `World`/`files` mapping
+`store.checksums` and `seeds.seeds_for_record` both need; `_run.run.run_suite`'s
+`on_test_dependencies` gives a test's own `CollectorRecord` folded together with every
+`module`/`session`-scope fixture its plan reaches (`_di.runtime.ScopeStore.collectors_for`), once
+a run is otherwise done -- `@voci.isolated`'s own subprocess (`_isolated_worker.py`) passes this
+too now, over its own fresh `ScopeStore`, so an isolated test's shipped record has the same shape
+as an in-process one's; `driver.py`'s `prior_selection`/`record_test` are the actual calls into
+`select.py`/`seeds.py`/`store.py` those two feed; `environment.py`'s `placeholder_env_key` is a
+deliberately coarse stand-in for M4's real environment key (too coarse only costs extra full runs,
+never an unsound skip). Still missing: starting a real `Tracer` around the *parent's* own run --
+nothing does that yet, so none of the above actually runs during a real `voci` invocation -- and
+the `--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
 `cli._installed_session` doesn't call `threads.install` yet either.
 """
 
