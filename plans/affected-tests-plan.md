@@ -89,10 +89,12 @@ dependencies, selection could skip a test it shouldn't.
       fixture in its plan) once a run is otherwise done; `_affected/world.py`'s `build_world` gives
       it a `World` over the whole first-party tree for `store.checksums`; `_affected/driver.py`'s
       `prior_selection`/`record_test` are the actual session-start/end calls over `select.py`/
-      `seeds.py`/`store.py`, both tested in isolation. Still needed: starting a real `Tracer` for
-      the parent's own run (today only `@voci.isolated`'s subprocess starts one, and its own inner
-      `run_suite` call doesn't pass `on_test_dependencies` yet either); a placeholder `env_key`
-      until M4's real one lands; and the CLI flags themselves, hidden from `--help` until M4 (see
+      `seeds.py`/`store.py`, both tested in isolation; `environment.py`'s `placeholder_env_key` is
+      a deliberately coarse stand-in for M4's real one (too coarse only costs extra full runs,
+      never an unsound skip). Still needed: starting a real `Tracer` for the parent's own run
+      (today only `@voci.isolated`'s subprocess starts one, and its own inner `run_suite` call
+      doesn't pass `on_test_dependencies` yet either); and the CLI flags themselves, hidden from
+      `--help` until M4 (see
       the M4 note
       above). Report `N selected · M unaffected` as its
       own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify

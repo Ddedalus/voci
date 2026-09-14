@@ -35,13 +35,14 @@ otherwise done. `driver.py` is the session-start/end driver itself: `prior_selec
 has nothing stored yet; `record_test` runs `seeds.seeds_for_record`/`World.closure`/
 `store.checksums`/`store_record` for one finished test, skipping a CANCELLED outcome (which never
 got to say anything about the code under test) or a record `seeds_for_record` itself dropped.
-Still to come: starting a real `Tracer` around the parent's own run (today only `@voci.isolated`'s
+`environment.py`'s `placeholder_env_key` is a deliberately coarse stand-in for M4's real
+environment key -- interpreter implementation/version/platform only, safe to ship ahead of the
+real one because being too coarse only costs extra full runs, never an unsound skip. Still to
+come: starting a real `Tracer` around the parent's own run (today only `@voci.isolated`'s
 subprocess starts one, and its own inner `run_suite` call doesn't pass `on_test_dependencies`
-either); the environment-key computation `driver.py`'s `env_key` takes as an opaque string today
-(M4's real one, replacing a placeholder); and the `--affected`/`--affected-verify` flags
-themselves, wiring all of it into `cli.py`. None of that exists yet, so the parent's own run still
-starts no `Tracer` of its own, and `cli._installed_session` doesn't call `threads.install` yet
-either.
+either); and the `--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
+None of that exists yet, so the parent's own run still starts no `Tracer` of its own, and
+`cli._installed_session` doesn't call `threads.install` yet either.
 """
 
 from __future__ import annotations
