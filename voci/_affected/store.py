@@ -420,10 +420,19 @@ def checksums(
     keys: Iterable[DependencyKey],
     *,
     rootdir: Path,
+    fingerprints: Fingerprints | None = None,
 ) -> dict[DependencyKey, bytes]:
     """Every one of `keys`' current checksum -- `Fingerprints` for a `DefKey`/`NameKey`,
-    `module_checksum` for a `ModuleKey`. `files` is the same mapping `world` was built from."""
-    fingerprints = build_fingerprints(conn, world, files)
+    `module_checksum` for a `ModuleKey`. `files` is the same mapping `world` was built from.
+
+    `fingerprints`, if given, is used as-is instead of building a fresh one: `build_fingerprints`
+    scans every block of every first-party file to invert `World.effect_fold_target` once, so a
+    caller making several `checksums` calls against the same `(conn, world, files)` over one run
+    -- `driver.record_test`, once per finished test -- builds it once itself and passes it to
+    each, rather than paying that whole-corpus scan again per test.
+    """
+    if fingerprints is None:
+        fingerprints = build_fingerprints(conn, world, files)
     first_party = {dotted: path for path, (dotted, _source) in files.items()}
     out: dict[DependencyKey, bytes] = {}
     for key in keys:

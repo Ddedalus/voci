@@ -1111,6 +1111,11 @@ class _AffectedContext:
     selection: _affected_select.Selection
     env_key: str
     full_run_reason: str | None
+    fingerprints: _affected_store.Fingerprints
+    """Built once, here, and reused by every `driver.record_test` call this run makes
+    (`_record_test_dependencies`): it inverts `World.effect_fold_target` over every block of
+    every first-party file, so rebuilding it per test -- there can be hundreds -- would turn
+    session-end bookkeeping into O(tests x corpus size) instead of O(corpus size)."""
 
 
 def _prepare_affected(rootdir: Path) -> _AffectedContext:
@@ -1120,14 +1125,23 @@ def _prepare_affected(rootdir: Path) -> _AffectedContext:
 
     `conn` is the caller's to close (`store.close_store`) once this run is fully done, in a
     `finally` -- there is no context-manager form here because the caller also needs `conn` alive
-    across the whole execute phase, not just this call.
+    across the whole execute phase, not just this call. `open_store` succeeding is this function's
+    own point of no return: everything after it (`build_world`'s file walk, `build_fingerprints`'s
+    corpus scan, `prior_selection`'s queries) is wrapped in its own `try`/`except` so a failure
+    there still closes what `open_store` opened, rather than leaking the connection back out
+    through `main`'s `affected = ...` before its own `finally` ever gets a chance to run.
     """
     conn = _affected_store.open_store(rootdir)
-    world, files = build_world(rootdir)
-    env_key = placeholder_env_key()
-    selection, full_run_reason = _affected_driver.prior_selection(
-        conn, world, files, env_key=env_key, rootdir=rootdir
-    )
+    try:
+        world, files = build_world(rootdir)
+        fingerprints = _affected_store.build_fingerprints(conn, world, files)
+        env_key = placeholder_env_key()
+        selection, full_run_reason = _affected_driver.prior_selection(
+            conn, world, files, env_key=env_key, rootdir=rootdir, fingerprints=fingerprints
+        )
+    except BaseException:
+        _affected_store.close_store(conn)
+        raise
     return _AffectedContext(
         conn=conn,
         world=world,
@@ -1135,6 +1149,7 @@ def _prepare_affected(rootdir: Path) -> _AffectedContext:
         selection=selection,
         env_key=env_key,
         full_run_reason=full_run_reason,
+        fingerprints=fingerprints,
     )
 
 
@@ -1231,8 +1246,8 @@ def _discover(session: _RunSession) -> tuple[list[Path], list[Path]]:
 
 def _try_fast_collect_only(session: _RunSession, files: Sequence[Path]) -> int | None:
     """The collect-only fast path: a plain `--collect-only`/`--co-json` -- no -k/-m/id/
-    --lf/--ff narrowing it to something the index doesn't track -- can answer straight
-    from `collection_index` when every discovered file is still fresh in it, skipping
+    --lf/--ff/--affected narrowing it to something the index doesn't track -- can answer
+    straight from `collection_index` when every discovered file is still fresh in it, skipping
     `collect()` and therefore every import it would have done. Returns the exit status
     when it answered, else `None` to fall through to a real collection exactly as
     before."""
@@ -1241,6 +1256,7 @@ def _try_fast_collect_only(session: _RunSession, files: Sequence[Path]) -> int |
         (args.collect_only or args.co_json)
         and not session.replay_last_failed
         and not session.replay_failed_first
+        and session.affected is None
         and not session.prepared.narrowed_by_selection
     ):
         return None
@@ -1468,6 +1484,11 @@ def _record_test_dependencies(
     `outcomes` has no entry for -- one a stop (`--maxfail`, Ctrl-C) dropped before it ever
     finished -- is left unrecorded: `on_result` never saw it, so nothing here is knowable about
     it yet, the same as any other test this run never got to.
+
+    `record_test`'s own `changed_paths` isn't passed here, so it always defaults to empty:
+    nothing in this call chain watches for a first-party file changing *during* this very run
+    (that's a `--watch`-shaped concern, M8's own rebuild, not built) -- see the plan's Failure
+    modes table, "File edited mid-run".
     """
 
     def on_test_dependencies(
@@ -1485,6 +1506,7 @@ def _record_test_dependencies(
             outcome=outcome,
             env_key=affected.env_key,
             rootdir=rootdir,
+            fingerprints=affected.fingerprints,
         )
 
     return on_test_dependencies
@@ -1691,6 +1713,37 @@ def _execute(session: _RunSession) -> int:
     return _run_and_report(session, found, collected, files=files, discovered=discovered)
 
 
+def _run_watch(args: argparse.Namespace, argv: list[str], wall_start: float) -> int:
+    """`main`'s own `--watch` branch, split out purely to keep that function's own branching
+    down: builds the watched scope and hands everything to `_watch_run`, which re-invokes `main`
+    itself once per iteration.
+    """
+    # Not yet a defined combination: today's --watch (unlike M8's rebuilt one) appends --lf to
+    # every rerun after the first, which --affected now rejects outright
+    # (_check_flag_contradictions) -- so left unchecked here, a first --watch --affected
+    # iteration would run fine and every one after it would fail with that usage error instead
+    # of ever rerunning. Caught here, before the first iteration, rather than discovered
+    # iteration by iteration.
+    if args.affected:
+        print(
+            "voci: --watch --affected isn't supported yet -- pass one or the other",
+            file=sys.stderr,
+        )
+        return 4
+    # Every re-invocation below is this same function, so args.watch must not still be set on
+    # it -- leaving it in would just recurse into this branch forever.
+    watch_argv = [item for item in argv if item != "--watch"]
+    roots, ignore_dirs = _watch_scope(args)
+    return _watch_run(
+        base_argv=watch_argv,
+        apply_last_failed=not args.failed_first and not args.last_failed,
+        roots=roots,
+        ignore_dirs=ignore_dirs,
+        initial_wall_start=wall_start,
+        run_once=main,
+    )
+
+
 def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing voci,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -1716,18 +1769,7 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
     args = parser.parse_args(argv)
 
     if args.watch:
-        # Every re-invocation below is this same function, so args.watch must not still be
-        # set on it -- leaving it in would just recurse into this branch forever.
-        watch_argv = [item for item in argv if item != "--watch"]
-        roots, ignore_dirs = _watch_scope(args)
-        return _watch_run(
-            base_argv=watch_argv,
-            apply_last_failed=not args.failed_first and not args.last_failed,
-            roots=roots,
-            ignore_dirs=ignore_dirs,
-            initial_wall_start=wall_start,
-            run_once=main,
-        )
+        return _run_watch(args, argv, wall_start)
 
     # Every usage error checkable before collection touches a single test file, in one
     # phase: a flag's own contradictions, PATHS, -k/-m, [tool.voci], and the run

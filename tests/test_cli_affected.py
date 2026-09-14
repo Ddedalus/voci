@@ -135,3 +135,70 @@ def test_affected_ignores_git_common_dir_and_reuses_a_store_under_a_worktree(
     project.write_passing_test()
     assert main(["--affected", str(project.root)]) == 0
     assert (project.root / ".voci_cache" / "affected.sqlite3").is_file()
+
+
+# Regressions from the code review that landed alongside the wiring above.
+# --------------------------------------------------------------------------------------------
+
+
+def test_affected_and_watch_together_is_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--watch` appends `--lf` to every rerun after its first, which `--affected` now rejects
+    outright -- caught up front, before the first iteration, rather than only on the second."""
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    assert main(["--watch", "--affected", str(project.root)]) == 4
+    assert "--watch --affected isn't supported yet" in capsys.readouterr().err
+
+
+def test_affected_collect_only_narrows_even_from_a_warm_collection_index(
+    project: Project,
+) -> None:
+    """The collect-only fast path answers straight from the collection index when it's fresh,
+    skipping `_collect_and_narrow` entirely -- it must still honor `--affected`'s own narrowing,
+    the same way it already excludes itself for `--lf`/`--ff`."""
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    # First run: stores a record and warms the collection index (a plain run, not --affected,
+    # so nothing about this warm-up depends on the wiring under test).
+    assert main([str(project.root)]) == 0
+    assert main(["--affected", str(project.root)]) == 0  # stores a record for the one test
+
+    status = main(["--affected", "--collect-only", str(project.root)])
+
+    # The collection index is warm (both runs above collected this same file), so without the
+    # fast-path fix this would answer from the index unnarrowed and print the test id anyway.
+    assert status == 5  # nothing left to run: the fast path was skipped and real narrowing applied
+
+
+def test_affected_closes_the_store_connection_even_when_prior_selection_raises(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_prepare_affected` opens the store before it can possibly fail; a failure afterward must
+    still close what `open_store` opened, not leak it back out through `main`."""
+    from voci import cli as _cli
+    from voci._affected import driver as _driver
+
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    closed: list[bool] = []
+    real_close = _cli._affected_store.close_store
+
+    def spying_close(conn: object) -> None:
+        closed.append(True)
+        real_close(conn)  # type: ignore[arg-type]
+
+    def broken_prior_selection(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(_cli._affected_store, "close_store", spying_close)
+    monkeypatch.setattr(_driver, "prior_selection", broken_prior_selection)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main(["--affected", str(project.root)])
+
+    assert closed == [True]

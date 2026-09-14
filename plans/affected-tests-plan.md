@@ -640,7 +640,7 @@ Gaps are what `verify` and a CI full run are for.
 | Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
 | A new test added beside only-`SKIP` siblings in an already-recorded file | `select.decide`'s own per-test filter is sound (an unseen test id always decides `RUN`) | `select.candidate_files`'s file-level narrowing can't see it: no dependency key changes when a file gains a sibling def, so the whole file is skipped and the new test is never imported under a real `--affected` run. Needs a key that changes with a file's own top-level bindings; `--affected-verify`/CI don't narrow via `candidate_files` at all, so both still catch it |
-| File edited mid-run | Records dropped | — |
+| File edited mid-run | Records dropped -- `seeds_for_record`'s own `changed_paths` rule | Nothing populates `changed_paths` yet: `cli.py`'s `_record_test_dependencies` always passes the default `frozenset()`, since detecting a mid-run edit is a stat-watching concern `--watch`'s own M8 rebuild owns, not built. Until then a file edited while `--affected` is running can be stored against slightly stale source |
 | Branch switching all day | Several records per test, parse cache by content, per-test package keys, store shared across worktrees | The first visit to each new tree |
 | mtime churn, moved cache | Content hashes, relative paths | — |
 | Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |

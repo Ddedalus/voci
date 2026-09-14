@@ -1311,8 +1311,9 @@ def run_suite(
     # -- the merge it feeds happens once, after `store` has torn every fixture down (see that
     # parameter's own docstring for why it can't happen any earlier).
     finished_collectors: dict[str, _collector.CollectorRecord] = {}
-    wants_collectors = on_collector is not None or on_test_dependencies is not None
-    record_collector = _collector_recorder(on_collector, on_test_dependencies, finished_collectors)
+    wants_dependencies = on_test_dependencies is not None
+    wants_collectors = on_collector is not None or wants_dependencies
+    record_collector = _collector_recorder(on_collector, wants_dependencies, finished_collectors)
 
     # install() is the first thing here that can fail and the first thing that mutates
     # process-global state, in that order: it resolves its one fallible step
@@ -1476,21 +1477,21 @@ def run_suite(
 
 def _collector_recorder(
     on_collector: Callable[[str, _collector.CollectorRecord], None] | None,
-    on_test_dependencies: object,
+    wants_dependencies: bool,
     finished_collectors: dict[str, _collector.CollectorRecord],
 ) -> Callable[[str, _collector.CollectorRecord], None]:
     """`run_suite`'s own `_Session.on_collector`: relays to the caller's `on_collector`, if any,
-    and -- iff `on_test_dependencies` was given too -- stashes the raw record for
-    `_fire_test_dependencies` to fold fixture collectors into later. Split out from `run_suite`
-    itself purely to keep that function's own branching down; `on_test_dependencies` is typed
-    `object` here rather than repeating its real callable type, since this helper never calls it,
-    only tests it for `None`.
+    and -- iff `wants_dependencies` (the caller passed an `on_test_dependencies`) -- stashes the
+    raw record for `_fire_test_dependencies` to fold fixture collectors into later. Split out from
+    `run_suite` itself purely to keep that function's own branching down; a bare `bool` rather
+    than the callback itself, since this helper never calls it, only needs to know whether one
+    was given.
     """
 
     def record_collector(test_id: str, collector_record: _collector.CollectorRecord) -> None:
         if on_collector is not None:
             on_collector(test_id, collector_record)
-        if on_test_dependencies is not None:
+        if wants_dependencies:
             finished_collectors[test_id] = collector_record
 
     return record_collector

@@ -15,7 +15,7 @@ from voci._affected.collector import CollectorRecord
 from voci._affected.resolve import DependencyKey, World
 from voci._affected.seeds import seeds_for_record
 from voci._affected.select import Selection
-from voci._affected.store import checksums, load_records, store_record
+from voci._affected.store import Fingerprints, checksums, load_records, store_record
 
 __all__ = ["FULL_RUN_NO_MATCHING_ENV", "prior_selection", "record_test"]
 
@@ -38,10 +38,14 @@ def prior_selection(
     *,
     env_key: str,
     rootdir: Path,
+    fingerprints: Fingerprints | None = None,
 ) -> tuple[Selection, str | None]:
     """Every stored test's `Decision` against the tree as it stands now, or `(an empty Selection,
     FULL_RUN_NO_MATCHING_ENV)` if `env_key` has no stored records at all -- a first run, or one
     under an environment nothing has run under before.
+
+    `fingerprints`, if given, is passed straight through to `checksums` -- see `record_test`'s own
+    docstring for why a caller making several calls over one run wants to build it once itself.
     """
     records_by_test = load_records(conn, env_key, rootdir=rootdir)
     if not records_by_test:
@@ -50,7 +54,7 @@ def prior_selection(
     for records in records_by_test.values():
         for record in records:
             keys.update(record.dep_checksums)
-    current = checksums(conn, world, files, keys, rootdir=rootdir)
+    current = checksums(conn, world, files, keys, rootdir=rootdir, fingerprints=fingerprints)
     return Selection.of(records_by_test, current), None
 
 
@@ -65,6 +69,7 @@ def record_test(
     env_key: str,
     rootdir: Path,
     changed_paths: frozenset[Path] = frozenset(),
+    fingerprints: Fingerprints | None = None,
     now: float | None = None,
 ) -> None:
     """Store `test_id`'s dependency closure under `collector_record` for this run -- `seeds_for_
@@ -73,6 +78,11 @@ def record_test(
     the record outright because one of `collector_record`'s codes names a file `changed_paths`
     says moved mid-run (the same rule `--watch`'s own mid-run stat guard applies elsewhere,
     applied here per test rather than per iteration).
+
+    `fingerprints`, if given, is passed straight through to `checksums` instead of it building a
+    fresh one: a caller storing one test after another over the same run -- `cli.py`'s own driver,
+    once per finished test -- builds `store.build_fingerprints(conn, world, files)` once itself
+    and passes it to every call here, rather than paying its whole-corpus scan again per test.
     """
     if outcome in _NO_RECORD_OUTCOMES:
         return
@@ -80,7 +90,9 @@ def record_test(
     if seeds is None:
         return
     closure = world.closure(seeds)
-    dep_checksums = checksums(conn, world, files, closure, rootdir=rootdir)
+    dep_checksums = checksums(
+        conn, world, files, closure, rootdir=rootdir, fingerprints=fingerprints
+    )
     store_record(
         conn,
         env_key=env_key,
