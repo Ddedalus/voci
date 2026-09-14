@@ -1671,6 +1671,16 @@ def _report_verify(
     print(summary)
 
 
+def _report_affected_summary(collected: _collect.CollectionResult, unaffected: int) -> None:
+    """Plain `--affected`'s own report, printed after `Reporter.finish`'s own totals: how many
+    tests this run actually selected, against how many it confirmed unaffected and skipped --
+    its own label, kept apart from `Reporter.finish`'s own `deselected` count, which also
+    carries whatever `-k`/`-m` dropped (Decisions: "`deselected` already means `-k`/`-m`").
+    Matches the docs draft in `docs/guide/affected.md` ("Reading the summary")."""
+    selected = len(collected.records) + len(collected.skipped)
+    print(f"{selected} selected · {unaffected} unaffected")
+
+
 def _report_run(
     session: _RunSession,
     collected: _collect.CollectionResult,
@@ -1720,15 +1730,29 @@ def _report_run(
     )
     if session.verify and session.affected is not None:
         _report_verify(execution, session.affected.selection, color_enabled=color_enabled)
+    elif session.affected is not None:
+        _report_affected_summary(collected, session.affected.selection.unaffected_count)
 
     # 2, not what the partial results happen to add up to: an interrupted run never got
     # to the point of having a verdict, and exiting 0 because the tests that did finish
     # passed would let a Ctrl-C read as success in CI.
-    return (
-        2
-        if execution.interrupted
-        else _run.exit_code_for(execution.results, collected.errors, skipped=len(collected.skipped))
-    )
+    if execution.interrupted:
+        return 2
+    code = _run.exit_code_for(execution.results, collected.errors, skipped=len(collected.skipped))
+    # exit_code_for's 5 means "nothing collected at all" -- right for -k/-m narrowing to
+    # nothing, wrong for plain --affected narrowing everything away because every one of them
+    # was confirmed unaffected (often via candidate_files, before collection ever runs, so
+    # nothing here comes from collected itself). That's success, not an empty suite --
+    # `Selection.unaffected_count` (irrelevant for --affected-verify, which narrows nothing) is
+    # what tells the two apart.
+    if (
+        code == 5
+        and session.affected is not None
+        and not session.verify
+        and session.affected.selection.unaffected_count
+    ):
+        return 0
+    return code
 
 
 def _run_and_report(

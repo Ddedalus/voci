@@ -116,6 +116,17 @@ class Selection:
         (Decisions: "new tests ... always run")."""
         return self.decisions.get(test_id, Decision.RUN)
 
+    @property
+    def unaffected_count(self) -> int:
+        """How many stored tests this tree confirms unaffected -- `Decision.SKIP`, whatever
+        `candidate_files` and `select` went on to do with each one. `--affected`'s own summary
+        line and exit code read this rather than a count recovered from `select`'s own
+        `CollectionResult.deselected`: `candidate_files` narrows a wholly-`SKIP` file out of
+        collection before `select` ever runs, so a count built from what `select` actually saw
+        would miss exactly the common case -- every test in a file deciding `SKIP` -- and read a
+        confirmed-unaffected run as a genuinely empty suite."""
+        return sum(1 for decision in self.decisions.values() if decision is Decision.SKIP)
+
 
 def candidate_files(files: Iterable[Path], selection: Selection, *, rootdir: Path) -> list[Path]:
     """The files in `files` worth importing under `selection`, in the order given --

@@ -41,11 +41,13 @@ def test_affected_second_run_skips_an_unchanged_passing_test(
     out = capsys.readouterr().out
     assert "full run:" not in out
     # Nothing left to run: the whole file's only test decided SKIP, so candidate_files narrows
-    # the file out of collection entirely -- exit 5, `exit_code_for`'s own "nothing collected at
-    # all" code, same as -k/-m narrowing to nothing (the CLI-level "N unaffected" summary
-    # `docs/guide/affected.md` drafts, distinguishing this from a genuinely empty suite, is a
-    # still-open piece of this bullet's own reporting, not yet wired).
-    assert status == 5
+    # the file out of collection entirely -- nothing here ever reaches `select`, let alone
+    # `collected`. exit_code_for's own "nothing collected at all" code would read that as 5,
+    # same as -k/-m narrowing to nothing -- but Selection.unaffected_count (a fact about the
+    # tree, not about what this run collected) tells _report_run this is a confirmed-unaffected
+    # run rather than a genuinely empty suite, so it exits 0 instead.
+    assert status == 0
+    assert "0 selected · 1 unaffected" in out
 
 
 def test_affected_reruns_a_test_after_its_own_body_changes(
@@ -123,6 +125,39 @@ def test_affected_only_reruns_the_test_whose_own_file_changed(
 
     assert "full run:" not in out
     assert "1 test" in out
+    # test_a reran (changed), test_b decided SKIP (unchanged) -- select's own summary names both.
+    assert "1 selected · 1 unaffected" in out
+
+
+def test_affected_unaffected_count_ignores_a_keyword_deselection(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`Selection.unaffected_count` is a fact about the tree, not about what this run's own `-k`
+    left for `select` to see: `-k` (`_collect.collect`'s own keyword_expr narrowing) deselects
+    `test_y` before `select` ever runs, since it decided `RUN` in the same file `-k` keeps for
+    `test_x`'s sake -- so a count built from `select`'s own `CollectionResult.deselected` would
+    miss `test_y` being unaffected entirely. `unaffected_count`, read straight from `Selection`,
+    doesn't."""
+    project.write_pyproject("[tool.voci]\n")
+    project.write(
+        "test_a.py",
+        "async def test_x():\n    assert 1 == 1\n\nasync def test_y():\n    assert 1 == 1\n",
+    )
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    # Only test_x's body changes; test_y stays unaffected. -k keeps only test_x collected,
+    # deselecting test_y for an unrelated reason before select() ever runs.
+    project.write(
+        "test_a.py",
+        "async def test_x():\n    assert 2 == 2\n\nasync def test_y():\n    assert 1 == 1\n",
+    )
+    status = main(["--affected", "-k", "test_x", str(project.root)])
+    out = capsys.readouterr().out
+
+    assert status == 0
+    assert "1 selected · 1 unaffected" in out
 
 
 def test_affected_ignores_git_common_dir_and_reuses_a_store_under_a_worktree(
