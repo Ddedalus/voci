@@ -62,7 +62,7 @@ import re
 import sys
 import traceback
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,8 @@ __all__ = [
     "collect",
     "display_path",
     "module_name_for",
+    "path_of_test_id",
+    "reindexed",
 ]
 
 #: Everything under this prefix is a voci-imported test module. Never `sys.path`-relative — the
@@ -236,6 +238,24 @@ def display_path(path: Path, resolved_rootdir: Path) -> Path:
         return resolved.relative_to(resolved_rootdir)
     except ValueError:
         return resolved
+
+
+def path_of_test_id(test_id: str) -> str:
+    """The rootdir-relative path a test id starts with. A qualname can hold `::` of its own (a
+    method on a `Test*` class), so the path is what precedes the first one.
+
+    Shared by `_collection.lastfailed` and `_affected.select`: both narrow a run down to a subset
+    of stored/recorded test ids and need this same split to relate a bare id back to the file it
+    came from."""
+    return test_id.partition("::")[0]
+
+
+def reindexed(records: list[TestRecord]) -> list[TestRecord]:
+    """`records` renumbered from zero, so `index` stays the position of a test in the run that is
+    actually about to happen -- deselected tests never consume an index. Shared by
+    `_collection.lastfailed.select`/`.reorder` and `_affected.select.select`, every one of which
+    narrows or reorders `CollectionResult.records` and must renumber what survives."""
+    return [replace(record, index=index) for index, record in enumerate(records)]
 
 
 def _skip_reason(marks: Marks) -> str | None:

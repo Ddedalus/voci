@@ -13,6 +13,17 @@ than each recomputing them.
 Not this module's job, because it isn't this bullet's: computing `current` (a `World` over the
 whole first-party tree, fed to `store.checksums`), resolving `env_key`, or storing anything new --
 all the session-start/end driver's, M3's other bullet, not built yet.
+
+**A known gap in `candidate_files`'s own narrowing:** a def block's checksum covers what it
+*references*, never what sits beside it, so a brand-new top-level test added to a file whose
+every previously-recorded test decided `SKIP` changes nothing any of those tests' own dependency
+keys cover -- `could_hold_one` would answer `False` for that file, and the new test would never be
+imported at all under a real `--affected` run (contrast `decide` and `select`'s own per-test
+filter, which are sound on their own: a test the store has never seen decides `RUN` by default,
+same as any other new test). Closing this needs a key that changes whenever a file's own top-level
+bindings change, which nothing in `resolve.py`/`blocks.py` computes yet. Until it does, this is
+exactly the class of gap the plan's own Failure modes table assigns to `--affected-verify`/a CI
+full run -- neither of which narrows via `candidate_files` at all, so both still catch it.
 """
 
 from __future__ import annotations
@@ -24,7 +35,7 @@ from pathlib import Path
 
 from voci._affected.resolve import DependencyKey
 from voci._affected.store import StoredRecord
-from voci._collection.collect import CollectionResult, TestRecord, display_path
+from voci._collection.collect import CollectionResult, display_path, path_of_test_id, reindexed
 
 __all__ = ["Decision", "Selection", "candidate_files", "decide", "select"]
 
@@ -79,9 +90,11 @@ class Selection:
             test_id: decide(records, current) for test_id, records in records_by_test.items()
         }
         run_paths = {
-            _path_of(test_id) for test_id, decision in decisions.items() if decision is Decision.RUN
+            path_of_test_id(test_id)
+            for test_id, decision in decisions.items()
+            if decision is Decision.RUN
         }
-        known_paths = {_path_of(test_id) for test_id in decisions}
+        known_paths = {path_of_test_id(test_id) for test_id in decisions}
         return cls(
             decisions=decisions,
             _run_paths=frozenset(run_paths),
@@ -93,7 +106,8 @@ class Selection:
         file, whose own tests (new or moved) can't be discovered any other way -- or one of its
         recorded tests decided `RUN`. A file every one of whose recorded tests decided `SKIP`
         needs no import at all: nothing it holds runs, so nothing here has anything to gain from
-        being collected."""
+        being collected -- modulo the module docstring's own gap note: a wholly new test added
+        beside only-`SKIP` siblings is invisible here."""
         rel = str(relative)
         return rel not in self._known_paths or rel in self._run_paths
 
@@ -133,20 +147,7 @@ def select(collected: CollectionResult, selection: Selection) -> CollectionResul
     ]
     return replace(
         collected,
-        records=_reindexed(records),
+        records=reindexed(records),
         skipped=skipped,
         deselected=[*collected.deselected, *dropped],
     )
-
-
-def _path_of(test_id: str) -> str:
-    """The rootdir-relative path a test id starts with -- `lastfailed._path_of`'s own rule: a
-    qualname can hold `::` of its own (a method on a `Test*` class), so the path is what precedes
-    the first one."""
-    return test_id.partition("::")[0]
-
-
-def _reindexed(records: list[TestRecord]) -> list[TestRecord]:
-    """`records` renumbered from zero, so `index` stays the position of a test in the run that is
-    actually about to happen -- `lastfailed._reindexed`'s own rule."""
-    return [replace(record, index=index) for index, record in enumerate(records)]

@@ -78,8 +78,11 @@ dependencies, selection could skip a test it shouldn't.
 
 - [x] `voci/_affected/select.py`: `decide`'s per-test rule and the `Selection` it feeds
       `candidate_files`/`select` from, mirroring `lastfailed`'s own two-step shape over the store
-      instead of `LastRun`. `store.py` gained the read side, `load_records`. Nothing calls any of
-      this yet -- that's the session-start/end driver, next.
+      instead of `LastRun` (`_collection/collect.py` gained the two bits both share,
+      `path_of_test_id`/`reindexed`). `store.py` gained the read side, `load_records`, one joined
+      query per environment. Nothing calls any of this yet -- that's the session-start/end driver,
+      next. `candidate_files`'s own soundness gap (a new test beside only-`SKIP` siblings) is in
+      Failure modes.
 - [ ] `--affected` and its sibling `--affected-verify`. Report `N selected · M unaffected` as its
       own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
       reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
@@ -623,6 +626,7 @@ Gaps are what `verify` and a CI full run are for.
 | Interpreter, config, extensions, plugins | Environment key | — |
 | Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
+| A new test added beside only-`SKIP` siblings in an already-recorded file | `select.decide`'s own per-test filter is sound (an unseen test id always decides `RUN`) | `select.candidate_files`'s file-level narrowing can't see it: no dependency key changes when a file gains a sibling def, so the whole file is skipped and the new test is never imported under a real `--affected` run. Needs a key that changes with a file's own top-level bindings; `--affected-verify`/CI don't narrow via `candidate_files` at all, so both still catch it |
 | File edited mid-run | Records dropped | — |
 | Branch switching all day | Several records per test, parse cache by content, per-test package keys, store shared across worktrees | The first visit to each new tree |
 | mtime churn, moved cache | Content hashes, relative paths | — |

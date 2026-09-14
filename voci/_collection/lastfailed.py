@@ -26,8 +26,9 @@ from voci._cache import LastRun
 from voci._collection.collect import (
     CollectionError,
     CollectionResult,
-    TestRecord,
     display_path,
+    path_of_test_id,
+    reindexed,
 )
 from voci._collection.requires import package_inits
 
@@ -67,7 +68,7 @@ class Recorded:
             trees=tuple(
                 Path(path).parent for path in whole_files if Path(path).name == "__init__.py"
             ),
-            paths=whole_files | {_path_of(test_id) for test_id in last_run.failed},
+            paths=whole_files | {path_of_test_id(test_id) for test_id in last_run.failed},
         )
 
     def could_hold_one(self, relative: Path) -> bool:
@@ -107,7 +108,7 @@ def select(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
     ]
     return replace(
         collected,
-        records=_reindexed(records),
+        records=reindexed(records),
         skipped=skipped,
         deselected=[*collected.deselected, *dropped],
     )
@@ -119,7 +120,7 @@ def reorder(collected: CollectionResult, last_run: LastRun) -> CollectionResult:
     recorded = Recorded.of(last_run)
     failed = [record for record in collected.records if recorded.names(record.id, record.path)]
     rest = [record for record in collected.records if not recorded.names(record.id, record.path)]
-    return replace(collected, records=_reindexed([*failed, *rest]))
+    return replace(collected, records=reindexed([*failed, *rest]))
 
 
 def settled_paths(attempted: Collection[str], *, rootdir: Path) -> set[str]:
@@ -244,19 +245,7 @@ def vanished(
     return {
         test_id
         for test_id in last_run.failed
-        if _path_of(test_id) in known_files
+        if path_of_test_id(test_id) in known_files
         and test_id not in existing
         and not any(test_id.startswith(f"{prefix}[") for prefix in prefixes)
     }
-
-
-def _path_of(test_id: str) -> str:
-    """The rootdir-relative path a test id starts with. A qualname can hold `::` of its own (a
-    method on a `Test*` class), so the path is what precedes the first one."""
-    return test_id.partition("::")[0]
-
-
-def _reindexed(records: list[TestRecord]) -> list[TestRecord]:
-    """`records` renumbered from zero, so `index` stays the position of a test in the run that
-    is actually about to happen."""
-    return [replace(record, index=index) for index, record in enumerate(records)]

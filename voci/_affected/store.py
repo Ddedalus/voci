@@ -573,39 +573,45 @@ def load_records(
 ) -> dict[str, list[StoredRecord]]:
     """Every stored record for `env_key`, keyed by test id. A test id absent from the result has
     no stored record under this environment at all -- a brand new test, or one only ever seen
-    under a different `env_key`."""
+    under a different `env_key`.
+
+    One joined query for the whole environment, not one round trip per record: a store that has
+    accumulated many records (`_RECORDS_PER_TEST` keeps several per test, across every test the
+    suite has ever run under this environment) would otherwise make `--affected` pay a `record_dep`
+    join per row before a single test runs."""
     row = conn.execute("SELECT id FROM env WHERE key = ?", (env_key,)).fetchone()
     if row is None:
         return {}
     env_id = row[0]
     rows = conn.execute(
-        "SELECT id, test_id, outcome, untrusted, last_used FROM record WHERE env_id = ?",
+        "SELECT record.id, record.test_id, record.outcome, record.untrusted, record.last_used, "
+        "dep_set.path, dep_set.keyed_checksums "
+        "FROM record "
+        "LEFT JOIN record_dep ON record_dep.record_id = record.id "
+        "LEFT JOIN dep_set ON dep_set.id = record_dep.dep_set_id "
+        "WHERE record.env_id = ? "
+        "ORDER BY record.id",
         (env_id,),
     ).fetchall()
+    order: list[int] = []
+    by_record: dict[int, tuple[str, str, str | None, float, dict[DependencyKey, bytes]]] = {}
+    for record_id, test_id, outcome, untrusted, last_used, path, blob in rows:
+        if record_id not in by_record:
+            order.append(record_id)
+            by_record[record_id] = (test_id, outcome, untrusted, last_used, {})
+        if path is not None:
+            by_record[record_id][4].update(_decode_dep_set(path, json.loads(blob), rootdir))
     out: dict[str, list[StoredRecord]] = {}
-    for record_id, test_id, outcome, untrusted, last_used in rows:
+    for record_id in order:
+        test_id, outcome, untrusted, last_used, dep_checksums = by_record[record_id]
         out.setdefault(test_id, []).append(
             StoredRecord(
                 outcome=outcome,
                 untrusted=untrusted,
                 last_used=last_used,
-                dep_checksums=_load_dep_checksums(conn, record_id, rootdir),
+                dep_checksums=dep_checksums,
             )
         )
-    return out
-
-
-def _load_dep_checksums(
-    conn: sqlite3.Connection, record_id: int, rootdir: Path
-) -> dict[DependencyKey, bytes]:
-    rows = conn.execute(
-        "SELECT dep_set.path, dep_set.keyed_checksums FROM record_dep "
-        "JOIN dep_set ON dep_set.id = record_dep.dep_set_id WHERE record_dep.record_id = ?",
-        (record_id,),
-    ).fetchall()
-    out: dict[DependencyKey, bytes] = {}
-    for path, blob in rows:
-        out.update(_decode_dep_set(path, json.loads(blob), rootdir))
     return out
 
 
