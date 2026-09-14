@@ -28,7 +28,8 @@ a test that both passed and kept every dependency unchanged.
 $ voci --affected
 config: pyproject.toml
 ...
-12 selected · 340 unaffected · 2.1s wall
+12 tests · 12 passed · 2.1s wall
+12 selected · 340 unaffected
 ```
 
 "Unaffected" is separate from "deselected", which is what `-k`/`-m` produce — the two can appear

@@ -116,6 +116,27 @@ class Selection:
         (Decisions: "new tests ... always run")."""
         return self.decisions.get(test_id, Decision.RUN)
 
+    def unaffected_count_among(self, paths: Iterable[Path], *, rootdir: Path) -> int:
+        """How many tests under `paths` -- rootdir-relative, `candidate_files`'s own scope --
+        this tree confirms unaffected: `Decision.SKIP`, whatever `candidate_files` and `select`
+        went on to do with each one. `--affected`'s own summary line and exit code read this
+        rather than a count recovered from `select`'s own `CollectionResult.deselected`:
+        `candidate_files` narrows a wholly-`SKIP` file out of collection before `select` ever
+        runs, so a count built from what `select` actually saw would miss exactly the common
+        case -- every test in a file deciding `SKIP` -- and read a confirmed-unaffected run as a
+        genuinely empty suite. `paths` keeps this scoped to what this run's own roots/patterns
+        discovered, since `decisions` otherwise spans the whole stored environment: a `voci
+        --affected tests/subdir` run must not count a `SKIP` decision for a test outside
+        `tests/subdir` -- one this run was never going to look at -- as a reason to call a
+        genuinely empty selection a confirmed-unaffected one."""
+        resolved_rootdir = Path(rootdir).resolve()
+        known = {str(display_path(path, resolved_rootdir)) for path in paths}
+        return sum(
+            1
+            for test_id, decision in self.decisions.items()
+            if decision is Decision.SKIP and path_of_test_id(test_id) in known
+        )
+
 
 def candidate_files(files: Iterable[Path], selection: Selection, *, rootdir: Path) -> list[Path]:
     """The files in `files` worth importing under `selection`, in the order given --

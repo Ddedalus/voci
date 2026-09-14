@@ -100,19 +100,20 @@ dependencies, selection could skip a test it shouldn't.
       changed test rerunning, a still-failing test always rerunning, a genuine `--affected-verify`
       mismatch (an env var flips a test's outcome without its code changing), the store's on-disk
       location, and every new-flag usage error (`--watch`, `--lf`, combining the two siblings).
-      Still needed: the `N selected · M unaffected` summary line for plain `--affected`
-      (`select.select()` currently folds an unaffected test into the same `deselected` count `-k`/
-      `-m` use, so a fully-skipped run exits 5 same as a genuinely empty suite -- distinguishing
-      the two needs a count carried alongside `CollectionResult`, not read back out of it); and
-      unhiding the flags once M4 lands. Two review passes each caught and fixed a real bug (a
-      leaked store connection, then a Ctrl-C escaping ungracefully); open, non-blocking style
-      feedback from the second pass, worth a look before unhiding rather than before -- `--lf`
-      and `--affected`'s narrowing dispatch in `_collect_and_narrow`/`_try_fast_collect_only`
-      could unify behind one interface now that `LastRun`/`Selection` share the exact
-      `candidate_files`/`select` shape; `on_test_dependencies` could carry the outcome `run_suite`
-      already has instead of `cli.py` rebuilding it via a second `on_result` dict. Matches the
-      draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
-      generated block afterward.
+      The `N selected · M unaffected` summary line for plain `--affected` is in too
+      (`_report_affected_summary`, `Selection.unaffected_count_among`), with the exit-code fix a
+      fully-unaffected run needed in both `_report_run` and `_finish_collect_only`
+      (`_confirms_the_empty_selection` -- see its docstring for the `narrowed_by_selection`
+      caveat). `tests/test_cli_affected.py` and `tests/affected/test_select.py` cover both.
+      Still needed: unhiding the flags once M4 lands. Two review passes each caught and fixed a
+      real bug (a leaked store connection, then a Ctrl-C escaping ungracefully); open,
+      non-blocking style feedback from the second pass, worth a look before unhiding rather than
+      before -- `--lf` and `--affected`'s narrowing dispatch in
+      `_collect_and_narrow`/`_try_fast_collect_only` could unify behind one interface now that
+      `LastRun`/`Selection` share the exact `candidate_files`/`select` shape; `on_test_dependencies`
+      could carry the outcome `run_suite` already has instead of `cli.py` rebuilding it via a
+      second `on_result` dict. Matches the draft in `docs/reference/cli.md` and
+      `docs/guide/affected.md`; regenerate the former's generated block afterward.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 

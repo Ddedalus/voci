@@ -1499,6 +1499,14 @@ def _finish_collect_only(
     # Collection is what imports every test module, so a module that warns at import
     # has warned by now -- and this is the only report this run will print.
     _report_warnings(rootdir, stream=sys.stderr if args.co_json else sys.stdout)
+    # Same fix as _report_run's own, for the same reason: --collect-only never reaches
+    # run_suite, but candidate_files can still narrow a fully-unaffected file out before
+    # collection sees it, and _collection_exit_status reads that the same way exit_code_for
+    # does -- "nothing collected".
+    if status == 5 and session.affected is not None:
+        unaffected = session.affected.selection.unaffected_count_among(discovered, rootdir=rootdir)
+        if _confirms_the_empty_selection(session, unaffected):
+            return 0
     return status
 
 
@@ -1671,11 +1679,41 @@ def _report_verify(
     print(summary)
 
 
+def _confirms_the_empty_selection(session: _RunSession, unaffected: int) -> bool:
+    """Whether `unaffected` (`Selection.unaffected_count_among`, scoped to `discovered`) is
+    trustworthy enough to rescue an exit code of 5 -- "nothing collected at all" -- back to 0:
+    shared by `_report_run` and `_finish_collect_only`'s own copy of the same question, since
+    `--collect-only`/`--co-json` never reaches `run_suite` but can hit the identical case.
+    `unaffected`'s scope is `discovered`, this run's own roots/patterns, not whatever `-k`/`-m`/
+    an id argument additionally narrowed within them -- so it can't tell "everything here is
+    unaffected" apart from "a keyword typo matched nothing, and something unrelated happens to
+    be unaffected". Only safe to trust when nothing else narrowed this run
+    (`not narrowed_by_selection`): with that too, the only way to an empty selection left is
+    `--affected`'s own. Always `False` for `--affected-verify`, which narrows nothing."""
+    return (
+        session.affected is not None
+        and not session.verify
+        and not session.prepared.narrowed_by_selection
+        and unaffected > 0
+    )
+
+
+def _report_affected_summary(collected: _collect.CollectionResult, unaffected: int) -> None:
+    """Plain `--affected`'s own report, printed after `Reporter.finish`'s own totals: how many
+    tests this run actually selected, against how many it confirmed unaffected and skipped --
+    its own label, kept apart from `Reporter.finish`'s own `deselected` count, which also
+    carries whatever `-k`/`-m` dropped (Decisions: "`deselected` already means `-k`/`-m`").
+    Matches the docs draft in `docs/guide/affected.md` ("Reading the summary")."""
+    selected = len(collected.records) + len(collected.skipped)
+    print(f"{selected} selected · {unaffected} unaffected")
+
+
 def _report_run(
     session: _RunSession,
     collected: _collect.CollectionResult,
     execution: _Execution,
     *,
+    discovered: Sequence[Path],
     color_enabled: bool,
 ) -> int:
     """Everything after `run_suite` returns: the stop reason (if any), collection-error
@@ -1718,17 +1756,33 @@ def _report_run(
         deselected=len(collected.deselected),
         collection_errors=len(collected.errors),
     )
-    if session.verify and session.affected is not None:
+    plain_affected = session.affected is not None and not session.verify
+    unaffected = 0
+    if plain_affected:
+        assert session.affected is not None
+        # Scoped to what this run's own roots/patterns discovered -- a SKIP decision for a test
+        # outside that scope (a store built from a wider run, or one still under a different
+        # target) belongs to a tree this run was never going to look at.
+        unaffected = session.affected.selection.unaffected_count_among(
+            discovered, rootdir=session.rootdir
+        )
+        _report_affected_summary(collected, unaffected)
+    elif session.verify and session.affected is not None:
         _report_verify(execution, session.affected.selection, color_enabled=color_enabled)
 
     # 2, not what the partial results happen to add up to: an interrupted run never got
     # to the point of having a verdict, and exiting 0 because the tests that did finish
     # passed would let a Ctrl-C read as success in CI.
-    return (
-        2
-        if execution.interrupted
-        else _run.exit_code_for(execution.results, collected.errors, skipped=len(collected.skipped))
-    )
+    if execution.interrupted:
+        return 2
+    code = _run.exit_code_for(execution.results, collected.errors, skipped=len(collected.skipped))
+    # exit_code_for's 5 means "nothing collected at all" -- right for -k/-m narrowing to
+    # nothing, wrong for plain --affected narrowing everything away because every one of them
+    # was confirmed unaffected (often via candidate_files, before collection ever runs, so
+    # nothing here comes from collected itself).
+    if code == 5 and _confirms_the_empty_selection(session, unaffected):
+        return 0
+    return code
 
 
 def _run_and_report(
@@ -1744,7 +1798,11 @@ def _run_and_report(
     rootdir = session.rootdir
     execution = _execute_suite(session, collected)
     exit_status = _report_run(
-        session, collected, execution, color_enabled=_color.color_enabled(sys.stdout)
+        session,
+        collected,
+        execution,
+        discovered=discovered,
+        color_enabled=_color.color_enabled(sys.stdout),
     )
     if session.args.report_json is not None:
         _json_report.write_report(
