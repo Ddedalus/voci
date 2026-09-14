@@ -1352,6 +1352,64 @@ def test_on_collector_records_code_a_tracer_attributed_to_the_test() -> None:
     assert any(qualname == "_passes" for _filename, qualname in seen[0].codes)
 
 
+# `on_test_dependencies`: called once per test whose envelope produced a `CollectorRecord`, once
+# the whole run (session teardown included) is otherwise done, with that record folded together
+# with every module/session fixture its plan reaches -- rule 1 of the plan's "What a passing test
+# depends on".
+# --------------------------------------------------------------------------------------------
+
+
+def test_on_test_dependencies_fires_once_per_test_after_on_collector() -> None:
+    records = [_record(0, _passes, "test_a"), _record(1, _passes, "test_b")]
+    order: list[str] = []
+
+    run_suite(
+        records,
+        on_collector=lambda test_id, _record: order.append(f"collector:{test_id}"),
+        on_test_dependencies=lambda record, _merged: order.append(f"deps:{record.id}"),
+    )
+
+    # Both on_collector calls happen before either on_test_dependencies call: the fold can't
+    # start until every fixture in this run has had its chance to tear down.
+    assert order == [
+        f"collector:{records[0].id}",
+        f"collector:{records[1].id}",
+        f"deps:{records[0].id}",
+        f"deps:{records[1].id}",
+    ]
+
+
+def test_on_test_dependencies_folds_in_a_module_scope_fixtures_own_collector() -> None:
+    """The merged record a test's `on_test_dependencies` sees includes what a Tracer attributed
+    to its module-scope fixture's own collector -- not just the test's own envelope, which is all
+    `on_collector` alone would show (see `test_a_module_scope_fixtures_construction_gets_its_own_
+    collector` above)."""
+    from voci._affected.tracer import Tracer
+
+    @voci.fixture(scope="module")
+    def per_module() -> int:
+        return 1
+
+    async def test_a(x: int = voci.Depends(per_module)) -> None:
+        pass
+
+    seen: list[_collector.CollectorRecord] = []
+    tracer = Tracer(Path(__file__).parent, _collector.record_first_party)
+    assert tracer.start() is None
+    try:
+        run_suite(
+            [_record(0, test_a, "test_a", plan=plan_for(test_a))],
+            on_test_dependencies=lambda _record, merged: seen.append(merged),
+        )
+    finally:
+        tracer.stop()
+
+    assert len(seen) == 1
+    qualnames = {qualname for _filename, qualname in seen[0].codes}
+    assert any(qualname.endswith(".test_a") for qualname in qualnames)
+    assert any(qualname.endswith(".per_module") for qualname in qualnames)
+
+
 def test_maxfail_stops_dispatching_after_the_threshold() -> None:
     """`concurrency=1` so the stop point is exact: tests start in logical order, so nothing
     after the first failure ever runs."""

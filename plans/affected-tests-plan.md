@@ -4,8 +4,8 @@ Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per
 first-party functions, data files and environment variables it touched. The next run re-runs a
 test only when one of those no longer matches the tree.
 
-Status: design settled, not started. The final milestone replaces today's `--watch` with one
-built on this. Reference implementation: `oss/pytest-testmon`.
+Status: M1–M3 built, `--affected`/`--affected-verify` hidden until M4 lands. The final milestone
+replaces today's `--watch` with one built on this. Reference implementation: `oss/pytest-testmon`.
 
 ## Work done
 
@@ -83,10 +83,35 @@ dependencies, selection could skip a test it shouldn't.
       query per environment. Nothing calls any of this yet -- that's the session-start/end driver,
       next. `candidate_files`'s own soundness gap (a new test beside only-`SKIP` siblings) is in
       Failure modes.
-- [ ] `--affected` and its sibling `--affected-verify`. Report `N selected · M unaffected` as its
-      own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
-      reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
-      the draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
+- [ ] `--affected` and its sibling `--affected-verify`. Both are wired end to end and working,
+      `cli.py`, `help=argparse.SUPPRESS`-hidden until M4: `main` opens the store, builds a
+      `World`, and computes a `Selection` before collection (`_prepare_affected`), opens a real
+      `Tracer` around collection and the run (`tracing.traced`), and -- for plain `--affected`
+      only, gated on `session.verify` -- narrows `candidate_files`/`select` the same way `--lf`
+      does. Both modes record every finished test's dependency closure afterward
+      (`_execute_suite`'s `on_test_dependencies`, bound through `_record_test_dependencies` to
+      `driver.record_test`); `--affected-verify` additionally checks `driver.verify_prediction`
+      against each real outcome as it's known and prints a `MISMATCH` block plus a `would have
+      been skipped` count (`_report_verify`). A Tracer that can't claim a tool id disables
+      narrowing and recording/verifying alike for that run (`session.affected` stays unset)
+      rather than risk storing a vacuous, always-matching dependency set -- the "no tool id is
+      free" full run reason exists for exactly this. `tests/test_cli_affected.py` covers both
+      flags end to end: a first run, an unchanged second run skipping/verifying its only test, a
+      changed test rerunning, a still-failing test always rerunning, a genuine `--affected-verify`
+      mismatch (an env var flips a test's outcome without its code changing), the store's on-disk
+      location, and every new-flag usage error (`--watch`, `--lf`, combining the two siblings).
+      Still needed: the `N selected · M unaffected` summary line for plain `--affected`
+      (`select.select()` currently folds an unaffected test into the same `deselected` count `-k`/
+      `-m` use, so a fully-skipped run exits 5 same as a genuinely empty suite -- distinguishing
+      the two needs a count carried alongside `CollectionResult`, not read back out of it); and
+      unhiding the flags once M4 lands. Two review passes each caught and fixed a real bug (a
+      leaked store connection, then a Ctrl-C escaping ungracefully); open, non-blocking style
+      feedback from the second pass, worth a look before unhiding rather than before -- `--lf`
+      and `--affected`'s narrowing dispatch in `_collect_and_narrow`/`_try_fast_collect_only`
+      could unify behind one interface now that `LastRun`/`Selection` share the exact
+      `candidate_files`/`select` shape; `on_test_dependencies` could carry the outcome `run_suite`
+      already has instead of `cli.py` rebuilding it via a second `on_result` dict. Matches the
+      draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
       generated block afterward.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
@@ -627,7 +652,7 @@ Gaps are what `verify` and a CI full run are for.
 | Positional parametrize ids reordered | Test's `def` statement block; data cases via audit | — |
 | `skipif`, new tests, failures | Always selected | — |
 | A new test added beside only-`SKIP` siblings in an already-recorded file | `select.decide`'s own per-test filter is sound (an unseen test id always decides `RUN`) | `select.candidate_files`'s file-level narrowing can't see it: no dependency key changes when a file gains a sibling def, so the whole file is skipped and the new test is never imported under a real `--affected` run. Needs a key that changes with a file's own top-level bindings; `--affected-verify`/CI don't narrow via `candidate_files` at all, so both still catch it |
-| File edited mid-run | Records dropped | — |
+| File edited mid-run | Records dropped -- `seeds_for_record`'s own `changed_paths` rule | Nothing populates `changed_paths` yet: `cli.py`'s `_record_test_dependencies` always passes the default `frozenset()`, since detecting a mid-run edit is a stat-watching concern `--watch`'s own M8 rebuild owns, not built. Until then a file edited while `--affected` is running can be stored against slightly stale source |
 | Branch switching all day | Several records per test, parse cache by content, per-test package keys, store shared across worktrees | The first visit to each new tree |
 | mtime churn, moved cache | Content hashes, relative paths | — |
 | Order dependence, time, randomness, network, external DB | — | `verify`, CI full run |

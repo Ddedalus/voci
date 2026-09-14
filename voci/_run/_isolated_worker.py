@@ -11,8 +11,10 @@ found on re-collection -- the file changed underfoot, most likely -- is reported
 Under a `coverage run` the parent asks for this process to be measured too, through the
 environment; `coverage.py` next door explains how the two halves meet. Affected-test recording
 rides the same idea: this process starts its own `Tracer`, since a fresh interpreter shares no
-tool id or ContextVar with the parent's, and `result_to_json`'s `collector` key carries what it
-saw back across the same boundary (`isolated.py`).
+tool id or ContextVar with the parent's, and `result_to_json`'s `collector` key carries back what
+it saw -- already folded together with this subprocess's own module/session-scope fixture
+collectors (`run_suite`'s `on_test_dependencies`, over the fresh `ScopeStore` this call gets, not
+the parent's) -- across the same boundary (`isolated.py`).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import sys
 from pathlib import Path
 
 from voci._affected import collector as _collector
-from voci._affected.tracer import Tracer
+from voci._affected.tracing import traced
 from voci._assertions import rewrite as _rewrite
 from voci._collection import collect as _collect
 from voci._run import coverage as _coverage
@@ -62,12 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     # This subprocess's own sys.monitoring tool: a fresh interpreter shares no tool id or
     # ContextVar with the parent, so the one test running here needs its own Tracer rather than
-    # reusing anything the parent already started (plan's Tracer design, "Recording"). A
-    # candidate id already taken -- vanishingly unlikely in a process dedicated to one test --
-    # just leaves every collector below empty, same as a run nothing is tracing looks today.
-    tracer = Tracer(rootdir, _collector.record_first_party)
-    tracer.start()
-    try:
+    # reusing anything the parent already started (plan's Tracer design, "Recording"). `traced`'s
+    # own start reason is discarded -- a candidate id already taken (vanishingly unlikely in a
+    # process dedicated to one test) just leaves every collector below empty, same as a run
+    # nothing is tracing looks today.
+    with traced(rootdir):
         try:
             collected = _collect.collect([file_path], rootdir=rootdir)
             target = next((record for record in collected.records if record.id == target_id), None)
@@ -107,8 +108,12 @@ def main(argv: list[str] | None = None) -> int:
                     already_isolated=True,
                     # Exactly one call for the one test this subprocess runs -- what
                     # result_to_json ships back below, the way coverage.py's own measurement
-                    # crosses the same boundary (see this module's docstring).
-                    on_collector=lambda _id, record: collected_records.append(record),
+                    # crosses the same boundary (see this module's docstring). on_test_dependencies,
+                    # not on_collector: this subprocess's own module/session-scope fixtures (its
+                    # ResolutionPlan is re-resolved fresh here, sharing nothing with the parent's)
+                    # need folding in exactly the way an in-process run does, and the merged record
+                    # is what a store_record call downstream should see either way.
+                    on_test_dependencies=lambda _record, merged: collected_records.append(merged),
                 )
                 data = result_to_json(
                     results[0],
@@ -117,8 +122,6 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if not hook_already_installed:
                 _rewrite.uninstall()
-    finally:
-        tracer.stop()
 
     Path(result_path).write_text(json.dumps(data))
     return 0

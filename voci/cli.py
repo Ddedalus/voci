@@ -14,14 +14,23 @@ import argparse
 import contextlib
 import math
 import os
+import sqlite3
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TextIO, overload
 
 from voci import __version__, _cache, _config, _warnings
+from voci._affected import collector as _collector
+from voci._affected import driver as _affected_driver
+from voci._affected import select as _affected_select
+from voci._affected import store as _affected_store
+from voci._affected import tracing as _tracing
+from voci._affected.environment import placeholder_env_key
+from voci._affected.resolve import World
+from voci._affected.world import build_world
 from voci._assertions import rewrite as _rewrite
 from voci._builtins import capture as _capture
 from voci._collection import collect as _collect
@@ -113,6 +122,26 @@ def build_parser() -> argparse.ArgumentParser:
         "that applies --lf on top -- unless --lf or --ff was already given, which is left alone "
         "-- so a red run is what gets rerun until it's green, and a change with nothing left "
         "failing reruns the whole suite. Stops on Ctrl-C.",
+    )
+    # Hidden (help=SUPPRESS) until M4 lands the non-code dependencies (data files, directory
+    # listings, env vars) -- without those, a test that only depends on one of them could be
+    # skipped when it shouldn't be. The mechanism underneath is real and exercised by its own
+    # tests; only advertising it to users waits (plans/affected-tests-plan.md, M3/M4).
+    parser.add_argument(
+        "--affected",
+        dest="affected",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    # A sibling flag, not a value of --affected (Decisions: "--affected-verify is a sibling flag,
+    # not a value of --affected" -- a distinct run mode, not a variant reading of the same
+    # option). Runs everything, predicting what --affected would have decided for each test and
+    # comparing that against its real outcome, rather than narrowing anything.
+    parser.add_argument(
+        "--affected-verify",
+        dest="affected_verify",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     # --assert and --rewrite-cache below both affect real behavior, not just help text.
     parser.add_argument(
@@ -671,6 +700,20 @@ def _check_flag_contradictions(args: argparse.Namespace) -> str | None:
         return basetemp_problem
     if args.serial and args.concurrency is not None and args.concurrency != 1:
         return f"--serial is --concurrency=1, and --concurrency={args.concurrency} was also given"
+    # --affected already selects failures, new tests and stale tests on its own (Decisions:
+    # "--affected already selects failures ... so --lf is no longer appended"), so --lf/--ff
+    # combined with it is a question this bullet doesn't need to answer yet -- unlike -k/-m/an
+    # id selector, which _collect_and_narrow applies before --affected's own narrowing the same
+    # way it already does for --lf, with no interaction to define. --affected-verify runs
+    # everything regardless, same as --lf/--ff would, so it gets the identical treatment.
+    if (args.affected or args.affected_verify) and (args.last_failed or args.failed_first):
+        return "--affected/--affected-verify already cover what --lf/--ff would select"
+    # A sibling flag, not a value of --affected (Decisions) -- the two are different run modes,
+    # so combining them is as meaningless as --lf and --ff together.
+    if args.affected and args.affected_verify:
+        return (
+            "--affected and --affected-verify are two different run modes -- pass one or the other"
+        )
     return None
 
 
@@ -1069,6 +1112,75 @@ def _installed_session(
                 os.environ[key] = prev_value
 
 
+@dataclass(frozen=True)
+class _AffectedContext:
+    """Everything `--affected` needs threaded through `_RunSession`: the open store, the `World`
+    built once for the whole run, and the `Selection` `_prepare_affected` computed against it
+    before collection. `full_run_reason`, if set, is printed once (Selection design section's
+    "Full run, with its reason printed") -- `selection` itself already decides `RUN` for every
+    test either way when nothing in the store matched, so nothing downstream needs to branch on
+    this separately; it exists purely to be shown.
+    """
+
+    conn: sqlite3.Connection
+    world: World
+    files: Mapping[Path, tuple[str, str]]
+    selection: _affected_select.Selection
+    env_key: str
+    full_run_reason: str | None
+    fingerprints: _affected_store.Fingerprints
+    """Built once, here, and reused by every `driver.record_test` call this run makes
+    (`_record_test_dependencies`): it inverts `World.effect_fold_target` over every block of
+    every first-party file, so rebuilding it per test -- there can be hundreds -- would turn
+    session-end bookkeeping into O(tests x corpus size) instead of O(corpus size)."""
+    first_party: Mapping[str, Path]
+    """Same idea, for `module_checksum`'s own `dotted -> path` argument -- a second O(files) pass
+    `checksums` would otherwise redo per call even with `fingerprints` already cached."""
+
+
+def _prepare_affected(rootdir: Path) -> _AffectedContext:
+    """Opens the store, builds a `World` over `rootdir`'s whole first-party tree, and computes
+    this tree's `Selection` against it -- everything `--affected` needs before collection, all in
+    one call so `main` has a single thing to open and a single thing to close.
+
+    `conn` is the caller's to close (`store.close_store`) once this run is fully done, in a
+    `finally` -- there is no context-manager form here because the caller also needs `conn` alive
+    across the whole execute phase, not just this call. `open_store` succeeding is this function's
+    own point of no return: everything after it (`build_world`'s file walk, `build_fingerprints`'s
+    corpus scan, `prior_selection`'s queries) is wrapped in its own `try`/`except` so a failure
+    there still closes what `open_store` opened, rather than leaking the connection back out
+    through `main`'s `affected = ...` before its own `finally` ever gets a chance to run.
+    """
+    conn = _affected_store.open_store(rootdir)
+    try:
+        world, files = build_world(rootdir)
+        fingerprints = _affected_store.build_fingerprints(conn, world, files)
+        first_party = _affected_store.first_party_paths(files)
+        env_key = placeholder_env_key()
+        selection, full_run_reason = _affected_driver.prior_selection(
+            conn,
+            world,
+            files,
+            env_key=env_key,
+            rootdir=rootdir,
+            fingerprints=fingerprints,
+            first_party=first_party,
+        )
+    except BaseException:
+        _affected_store.close_store(conn)
+        raise
+    return _AffectedContext(
+        conn=conn,
+        world=world,
+        files=files,
+        selection=selection,
+        env_key=env_key,
+        full_run_reason=full_run_reason,
+        first_party=first_party,
+        fingerprints=fingerprints,
+    )
+
+
 @dataclass
 class _RunSession:
     """State the execute phase (everything `_installed_session` makes possible) threads
@@ -1082,6 +1194,13 @@ class _RunSession:
     last_run: _cache.LastRun
     collection_index: _index.Index
     wall_start: float
+    affected: _AffectedContext | None = None
+    verify: bool = False
+    """Whether `affected` (when not `None`) means `--affected-verify` rather than plain
+    `--affected`: `_collect_and_narrow` only narrows for the latter, and `_execute_suite` only
+    checks `driver.verify_prediction` for the former -- both read this rather than `args.
+    affected_verify` directly, so a Tracer that failed to start (which leaves `affected` `None`
+    regardless of which flag was passed) disables both uniformly."""
 
     @property
     def rootdir(self) -> Path:
@@ -1161,8 +1280,8 @@ def _discover(session: _RunSession) -> tuple[list[Path], list[Path]]:
 
 def _try_fast_collect_only(session: _RunSession, files: Sequence[Path]) -> int | None:
     """The collect-only fast path: a plain `--collect-only`/`--co-json` -- no -k/-m/id/
-    --lf/--ff narrowing it to something the index doesn't track -- can answer straight
-    from `collection_index` when every discovered file is still fresh in it, skipping
+    --lf/--ff/--affected narrowing it to something the index doesn't track -- can answer
+    straight from `collection_index` when every discovered file is still fresh in it, skipping
     `collect()` and therefore every import it would have done. Returns the exit status
     when it answered, else `None` to fall through to a real collection exactly as
     before."""
@@ -1171,6 +1290,7 @@ def _try_fast_collect_only(session: _RunSession, files: Sequence[Path]) -> int |
         (args.collect_only or args.co_json)
         and not session.replay_last_failed
         and not session.replay_failed_first
+        and session.affected is None
         and not session.prepared.narrowed_by_selection
     ):
         return None
@@ -1254,26 +1374,35 @@ def _unmatched_id_status(session: _RunSession, collected: _collect.CollectionRes
 def _collect_and_narrow(
     session: _RunSession, files: list[Path], discovered: Sequence[Path]
 ) -> tuple[_collect.CollectionResult, _collect.CollectionResult, list[Path]]:
-    """Collection, then `--lf`/`--ff` narrowing on top of `-k`/`-m`/id-selection, applied
-    after rather than instead of them: `--lf` narrows a selection the other flags
-    already made, so `voci --lf -k users` means both. Returns `found` -- collection's
-    own unnarrowed result, kept for the cache write at the end -- `collected` -- what
-    this run actually runs, before `_unmatched_id_status` has had a say -- and `files`,
-    `--lf`-narrowed if that applied.
+    """Collection, then `--lf`/`--ff`/`--affected` narrowing on top of `-k`/`-m`/id-selection,
+    applied after rather than instead of them: `--lf` narrows a selection the other flags
+    already made, so `voci --lf -k users` means both -- `--affected` the same way, `voci
+    --affected -k users` narrowing the same `-k` selection further rather than replacing it.
+    `--affected` and `--lf`/`--ff` are mutually exclusive (`_check_flag_contradictions`), so at
+    most one of the three `elif` branches below ever fires. `--affected-verify` narrows nothing
+    at all -- it runs everything, `session.verify` is what tells the branches below apart from a
+    plain `--affected`. Returns `found` -- collection's own unnarrowed result, kept for the cache
+    write at the end -- `collected` -- what this run actually runs, before `_unmatched_id_status`
+    has had a say -- and `files`, narrowed if either applied.
     """
     rootdir = session.rootdir
+    affects = session.affected is not None and not session.verify
+    narrowing = session.replay_last_failed or affects
     if session.replay_last_failed:
         files = _lastfailed.candidate_files(files, session.last_run, rootdir=rootdir)
+    elif affects:
+        assert session.affected is not None
+        files = _affected_select.candidate_files(files, session.affected.selection, rootdir=rootdir)
     collected = _collect.collect(
         files,
         rootdir=rootdir,
         tag_expr=session.prepared.markexpr,
         keyword_expr=session.prepared.keywordexpr,
         id_selection=session.prepared.id_selection,
-        # The unnarrowed set, so --lf leaving a test module out doesn't turn its
+        # The unnarrowed set, so --lf/--affected leaving a test module out doesn't turn its
         # `voci.use(...)` into a misplaced declaration. Nothing here is imported. Only
         # when narrowed: otherwise it is `files`, which the loop below walks anyway.
-        collectible=discovered if session.replay_last_failed else (),
+        collectible=discovered if narrowing else (),
     )
     # What collection itself found is kept for the cache write at the end: `select` moves
     # the tests --lf wasn't asked for into `deselected`, and `vanished` reads a deselected
@@ -1295,6 +1424,9 @@ def _collect_and_narrow(
             print("--lf: no recorded failure is in this run's selection")
     elif session.replay_failed_first:
         collected = _lastfailed.reorder(collected, session.last_run)
+    elif affects:
+        assert session.affected is not None
+        collected = _affected_select.select(collected, session.affected.selection)
 
     return found, collected, files
 
@@ -1380,6 +1512,47 @@ class _Execution:
     interrupted: bool
     unattributed: list[str]
     wall_clock: float
+    verify_mismatches: list[tuple[str, str]]
+    """`--affected-verify` only: `(test_id, reason)` per test whose real outcome disagreed with
+    what `--affected` would have predicted (`driver.verify_prediction`), in completion order.
+    Always empty otherwise."""
+
+
+def _record_test_dependencies(
+    affected: _AffectedContext, rootdir: Path, outcomes: Mapping[str, str]
+) -> Callable[[_collect.TestRecord, _collector.CollectorRecord], None]:
+    """`run_suite`'s own `on_test_dependencies`, bound to this run's `_AffectedContext` and the
+    outcomes `_execute_suite`'s own `on_result` wrapper stashes as each test finishes. A test
+    `outcomes` has no entry for -- one a stop (`--maxfail`, Ctrl-C) dropped before it ever
+    finished -- is left unrecorded: `on_result` never saw it, so nothing here is knowable about
+    it yet, the same as any other test this run never got to.
+
+    `record_test`'s own `changed_paths` isn't passed here, so it always defaults to empty:
+    nothing in this call chain watches for a first-party file changing *during* this very run
+    (that's a `--watch`-shaped concern, M8's own rebuild, not built) -- see the plan's Failure
+    modes table, "File edited mid-run".
+    """
+
+    def on_test_dependencies(
+        record: _collect.TestRecord, merged: _collector.CollectorRecord
+    ) -> None:
+        outcome = outcomes.get(record.id)
+        if outcome is None:
+            return
+        _affected_driver.record_test(
+            affected.conn,
+            affected.world,
+            affected.files,
+            test_id=record.id,
+            collector_record=merged,
+            outcome=outcome,
+            env_key=affected.env_key,
+            rootdir=rootdir,
+            fingerprints=affected.fingerprints,
+            first_party=affected.first_party,
+        )
+
+    return on_test_dependencies
 
 
 def _execute_suite(session: _RunSession, collected: _collect.CollectionResult) -> _Execution:
@@ -1418,6 +1591,28 @@ def _execute_suite(session: _RunSession, collected: _collect.CollectionResult) -
         nonlocal interrupted
         interrupted = True
 
+    # Populated by on_result below, only under --affected/--affected-verify: run_suite's own
+    # on_test_dependencies fires later, after the whole call (session teardown included), with a
+    # TestRecord and a merged CollectorRecord but no outcome of its own -- see
+    # _record_test_dependencies.
+    outcomes: dict[str, str] = {}
+    # --affected-verify only: every real outcome that disagreed with what --affected would have
+    # predicted for that same test, checked as soon as the outcome is known rather than waiting
+    # for on_test_dependencies -- verify_prediction only needs session.affected.selection and the
+    # outcome, neither of which depends on this test's own CollectorRecord.
+    verify_mismatches: list[tuple[str, str]] = []
+
+    def on_result(result: _run.TestResult) -> None:
+        reporter.on_result(result)
+        if session.affected is not None:
+            outcomes[result.id] = result.outcome.value
+            if session.verify:
+                reason = _affected_driver.verify_prediction(
+                    session.affected.selection, result.id, result.outcome.value
+                )
+                if reason is not None:
+                    verify_mismatches.append((result.id, reason))
+
     results = _run.run_suite(
         collected.records,
         concurrency=prepared.concurrency,
@@ -1426,7 +1621,12 @@ def _execute_suite(session: _RunSession, collected: _collect.CollectionResult) -
         maxfail=prepared.maxfail,
         basetemp=args.basetemp,
         unattributed_output=unattributed,
-        on_result=reporter.on_result,
+        on_result=on_result,
+        on_test_dependencies=(
+            _record_test_dependencies(session.affected, session.rootdir, outcomes)
+            if session.affected is not None
+            else None
+        ),
         on_interrupt=on_interrupt,
         # 0 means "off" at the CLI; run_suite spells that None, and treats a
         # non-positive number the same way regardless.
@@ -1444,7 +1644,31 @@ def _execute_suite(session: _RunSession, collected: _collect.CollectionResult) -
         ),
     )
     wall_clock = time.monotonic() - session.wall_start
-    return _Execution(results, reporter, interrupted, unattributed, wall_clock)
+    return _Execution(results, reporter, interrupted, unattributed, wall_clock, verify_mismatches)
+
+
+def _report_verify(
+    execution: _Execution, selection: _affected_select.Selection, *, color_enabled: bool
+) -> None:
+    """`--affected-verify`'s own report, printed after `Reporter.finish`'s own totals: a named
+    `MISMATCH` block per test whose real outcome disagreed with what `--affected` would have
+    predicted, then a one-line count of how many tests it would have skipped -- matching the docs
+    draft in `docs/guide/affected.md` ("Checking the selection before trusting it").
+    """
+    mismatch_word = _color.paint("MISMATCH", _color.RED, enabled=color_enabled)
+    for test_id, reason in execution.verify_mismatches:
+        print(f"{mismatch_word}  {test_id}")
+        print(f"    {reason}")
+    would_skip = sum(
+        1
+        for result in execution.results
+        if selection.decision_for(result.id) is _affected_select.Decision.SKIP
+    )
+    mismatch_count = len(execution.verify_mismatches)
+    summary = f"{would_skip} would have been skipped"
+    if mismatch_count:
+        summary += f" · {mismatch_count} mismatch{'es' if mismatch_count != 1 else ''}"
+    print(summary)
 
 
 def _report_run(
@@ -1494,6 +1718,8 @@ def _report_run(
         deselected=len(collected.deselected),
         collection_errors=len(collected.errors),
     )
+    if session.verify and session.affected is not None:
+        _report_verify(execution, session.affected.selection, color_enabled=color_enabled)
 
     # 2, not what the partial results happen to add up to: an interrupted run never got
     # to the point of having a verdict, and exiting 0 because the tests that did finish
@@ -1568,6 +1794,70 @@ def _execute(session: _RunSession) -> int:
     return _run_and_report(session, found, collected, files=files, discovered=discovered)
 
 
+def _run_watch(args: argparse.Namespace, argv: list[str], wall_start: float) -> int:
+    """`main`'s own `--watch` branch, split out purely to keep that function's own branching
+    down: builds the watched scope and hands everything to `_watch_run`, which re-invokes `main`
+    itself once per iteration.
+    """
+    # Not yet a defined combination: today's --watch (unlike M8's rebuilt one) appends --lf to
+    # every rerun after the first, which --affected/--affected-verify now reject outright
+    # (_check_flag_contradictions) -- so left unchecked here, a first iteration would run fine
+    # and every one after it would fail with that usage error instead of ever rerunning. Caught
+    # here, before the first iteration, rather than discovered iteration by iteration.
+    if args.affected or args.affected_verify:
+        print(
+            "voci: --watch --affected/--affected-verify isn't supported yet -- pass one or the "
+            "other",
+            file=sys.stderr,
+        )
+        return 4
+    # Every re-invocation below is this same function, so args.watch must not still be set on
+    # it -- leaving it in would just recurse into this branch forever.
+    watch_argv = [item for item in argv if item != "--watch"]
+    roots, ignore_dirs = _watch_scope(args)
+    return _watch_run(
+        base_argv=watch_argv,
+        apply_last_failed=not args.failed_first and not args.last_failed,
+        roots=roots,
+        ignore_dirs=ignore_dirs,
+        initial_wall_start=wall_start,
+        run_once=main,
+    )
+
+
+def _finish_affected_setup(
+    session: _RunSession, affected: _AffectedContext, trace_reason: str | None
+) -> None:
+    """`main`'s own affected-mode setup, once the `Tracer` context has actually been entered --
+    split out purely to keep that function's own branching down. Sets `session.verify`
+    unconditionally, and `session.affected` only when `trace_reason is None`.
+
+    Either reason (`affected.full_run_reason` or `trace_reason`) means the same thing to the
+    user (this run selects nothing to skip) even though only `trace_reason` also disables
+    *recording*: a Tracer that couldn't claim a tool id would otherwise let every test's
+    collector record nothing at all, `seeds_for_record` would resolve that to zero dependency
+    keys, and `decide`'s own `all(...)` over an empty mapping is vacuously true -- a record with
+    nothing to invalidate it ever again (Selection design section, "no tool id is free").
+    `session.affected` stays unset in that case, which is what keeps `_execute_suite` from
+    calling `record_test`/`verify_prediction` at all.
+
+    The reason is never printed under `--affected-verify`: that mode never narrows anything --
+    every test runs regardless of what `full_run_reason` would have meant for a plain
+    `--affected` run -- so the line would only be confusing there.
+    """
+    session.verify = session.args.affected_verify
+    reason = affected.full_run_reason or trace_reason
+    if (
+        not session.verify
+        and reason is not None
+        and session.verbosity >= 0
+        and not session.args.co_json
+    ):
+        print(f"full run: {reason}")
+    if trace_reason is None:
+        session.affected = affected
+
+
 def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing voci,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -1593,18 +1883,7 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
     args = parser.parse_args(argv)
 
     if args.watch:
-        # Every re-invocation below is this same function, so args.watch must not still be
-        # set on it -- leaving it in would just recurse into this branch forever.
-        watch_argv = [item for item in argv if item != "--watch"]
-        roots, ignore_dirs = _watch_scope(args)
-        return _watch_run(
-            base_argv=watch_argv,
-            apply_last_failed=not args.failed_first and not args.last_failed,
-            roots=roots,
-            ignore_dirs=ignore_dirs,
-            initial_wall_start=wall_start,
-            run_once=main,
-        )
+        return _run_watch(args, argv, wall_start)
 
     # Every usage error checkable before collection touches a single test file, in one
     # phase: a flag's own contradictions, PATHS, -k/-m, [tool.voci], and the run
@@ -1647,22 +1926,47 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
     )
     _print_run_header(session)
 
+    # Opened (store, World, Selection) before the Tracer, closed in the outermost finally below,
+    # regardless of which of the four `return`s inside gets hit. `None` when neither --affected
+    # nor --affected-verify was passed, which is also what leaves session.affected unset and
+    # every --affected-specific branch in _collect_and_narrow/_execute_suite inert.
+    wants_affected = args.affected or args.affected_verify
+    affected: _AffectedContext | None = None
     try:
-        with _installed_session(
-            prepared.config, prepared.roots, setup, args.filterwarnings
-        ) as problem:
-            if problem is not None:
-                print(f"voci: {problem}", file=sys.stderr)
-                return 4
-            return _execute(session)
+        # Inside the same try/except KeyboardInterrupt as everything below, not before it: a
+        # large first-party tree makes _prepare_affected's own file walk and fingerprint scan
+        # the least-instant part of startup, and a Ctrl-C landing there deserves the same
+        # graceful "voci: aborted" this function already gives one anywhere else, not a bare
+        # traceback. _prepare_affected's own internal except BaseException still closes the
+        # connection first, in that case, before this outer except ever sees it.
+        if wants_affected:
+            affected = _prepare_affected(prepared.config.rootdir)
+        tracer_cm = (
+            _tracing.traced(prepared.config.rootdir)
+            if affected is not None
+            else contextlib.nullcontext(None)
+        )
+        with tracer_cm as trace_reason:
+            if affected is not None:
+                _finish_affected_setup(session, affected, trace_reason)
+            with _installed_session(
+                prepared.config, prepared.roots, setup, args.filterwarnings
+            ) as problem:
+                if problem is not None:
+                    print(f"voci: {problem}", file=sys.stderr)
+                    return 4
+                return _execute(session)
     except KeyboardInterrupt:
         # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second
         # one (the deliberate "abort now" path), or one that landed while this call was
-        # still collecting. Nothing partial is worth printing at that point -- the run
-        # was abandoned, not finished.
+        # still collecting (or, now, preparing --affected's own selection). Nothing
+        # partial is worth printing at that point -- the run was abandoned, not finished.
         print(file=sys.stdout, flush=True)
         print("voci: aborted (Ctrl-C)", file=sys.stderr)
         return 2
+    finally:
+        if affected is not None:
+            _affected_store.close_store(affected.conn)
 
 
 if __name__ == "__main__":
