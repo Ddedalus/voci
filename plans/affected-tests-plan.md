@@ -101,12 +101,15 @@ dependencies, selection could skip a test it shouldn't.
       mismatch (an env var flips a test's outcome without its code changing), the store's on-disk
       location, and every new-flag usage error (`--watch`, `--lf`, combining the two siblings).
       The `N selected · M unaffected` summary line for plain `--affected` is in too
-      (`_report_affected_summary`, `Selection.unaffected_count`), and with it the exit-code fix:
-      a fully-unaffected run used to exit 5, same as a genuinely empty suite, since
+      (`_report_affected_summary`, `Selection.unaffected_count_among`), and with it the exit-code
+      fix: a fully-unaffected run used to exit 5, same as a genuinely empty suite, since
       `candidate_files` narrows a wholly-`SKIP` file out before `select` ever sees it, so a count
       built from `select`'s own `CollectionResult.deselected` couldn't tell the two apart --
-      `unaffected_count` reads `Selection` directly instead, whether or not the file was ever
-      collected. `tests/test_cli_affected.py` and `tests/affected/test_select.py` cover both.
+      `unaffected_count_among` reads `Selection` directly instead, scoped to what this run's own
+      roots/patterns discovered (a first pass read `decisions` unscoped, over the whole stored
+      environment, which a code review caught: a `voci --affected <narrow path>` run would count
+      an unrelated `SKIP` test outside that path). `tests/test_cli_affected.py` and
+      `tests/affected/test_select.py` cover both.
       Still needed: unhiding the flags once M4 lands. Two review passes each caught and fixed a
       real bug (a leaked store connection, then a Ctrl-C escaping ungracefully); open,
       non-blocking style feedback from the second pass, worth a look before unhiding rather than

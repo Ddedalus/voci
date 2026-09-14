@@ -129,6 +129,32 @@ def test_selection_could_hold_one_is_true_for_a_file_the_store_has_never_seen() 
     assert selection.could_hold_one(Path("test_new.py")) is True
 
 
+def test_selection_unaffected_count_among_counts_skip_within_scope(tmp_path: Path) -> None:
+    for name in ("test_a.py", "test_b.py"):
+        (tmp_path / name).write_text("")
+    records_by_test = {
+        "test_a.py::test_x": [_record(outcome="passed", checksum=b"\x01")],  # SKIP
+        "test_b.py::test_y": [_record(outcome="failed", checksum=b"\x01")],  # RUN
+    }
+    selection = Selection.of(records_by_test, _CURRENT)
+    assert selection.unaffected_count_among([tmp_path / "test_a.py"], rootdir=tmp_path) == 1
+    assert selection.unaffected_count_among([tmp_path / "test_b.py"], rootdir=tmp_path) == 0
+
+
+def test_selection_unaffected_count_among_ignores_a_skip_outside_scope(tmp_path: Path) -> None:
+    """A `SKIP` decision for a test this run's own roots/patterns never discovered doesn't
+    count -- the whole point of scoping by `paths` rather than reading `decisions` bare. A store
+    built from a wider run, or a `voci --affected` invocation narrowed to a different subtree,
+    must not let an unrelated confirmed-unaffected test elsewhere mask a genuinely empty
+    selection."""
+    (tmp_path / "test_a.py").write_text("")
+    records_by_test = {
+        "test_a.py::test_x": [_record(outcome="passed", checksum=b"\x01")],  # SKIP, out of scope
+    }
+    selection = Selection.of(records_by_test, _CURRENT)
+    assert selection.unaffected_count_among([], rootdir=tmp_path) == 0
+
+
 # -- candidate_files ------------------------------------------------------------------------
 
 

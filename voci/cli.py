@@ -1686,6 +1686,7 @@ def _report_run(
     collected: _collect.CollectionResult,
     execution: _Execution,
     *,
+    discovered: Sequence[Path],
     color_enabled: bool,
 ) -> int:
     """Everything after `run_suite` returns: the stop reason (if any), collection-error
@@ -1728,10 +1729,18 @@ def _report_run(
         deselected=len(collected.deselected),
         collection_errors=len(collected.errors),
     )
+    unaffected = 0
+    if session.affected is not None:
+        # Scoped to what this run's own roots/patterns discovered -- a SKIP decision for a test
+        # outside that scope (a store built from a wider run, or one still under a different
+        # target) belongs to a tree this run was never going to look at.
+        unaffected = session.affected.selection.unaffected_count_among(
+            discovered, rootdir=session.rootdir
+        )
     if session.verify and session.affected is not None:
         _report_verify(execution, session.affected.selection, color_enabled=color_enabled)
     elif session.affected is not None:
-        _report_affected_summary(collected, session.affected.selection.unaffected_count)
+        _report_affected_summary(collected, unaffected)
 
     # 2, not what the partial results happen to add up to: an interrupted run never got
     # to the point of having a verdict, and exiting 0 because the tests that did finish
@@ -1742,15 +1751,9 @@ def _report_run(
     # exit_code_for's 5 means "nothing collected at all" -- right for -k/-m narrowing to
     # nothing, wrong for plain --affected narrowing everything away because every one of them
     # was confirmed unaffected (often via candidate_files, before collection ever runs, so
-    # nothing here comes from collected itself). That's success, not an empty suite --
-    # `Selection.unaffected_count` (irrelevant for --affected-verify, which narrows nothing) is
-    # what tells the two apart.
-    if (
-        code == 5
-        and session.affected is not None
-        and not session.verify
-        and session.affected.selection.unaffected_count
-    ):
+    # nothing here comes from collected itself). That's success, not an empty suite -- `unaffected`
+    # (always 0 for --affected-verify, which narrows nothing) is what tells the two apart.
+    if code == 5 and session.affected is not None and not session.verify and unaffected:
         return 0
     return code
 
@@ -1768,7 +1771,11 @@ def _run_and_report(
     rootdir = session.rootdir
     execution = _execute_suite(session, collected)
     exit_status = _report_run(
-        session, collected, execution, color_enabled=_color.color_enabled(sys.stdout)
+        session,
+        collected,
+        execution,
+        discovered=discovered,
+        color_enabled=_color.color_enabled(sys.stdout),
     )
     if session.args.report_json is not None:
         _json_report.write_report(
