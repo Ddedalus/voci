@@ -25,7 +25,11 @@ dependencies are already accounted for by the `CollectorRecord` it ships back
 (`_run/_isolated_worker.py`), not by anything this audit hook could see from the parent side --
 without it, every `@voci.isolated` test would be marked untrusted purely for using the mechanism
 the plan's own Failure modes table already credits with soundness ("isolated tests merge their
-record").
+record"). This is opt-in per call site, not automatic: a future voci-internal spawn that already
+accounts for its own dependencies some other way (M6's child-process tracing is the obvious
+candidate) needs its own `with exempt_own_spawn():` around the call that launches it, the same way
+`isolated.py` does -- there is no way for this hook to tell "voci's own controlled spawn" apart
+from "a test's own subprocess call" other than being told.
 """
 
 from __future__ import annotations

@@ -440,10 +440,13 @@ def data_checksum(path: Path) -> bytes:
 
 
 def dir_checksum(path: Path) -> bytes:
-    """M4's `dir:<path>` checksum -- a hash of `path`'s current sorted entry names (the Non-code
-    dependencies design section: "a hash of the sorted names"), or "absent" if `path` is gone."""
+    """M4's `dir:<path>` checksum -- a hash of `path`'s current entry names (the Non-code
+    dependencies design section: "a hash of the sorted names"), or "absent" if `path` is gone.
+    `_combine` is what actually makes this order-independent, sorting the per-name checksums
+    themselves before hashing them together -- sorting `os.listdir`'s own raw names first would
+    only be discarded work on top of that."""
     try:
-        names = sorted(os.listdir(path))
+        names = os.listdir(path)
     except OSError:
         return _string_checksum("absent")
     return _combine(_string_checksum(name) for name in names)

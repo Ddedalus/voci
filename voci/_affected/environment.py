@@ -106,6 +106,15 @@ def _interpreter_fingerprint() -> str:
     )
 
 
+def _digest(data: bytes) -> str:
+    """blake2b-8, this module's own two fingerprints' shared width -- matches `store.py`'s own
+    checksum convention (its module docstring: "blake2b-8"), though not its actual helper: that
+    one hashes a dependency key's checksum, a different domain from this module's interpreter/
+    config/extension fingerprint, so the two stay separate rather than sharing an import across
+    that boundary for one line of hashlib."""
+    return hashlib.blake2b(data, digest_size=8).hexdigest()
+
+
 def _config_fingerprint(config: Config) -> str:
     payload = {
         "testpaths": config.testpaths,
@@ -119,7 +128,7 @@ def _config_fingerprint(config: Config) -> str:
         "affected_trace_threads": config.affected_trace_threads,
     }
     blob = json.dumps(payload, sort_keys=True, default=list)
-    return hashlib.blake2b(blob.encode(), digest_size=8).hexdigest()
+    return _digest(blob.encode())
 
 
 def _locale_fingerprint() -> str:
@@ -134,7 +143,7 @@ def _extension_fingerprint(rootdir: Path) -> str:
         if not is_first_party(str(path), resolved):
             continue
         try:
-            digest = hashlib.blake2b(path.read_bytes(), digest_size=8).hexdigest()
+            digest = _digest(path.read_bytes())
         except OSError:
             continue
         hashes.append(f"{path.relative_to(resolved)}:{digest}")
