@@ -25,22 +25,26 @@ current checksums, and `Selection` holds every test's answer for `candidate_file
 are worth importing) and `select` (which of their tests actually run) to share --
 `_collection.lastfailed`'s own two-step shape, over the store instead of `LastRun`.
 
-The session-start/end driver M3 still needs is mostly built, just not wired into a real run yet:
 `world.py`'s `build_world` turns every first-party file under rootdir (`is_first_party`'s own
 criterion, not just `discover_files`' `ignore_dirs`) into the `World`/`files` mapping
 `store.checksums` and `seeds.seeds_for_record` both need; `_run.run.run_suite`'s
 `on_test_dependencies` gives a test's own `CollectorRecord` folded together with every
 `module`/`session`-scope fixture its plan reaches (`_di.runtime.ScopeStore.collectors_for`), once
 a run is otherwise done -- `@voci.isolated`'s own subprocess (`_isolated_worker.py`) passes this
-too now, over its own fresh `ScopeStore`, so an isolated test's shipped record has the same shape
-as an in-process one's; `driver.py`'s `prior_selection`/`record_test` are the actual calls into
+too, over its own fresh `ScopeStore`, so an isolated test's shipped record has the same shape as
+an in-process one's; `driver.py`'s `prior_selection`/`record_test` are the calls into
 `select.py`/`seeds.py`/`store.py` those two feed; `environment.py`'s `placeholder_env_key` is a
 deliberately coarse stand-in for M4's real environment key (too coarse only costs extra full runs,
 never an unsound skip); `tracing.py`'s `traced` is a `Tracer`'s start/stop lifetime as a context
-manager, the same shape `_isolated_worker.py` already used inline, factored out for `cli.py` to
-share. Still missing: actually opening `traced` around the *parent's* own run -- nothing calls it
-there yet, so none of the above actually runs during a real `voci` invocation -- and the
-`--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
+manager. `cli.py` now wires all of it into `main`, behind a `--affected` flag that's
+`argparse.SUPPRESS`-hidden until M4: `_prepare_affected` opens the store/`World`/`Selection`
+before collection, `traced` wraps collection and the run, `_collect_and_narrow` applies
+`candidate_files`/`select` the same way it already does for `--lf`, and `_execute_suite`'s
+`on_test_dependencies` (bound through `_record_test_dependencies`) calls `record_test` per
+finished test. A `Tracer` that can't claim a tool id disables both narrowing and recording for
+that run rather than risk storing a vacuous, always-matching dependency set. Still missing:
+`--affected-verify`; the `N selected · M unaffected` summary line docs draft (today a fully-
+skipped run just exits 5, same as a genuinely empty suite); and unhiding the flags once M4 lands.
 `cli._installed_session` doesn't call `threads.install` yet either.
 """
 

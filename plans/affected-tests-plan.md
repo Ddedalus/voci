@@ -83,27 +83,24 @@ dependencies, selection could skip a test it shouldn't.
       query per environment. Nothing calls any of this yet -- that's the session-start/end driver,
       next. `candidate_files`'s own soundness gap (a new test beside only-`SKIP` siblings) is in
       Failure modes.
-- [ ] `--affected` and its sibling `--affected-verify`. In progress: `_di.runtime.ScopeStore.
-      collectors_for` and `_run.run.run_suite`'s new `on_test_dependencies` give the session-end
-      driver a test's fully-merged `CollectorRecord` (its own envelope plus every module/session
-      fixture in its plan) once a run is otherwise done; `_affected/world.py`'s `build_world` gives
-      it a `World` over the whole first-party tree for `store.checksums`; `_affected/driver.py`'s
-      `prior_selection`/`record_test` are the actual session-start/end calls over `select.py`/
-      `seeds.py`/`store.py`, both tested in isolation; `environment.py`'s `placeholder_env_key` is
-      a deliberately coarse stand-in for M4's real one (too coarse only costs extra full runs,
-      never an unsound skip); `@voci.isolated`'s own subprocess now ships back the same
-      fixture-folded shape too; `tracing.py`'s `traced` is a `Tracer`'s start/stop lifetime as a
-      context manager, ready for `cli.py` to open around a real run. Still needed: actually
-      opening it there -- nothing does that yet, so none of the above runs during a real
-      invocation; and the CLI
-      flags themselves, hidden from
-      `--help` until M4 (see
-      the M4 note
-      above). Report `N selected · M unaffected` as its
-      own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
-      reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
-      the draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
-      generated block afterward.
+- [ ] `--affected` and its sibling `--affected-verify`. `--affected` itself is wired end to end
+      and working, `cli.py`, `help=argparse.SUPPRESS`-hidden until M4: `main` opens the store,
+      builds a `World`, and computes a `Selection` before collection (`_prepare_affected`), opens
+      a real `Tracer` around collection and the run (`tracing.traced`), narrows
+      `candidate_files`/`select` the same way `--lf` does, and records every finished test's
+      dependency closure afterward (`_execute_suite`'s `on_test_dependencies`, bound through
+      `_record_test_dependencies` to `driver.record_test`). A Tracer that can't claim a tool id
+      disables both narrowing and recording for that run (`session.affected` stays unset) rather
+      than risk storing a vacuous, always-matching dependency set -- the "no tool id is free" full
+      run reason exists for exactly this. Eight end-to-end tests in `tests/test_cli_affected.py`
+      cover a first run, an unchanged second run skipping its only test, a changed test rerunning,
+      a still-failing test always rerunning, and the store's on-disk location. Still needed:
+      `--affected-verify`; the `N selected · M unaffected`/`full run: <reason>` summary line
+      (`select.select()` currently folds an unaffected test into the same `deselected` count `-k`/
+      `-m` use, so a fully-skipped run exits 5 same as a genuinely empty suite -- distinguishing
+      the two needs a count carried alongside `CollectionResult`, not read back out of it); and
+      unhiding the flags once M4 lands. Matches the draft in `docs/reference/cli.md` and
+      `docs/guide/affected.md`; regenerate the former's generated block afterward.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
