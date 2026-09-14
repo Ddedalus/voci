@@ -286,3 +286,25 @@ def test_affected_verify_and_watch_together_is_a_usage_error(
 
     assert main(["--watch", "--affected-verify", str(project.root)]) == 4
     assert "--watch --affected" in capsys.readouterr().err
+
+
+def test_affected_reports_a_graceful_abort_on_ctrl_c_during_prepare_affected(
+    project: Project, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Ctrl-C landing while `_prepare_affected` is still building the World/Selection (the
+    least-instant part of `--affected`'s own startup on a large tree) gets the same graceful
+    "voci: aborted" treatment as one landing anywhere else in a run, not a bare traceback."""
+    from voci._affected import driver as _driver
+
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    def interrupted_prior_selection(*_args: object, **_kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_driver, "prior_selection", interrupted_prior_selection)
+
+    status = main(["--affected", str(project.root)])
+
+    assert status == 2
+    assert "voci: aborted (Ctrl-C)" in capsys.readouterr().err

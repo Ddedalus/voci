@@ -39,13 +39,15 @@ def prior_selection(
     env_key: str,
     rootdir: Path,
     fingerprints: Fingerprints | None = None,
+    first_party: Mapping[str, Path] | None = None,
 ) -> tuple[Selection, str | None]:
     """Every stored test's `Decision` against the tree as it stands now, or `(an empty Selection,
     FULL_RUN_NO_MATCHING_ENV)` if `env_key` has no stored records at all -- a first run, or one
     under an environment nothing has run under before.
 
-    `fingerprints`, if given, is passed straight through to `checksums` -- see `record_test`'s own
-    docstring for why a caller making several calls over one run wants to build it once itself.
+    `fingerprints`/`first_party`, if given, are passed straight through to `checksums` -- see
+    `record_test`'s own docstring for why a caller making several calls over one run wants to
+    build both once itself.
     """
     records_by_test = load_records(conn, env_key, rootdir=rootdir)
     if not records_by_test:
@@ -54,7 +56,15 @@ def prior_selection(
     for records in records_by_test.values():
         for record in records:
             keys.update(record.dep_checksums)
-    current = checksums(conn, world, files, keys, rootdir=rootdir, fingerprints=fingerprints)
+    current = checksums(
+        conn,
+        world,
+        files,
+        keys,
+        rootdir=rootdir,
+        fingerprints=fingerprints,
+        first_party=first_party,
+    )
     return Selection.of(records_by_test, current), None
 
 
@@ -88,6 +98,7 @@ def record_test(
     rootdir: Path,
     changed_paths: frozenset[Path] = frozenset(),
     fingerprints: Fingerprints | None = None,
+    first_party: Mapping[str, Path] | None = None,
     now: float | None = None,
 ) -> None:
     """Store `test_id`'s dependency closure under `collector_record` for this run -- `seeds_for_
@@ -97,10 +108,11 @@ def record_test(
     says moved mid-run (the same rule `--watch`'s own mid-run stat guard applies elsewhere,
     applied here per test rather than per iteration).
 
-    `fingerprints`, if given, is passed straight through to `checksums` instead of it building a
-    fresh one: a caller storing one test after another over the same run -- `cli.py`'s own driver,
-    once per finished test -- builds `store.build_fingerprints(conn, world, files)` once itself
-    and passes it to every call here, rather than paying its whole-corpus scan again per test.
+    `fingerprints`/`first_party`, if given, are passed straight through to `checksums` instead of
+    it building fresh ones: a caller storing one test after another over the same run --
+    `cli.py`'s own driver, once per finished test -- builds `store.build_fingerprints(conn,
+    world, files)`/`store.first_party_paths(files)` once itself and passes them to every call
+    here, rather than paying either's whole-corpus scan again per test.
     """
     if outcome in _NO_RECORD_OUTCOMES:
         return
@@ -109,7 +121,13 @@ def record_test(
         return
     closure = world.closure(seeds)
     dep_checksums = checksums(
-        conn, world, files, closure, rootdir=rootdir, fingerprints=fingerprints
+        conn,
+        world,
+        files,
+        closure,
+        rootdir=rootdir,
+        fingerprints=fingerprints,
+        first_party=first_party,
     )
     store_record(
         conn,

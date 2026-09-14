@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from voci._affected import collector as _collector
-from voci._affected.tracer import Tracer
+from voci._affected.tracing import traced
 from voci._assertions import rewrite as _rewrite
 from voci._collection import collect as _collect
 from voci._run import coverage as _coverage
@@ -64,12 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     # This subprocess's own sys.monitoring tool: a fresh interpreter shares no tool id or
     # ContextVar with the parent, so the one test running here needs its own Tracer rather than
-    # reusing anything the parent already started (plan's Tracer design, "Recording"). A
-    # candidate id already taken -- vanishingly unlikely in a process dedicated to one test --
-    # just leaves every collector below empty, same as a run nothing is tracing looks today.
-    tracer = Tracer(rootdir, _collector.record_first_party)
-    tracer.start()
-    try:
+    # reusing anything the parent already started (plan's Tracer design, "Recording"). `traced`'s
+    # own start reason is discarded -- a candidate id already taken (vanishingly unlikely in a
+    # process dedicated to one test) just leaves every collector below empty, same as a run
+    # nothing is tracing looks today.
+    with traced(rootdir):
         try:
             collected = _collect.collect([file_path], rootdir=rootdir)
             target = next((record for record in collected.records if record.id == target_id), None)
@@ -123,8 +122,6 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if not hook_already_installed:
                 _rewrite.uninstall()
-    finally:
-        tracer.stop()
 
     Path(result_path).write_text(json.dumps(data))
     return 0

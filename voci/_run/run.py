@@ -1506,6 +1506,11 @@ def _fire_test_dependencies(
     """`run_suite`'s own `on_test_dependencies` pass, split out to keep that function's own
     branching down: one call per test `finished_collectors` has an entry for, each folded
     together with its plan's module/session fixture collectors via `store.collectors_for`."""
+    if not finished_collectors:
+        # A run that stopped (--maxfail, Ctrl-C) before any test's envelope finished, or simply
+        # an empty suite -- either way, nothing to look up, so `records` (which can be large) is
+        # never worth indexing for it.
+        return
     by_id = {record.id: record for record in records}
     for test_id, collector_record in finished_collectors.items():
         record = by_id[test_id]

@@ -61,6 +61,7 @@ __all__ = [
     "build_fingerprints",
     "checksums",
     "close_store",
+    "first_party_paths",
     "load_records",
     "module_checksum",
     "open_store",
@@ -413,6 +414,18 @@ def _string_checksum(value: str) -> bytes:
     return hashlib.blake2b(value.encode(), digest_size=8).digest()
 
 
+def first_party_paths(files: Mapping[Path, tuple[str, str]]) -> dict[str, Path]:
+    """`module_checksum`'s own `first_party` argument, derived from the same `files` mapping
+    `World` is built from -- `dotted -> path`, the inverse of `files`' own `path -> (dotted,
+    source)`. A plain O(files) dict build, but the same one `checksums` used to redo on every
+    call even after `fingerprints` stopped it from redoing the whole-corpus scan -- split out so
+    a caller making several `checksums` calls over one run (`driver.record_test`, once per
+    finished test) can build this once too and pass it in, the same way it already does for
+    `fingerprints`.
+    """
+    return {dotted: path for path, (dotted, _source) in files.items()}
+
+
 def checksums(
     conn: sqlite3.Connection,
     world: World,
@@ -421,19 +434,22 @@ def checksums(
     *,
     rootdir: Path,
     fingerprints: Fingerprints | None = None,
+    first_party: Mapping[str, Path] | None = None,
 ) -> dict[DependencyKey, bytes]:
     """Every one of `keys`' current checksum -- `Fingerprints` for a `DefKey`/`NameKey`,
     `module_checksum` for a `ModuleKey`. `files` is the same mapping `world` was built from.
 
-    `fingerprints`, if given, is used as-is instead of building a fresh one: `build_fingerprints`
-    scans every block of every first-party file to invert `World.effect_fold_target` once, so a
-    caller making several `checksums` calls against the same `(conn, world, files)` over one run
-    -- `driver.record_test`, once per finished test -- builds it once itself and passes it to
-    each, rather than paying that whole-corpus scan again per test.
+    `fingerprints`/`first_party`, if given, are used as-is instead of building fresh ones:
+    `build_fingerprints` scans every block of every first-party file to invert `World.
+    effect_fold_target` once, and `first_party_paths` is a second O(files) pass over the same
+    mapping -- so a caller making several `checksums` calls against the same `(conn, world,
+    files)` over one run -- `driver.record_test`, once per finished test -- builds both once
+    itself and passes them to each, rather than paying either again per test.
     """
     if fingerprints is None:
         fingerprints = build_fingerprints(conn, world, files)
-    first_party = {dotted: path for path, (dotted, _source) in files.items()}
+    if first_party is None:
+        first_party = first_party_paths(files)
     out: dict[DependencyKey, bytes] = {}
     for key in keys:
         if isinstance(key, ModuleKey):

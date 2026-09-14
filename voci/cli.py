@@ -1133,6 +1133,9 @@ class _AffectedContext:
     (`_record_test_dependencies`): it inverts `World.effect_fold_target` over every block of
     every first-party file, so rebuilding it per test -- there can be hundreds -- would turn
     session-end bookkeeping into O(tests x corpus size) instead of O(corpus size)."""
+    first_party: Mapping[str, Path]
+    """Same idea, for `module_checksum`'s own `dotted -> path` argument -- a second O(files) pass
+    `checksums` would otherwise redo per call even with `fingerprints` already cached."""
 
 
 def _prepare_affected(rootdir: Path) -> _AffectedContext:
@@ -1152,9 +1155,16 @@ def _prepare_affected(rootdir: Path) -> _AffectedContext:
     try:
         world, files = build_world(rootdir)
         fingerprints = _affected_store.build_fingerprints(conn, world, files)
+        first_party = _affected_store.first_party_paths(files)
         env_key = placeholder_env_key()
         selection, full_run_reason = _affected_driver.prior_selection(
-            conn, world, files, env_key=env_key, rootdir=rootdir, fingerprints=fingerprints
+            conn,
+            world,
+            files,
+            env_key=env_key,
+            rootdir=rootdir,
+            fingerprints=fingerprints,
+            first_party=first_party,
         )
     except BaseException:
         _affected_store.close_store(conn)
@@ -1166,6 +1176,7 @@ def _prepare_affected(rootdir: Path) -> _AffectedContext:
         selection=selection,
         env_key=env_key,
         full_run_reason=full_run_reason,
+        first_party=first_party,
         fingerprints=fingerprints,
     )
 
@@ -1538,6 +1549,7 @@ def _record_test_dependencies(
             env_key=affected.env_key,
             rootdir=rootdir,
             fingerprints=affected.fingerprints,
+            first_party=affected.first_party,
         )
 
     return on_test_dependencies
@@ -1813,6 +1825,39 @@ def _run_watch(args: argparse.Namespace, argv: list[str], wall_start: float) -> 
     )
 
 
+def _finish_affected_setup(
+    session: _RunSession, affected: _AffectedContext, trace_reason: str | None
+) -> None:
+    """`main`'s own affected-mode setup, once the `Tracer` context has actually been entered --
+    split out purely to keep that function's own branching down. Sets `session.verify`
+    unconditionally, and `session.affected` only when `trace_reason is None`.
+
+    Either reason (`affected.full_run_reason` or `trace_reason`) means the same thing to the
+    user (this run selects nothing to skip) even though only `trace_reason` also disables
+    *recording*: a Tracer that couldn't claim a tool id would otherwise let every test's
+    collector record nothing at all, `seeds_for_record` would resolve that to zero dependency
+    keys, and `decide`'s own `all(...)` over an empty mapping is vacuously true -- a record with
+    nothing to invalidate it ever again (Selection design section, "no tool id is free").
+    `session.affected` stays unset in that case, which is what keeps `_execute_suite` from
+    calling `record_test`/`verify_prediction` at all.
+
+    The reason is never printed under `--affected-verify`: that mode never narrows anything --
+    every test runs regardless of what `full_run_reason` would have meant for a plain
+    `--affected` run -- so the line would only be confusing there.
+    """
+    session.verify = session.args.affected_verify
+    reason = affected.full_run_reason or trace_reason
+    if (
+        not session.verify
+        and reason is not None
+        and session.verbosity >= 0
+        and not session.args.co_json
+    ):
+        print(f"full run: {reason}")
+    if trace_reason is None:
+        session.affected = affected
+
+
 def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> int:
     # The process start, not the top of main(): interpreter startup, importing voci,
     # argument parsing, config resolution, discovery, and collection (importing every
@@ -1882,58 +1927,43 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
     _print_run_header(session)
 
     # Opened (store, World, Selection) before the Tracer, closed in the outermost finally below,
-    # regardless of which of the three `return`s inside gets hit. `None` when neither
-    # --affected nor --affected-verify was passed, which is also what leaves session.affected
-    # unset and every --affected-specific branch in _collect_and_narrow/_execute_suite inert.
+    # regardless of which of the four `return`s inside gets hit. `None` when neither --affected
+    # nor --affected-verify was passed, which is also what leaves session.affected unset and
+    # every --affected-specific branch in _collect_and_narrow/_execute_suite inert.
     wants_affected = args.affected or args.affected_verify
-    affected = _prepare_affected(prepared.config.rootdir) if wants_affected else None
-    tracer_cm = (
-        _tracing.traced(prepared.config.rootdir)
-        if affected is not None
-        else contextlib.nullcontext(None)
-    )
+    affected: _AffectedContext | None = None
     try:
+        # Inside the same try/except KeyboardInterrupt as everything below, not before it: a
+        # large first-party tree makes _prepare_affected's own file walk and fingerprint scan
+        # the least-instant part of startup, and a Ctrl-C landing there deserves the same
+        # graceful "voci: aborted" this function already gives one anywhere else, not a bare
+        # traceback. _prepare_affected's own internal except BaseException still closes the
+        # connection first, in that case, before this outer except ever sees it.
+        if wants_affected:
+            affected = _prepare_affected(prepared.config.rootdir)
+        tracer_cm = (
+            _tracing.traced(prepared.config.rootdir)
+            if affected is not None
+            else contextlib.nullcontext(None)
+        )
         with tracer_cm as trace_reason:
             if affected is not None:
-                session.verify = args.affected_verify
-                # Either reason means the same thing to the user (this run selects nothing to
-                # skip) even though only trace_reason also disables *recording*: a Tracer that
-                # couldn't claim a tool id would otherwise let every test's collector record
-                # nothing at all, seeds_for_record would resolve that to zero dependency keys,
-                # and decide()'s own `all(...)` over an empty mapping is vacuously true -- a
-                # record with nothing to invalidate it ever again (Selection design section,
-                # "no tool id is free"). session.affected stays unset in that case, which is
-                # what keeps _execute_suite from calling record_test/verify_prediction at all.
-                #
-                # Not printed under --affected-verify: that mode never narrows anything --
-                # every test runs regardless of what full_run_reason would have meant for a
-                # plain --affected run -- so the line would only be confusing here.
-                reason = affected.full_run_reason or trace_reason
-                if (
-                    not session.verify
-                    and reason is not None
-                    and session.verbosity >= 0
-                    and not args.co_json
-                ):
-                    print(f"full run: {reason}")
-                if trace_reason is None:
-                    session.affected = affected
-            try:
-                with _installed_session(
-                    prepared.config, prepared.roots, setup, args.filterwarnings
-                ) as problem:
-                    if problem is not None:
-                        print(f"voci: {problem}", file=sys.stderr)
-                        return 4
-                    return _execute(session)
-            except KeyboardInterrupt:
-                # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the
-                # second one (the deliberate "abort now" path), or one that landed while
-                # this call was still collecting. Nothing partial is worth printing at that
-                # point -- the run was abandoned, not finished.
-                print(file=sys.stdout, flush=True)
-                print("voci: aborted (Ctrl-C)", file=sys.stderr)
-                return 2
+                _finish_affected_setup(session, affected, trace_reason)
+            with _installed_session(
+                prepared.config, prepared.roots, setup, args.filterwarnings
+            ) as problem:
+                if problem is not None:
+                    print(f"voci: {problem}", file=sys.stderr)
+                    return 4
+                return _execute(session)
+    except KeyboardInterrupt:
+        # A Ctrl-C run_suite's own handler didn't turn into a graceful stop: the second
+        # one (the deliberate "abort now" path), or one that landed while this call was
+        # still collecting (or, now, preparing --affected's own selection). Nothing
+        # partial is worth printing at that point -- the run was abandoned, not finished.
+        print(file=sys.stdout, flush=True)
+        print("voci: aborted (Ctrl-C)", file=sys.stderr)
+        return 2
     finally:
         if affected is not None:
             _affected_store.close_store(affected.conn)
