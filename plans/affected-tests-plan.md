@@ -76,7 +76,10 @@ dependencies, selection could skip a test it shouldn't.
 
 **M3 — Selection and CLI** (see Selection)
 
-- [ ] Narrow through `lastfailed.candidate_files`, then filter per test like `lastfailed.select`.
+- [x] `voci/_affected/select.py`: `decide`'s per-test rule and the `Selection` it feeds
+      `candidate_files`/`select` from, mirroring `lastfailed`'s own two-step shape over the store
+      instead of `LastRun`. `store.py` gained the read side, `load_records`. Nothing calls any of
+      this yet -- that's the session-start/end driver, next.
 - [ ] `--affected` and its sibling `--affected-verify`. Report `N selected · M unaffected` as its
       own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
       reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches

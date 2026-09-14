@@ -28,6 +28,12 @@ What still isn't here, because it isn't this bullet's job: the session-end drive
 finished test and hands the result to `store_record` (M3's CLI wiring), and the environment-key
 computation whose string `store_record` takes as an opaque `env_key` (M4, plus the Environment
 key design section).
+
+`load_records` is `store_record`'s read side, added for M3's "Narrow through
+`lastfailed.candidate_files`, then filter per test like `lastfailed.select`" bullet
+(`_affected/select.py`): the exact inverse of `_dep_set_ids`/`_group_path`/`_key_id`, decoding a
+stored `dep_set` row back into `DependencyKey -> checksum` so `select.decide` can compare it
+against the tree's current checksums.
 """
 
 from __future__ import annotations
@@ -51,9 +57,11 @@ from voci._affected.resolve import DefKey, DependencyKey, ModuleKey, NameKey, Wo
 
 __all__ = [
     "Fingerprints",
+    "StoredRecord",
     "build_fingerprints",
     "checksums",
     "close_store",
+    "load_records",
     "module_checksum",
     "open_store",
     "parsed_blocks",
@@ -544,3 +552,79 @@ def _prune_records(conn: sqlite3.Connection, env_id: int, test_id: str) -> bool:
 
 def _prune_orphan_dep_sets(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM dep_set WHERE id NOT IN (SELECT DISTINCT dep_set_id FROM record_dep)")
+
+
+# -- Reading records back --------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StoredRecord:
+    """One stored `record` row, decoded back into the dependency keys `store_record` was given
+    for it -- what `select.decide` compares against the tree's current checksums."""
+
+    outcome: str
+    untrusted: str | None
+    last_used: float
+    dep_checksums: Mapping[DependencyKey, bytes]
+
+
+def load_records(
+    conn: sqlite3.Connection, env_key: str, *, rootdir: Path
+) -> dict[str, list[StoredRecord]]:
+    """Every stored record for `env_key`, keyed by test id. A test id absent from the result has
+    no stored record under this environment at all -- a brand new test, or one only ever seen
+    under a different `env_key`."""
+    row = conn.execute("SELECT id FROM env WHERE key = ?", (env_key,)).fetchone()
+    if row is None:
+        return {}
+    env_id = row[0]
+    rows = conn.execute(
+        "SELECT id, test_id, outcome, untrusted, last_used FROM record WHERE env_id = ?",
+        (env_id,),
+    ).fetchall()
+    out: dict[str, list[StoredRecord]] = {}
+    for record_id, test_id, outcome, untrusted, last_used in rows:
+        out.setdefault(test_id, []).append(
+            StoredRecord(
+                outcome=outcome,
+                untrusted=untrusted,
+                last_used=last_used,
+                dep_checksums=_load_dep_checksums(conn, record_id, rootdir),
+            )
+        )
+    return out
+
+
+def _load_dep_checksums(
+    conn: sqlite3.Connection, record_id: int, rootdir: Path
+) -> dict[DependencyKey, bytes]:
+    rows = conn.execute(
+        "SELECT dep_set.path, dep_set.keyed_checksums FROM record_dep "
+        "JOIN dep_set ON dep_set.id = record_dep.dep_set_id WHERE record_dep.record_id = ?",
+        (record_id,),
+    ).fetchall()
+    out: dict[DependencyKey, bytes] = {}
+    for path, blob in rows:
+        out.update(_decode_dep_set(path, json.loads(blob), rootdir))
+    return out
+
+
+def _decode_dep_set(
+    path: str, keyed: Mapping[str, str], rootdir: Path
+) -> dict[DependencyKey, bytes]:
+    """The inverse of `_group_path`/`_key_id`: `path` is either `module:<dotted>` (one synthetic
+    entry, always keyed `"module"`) or a file's own rootdir-relative -- or, for a file outside
+    `rootdir`, absolute -- location, holding `def:<qualname>`/`name:<name>` entries."""
+    if path.startswith("module:"):
+        dotted = path.removeprefix("module:")
+        return {ModuleKey(dotted): bytes.fromhex(hexval) for hexval in keyed.values()}
+    file_path = Path(path)
+    if not file_path.is_absolute():
+        file_path = rootdir / file_path
+    out: dict[DependencyKey, bytes] = {}
+    for key_id, hexval in keyed.items():
+        if key_id.startswith("def:"):
+            out[DefKey(file_path, key_id.removeprefix("def:"))] = bytes.fromhex(hexval)
+        elif key_id.startswith("name:"):
+            out[NameKey(file_path, key_id.removeprefix("name:"))] = bytes.fromhex(hexval)
+    return out

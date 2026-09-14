@@ -316,6 +316,79 @@ def test_store_record_shares_a_dep_set_across_tests(tmp_path: Path) -> None:
         store.close_store(conn)
 
 
+def test_load_records_is_empty_for_an_unknown_environment(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        assert store.load_records(conn, "no-such-env", rootdir=tmp_path) == {}
+    finally:
+        store.close_store(conn)
+
+
+def test_load_records_decodes_its_own_write(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        dep_checksums: dict[DependencyKey, bytes] = {
+            NameKey(tmp_path / "app.py", "x"): b"\x01",
+            ModuleKey("pydantic"): b"\x02",
+        }
+        store.store_record(
+            conn,
+            env_key="env",
+            test_id="tests/test_a.py::test_x",
+            outcome="passed",
+            untrusted=None,
+            dep_checksums=dep_checksums,
+            rootdir=tmp_path,
+            now=1.0,
+        )
+        loaded = store.load_records(conn, "env", rootdir=tmp_path)
+        [record] = loaded["tests/test_a.py::test_x"]
+        assert record.outcome == "passed"
+        assert record.untrusted is None
+        assert record.last_used == 1.0
+        assert dict(record.dep_checksums) == dep_checksums
+    finally:
+        store.close_store(conn)
+
+
+def test_load_records_keeps_several_records_per_test(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        for i, outcome in enumerate(("failed", "passed")):
+            store.store_record(
+                conn,
+                env_key="env",
+                test_id="tests/test_a.py::test_x",
+                outcome=outcome,
+                untrusted=None,
+                dep_checksums={NameKey(tmp_path / "app.py", "x"): bytes([i])},
+                rootdir=tmp_path,
+                now=float(i),
+            )
+        records = store.load_records(conn, "env", rootdir=tmp_path)["tests/test_a.py::test_x"]
+        assert {r.outcome for r in records} == {"failed", "passed"}
+    finally:
+        store.close_store(conn)
+
+
+def test_load_records_separates_environments(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        store.store_record(
+            conn,
+            env_key="env-a",
+            test_id="tests/test_a.py::test_x",
+            outcome="passed",
+            untrusted=None,
+            dep_checksums={NameKey(tmp_path / "app.py", "x"): b"\x01"},
+            rootdir=tmp_path,
+            now=1.0,
+        )
+        assert store.load_records(conn, "env-b", rootdir=tmp_path) == {}
+    finally:
+        store.close_store(conn)
+
+
 def test_store_record_groups_module_keys_apart_from_file_keys(tmp_path: Path) -> None:
     conn = store.open_store(tmp_path)
     try:
