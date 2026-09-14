@@ -36,9 +36,11 @@ too now, over its own fresh `ScopeStore`, so an isolated test's shipped record h
 as an in-process one's; `driver.py`'s `prior_selection`/`record_test` are the actual calls into
 `select.py`/`seeds.py`/`store.py` those two feed; `environment.py`'s `placeholder_env_key` is a
 deliberately coarse stand-in for M4's real environment key (too coarse only costs extra full runs,
-never an unsound skip). Still missing: starting a real `Tracer` around the *parent's* own run --
-nothing does that yet, so none of the above actually runs during a real `voci` invocation -- and
-the `--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
+never an unsound skip); `tracing.py`'s `traced` is a `Tracer`'s start/stop lifetime as a context
+manager, the same shape `_isolated_worker.py` already used inline, factored out for `cli.py` to
+share. Still missing: actually opening `traced` around the *parent's* own run -- nothing calls it
+there yet, so none of the above actually runs during a real `voci` invocation -- and the
+`--affected`/`--affected-verify` flags themselves, wiring all of it into `cli.py`.
 `cli._installed_session` doesn't call `threads.install` yet either.
 """
 

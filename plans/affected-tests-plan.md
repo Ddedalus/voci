@@ -92,8 +92,10 @@ dependencies, selection could skip a test it shouldn't.
       `seeds.py`/`store.py`, both tested in isolation; `environment.py`'s `placeholder_env_key` is
       a deliberately coarse stand-in for M4's real one (too coarse only costs extra full runs,
       never an unsound skip); `@voci.isolated`'s own subprocess now ships back the same
-      fixture-folded shape too. Still needed: starting a real `Tracer` for the *parent's* own run
-      -- nothing does that yet, so none of the above runs during a real invocation; and the CLI
+      fixture-folded shape too; `tracing.py`'s `traced` is a `Tracer`'s start/stop lifetime as a
+      context manager, ready for `cli.py` to open around a real run. Still needed: actually
+      opening it there -- nothing does that yet, so none of the above runs during a real
+      invocation; and the CLI
       flags themselves, hidden from
       `--help` until M4 (see
       the M4 note
