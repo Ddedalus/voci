@@ -5,6 +5,13 @@ this module is the thin per-record driver on top of it, plus the one rule that i
 lookup at all: a record naming a file that changed mid-run is dropped outright rather than
 resolved against stale qualnames.
 
+`non_code_keys_for` is M4's counterpart for the audit hook's and `os.environ` recorder's own
+recordings (`data_paths`/`dir_paths`/`env_names`): unlike a `(filename, qualname)` pair, a data
+path, a listed directory or an env var name needs no resolution at all -- there's no static
+reference for `World.closure` to follow from an `open()` call the way there is from a def's own
+body -- so these become `DataKey`/`DirKey`/`EnvKey`s directly, to merge into a test's dependency
+set alongside (not through) `World.closure`'s own output.
+
 Turning the returned seeds into a stored, checksummed dependency set -- calling `World.closure`
 over them, keying by test, pruning by LRU -- is `store.py`'s job, not built yet.
 """
@@ -14,9 +21,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from voci._affected.collector import CollectorRecord
-from voci._affected.resolve import DefKey, NameKey, World
+from voci._affected.resolve import DataKey, DefKey, DirKey, EnvKey, NameKey, World
 
-__all__ = ["seeds_for_record"]
+__all__ = ["non_code_keys_for", "seeds_for_record"]
 
 
 def seeds_for_record(
@@ -47,3 +54,20 @@ def seeds_for_record(
             return None
         seeds |= world.resolve_code(path, qualname)
     return frozenset(seeds)
+
+
+def non_code_keys_for(record: CollectorRecord) -> frozenset[DataKey | DirKey | EnvKey]:
+    """`record`'s own `data_paths`/`dir_paths`/`env_names`, turned into the keys `store.checksums`
+    can compute a checksum for -- straight across, no resolution and no mid-run drop: unlike a
+    def's own recorded qualname, a data path or env var name names exactly the dependency it is,
+    and a data file edited mid-run is caught the ordinary way a changed checksum always is, not by
+    a special case here (`seeds_for_record`'s own `changed_paths` rule exists only because a
+    `(filename, qualname)` pair can silently resolve to the *wrong* block once its file has moved
+    out from under it; a bare path or env var name has nothing analogous to resolve)."""
+    return frozenset(
+        (
+            *(DataKey(Path(path)) for path in record.data_paths),
+            *(DirKey(Path(path)) for path in record.dir_paths),
+            *(EnvKey(name) for name in record.env_names),
+        )
+    )

@@ -7,8 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from voci._affected.collector import CollectorRecord
-from voci._affected.resolve import DefKey, World
-from voci._affected.seeds import seeds_for_record
+from voci._affected.resolve import DataKey, DefKey, DirKey, EnvKey, World
+from voci._affected.seeds import non_code_keys_for, seeds_for_record
 
 
 def _world(files: Mapping[str, str]) -> tuple[World, dict[str, Path]]:
@@ -72,3 +72,41 @@ def test_seeds_for_record_untrusted_still_resolves_seeds() -> None:
     record = CollectorRecord(codes=frozenset({(str(paths["app"]), "handler")}), untrusted="reason")
     seeds = seeds_for_record(world, record)
     assert seeds == frozenset({DefKey(paths["app"], "handler")})
+
+
+# -- non_code_keys_for --------------------------------------------------------------------------
+
+
+def test_non_code_keys_for_turns_data_paths_into_data_keys() -> None:
+    record = CollectorRecord(codes=frozenset(), data_paths=frozenset({"/proj/fixture.json"}))
+    assert non_code_keys_for(record) == frozenset({DataKey(Path("/proj/fixture.json"))})
+
+
+def test_non_code_keys_for_turns_dir_paths_into_dir_keys() -> None:
+    record = CollectorRecord(codes=frozenset(), dir_paths=frozenset({"/proj/fixtures"}))
+    assert non_code_keys_for(record) == frozenset({DirKey(Path("/proj/fixtures"))})
+
+
+def test_non_code_keys_for_turns_env_names_into_env_keys() -> None:
+    record = CollectorRecord(codes=frozenset(), env_names=frozenset({"MY_VAR"}))
+    assert non_code_keys_for(record) == frozenset({EnvKey("MY_VAR")})
+
+
+def test_non_code_keys_for_is_empty_for_an_empty_record() -> None:
+    assert non_code_keys_for(CollectorRecord.empty()) == frozenset()
+
+
+def test_non_code_keys_for_unions_all_three_kinds() -> None:
+    record = CollectorRecord(
+        codes=frozenset(),
+        data_paths=frozenset({"/proj/fixture.json"}),
+        dir_paths=frozenset({"/proj/fixtures"}),
+        env_names=frozenset({"MY_VAR"}),
+    )
+    assert non_code_keys_for(record) == frozenset(
+        {
+            DataKey(Path("/proj/fixture.json")),
+            DirKey(Path("/proj/fixtures")),
+            EnvKey("MY_VAR"),
+        }
+    )

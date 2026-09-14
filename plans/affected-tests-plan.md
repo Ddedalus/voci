@@ -117,7 +117,41 @@ dependencies, selection could skip a test it shouldn't.
 
 **M4 — Non-code dependencies** (see Non-code dependencies, Environment key)
 
-- [ ] Audit hook, `os.environ` recorder, environment key.
+- [ ] `voci/_affected/audit.py`: a process-wide `sys.addaudithook` callback, active only for the
+      duration of a real run (`_run_state`, a `ContextVar` the way `collector.current_collector`
+      already is) and a no-op with no current collector, matching `record_first_party`'s own
+      posture. Turns a read-mode `open`, `os.listdir`/`os.scandir`, and `sqlite3.connect` into
+      `data:`/`dir:` dependencies (`resolve.py`'s new `DataKey`/`DirKey`) on the current collector,
+      skipping `.py` files (already tracked via `DefKey`/`NameKey`) and anything written after the
+      session started (the run's own output). A process spawn marks its own collector untrusted,
+      except `@voci.isolated`'s own (`audit.exempt_own_spawn`, wrapped around `isolated.py`'s
+      `create_subprocess_exec` call) -- without it every isolated test would be marked untrusted
+      purely for using the mechanism that already ships its dependencies back as a
+      `CollectorRecord`. Every exception inside the hook is swallowed: `sys.audit`'s own hooks can
+      veto the call they were raised from, so a bug here must never be able to break a real `open`.
+      `voci/_affected/environ.py`: patches `type(os.environ).__getitem__` the same unconditional
+      way (a probe found every other read path -- `getenv`, `.get()`, `in`, `.copy()`, iteration --
+      already routes through it), turning each env var read into `resolve.py`'s new `EnvKey`.
+      `seeds.non_code_keys_for` turns a finished `CollectorRecord`'s `data_paths`/`dir_paths`/
+      `env_names` into those keys directly, no resolution needed; `driver.record_test` folds them
+      in alongside `World.closure`'s own output. `store.py` gained the three keys' checksums
+      (`data_checksum`/`dir_checksum`/`env_checksum`, each falling back to `module_checksum`'s own
+      "absent" sentinel) and their storage-key encoding (`_group_path`/`_key_id`/
+      `_decode_dep_set`). `environment.env_key` replaces the M3 placeholder: interpreter
+      implementation/version/ABI flags/platform, the resolved `[tool.voci]` plus the already-
+      three-tier-resolved concurrency/timeout/filterwarnings and `assert_mode`, `LANG`/`LC_*`/`TZ`,
+      and first-party compiled-extension (`*.so`/`*.pyd`) hashes. `tracing.traced` now installs
+      the audit hook and `os.environ` recorder alongside the `Tracer`, so both the parent run and
+      `@voci.isolated`'s own subprocess get all of M1-M4's recording from one context manager;
+      `cli._prepare_affected` calls the real `env_key` in place of the placeholder.
+      Deliberately deferred, documented rather than silently missing (`environment.py`'s own
+      docstring): "the entry points of every group queried during the run" needs a group's
+      contents *as of this run*, before the run has necessarily queried it even once -- unlike
+      every other piece, which are all known before a single test runs. Leaving it out only costs
+      an occasional extra full run once a persisted record of queried groups is added, never an
+      unsound skip -- the same direction every other coarseness in this plan is deliberately wrong
+      in. Still needed: unhiding `--affected`/`--affected-verify` once that gap is closed (or
+      accepted), same as M3 left for M4.
 
 **M5 — Starlette/FastAPI adapter** (see Starlette/FastAPI adapter)
 

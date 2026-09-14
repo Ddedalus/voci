@@ -65,8 +65,11 @@ from pathlib import Path
 from voci._affected.blocks import Block, parse_blocks
 
 __all__ = [
+    "DataKey",
     "DefKey",
     "DependencyKey",
+    "DirKey",
+    "EnvKey",
     "ModuleKey",
     "NameKey",
     "World",
@@ -101,7 +104,39 @@ class ModuleKey:
     dotted: str
 
 
-DependencyKey = DefKey | NameKey | ModuleKey
+@dataclass(frozen=True, slots=True)
+class DataKey:
+    """A data file the audit hook (`_affected/audit.py`) saw opened in read mode under rootdir --
+    M4's `data:<path>` key (Non-code dependencies design section). Never produced by this module's
+    own resolution: it comes straight off a `CollectorRecord`'s own `data` set, the way a `DefKey`/
+    `NameKey` seed comes off its `codes` (`seeds.py`), and passes through `World.closure` untouched
+    -- nothing about a data file's *content* is reachable by static reference the way a def's body
+    is."""
+
+    path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class DirKey:
+    """A directory the audit hook saw listed (`os.listdir`/`os.scandir`) under rootdir -- M4's
+    `dir:<path>` key, checksummed as a hash of its sorted entry names rather than any one file's
+    content. Same non-resolved, pass-through-only relationship to `World.closure` as `DataKey`."""
+
+    path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class EnvKey:
+    """An environment variable the `os.environ` recorder (`_affected/environ.py`) saw read during
+    a test's or fixture's span -- M4's `env:<NAME>` key, checksummed as a hash of its current value
+    or "absent". Has no `path`, unlike the other non-code keys: an environment variable isn't
+    scoped to any file, so `store.py`'s own per-file `dep_set` grouping gives it a synthetic group
+    of its own, the same way `ModuleKey` already does for a dotted name with no file behind it."""
+
+    name: str
+
+
+DependencyKey = DefKey | NameKey | ModuleKey | DataKey | DirKey | EnvKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,7 +472,7 @@ class World:
             queue.extend(self._continuation(item, touched))
         return frozenset(item for item in result if isinstance(item, (DefKey, NameKey, ModuleKey)))
 
-    def _continuation(self, item: DependencyKey, touched: set[str]) -> set[_DepItem]:
+    def _continuation(self, item: DefKey | NameKey | ModuleKey, touched: set[str]) -> set[_DepItem]:
         """Everything `item`'s own presence in the closure adds beyond itself: its block's
         references and string literals (rules 2 and 5), its module's own imports and
         session-global effects the first time that module is touched at all (rule 3's

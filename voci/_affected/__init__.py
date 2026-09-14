@@ -46,10 +46,30 @@ everything) -- and `_execute_suite`'s `on_test_dependencies` (bound through
 `--affected-verify` additionally checks `verify_prediction` against each real outcome as it's
 known and reports any mismatch (`_report_verify`). A `Tracer` that can't claim a tool id disables
 narrowing and recording/verifying alike for that run rather than risk storing a vacuous,
-always-matching dependency set. Still missing: the `N selected · M unaffected` summary line for
-plain `--affected` (today a fully-skipped run just exits 5, same as a genuinely empty suite); and
-unhiding the flags once M4 lands. `cli._installed_session` doesn't call `threads.install` yet
-either.
+always-matching dependency set. The `N selected · M unaffected` summary line for plain `--affected`
+(`_report_affected_summary`, `Selection.unaffected_count_among`) is in too. `cli._installed_session`
+doesn't call `threads.install` yet either.
+
+M4 "Non-code dependencies" builds on that: `audit.py`'s process-wide `sys.addaudithook` callback
+turns a read-mode `open`, `os.listdir`/`os.scandir`, and `sqlite3.connect` into `data:`/`dir:`
+dependencies (`resolve.py`'s new `DataKey`/`DirKey`) on whichever collector is current, and marks
+a process spawn's own collector untrusted -- except `@voci.isolated`'s own spawn (`_run/
+isolated.py`), exempted via `audit.exempt_own_spawn` since its dependencies already travel back as
+a `CollectorRecord`. `environ.py` patches `type(os.environ).__getitem__` the same unconditional
+way, turning each env var read into an `EnvKey`. `seeds.non_code_keys_for` turns a finished
+`CollectorRecord`'s `data_paths`/`dir_paths`/`env_names` into those keys directly -- no resolution
+needed, unlike a traced `(filename, qualname)` pair -- and `driver.record_test` folds them in
+alongside `World.closure`'s own output. `store.py` gained the three keys' checksums (`data_
+checksum`/`dir_checksum`/`env_checksum`) and the storage-key encoding for all three. `environment.
+env_key` replaces the M3 placeholder with a real one: interpreter/platform, the resolved
+`[tool.voci]` plus the three-tier-resolved concurrency/timeout/filterwarnings and `assert_mode`,
+`LANG`/`LC_*`/`TZ`, and first-party compiled-extension hashes -- everything but the entry-points
+piece, deliberately deferred (see that module's own docstring for why). `tracing.traced` now
+installs the audit hook and `os.environ` recorder alongside the `Tracer`, so both the parent run
+and `@voci.isolated`'s own subprocess get all of M1-M4's recording from one context manager.
+Still missing: unhiding the flags (M5's Starlette/FastAPI adapter and M6's child-process tracing
+remain their own milestones, not gates on unhiding), and the entry-points piece of `environment.
+env_key` (`environment.py`'s own docstring).
 """
 
 from __future__ import annotations

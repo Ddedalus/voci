@@ -364,6 +364,29 @@ def test_affected_verify_and_watch_together_is_a_usage_error(
     assert "--watch --affected" in capsys.readouterr().err
 
 
+def test_affected_second_run_skips_an_isolated_test_too(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`@voci.isolated`'s own subprocess spawn (`_run/isolated.py`) must not trip the audit
+    hook's "a process spawn makes its collector untrusted" rule (M4) -- `audit.exempt_own_spawn`
+    is what keeps this test's dependencies (already shipped back as a `CollectorRecord`) from
+    being overridden by an untrusted mark for the very mechanism that ships them."""
+    project.write_pyproject("[tool.voci]\n")
+    project.write(
+        "test_a.py",
+        "import voci\n\n@voci.isolated\nasync def test_x():\n    assert 1 == 1\n",
+    )
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    status = main(["--affected", str(project.root)])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "0 selected · 1 unaffected" in out
+
+
 def test_affected_reports_a_graceful_abort_on_ctrl_c_during_prepare_affected(
     project: Project, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

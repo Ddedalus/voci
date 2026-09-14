@@ -28,7 +28,7 @@ from voci._affected import driver as _affected_driver
 from voci._affected import select as _affected_select
 from voci._affected import store as _affected_store
 from voci._affected import tracing as _tracing
-from voci._affected.environment import placeholder_env_key
+from voci._affected.environment import env_key as _affected_env_key
 from voci._affected.resolve import World
 from voci._affected.world import build_world
 from voci._assertions import rewrite as _rewrite
@@ -1138,10 +1138,17 @@ class _AffectedContext:
     `checksums` would otherwise redo per call even with `fingerprints` already cached."""
 
 
-def _prepare_affected(rootdir: Path) -> _AffectedContext:
+def _prepare_affected(
+    rootdir: Path, prepared: _PreparedRun, args: argparse.Namespace
+) -> _AffectedContext:
     """Opens the store, builds a `World` over `rootdir`'s whole first-party tree, and computes
     this tree's `Selection` against it -- everything `--affected` needs before collection, all in
     one call so `main` has a single thing to open and a single thing to close.
+
+    `prepared`/`args` supply `environment.env_key`'s own inputs -- the three-tier-resolved
+    concurrency/timeout/filterwarnings `_prepare_run` already computed, plus `args.assert_mode`,
+    which never goes through that resolution at all (there is no `[tool.voci]` key for it) -- so
+    this function's own caller doesn't need to duplicate any of `_PreparedRun`'s fields.
 
     `conn` is the caller's to close (`store.close_store`) once this run is fully done, in a
     `finally` -- there is no context-manager form here because the caller also needs `conn` alive
@@ -1156,7 +1163,14 @@ def _prepare_affected(rootdir: Path) -> _AffectedContext:
         world, files = build_world(rootdir)
         fingerprints = _affected_store.build_fingerprints(conn, world, files)
         first_party = _affected_store.first_party_paths(files)
-        env_key = placeholder_env_key()
+        env_key = _affected_env_key(
+            rootdir,
+            prepared.config,
+            concurrency=prepared.concurrency,
+            timeout=prepared.timeout,
+            filterwarnings=prepared.filterwarnings,
+            assert_mode=args.assert_mode,
+        )
         selection, full_run_reason = _affected_driver.prior_selection(
             conn,
             world,
@@ -1998,7 +2012,7 @@ def main(argv: list[str] | None = None, *, wall_start: float | None = None) -> i
         # traceback. _prepare_affected's own internal except BaseException still closes the
         # connection first, in that case, before this outer except ever sees it.
         if wants_affected:
-            affected = _prepare_affected(prepared.config.rootdir)
+            affected = _prepare_affected(prepared.config.rootdir, prepared, args)
         tracer_cm = (
             _tracing.traced(prepared.config.rootdir)
             if affected is not None

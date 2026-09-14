@@ -134,6 +134,16 @@ def test_record_first_party_leaves_a_collector_untrusted_once_marked() -> None:
     assert c.untrusted is not None
 
 
+def test_record_data_dir_and_env_accumulate_into_the_collector() -> None:
+    c = collector.Collector()
+    c.record_data("/proj/data.json")
+    c.record_dir("/proj/fixtures")
+    c.record_env("MY_VAR")
+    assert c.data_paths == {"/proj/data.json"}
+    assert c.dir_paths == {"/proj/fixtures"}
+    assert c.env_names == {"MY_VAR"}
+
+
 def test_finish_snapshots_recorded_codes_as_filename_qualname_pairs() -> None:
     c = collector.Collector()
     code = _sample.__code__
@@ -141,6 +151,17 @@ def test_finish_snapshots_recorded_codes_as_filename_qualname_pairs() -> None:
     record = c.finish()
     assert record.codes == {(code.co_filename, code.co_qualname)}
     assert record.untrusted is None
+
+
+def test_finish_snapshots_data_dir_and_env_too() -> None:
+    c = collector.Collector()
+    c.record_data("/proj/data.json")
+    c.record_dir("/proj/fixtures")
+    c.record_env("MY_VAR")
+    record = c.finish()
+    assert record.data_paths == frozenset({"/proj/data.json"})
+    assert record.dir_paths == frozenset({"/proj/fixtures"})
+    assert record.env_names == frozenset({"MY_VAR"})
 
 
 def test_finish_carries_the_untrusted_reason() -> None:
@@ -153,14 +174,33 @@ def test_collector_record_empty_has_no_codes_or_untrusted_reason() -> None:
     record = collector.CollectorRecord.empty()
     assert record.codes == frozenset()
     assert record.untrusted is None
+    assert record.data_paths == frozenset()
+    assert record.dir_paths == frozenset()
+    assert record.env_names == frozenset()
 
 
 def test_collector_record_json_round_trips() -> None:
     code = _sample.__code__
     record = collector.CollectorRecord(
-        codes=frozenset({(code.co_filename, code.co_qualname)}), untrusted="a reason"
+        codes=frozenset({(code.co_filename, code.co_qualname)}),
+        untrusted="a reason",
+        data_paths=frozenset({"/proj/data.json"}),
+        dir_paths=frozenset({"/proj/fixtures"}),
+        env_names=frozenset({"MY_VAR"}),
     )
     assert collector.CollectorRecord.from_json(record.to_json()) == record
+
+
+def test_collector_record_from_json_defaults_missing_non_code_keys_to_empty() -> None:
+    """An older worker's JSON, from before M4, has no `data_paths`/`dir_paths`/`env_names` keys
+    at all -- `from_json` must not raise decoding one."""
+    code = _sample.__code__
+    record = collector.CollectorRecord.from_json(
+        {"codes": [[code.co_filename, code.co_qualname]], "untrusted": None}
+    )
+    assert record.data_paths == frozenset()
+    assert record.dir_paths == frozenset()
+    assert record.env_names == frozenset()
 
 
 def test_collector_record_to_json_is_json_safe() -> None:
@@ -169,11 +209,20 @@ def test_collector_record_to_json_is_json_safe() -> None:
     code = _sample.__code__
     c = collector.Collector()
     c.record(code)
+    c.record_data("/proj/data.json")
+    c.record_dir("/proj/fixtures")
+    c.record_env("MY_VAR")
     data = c.finish().to_json()
     # A frozenset of tuples isn't JSON-safe on its own -- to_json must have already converted
     # it to something json.dumps accepts without raising.
     reloaded = json.loads(json.dumps(data))
-    assert reloaded == {"codes": [[code.co_filename, code.co_qualname]], "untrusted": None}
+    assert reloaded == {
+        "codes": [[code.co_filename, code.co_qualname]],
+        "untrusted": None,
+        "data_paths": ["/proj/data.json"],
+        "dir_paths": ["/proj/fixtures"],
+        "env_names": ["MY_VAR"],
+    }
 
 
 def test_active_no_longer_counts_as_in_flight_once_the_block_exits() -> None:

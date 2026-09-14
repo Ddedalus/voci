@@ -113,6 +113,58 @@ def test_a_file_under_a_nested_venv_is_not_first_party(tmp_path: Path) -> None:
     assert tracer.is_first_party(str(mod), tmp_path) is False
 
 
+# -- is_first_party_dir ---------------------------------------------------------------------
+
+
+def test_a_dir_under_rootdir_is_first_party(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    assert tracer.is_first_party_dir(str(fixtures), tmp_path) is True
+
+
+def test_a_dir_outside_rootdir_is_not_first_party(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-sibling"
+    outside.mkdir()
+    try:
+        assert tracer.is_first_party_dir(str(outside), tmp_path) is False
+    finally:
+        outside.rmdir()
+
+
+def test_a_missing_dir_is_not_first_party(tmp_path: Path) -> None:
+    assert tracer.is_first_party_dir(str(tmp_path / "gone"), tmp_path) is False
+
+
+def test_an_empty_dirname_is_not_first_party(tmp_path: Path) -> None:
+    assert tracer.is_first_party_dir("", tmp_path) is False
+
+
+def test_a_dir_under_the_cache_dir_is_not_first_party(tmp_path: Path) -> None:
+    from voci._cache import CACHE_DIR_NAME
+
+    cache_subdir = tmp_path / CACHE_DIR_NAME / "sub"
+    cache_subdir.mkdir(parents=True)
+    assert tracer.is_first_party_dir(str(cache_subdir), tmp_path) is False
+
+
+def test_a_nested_venvs_own_root_directory_is_not_first_party(tmp_path: Path) -> None:
+    """A directory that *is itself* a venv root, not merely something inside one: `_venv_between`
+    must check `resolved` itself, not just its ancestors -- `os.listdir(venv_root)` is exactly as
+    excluded as `os.listdir(venv_root/'lib')` is."""
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    assert tracer.is_first_party_dir(str(venv), tmp_path) is False
+
+
+def test_a_dir_inside_a_nested_venv_is_not_first_party(tmp_path: Path) -> None:
+    venv = tmp_path / ".venv"
+    site_packages = venv / "lib" / "sitepkg"
+    site_packages.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    assert tracer.is_first_party_dir(str(site_packages), tmp_path) is False
+
+
 # Tracer
 # ------------------------------------------------------------------------
 

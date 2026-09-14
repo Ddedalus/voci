@@ -18,6 +18,10 @@ subprocess's own fresh `ScopeStore`), and `result_to_json`'s `collector` key car
 `CollectorRecord` back, `collector_from_json`'s job to read again. Unlike coverage.py there is no
 live measurement on this side to merge into yet -- `run.py`'s `on_collector`/`on_test_dependencies`
 callbacks are where a caller gets it (see the plan's M1, "Recording", and M3's driver).
+`audit.exempt_own_spawn` wraps the spawn below for exactly this reason: the parent's own audit hook
+(M4) would otherwise see this `subprocess.Popen` and mark the spawning test's collector untrusted,
+even though its dependencies are already accounted for by the very `CollectorRecord` this call
+gets back.
 
 Each subprocess gets its own `tmp_path` root, nested under the parent run's own basetemp so it is
 swept by the same retention policy, never the parent's root directly -- `_capture.install`'s
@@ -38,6 +42,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from voci._affected import audit as _audit
 from voci._affected.collector import CollectorRecord
 from voci._builtins.capture import sanitize_test_id
 from voci._run import coverage as _coverage
@@ -183,16 +188,17 @@ async def run_isolated(
     coverage_data = scratch_dir / f"{stem}.coverage"
     coverage_env = _coverage.subprocess_env(coverage_data, note=note)
 
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "voci._run._isolated_worker",
-        str(config_path),
-        str(result_path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=None if coverage_env is None else os.environ | coverage_env,
-    )
+    with _audit.exempt_own_spawn():
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "voci._run._isolated_worker",
+            str(config_path),
+            str(result_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=None if coverage_env is None else os.environ | coverage_env,
+        )
     try:
         _stdout, stderr = await proc.communicate()
     except asyncio.CancelledError:

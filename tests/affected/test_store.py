@@ -8,8 +8,19 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from voci._affected import store
-from voci._affected.resolve import DefKey, DependencyKey, ModuleKey, NameKey, World
+from voci._affected.resolve import (
+    DataKey,
+    DefKey,
+    DependencyKey,
+    DirKey,
+    EnvKey,
+    ModuleKey,
+    NameKey,
+    World,
+)
 
 
 def _world(files: Mapping[str, str], root: Path = Path("/proj")) -> tuple[World, dict[str, Path]]:
@@ -236,6 +247,70 @@ def test_module_checksum_reflects_an_installed_distributions_version() -> None:
     assert checksum == store.module_checksum("pytest", first_party={}, rootdir=Path("/proj"))
 
 
+def test_data_checksum_changes_when_the_file_content_changes(tmp_path: Path) -> None:
+    data = tmp_path / "fixture.json"
+    data.write_text("{}")
+    before = store.data_checksum(data)
+    data.write_text('{"x": 1}')
+    after = store.data_checksum(data)
+    assert before != after
+
+
+def test_data_checksum_is_absent_for_a_missing_file(tmp_path: Path) -> None:
+    assert store.data_checksum(tmp_path / "gone.json") == store.data_checksum(
+        tmp_path / "also-gone.json"
+    )
+
+
+def test_dir_checksum_changes_when_an_entry_is_added(tmp_path: Path) -> None:
+    before = store.dir_checksum(tmp_path)
+    (tmp_path / "new_file.txt").write_text("x")
+    after = store.dir_checksum(tmp_path)
+    assert before != after
+
+
+def test_dir_checksum_ignores_entry_order(tmp_path: Path) -> None:
+    (tmp_path / "b.txt").write_text("x")
+    (tmp_path / "a.txt").write_text("x")
+    assert store.dir_checksum(tmp_path) == store.dir_checksum(tmp_path)
+
+
+def test_dir_checksum_is_absent_for_a_missing_directory(tmp_path: Path) -> None:
+    assert store.dir_checksum(tmp_path / "gone") == store.dir_checksum(tmp_path / "also-gone")
+
+
+def test_env_checksum_reflects_the_current_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VOCI_TEST_STORE_VAR", "one")
+    first = store.env_checksum("VOCI_TEST_STORE_VAR")
+    monkeypatch.setenv("VOCI_TEST_STORE_VAR", "two")
+    second = store.env_checksum("VOCI_TEST_STORE_VAR")
+    assert first != second
+
+
+def test_env_checksum_is_absent_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VOCI_TEST_STORE_VAR_A", raising=False)
+    monkeypatch.delenv("VOCI_TEST_STORE_VAR_B", raising=False)
+    assert store.env_checksum("VOCI_TEST_STORE_VAR_A") == store.env_checksum(
+        "VOCI_TEST_STORE_VAR_B"
+    )
+
+
+def test_checksums_dispatches_data_dir_and_env_keys(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        world, paths = _world({"app": "x = 1\n"}, tmp_path)
+        files = _files({"app": "x = 1\n"}, paths)
+        data = tmp_path / "fixture.json"
+        data.write_text("{}")
+        keys: list[DependencyKey] = [DataKey(data), DirKey(tmp_path), EnvKey("PATH")]
+        result = store.checksums(conn, world, files, keys, rootdir=tmp_path)
+        assert result[DataKey(data)] == store.data_checksum(data)
+        assert result[DirKey(tmp_path)] == store.dir_checksum(tmp_path)
+        assert result[EnvKey("PATH")] == store.env_checksum("PATH")
+    finally:
+        store.close_store(conn)
+
+
 # -- Storing a record -------------------------------------------------------------------------
 
 
@@ -407,5 +482,54 @@ def test_store_record_groups_module_keys_apart_from_file_keys(tmp_path: Path) ->
         )
         paths = {row[0] for row in conn.execute("SELECT path FROM dep_set").fetchall()}
         assert paths == {"app.py", "module:pydantic"}
+    finally:
+        store.close_store(conn)
+
+
+def test_load_records_decodes_data_dir_and_env_keys(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        data_path = tmp_path / "fixture.json"
+        dir_path = tmp_path / "fixtures"
+        dep_checksums: dict[DependencyKey, bytes] = {
+            DataKey(data_path): b"\x01",
+            DirKey(dir_path): b"\x02",
+            EnvKey("MY_VAR"): b"\x03",
+        }
+        store.store_record(
+            conn,
+            env_key="env",
+            test_id="tests/test_a.py::test_x",
+            outcome="passed",
+            untrusted=None,
+            dep_checksums=dep_checksums,
+            rootdir=tmp_path,
+            now=1.0,
+        )
+        loaded = store.load_records(conn, "env", rootdir=tmp_path)
+        [record] = loaded["tests/test_a.py::test_x"]
+        assert dict(record.dep_checksums) == dep_checksums
+    finally:
+        store.close_store(conn)
+
+
+def test_store_record_groups_env_keys_apart_from_file_keys(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        store.store_record(
+            conn,
+            env_key="env",
+            test_id="tests/test_a.py::test_x",
+            outcome="passed",
+            untrusted=None,
+            dep_checksums={
+                NameKey(Path("/proj/app.py"), "x"): b"\x01",
+                EnvKey("MY_VAR"): b"\x02",
+            },
+            rootdir=Path("/proj"),
+            now=1.0,
+        )
+        paths = {row[0] for row in conn.execute("SELECT path FROM dep_set").fetchall()}
+        assert paths == {"app.py", "env:MY_VAR"}
     finally:
         store.close_store(conn)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from voci._affected.collector import CollectorRecord
 from voci._affected.resolve import DependencyKey, World
-from voci._affected.seeds import seeds_for_record
+from voci._affected.seeds import non_code_keys_for, seeds_for_record
 from voci._affected.select import Decision, Selection
 from voci._affected.store import Fingerprints, checksums, load_records, store_record
 
@@ -106,7 +106,10 @@ def record_test(
     nothing at all: `outcome` is one `_NO_RECORD_OUTCOMES` excludes, or `seeds_for_record` dropped
     the record outright because one of `collector_record`'s codes names a file `changed_paths`
     says moved mid-run (the same rule `--watch`'s own mid-run stat guard applies elsewhere,
-    applied here per test rather than per iteration).
+    applied here per test rather than per iteration). `non_code_keys_for` folds in
+    `collector_record`'s own `data_paths`/`dir_paths`/`env_names` (M4) alongside `World.closure`'s
+    output, not through it -- see that function's own docstring for why a data path or env var
+    name needs no resolution first.
 
     `fingerprints`/`first_party`, if given, are passed straight through to `checksums` instead of
     it building fresh ones: a caller storing one test after another over the same run --
@@ -119,7 +122,7 @@ def record_test(
     seeds = seeds_for_record(world, collector_record, changed_paths=changed_paths)
     if seeds is None:
         return
-    closure = world.closure(seeds)
+    closure = world.closure(seeds) | non_code_keys_for(collector_record)
     dep_checksums = checksums(
         conn,
         world,

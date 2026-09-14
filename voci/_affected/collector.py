@@ -25,6 +25,12 @@ hop in the first place, so this path is only hit without them, or for a case the
 `CollectorRecord` is a finished collector's contents distilled to what survives a `@voci.isolated`
 subprocess boundary -- `(filename, qualname)` pairs rather than the `CodeType`s themselves, which
 never leave the process that ran them (`Collector.finish`, `_run/isolated.py`).
+
+`record_data`/`record_dir`/`record_env` are the same idea for M4's non-code dependencies: the
+audit hook (`_affected/audit.py`) and the `os.environ` recorder (`_affected/environ.py`) call
+these on whichever collector is current, exactly the way `record_first_party` does for code --
+plain strings straight in, since a path or env var name needs no reduction the way a `CodeType`
+does to survive a subprocess boundary.
 """
 
 from __future__ import annotations
@@ -59,6 +65,15 @@ class CollectorRecord:
 
     codes: frozenset[tuple[str, str]]
     untrusted: str | None = None
+    #: Resolved paths the audit hook (`_affected/audit.py`) saw opened in read mode, or listed via
+    #: `os.listdir`/`os.scandir`, while this collector was current -- M4's `data:`/`dir:` keys
+    #: (Non-code dependencies design section). Bare strings, not `Path`s: JSON-safe on its own,
+    #: the same reason `codes` is `(filename, qualname)` pairs rather than `CodeType`s.
+    data_paths: frozenset[str] = frozenset()
+    dir_paths: frozenset[str] = frozenset()
+    #: Environment variable names the `os.environ` recorder (`_affected/environ.py`) saw read --
+    #: M4's `env:` key.
+    env_names: frozenset[str] = frozenset()
 
     @classmethod
     def empty(cls) -> CollectorRecord:
@@ -68,13 +83,22 @@ class CollectorRecord:
         return cls(codes=frozenset())
 
     def to_json(self) -> dict[str, Any]:
-        return {"codes": sorted(self.codes), "untrusted": self.untrusted}
+        return {
+            "codes": sorted(self.codes),
+            "untrusted": self.untrusted,
+            "data_paths": sorted(self.data_paths),
+            "dir_paths": sorted(self.dir_paths),
+            "env_names": sorted(self.env_names),
+        }
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> CollectorRecord:
         return cls(
             codes=frozenset((filename, qualname) for filename, qualname in data["codes"]),
             untrusted=data["untrusted"],
+            data_paths=frozenset(data.get("data_paths", ())),
+            dir_paths=frozenset(data.get("dir_paths", ())),
+            env_names=frozenset(data.get("env_names", ())),
         )
 
 
@@ -86,10 +110,16 @@ class Collector:
     `<lambda>` or comprehension body has no other owner once the statement that made it returns.
     """
 
-    __slots__ = ("codes", "untrusted")
+    __slots__ = ("codes", "data_paths", "dir_paths", "env_names", "untrusted")
 
     def __init__(self) -> None:
         self.codes: dict[int, CodeType] = {}
+        #: Plain `set`s, not a keep-alive dict like `codes`: a path or env var name is already a
+        #: string with a lifetime of its own, unlike a code object, which nothing else is
+        #: guaranteed to keep alive (see `codes`' own docstring).
+        self.data_paths: set[str] = set()
+        self.dir_paths: set[str] = set()
+        self.env_names: set[str] = set()
         self.untrusted: str | None = None
         """`None` while this collector is still trustworthy; otherwise the reason the *first*
         thing to distrust it gave. Later marks are recorded nowhere else -- a stored record has
@@ -101,6 +131,20 @@ class Collector:
     def record(self, code: CodeType) -> None:
         self.codes[id(code)] = code
 
+    def record_data(self, path: str) -> None:
+        """A data file the audit hook saw opened in read mode while this collector was current
+        (`_affected/audit.py`)."""
+        self.data_paths.add(path)
+
+    def record_dir(self, path: str) -> None:
+        """A directory the audit hook saw listed (`os.listdir`/`os.scandir`)."""
+        self.dir_paths.add(path)
+
+    def record_env(self, name: str) -> None:
+        """An environment variable name the `os.environ` recorder saw read
+        (`_affected/environ.py`)."""
+        self.env_names.add(name)
+
     def finish(self) -> CollectorRecord:
         """A JSON-safe snapshot of this collector, for a caller that is done with it: `run.py`'s
         `run_envelope`, for both an ordinary test and a `@voci.isolated` one's own subprocess-side
@@ -108,6 +152,9 @@ class Collector:
         return CollectorRecord(
             codes=frozenset((code.co_filename, code.co_qualname) for code in self.codes.values()),
             untrusted=self.untrusted,
+            data_paths=frozenset(self.data_paths),
+            dir_paths=frozenset(self.dir_paths),
+            env_names=frozenset(self.env_names),
         )
 
     def mark_untrusted(self, reason: str) -> None:

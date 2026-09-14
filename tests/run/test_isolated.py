@@ -117,7 +117,13 @@ def test_result_to_json_includes_the_collector_record_when_given() -> None:
 
     data = result_to_json(result, collector=record)
 
-    assert data["collector"] == {"codes": [("mod.py", "test_thing")], "untrusted": "a reason"}
+    assert data["collector"] == {
+        "codes": [("mod.py", "test_thing")],
+        "untrusted": "a reason",
+        "data_paths": [],
+        "dir_paths": [],
+        "env_names": [],
+    }
 
 
 def test_collector_from_json_is_empty_for_a_dict_with_no_collector_key() -> None:

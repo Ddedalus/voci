@@ -8,7 +8,15 @@ from pathlib import Path
 
 from voci._affected import driver, store
 from voci._affected.collector import CollectorRecord
-from voci._affected.resolve import DefKey, DependencyKey, NameKey, World
+from voci._affected.resolve import (
+    DataKey,
+    DefKey,
+    DependencyKey,
+    DirKey,
+    EnvKey,
+    NameKey,
+    World,
+)
 from voci._affected.select import Decision, Selection
 from voci._affected.store import StoredRecord
 
@@ -173,6 +181,41 @@ def test_record_test_stores_nothing_for_a_cancelled_outcome(tmp_path: Path) -> N
         )
 
         assert store.load_records(conn, "env", rootdir=tmp_path) == {}
+    finally:
+        store.close_store(conn)
+
+
+def test_record_test_folds_in_non_code_dependencies(tmp_path: Path) -> None:
+    conn = store.open_store(tmp_path)
+    try:
+        world, files = _world({"app": "def handler():\n    return 1\n"}, tmp_path)
+        app_path = next(iter(files))
+        data_path = tmp_path / "fixture.json"
+        data_path.write_text("{}")
+        collector_record = CollectorRecord(
+            codes=frozenset({(str(app_path), "handler")}),
+            data_paths=frozenset({str(data_path)}),
+            dir_paths=frozenset({str(tmp_path)}),
+            env_names=frozenset({"MY_VAR"}),
+        )
+
+        driver.record_test(
+            conn,
+            world,
+            files,
+            test_id="tests/test_app.py::test_handler",
+            collector_record=collector_record,
+            outcome="passed",
+            env_key="env",
+            rootdir=tmp_path,
+            now=1.0,
+        )
+
+        stored = store.load_records(conn, "env", rootdir=tmp_path)
+        (record,) = stored["tests/test_app.py::test_handler"]
+        assert DataKey(data_path) in record.dep_checksums
+        assert DirKey(tmp_path) in record.dep_checksums
+        assert EnvKey("MY_VAR") in record.dep_checksums
     finally:
         store.close_store(conn)
 

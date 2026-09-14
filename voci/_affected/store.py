@@ -21,13 +21,15 @@ Three things this module owns, kept separate because each has its own cache key:
   a namespace package's sorted directories, "absent", or -- since voci itself ships with zero
   runtime dependencies (`pyproject.toml`) and so cannot import `packaging` to do this properly --
   a hand-rolled requirement-name parse over `importlib.metadata`'s own `Distribution.requires`,
-  walking the requirement closure by hand.
+  walking the requirement closure by hand. `data_checksum`/`dir_checksum`/`env_checksum` are M4's
+  three non-code counterparts (Non-code dependencies design section): a content hash, a hash of a
+  directory's sorted entry names, and a hash of an environment variable's value, each falling back
+  to the same "absent" sentinel `module_checksum` uses when what a prior run recorded no longer
+  exists at all.
 
 What still isn't here, because it isn't this bullet's job: the session-end driver that calls
 `seeds.seeds_for_record`, `World.closure` and this module's `checksums` in sequence for every
-finished test and hands the result to `store_record` (M3's CLI wiring), and the environment-key
-computation whose string `store_record` takes as an opaque `env_key` (M4, plus the Environment
-key design section).
+finished test and hands the result to `store_record` (M3's CLI wiring).
 
 `load_records` is `store_record`'s read side, added for M3's "Narrow through
 `lastfailed.candidate_files`, then filter per test like `lastfailed.select`" bullet
@@ -53,7 +55,16 @@ from pathlib import Path
 from typing import Any
 
 from voci._affected.blocks import Block, parse_blocks
-from voci._affected.resolve import DefKey, DependencyKey, ModuleKey, NameKey, World
+from voci._affected.resolve import (
+    DataKey,
+    DefKey,
+    DependencyKey,
+    DirKey,
+    EnvKey,
+    ModuleKey,
+    NameKey,
+    World,
+)
 
 __all__ = [
     "Fingerprints",
@@ -61,6 +72,9 @@ __all__ = [
     "build_fingerprints",
     "checksums",
     "close_store",
+    "data_checksum",
+    "dir_checksum",
+    "env_checksum",
     "first_party_paths",
     "load_records",
     "module_checksum",
@@ -414,6 +428,34 @@ def _string_checksum(value: str) -> bytes:
     return hashlib.blake2b(value.encode(), digest_size=8).digest()
 
 
+def data_checksum(path: Path) -> bytes:
+    """M4's `data:<path>` checksum -- a content hash of `path` as it stands right now, or the same
+    "absent" sentinel `module_checksum` uses when `path` -- read by a prior run, per the audit
+    hook's own `data:` recording (`_affected/audit.py`) -- no longer exists at all."""
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return _string_checksum("absent")
+    return hashlib.blake2b(content, digest_size=8).digest()
+
+
+def dir_checksum(path: Path) -> bytes:
+    """M4's `dir:<path>` checksum -- a hash of `path`'s current sorted entry names (the Non-code
+    dependencies design section: "a hash of the sorted names"), or "absent" if `path` is gone."""
+    try:
+        names = sorted(os.listdir(path))
+    except OSError:
+        return _string_checksum("absent")
+    return _combine(_string_checksum(name) for name in names)
+
+
+def env_checksum(name: str) -> bytes:
+    """M4's `env:<NAME>` checksum -- a hash of `name`'s current value in `os.environ`, or
+    "absent" if it isn't set (the Non-code dependencies design section's own wording)."""
+    value = os.environ.get(name)
+    return _string_checksum("absent") if value is None else _string_checksum(value)
+
+
 def first_party_paths(files: Mapping[Path, tuple[str, str]]) -> dict[str, Path]:
     """`module_checksum`'s own `first_party` argument, derived from the same `files` mapping
     `World` is built from -- `dotted -> path`, the inverse of `files`' own `path -> (dotted,
@@ -454,6 +496,12 @@ def checksums(
     for key in keys:
         if isinstance(key, ModuleKey):
             out[key] = module_checksum(key.dotted, first_party=first_party, rootdir=rootdir)
+        elif isinstance(key, DataKey):
+            out[key] = data_checksum(key.path)
+        elif isinstance(key, DirKey):
+            out[key] = dir_checksum(key.path)
+        elif isinstance(key, EnvKey):
+            out[key] = env_checksum(key.name)
         else:
             out[key] = fingerprints.checksum_for(key)
     return out
@@ -519,10 +567,14 @@ def _dep_set_ids(
     """One `dep_set` row per file `dep_checksums`' keys touch, `UNIQUE(path, keyed_checksums)` so
     an unchanged file's dep set is reused across tests and branches rather than duplicated --
     "shared across tests and records, so a branch variant costs only the dep sets that differ"
-    (the Storage design section). A `ModuleKey` has no file of its own, so it gets a synthetic
-    one-entry group keyed by its own dotted name -- `module:` keys are already resolved and
-    invalidated one at a time (Selection: "Each distinct `module:` key is re-resolved once per
-    run"), so nothing needs them grouped with anything else."""
+    (the Storage design section). A `ModuleKey`/`EnvKey` has no file of its own, so each gets a
+    synthetic one-entry group keyed by its own dotted name/env var name -- both are already
+    resolved and invalidated one at a time (Selection: "Each distinct `module:` key is re-resolved
+    once per run"; M4's `env:` keys the same way), so nothing needs them grouped with anything
+    else. `DataKey`/`DirKey` group under their own path instead, same as a `DefKey`/`NameKey`
+    groups under its file's -- a data file or directory never collides with a first-party source
+    file's own path (the audit hook excludes `.py` files outright, see `audit.py`), so nothing
+    else ever shares that group."""
     groups: dict[str, dict[str, str]] = {}
     for key, checksum in dep_checksums.items():
         groups.setdefault(_group_path(key, rootdir), {})[_key_id(key)] = checksum.hex()
@@ -542,6 +594,8 @@ def _dep_set_ids(
 def _group_path(key: DependencyKey, rootdir: Path) -> str:
     if isinstance(key, ModuleKey):
         return f"module:{key.dotted}"
+    if isinstance(key, EnvKey):
+        return f"env:{key.name}"
     return str(key.path.relative_to(rootdir) if key.path.is_relative_to(rootdir) else key.path)
 
 
@@ -550,6 +604,12 @@ def _key_id(key: DependencyKey) -> str:
         return f"def:{key.qualname}"
     if isinstance(key, NameKey):
         return f"name:{key.name}"
+    if isinstance(key, DataKey):
+        return "data"
+    if isinstance(key, DirKey):
+        return "dir"
+    if isinstance(key, EnvKey):
+        return "env"
     return "module"
 
 
@@ -643,12 +703,16 @@ def load_records(
 def _decode_dep_set(
     path: str, keyed: Mapping[str, str], rootdir: Path
 ) -> dict[DependencyKey, bytes]:
-    """The inverse of `_group_path`/`_key_id`: `path` is either `module:<dotted>` (one synthetic
-    entry, always keyed `"module"`) or a file's own rootdir-relative -- or, for a file outside
-    `rootdir`, absolute -- location, holding `def:<qualname>`/`name:<name>` entries."""
+    """The inverse of `_group_path`/`_key_id`: `path` is `module:<dotted>` or `env:<NAME>` (one
+    synthetic entry each, always keyed `"module"`/`"env"`) or a file's own rootdir-relative -- or,
+    for a file outside `rootdir`, absolute -- location, holding `def:<qualname>`/`name:<name>`/
+    `data`/`dir` entries."""
     if path.startswith("module:"):
         dotted = path.removeprefix("module:")
         return {ModuleKey(dotted): bytes.fromhex(hexval) for hexval in keyed.values()}
+    if path.startswith("env:"):
+        name = path.removeprefix("env:")
+        return {EnvKey(name): bytes.fromhex(hexval) for hexval in keyed.values()}
     file_path = Path(path)
     if not file_path.is_absolute():
         file_path = rootdir / file_path
@@ -658,4 +722,8 @@ def _decode_dep_set(
             out[DefKey(file_path, key_id.removeprefix("def:"))] = bytes.fromhex(hexval)
         elif key_id.startswith("name:"):
             out[NameKey(file_path, key_id.removeprefix("name:"))] = bytes.fromhex(hexval)
+        elif key_id == "data":
+            out[DataKey(file_path)] = bytes.fromhex(hexval)
+        elif key_id == "dir":
+            out[DirKey(file_path)] = bytes.fromhex(hexval)
     return out

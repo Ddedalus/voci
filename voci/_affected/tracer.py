@@ -24,6 +24,7 @@ from voci._cache import CACHE_DIR_NAME
 __all__ = [
     "Tracer",
     "is_first_party",
+    "is_first_party_dir",
 ]
 
 #: `sys.monitoring` reserves 0/1/2/5 for the debugger, coverage, the profiler and the optimizer
@@ -119,12 +120,41 @@ def is_first_party(filename: str, rootdir: Path) -> bool:
     rootdir = rootdir.resolve()
     if not resolved.is_relative_to(rootdir):
         return False
-    if CACHE_DIR_NAME in resolved.relative_to(rootdir).parts:
+    return not _excluded(resolved, rootdir, venv_start=resolved.parent)
+
+
+def is_first_party_dir(dirname: str, rootdir: Path) -> bool:
+    """Whether `dirname` -- a directory the audit hook saw listed via `os.listdir`/`os.scandir`
+    (`_affected/audit.py`'s own `dir:` dependency, Non-code dependencies design section) -- is a
+    first-party directory under `rootdir`: the same exclusions `is_first_party` applies to a file,
+    minus the "must be a file" check its own name promises."""
+    if not dirname:
         return False
+    try:
+        resolved = Path(dirname).resolve()
+    except OSError:
+        return False
+    if not resolved.is_dir():
+        return False
+    rootdir = rootdir.resolve()
+    if not resolved.is_relative_to(rootdir):
+        return False
+    return not _excluded(resolved, rootdir, venv_start=resolved)
+
+
+def _excluded(resolved: Path, rootdir: Path, *, venv_start: Path) -> bool:
+    """Whether `resolved` -- already confirmed an existing path under `rootdir` -- sits somewhere
+    neither `is_first_party` nor `is_first_party_dir` may ever attribute to the project: under the
+    running interpreter's own prefix, under a nested venv, or under the cache dir. `venv_start` is
+    where `_venv_between`'s own upward walk begins: `resolved.parent` for a file (a file can't
+    itself hold a `pyvenv.cfg`, only its directory can), `resolved` itself for a directory --
+    `os.listdir()`ing a venv's own root, not just something inside one, must be excluded too."""
+    if CACHE_DIR_NAME in resolved.relative_to(rootdir).parts:
+        return True
     interpreter_roots = (sys.prefix, sys.base_prefix, sys.exec_prefix)
     if any(resolved.is_relative_to(Path(root).resolve()) for root in interpreter_roots):
-        return False
-    return not _venv_between(resolved.parent, rootdir)
+        return True
+    return _venv_between(venv_start, rootdir)
 
 
 def _venv_between(start: Path, stop: Path) -> bool:
