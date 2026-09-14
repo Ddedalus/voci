@@ -4,8 +4,8 @@ Re-run only the tests a change can reach. A `sys.monitoring` tracer records, per
 first-party functions, data files and environment variables it touched. The next run re-runs a
 test only when one of those no longer matches the tree.
 
-Status: design settled, not started. The final milestone replaces today's `--watch` with one
-built on this. Reference implementation: `oss/pytest-testmon`.
+Status: M1–M3 built, `--affected`/`--affected-verify` hidden until M4 lands. The final milestone
+replaces today's `--watch` with one built on this. Reference implementation: `oss/pytest-testmon`.
 
 ## Work done
 
