@@ -43,9 +43,9 @@ def test_affected_second_run_skips_an_unchanged_passing_test(
     # Nothing left to run: the whole file's only test decided SKIP, so candidate_files narrows
     # the file out of collection entirely -- nothing here ever reaches `select`, let alone
     # `collected`. exit_code_for's own "nothing collected at all" code would read that as 5,
-    # same as -k/-m narrowing to nothing -- but Selection.unaffected_count (a fact about the
-    # tree, not about what this run collected) tells _report_run this is a confirmed-unaffected
-    # run rather than a genuinely empty suite, so it exits 0 instead.
+    # same as -k/-m narrowing to nothing -- but Selection.unaffected_count_among (a fact about
+    # the tree, not about what this run collected) tells _report_run this is a confirmed-
+    # unaffected run rather than a genuinely empty suite, so it exits 0 instead.
     assert status == 0
     assert "0 selected · 1 unaffected" in out
 
@@ -132,12 +132,12 @@ def test_affected_only_reruns_the_test_whose_own_file_changed(
 def test_affected_unaffected_count_ignores_a_keyword_deselection(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`Selection.unaffected_count` is a fact about the tree, not about what this run's own `-k`
-    left for `select` to see: `-k` (`_collect.collect`'s own keyword_expr narrowing) deselects
-    `test_y` before `select` ever runs, since it decided `RUN` in the same file `-k` keeps for
-    `test_x`'s sake -- so a count built from `select`'s own `CollectionResult.deselected` would
-    miss `test_y` being unaffected entirely. `unaffected_count`, read straight from `Selection`,
-    doesn't."""
+    """`Selection.unaffected_count_among` is a fact about the tree, not about what this run's
+    own `-k` left for `select` to see: `-k` (`_collect.collect`'s own keyword_expr narrowing)
+    deselects `test_y` before `select` ever runs, since it decided `RUN` in the same file `-k`
+    keeps for `test_x`'s sake -- so a count built from `select`'s own
+    `CollectionResult.deselected` would miss `test_y` being unaffected entirely.
+    `unaffected_count_among`, read straight from `Selection`, doesn't."""
     project.write_pyproject("[tool.voci]\n")
     project.write(
         "test_a.py",
@@ -176,6 +176,25 @@ def test_affected_a_keyword_typo_still_exits_5_despite_an_unrelated_unaffected_t
 
     project.write("test_b.py", "async def test_b():\n    assert 1 == 1\n")  # test_b changes
     status = main(["--affected", "-k", "no_such_test_matches_nothing", str(project.root)])
+
+    assert status == 5
+
+
+def test_affected_collect_only_keyword_typo_still_exits_5_too(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`_finish_collect_only`'s own copy of the same rescue (`--collect-only`/`--co-json` never
+    reaches `_report_run`) needs the identical `narrowed_by_selection` guard, checked here
+    separately since it's a distinct code path with its own exit-status call."""
+    _dir_with_two_tests(project)
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    project.write("test_b.py", "async def test_b():\n    assert 1 == 1\n")  # test_b changes
+    status = main(
+        ["--affected", "--collect-only", "-k", "no_such_test_matches_nothing", str(project.root)]
+    )
 
     assert status == 5
 

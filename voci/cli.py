@@ -1502,16 +1502,11 @@ def _finish_collect_only(
     # Same fix as _report_run's own, for the same reason: --collect-only never reaches
     # run_suite, but candidate_files can still narrow a fully-unaffected file out before
     # collection sees it, and _collection_exit_status reads that the same way exit_code_for
-    # does -- "nothing collected" -- unless -k/-m/an id argument might also be why nothing's
-    # left, in which case this stays conservative and leaves the 5 alone.
-    if (
-        status == 5
-        and session.affected is not None
-        and not session.verify
-        and not session.prepared.narrowed_by_selection
-        and session.affected.selection.unaffected_count_among(discovered, rootdir=rootdir)
-    ):
-        return 0
+    # does -- "nothing collected".
+    if status == 5 and session.affected is not None:
+        unaffected = session.affected.selection.unaffected_count_among(discovered, rootdir=rootdir)
+        if _confirms_the_empty_selection(session, unaffected):
+            return 0
     return status
 
 
@@ -1684,6 +1679,25 @@ def _report_verify(
     print(summary)
 
 
+def _confirms_the_empty_selection(session: _RunSession, unaffected: int) -> bool:
+    """Whether `unaffected` (`Selection.unaffected_count_among`, scoped to `discovered`) is
+    trustworthy enough to rescue an exit code of 5 -- "nothing collected at all" -- back to 0:
+    shared by `_report_run` and `_finish_collect_only`'s own copy of the same question, since
+    `--collect-only`/`--co-json` never reaches `run_suite` but can hit the identical case.
+    `unaffected`'s scope is `discovered`, this run's own roots/patterns, not whatever `-k`/`-m`/
+    an id argument additionally narrowed within them -- so it can't tell "everything here is
+    unaffected" apart from "a keyword typo matched nothing, and something unrelated happens to
+    be unaffected". Only safe to trust when nothing else narrowed this run
+    (`not narrowed_by_selection`): with that too, the only way to an empty selection left is
+    `--affected`'s own. Always `False` for `--affected-verify`, which narrows nothing."""
+    return (
+        session.affected is not None
+        and not session.verify
+        and not session.prepared.narrowed_by_selection
+        and unaffected > 0
+    )
+
+
 def _report_affected_summary(collected: _collect.CollectionResult, unaffected: int) -> None:
     """Plain `--affected`'s own report, printed after `Reporter.finish`'s own totals: how many
     tests this run actually selected, against how many it confirmed unaffected and skipped --
@@ -1765,13 +1779,8 @@ def _report_run(
     # exit_code_for's 5 means "nothing collected at all" -- right for -k/-m narrowing to
     # nothing, wrong for plain --affected narrowing everything away because every one of them
     # was confirmed unaffected (often via candidate_files, before collection ever runs, so
-    # nothing here comes from collected itself). But `unaffected` is scoped to `discovered`,
-    # this run's own roots/patterns, not to whatever `-k`/`-m`/an id argument additionally
-    # narrowed -- so it can't tell "everything here is unaffected" apart from "a keyword typo
-    # matched nothing, and something unrelated happens to be unaffected". Only safe to trust
-    # when nothing else narrowed this run (`not narrowed_by_selection`): with that too, the
-    # only way to an empty selection left is --affected's own.
-    if code == 5 and plain_affected and not session.prepared.narrowed_by_selection and unaffected:
+    # nothing here comes from collected itself).
+    if code == 5 and _confirms_the_empty_selection(session, unaffected):
         return 0
     return code
 

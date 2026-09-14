@@ -147,11 +147,16 @@ def test_selection_unaffected_count_among_ignores_a_skip_outside_scope(tmp_path:
     built from a wider run, or a `voci --affected` invocation narrowed to a different subtree,
     must not let an unrelated confirmed-unaffected test elsewhere mask a genuinely empty
     selection."""
-    (tmp_path / "test_a.py").write_text("")
+    for name in ("test_a.py", "test_b.py"):
+        (tmp_path / name).write_text("")
     records_by_test = {
         "test_a.py::test_x": [_record(outcome="passed", checksum=b"\x01")],  # SKIP, out of scope
+        "test_b.py::test_y": [_record(outcome="passed", checksum=b"\x01")],  # SKIP, in scope
     }
     selection = Selection.of(records_by_test, _CURRENT)
+    # test_a.py's SKIP doesn't count even though test_b.py's, a decision of the same kind, does
+    # -- proving the exclusion is scope, not something wrong with SKIP counting in general.
+    assert selection.unaffected_count_among([tmp_path / "test_b.py"], rootdir=tmp_path) == 1
     assert selection.unaffected_count_among([], rootdir=tmp_path) == 0
 
 
