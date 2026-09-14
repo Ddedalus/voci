@@ -19,10 +19,16 @@ fallback) and, via `resolve_code`, maps a `CollectorRecord`'s bare `(filename, q
 back to those keys in the first place; `seeds.py` drives that per record, dropping one outright if
 it names a file that changed mid-run; `store.py` is where the resulting seeds are checksummed
 (`Fingerprints`, `module_checksum`) and stored (`store_record`, in a sqlite3 file shared across a
-repository's worktrees). Still to come: the session-end driver that calls all of the above for
-every finished test, the environment-key computation `store_record`'s `env_key` takes as an opaque
-string today, and the `--affected`/`--affected-verify` flags that read the store back; none of
-that exists yet, so the parent's own run still starts no `Tracer` of its own, and
+repository's worktrees) and read back (`load_records`). M3 "Selection and CLI" builds on that:
+`select.py`'s `decide` answers, per test, whether its most recent record still matches the tree's
+current checksums, and `Selection` holds every test's answer for `candidate_files` (which files
+are worth importing) and `select` (which of their tests actually run) to share --
+`_collection.lastfailed`'s own two-step shape, over the store instead of `LastRun`. Still to come:
+the session-start/end driver that builds a `World` over the whole tree, calls `store.checksums`
+against every stored key, and calls all of M1/M2 for every finished test; the environment-key
+computation `store_record`'s `env_key` takes as an opaque string today; and the
+`--affected`/`--affected-verify` flags that wire all of it together and read the store back. None
+of that exists yet, so the parent's own run still starts no `Tracer` of its own, and
 `cli._installed_session` doesn't call `threads.install` yet either.
 """
 

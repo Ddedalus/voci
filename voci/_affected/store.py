@@ -28,6 +28,12 @@ What still isn't here, because it isn't this bullet's job: the session-end drive
 finished test and hands the result to `store_record` (M3's CLI wiring), and the environment-key
 computation whose string `store_record` takes as an opaque `env_key` (M4, plus the Environment
 key design section).
+
+`load_records` is `store_record`'s read side, added for M3's "Narrow through
+`lastfailed.candidate_files`, then filter per test like `lastfailed.select`" bullet
+(`_affected/select.py`): the exact inverse of `_dep_set_ids`/`_group_path`/`_key_id`, decoding a
+stored `dep_set` row back into `DependencyKey -> checksum` so `select.decide` can compare it
+against the tree's current checksums.
 """
 
 from __future__ import annotations
@@ -51,9 +57,11 @@ from voci._affected.resolve import DefKey, DependencyKey, ModuleKey, NameKey, Wo
 
 __all__ = [
     "Fingerprints",
+    "StoredRecord",
     "build_fingerprints",
     "checksums",
     "close_store",
+    "load_records",
     "module_checksum",
     "open_store",
     "parsed_blocks",
@@ -544,3 +552,85 @@ def _prune_records(conn: sqlite3.Connection, env_id: int, test_id: str) -> bool:
 
 def _prune_orphan_dep_sets(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM dep_set WHERE id NOT IN (SELECT DISTINCT dep_set_id FROM record_dep)")
+
+
+# -- Reading records back --------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StoredRecord:
+    """One stored `record` row, decoded back into the dependency keys `store_record` was given
+    for it -- what `select.decide` compares against the tree's current checksums."""
+
+    outcome: str
+    untrusted: str | None
+    last_used: float
+    dep_checksums: Mapping[DependencyKey, bytes]
+
+
+def load_records(
+    conn: sqlite3.Connection, env_key: str, *, rootdir: Path
+) -> dict[str, list[StoredRecord]]:
+    """Every stored record for `env_key`, keyed by test id. A test id absent from the result has
+    no stored record under this environment at all -- a brand new test, or one only ever seen
+    under a different `env_key`.
+
+    One joined query for the whole environment, not one round trip per record: a store that has
+    accumulated many records (`_RECORDS_PER_TEST` keeps several per test, across every test the
+    suite has ever run under this environment) would otherwise make `--affected` pay a `record_dep`
+    join per row before a single test runs."""
+    row = conn.execute("SELECT id FROM env WHERE key = ?", (env_key,)).fetchone()
+    if row is None:
+        return {}
+    env_id = row[0]
+    rows = conn.execute(
+        "SELECT record.id, record.test_id, record.outcome, record.untrusted, record.last_used, "
+        "dep_set.path, dep_set.keyed_checksums "
+        "FROM record "
+        "LEFT JOIN record_dep ON record_dep.record_id = record.id "
+        "LEFT JOIN dep_set ON dep_set.id = record_dep.dep_set_id "
+        "WHERE record.env_id = ? "
+        "ORDER BY record.id",
+        (env_id,),
+    ).fetchall()
+    order: list[int] = []
+    by_record: dict[int, tuple[str, str, str | None, float, dict[DependencyKey, bytes]]] = {}
+    for record_id, test_id, outcome, untrusted, last_used, path, blob in rows:
+        if record_id not in by_record:
+            order.append(record_id)
+            by_record[record_id] = (test_id, outcome, untrusted, last_used, {})
+        if path is not None:
+            by_record[record_id][4].update(_decode_dep_set(path, json.loads(blob), rootdir))
+    out: dict[str, list[StoredRecord]] = {}
+    for record_id in order:
+        test_id, outcome, untrusted, last_used, dep_checksums = by_record[record_id]
+        out.setdefault(test_id, []).append(
+            StoredRecord(
+                outcome=outcome,
+                untrusted=untrusted,
+                last_used=last_used,
+                dep_checksums=dep_checksums,
+            )
+        )
+    return out
+
+
+def _decode_dep_set(
+    path: str, keyed: Mapping[str, str], rootdir: Path
+) -> dict[DependencyKey, bytes]:
+    """The inverse of `_group_path`/`_key_id`: `path` is either `module:<dotted>` (one synthetic
+    entry, always keyed `"module"`) or a file's own rootdir-relative -- or, for a file outside
+    `rootdir`, absolute -- location, holding `def:<qualname>`/`name:<name>` entries."""
+    if path.startswith("module:"):
+        dotted = path.removeprefix("module:")
+        return {ModuleKey(dotted): bytes.fromhex(hexval) for hexval in keyed.values()}
+    file_path = Path(path)
+    if not file_path.is_absolute():
+        file_path = rootdir / file_path
+    out: dict[DependencyKey, bytes] = {}
+    for key_id, hexval in keyed.items():
+        if key_id.startswith("def:"):
+            out[DefKey(file_path, key_id.removeprefix("def:"))] = bytes.fromhex(hexval)
+        elif key_id.startswith("name:"):
+            out[NameKey(file_path, key_id.removeprefix("name:"))] = bytes.fromhex(hexval)
+    return out
