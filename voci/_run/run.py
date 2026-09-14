@@ -43,7 +43,7 @@ import threading
 import time
 import traceback
 from collections import deque
-from collections.abc import Callable, Coroutine, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO, cast, final
@@ -1204,6 +1204,7 @@ def run_suite(
     unattributed_output: list[str] | None = None,
     on_result: Callable[[TestResult], None] | None = None,
     on_collector: Callable[[str, _collector.CollectorRecord], None] | None = None,
+    on_test_dependencies: Callable[[TestRecord, _collector.CollectorRecord], None] | None = None,
     on_interrupt: Callable[[], None] | None = None,
     loop_watchdog: float | None = _safety.DEFAULT_LOOP_WATCHDOG,
     teardown_grace: float = DEFAULT_TEARDOWN_GRACE,
@@ -1237,7 +1238,22 @@ def run_suite(
     was recording, never `None`, whether the test ran in this process or, via `@voci.isolated`,
     shipped one back from its own subprocess (`_isolated_worker.py`, `isolated.py`). This is
     `_isolated_worker`'s own call's hook for grabbing the one collector it cares about; nothing
-    else calls it yet (see the plan's M1, "Recording").
+    else calls it yet (see the plan's M1, "Recording"). `own` only -- a test's own setup/call/
+    teardown envelope -- never the module/session fixtures its plan reaches; `on_test_dependencies`
+    is where those join in.
+
+    `on_test_dependencies`, if given, is called once per test whose envelope actually produced a
+    `CollectorRecord` (the same tests `on_collector` sees, in no particular order, and only once
+    this whole call is otherwise done -- session-scope teardown included), with that test's own
+    `TestRecord` and the `CollectorRecord` `on_collector` would have reported, folded together with
+    every `module`/`session`-scope fixture in `record.plan.steps`' own finished collector
+    (`_di.ScopeStore.collectors_for`) -- rule 1 of the plan's "What a passing test depends on": "def
+    blocks its own collector recorded, plus those of each module/session fixture in
+    `record.plan.steps`". Deferred to the very end rather than fired alongside `on_result`/
+    `on_collector` because a shared fixture's own collector isn't finished -- teardown included --
+    until `ScopeStore.release`/`aclose` actually tears it down, which for a `module`-scope fixture
+    can be as late as its last test's own admission, and for `session` scope is always this call's
+    own final `store.aclose()`.
 
     `maxfail`, if given, stops the run once that many results have a failing outcome:
     tests not yet started are dropped, and every test still in flight is cancelled and
@@ -1291,6 +1307,13 @@ def run_suite(
     results: list[TestResult | None] = [None] * len(records)
     store = _di.ScopeStore()
 
+    # Populated by `_record_collector` below, only when `on_test_dependencies` actually wants it
+    # -- the merge it feeds happens once, after `store` has torn every fixture down (see that
+    # parameter's own docstring for why it can't happen any earlier).
+    finished_collectors: dict[str, _collector.CollectorRecord] = {}
+    wants_collectors = on_collector is not None or on_test_dependencies is not None
+    record_collector = _collector_recorder(on_collector, on_test_dependencies, finished_collectors)
+
     # install() is the first thing here that can fail and the first thing that mutates
     # process-global state, in that order: it resolves its one fallible step
     # (basetemp_root) before touching sys.stdout/sys.stderr/the log handler, so a
@@ -1342,7 +1365,7 @@ def run_suite(
                 executor=executor,
                 watchdog=watchdog,
                 on_result=on_result,
-                on_collector=on_collector,
+                on_collector=record_collector if wants_collectors else None,
                 maxfail=maxfail,
                 isolated=isolated,
                 already_isolated=already_isolated,
@@ -1435,6 +1458,13 @@ def run_suite(
         if still_stuck is not None:
             print(still_stuck, file=capture_setup.real_stderr, flush=True)
         _capture.uninstall()
+    # Only now, with `store.aclose()` above having torn every fixture down (module scope may
+    # have gone earlier, at its own last test's admission; session scope only just did, in that
+    # call), does `store.collectors_for` have anything to read -- see `on_test_dependencies`'s
+    # own docstring for why this can't happen any sooner.
+    if on_test_dependencies is not None:
+        _fire_test_dependencies(records, store, finished_collectors, on_test_dependencies)
+
     # Every dispatch_one task unconditionally sets results[index] as its final action once
     # its envelope returns, and that envelope's own contract is that it never raises
     # anything but KeyboardInterrupt/SystemExit -- so the only slots still None here are
@@ -1442,6 +1472,63 @@ def run_suite(
     # started reports CANCELLED and fills its slot. Dropping the rest keeps this list to
     # results that describe a test that actually ran, in logical order.
     return [result for result in results if result is not None]
+
+
+def _collector_recorder(
+    on_collector: Callable[[str, _collector.CollectorRecord], None] | None,
+    on_test_dependencies: object,
+    finished_collectors: dict[str, _collector.CollectorRecord],
+) -> Callable[[str, _collector.CollectorRecord], None]:
+    """`run_suite`'s own `_Session.on_collector`: relays to the caller's `on_collector`, if any,
+    and -- iff `on_test_dependencies` was given too -- stashes the raw record for
+    `_fire_test_dependencies` to fold fixture collectors into later. Split out from `run_suite`
+    itself purely to keep that function's own branching down; `on_test_dependencies` is typed
+    `object` here rather than repeating its real callable type, since this helper never calls it,
+    only tests it for `None`.
+    """
+
+    def record_collector(test_id: str, collector_record: _collector.CollectorRecord) -> None:
+        if on_collector is not None:
+            on_collector(test_id, collector_record)
+        if on_test_dependencies is not None:
+            finished_collectors[test_id] = collector_record
+
+    return record_collector
+
+
+def _fire_test_dependencies(
+    records: list[TestRecord],
+    store: _di.ScopeStore,
+    finished_collectors: dict[str, _collector.CollectorRecord],
+    on_test_dependencies: Callable[[TestRecord, _collector.CollectorRecord], None],
+) -> None:
+    """`run_suite`'s own `on_test_dependencies` pass, split out to keep that function's own
+    branching down: one call per test `finished_collectors` has an entry for, each folded
+    together with its plan's module/session fixture collectors via `store.collectors_for`."""
+    by_id = {record.id: record for record in records}
+    for test_id, collector_record in finished_collectors.items():
+        record = by_id[test_id]
+        fixture_records = store.collectors_for(
+            record.plan, test_id=test_id, module_path=str(record.path)
+        )
+        on_test_dependencies(record, _merge_collector_records(collector_record, fixture_records))
+
+
+def _merge_collector_records(
+    own: _collector.CollectorRecord, fixtures: Iterable[_collector.CollectorRecord]
+) -> _collector.CollectorRecord:
+    """`own` -- a test's own setup/call/teardown envelope -- folded together with every
+    module/session fixture in its plan that got a collector of its own (rule 1 of "What a passing
+    test depends on"). Untrusted is `own`'s reason if it has one, else the first fixture's with
+    one -- a stored record keeps a single reason, not a list, same as `Collector.mark_untrusted`
+    itself keeps only the first cause a collector is distrusted for."""
+    codes = set(own.codes)
+    untrusted = own.untrusted
+    for fixture_record in fixtures:
+        codes |= fixture_record.codes
+        if untrusted is None:
+            untrusted = fixture_record.untrusted
+    return _collector.CollectorRecord(codes=frozenset(codes), untrusted=untrusted)
 
 
 def _close_abandoned_tasks(loop: asyncio.AbstractEventLoop) -> None:
