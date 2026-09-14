@@ -83,7 +83,17 @@ dependencies, selection could skip a test it shouldn't.
       query per environment. Nothing calls any of this yet -- that's the session-start/end driver,
       next. `candidate_files`'s own soundness gap (a new test beside only-`SKIP` siblings) is in
       Failure modes.
-- [ ] `--affected` and its sibling `--affected-verify`. Report `N selected · M unaffected` as its
+- [ ] `--affected` and its sibling `--affected-verify`. In progress: `_di.runtime.ScopeStore.
+      collectors_for` and `_run.run.run_suite`'s new `on_test_dependencies` give the session-end
+      driver a test's fully-merged `CollectorRecord` (its own envelope plus every module/session
+      fixture in its plan) once a run is otherwise done; `_affected/world.py`'s `build_world` gives
+      it a `World` over the whole first-party tree for `store.checksums`. Still needed: starting a
+      real `Tracer` for the parent's own run (today only `@voci.isolated`'s subprocess starts
+      one, and its own inner `run_suite` call doesn't pass `on_test_dependencies` yet either);
+      calling `store.checksums`/`select.Selection.of` before collection; `seeds.seeds_for_record`/
+      `World.closure`/`store.checksums`/`store_record` after; a placeholder `env_key` until M4's
+      real one lands; and the CLI flags themselves, hidden from `--help` until M4 (see the M4 note
+      above). Report `N selected · M unaffected` as its
       own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
       reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
       the draft in `docs/reference/cli.md` and `docs/guide/affected.md`; regenerate the former's
