@@ -8,8 +8,9 @@ from pathlib import Path
 
 from voci._affected import driver, store
 from voci._affected.collector import CollectorRecord
-from voci._affected.resolve import DefKey, NameKey, World
-from voci._affected.select import Decision
+from voci._affected.resolve import DefKey, DependencyKey, NameKey, World
+from voci._affected.select import Decision, Selection
+from voci._affected.store import StoredRecord
 
 
 def _world(files: Mapping[str, str], root: Path) -> tuple[World, dict[Path, tuple[str, str]]]:
@@ -199,3 +200,42 @@ def test_record_test_stores_nothing_when_a_traced_file_changed_mid_run(tmp_path:
         assert store.load_records(conn, "env", rootdir=tmp_path) == {}
     finally:
         store.close_store(conn)
+
+
+# -- verify_prediction ---------------------------------------------------------------------------
+
+_VERIFY_KEY = NameKey(Path("/proj/app.py"), "x")
+_VERIFY_CURRENT: Mapping[DependencyKey, bytes] = {_VERIFY_KEY: b"\x01"}
+
+
+def _selection_predicting_skip() -> Selection:
+    records = {
+        "test_a.py::test_x": [
+            StoredRecord(
+                outcome="passed",
+                untrusted=None,
+                last_used=0.0,
+                dep_checksums={_VERIFY_KEY: b"\x01"},
+            )
+        ]
+    }
+    return Selection.of(records, _VERIFY_CURRENT)
+
+
+def test_verify_prediction_is_none_when_a_predicted_skip_stays_a_pass() -> None:
+    selection = _selection_predicting_skip()
+    assert driver.verify_prediction(selection, "test_a.py::test_x", "passed") is None
+
+
+def test_verify_prediction_reports_a_mismatch_when_a_predicted_skip_actually_failed() -> None:
+    selection = _selection_predicting_skip()
+    reason = driver.verify_prediction(selection, "test_a.py::test_x", "failed")
+    assert reason == "predicted a skip (recorded passing) -- this run: FAILED"
+
+
+def test_verify_prediction_is_none_for_a_test_predicted_to_run() -> None:
+    """Nothing to disagree with: --affected never promised to skip a test it predicted RUN for,
+    so no outcome of that test can mismatch here -- new tests included."""
+    selection = Selection.of({}, _VERIFY_CURRENT)
+    assert driver.verify_prediction(selection, "test_a.py::test_new", "failed") is None
+    assert driver.verify_prediction(selection, "test_a.py::test_new", "passed") is None

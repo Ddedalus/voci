@@ -14,10 +14,10 @@ from pathlib import Path
 from voci._affected.collector import CollectorRecord
 from voci._affected.resolve import DependencyKey, World
 from voci._affected.seeds import seeds_for_record
-from voci._affected.select import Selection
+from voci._affected.select import Decision, Selection
 from voci._affected.store import Fingerprints, checksums, load_records, store_record
 
-__all__ = ["FULL_RUN_NO_MATCHING_ENV", "prior_selection", "record_test"]
+__all__ = ["FULL_RUN_NO_MATCHING_ENV", "prior_selection", "record_test", "verify_prediction"]
 
 #: One of the Selection design section's three full-run reasons -- the other two (a missing or
 #: just-rebuilt store, no free `sys.monitoring` tool id) are the caller's own to report, straight
@@ -56,6 +56,24 @@ def prior_selection(
             keys.update(record.dep_checksums)
     current = checksums(conn, world, files, keys, rootdir=rootdir, fingerprints=fingerprints)
     return Selection.of(records_by_test, current), None
+
+
+def verify_prediction(selection: Selection, test_id: str, outcome: str) -> str | None:
+    """`--affected-verify`'s own comparison: `None` if `--affected` would have gotten `test_id`
+    right (it predicted `RUN`, which every outcome trivially satisfies, or it predicted `SKIP` and
+    `outcome` is `"passed"`, confirming the skip would have been safe); otherwise the mismatch
+    reason to report, in the docs' own wording ("predicted a skip (recorded passing) -- this run:
+    FAILED").
+
+    Only a predicted `SKIP` can ever mismatch: `Selection.decision_for` returning `RUN` is never
+    wrong to compare against an outcome, since `--affected` never promised to skip that test in
+    the first place -- there is nothing here for `RUN` to disagree with.
+    """
+    if selection.decision_for(test_id) is not Decision.SKIP:
+        return None
+    if outcome == "passed":
+        return None
+    return f"predicted a skip (recorded passing) -- this run: {outcome.upper()}"
 
 
 def record_test(

@@ -150,7 +150,7 @@ def test_affected_and_watch_together_is_a_usage_error(
     project.write_passing_test()
 
     assert main(["--watch", "--affected", str(project.root)]) == 4
-    assert "--watch --affected isn't supported yet" in capsys.readouterr().err
+    assert "--watch --affected" in capsys.readouterr().err
 
 
 def test_affected_collect_only_narrows_even_from_a_warm_collection_index(
@@ -202,3 +202,87 @@ def test_affected_closes_the_store_connection_even_when_prior_selection_raises(
         main(["--affected", str(project.root)])
 
     assert closed == [True]
+
+
+# --affected-verify: runs everything, but still predicts what --affected would have decided per
+# test and compares that against the real outcome.
+# --------------------------------------------------------------------------------------------
+
+
+def test_affected_verify_runs_everything_and_reports_no_mismatches_when_unchanged(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    status = main(["--affected-verify", str(project.root)])
+    out = capsys.readouterr().out
+
+    assert status == 0
+    assert "MISMATCH" not in out
+    assert "1 would have been skipped" in out
+    assert "full run:" not in out  # verify never narrows, so there's nothing to call a full run
+
+
+def test_affected_verify_runs_a_never_before_seen_test_with_nothing_to_predict(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    status = main(["--affected-verify", str(project.root)])
+    out = capsys.readouterr().out
+
+    assert status == 0
+    assert "MISMATCH" not in out
+    assert "0 would have been skipped" in out
+
+
+def test_affected_verify_reports_a_mismatch_when_an_unchanged_test_flips_outcome(
+    project: Project, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test reading something --affected doesn't track (an env var -- M4's own job) can change
+    outcome without its own code changing at all: exactly the gap `--affected-verify` exists to
+    catch, per the docs draft's own reasoning (an earlier test's state, timing, randomness, a
+    network call...)."""
+    project.write_pyproject("[tool.voci]\n")
+    project.write(
+        "test_a.py",
+        "import os\n\nasync def test_x():\n    assert os.environ.get('SHOULD_FAIL') != '1'\n",
+    )
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setenv("SHOULD_FAIL", "1")
+    status = main(["--affected-verify", str(project.root)])
+    out = capsys.readouterr().out
+
+    assert status == 1  # the test really did fail this run
+    assert "MISMATCH  test_a.py::test_x" in out
+    assert "predicted a skip (recorded passing) -- this run: FAILED" in out
+    assert "1 would have been skipped" in out
+    assert "1 mismatch" in out
+
+
+def test_affected_verify_rejects_combination_with_affected(project: Project) -> None:
+    project.write_passing_test()
+    assert main(["--affected", "--affected-verify", str(project.root)]) == 4
+
+
+def test_affected_verify_rejects_combination_with_lf(project: Project) -> None:
+    project.write_passing_test()
+    assert main(["--affected-verify", "--lf", str(project.root)]) == 4
+
+
+def test_affected_verify_and_watch_together_is_a_usage_error(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project.write_pyproject("[tool.voci]\n")
+    project.write_passing_test()
+
+    assert main(["--watch", "--affected-verify", str(project.root)]) == 4
+    assert "--watch --affected" in capsys.readouterr().err

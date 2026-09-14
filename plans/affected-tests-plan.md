@@ -83,19 +83,24 @@ dependencies, selection could skip a test it shouldn't.
       query per environment. Nothing calls any of this yet -- that's the session-start/end driver,
       next. `candidate_files`'s own soundness gap (a new test beside only-`SKIP` siblings) is in
       Failure modes.
-- [ ] `--affected` and its sibling `--affected-verify`. `--affected` itself is wired end to end
-      and working, `cli.py`, `help=argparse.SUPPRESS`-hidden until M4: `main` opens the store,
-      builds a `World`, and computes a `Selection` before collection (`_prepare_affected`), opens
-      a real `Tracer` around collection and the run (`tracing.traced`), narrows
-      `candidate_files`/`select` the same way `--lf` does, and records every finished test's
-      dependency closure afterward (`_execute_suite`'s `on_test_dependencies`, bound through
-      `_record_test_dependencies` to `driver.record_test`). A Tracer that can't claim a tool id
-      disables both narrowing and recording for that run (`session.affected` stays unset) rather
-      than risk storing a vacuous, always-matching dependency set -- the "no tool id is free" full
-      run reason exists for exactly this. Eight end-to-end tests in `tests/test_cli_affected.py`
-      cover a first run, an unchanged second run skipping its only test, a changed test rerunning,
-      a still-failing test always rerunning, and the store's on-disk location. Still needed:
-      `--affected-verify`; the `N selected · M unaffected`/`full run: <reason>` summary line
+- [ ] `--affected` and its sibling `--affected-verify`. Both are wired end to end and working,
+      `cli.py`, `help=argparse.SUPPRESS`-hidden until M4: `main` opens the store, builds a
+      `World`, and computes a `Selection` before collection (`_prepare_affected`), opens a real
+      `Tracer` around collection and the run (`tracing.traced`), and -- for plain `--affected`
+      only, gated on `session.verify` -- narrows `candidate_files`/`select` the same way `--lf`
+      does. Both modes record every finished test's dependency closure afterward
+      (`_execute_suite`'s `on_test_dependencies`, bound through `_record_test_dependencies` to
+      `driver.record_test`); `--affected-verify` additionally checks `driver.verify_prediction`
+      against each real outcome as it's known and prints a `MISMATCH` block plus a `would have
+      been skipped` count (`_report_verify`). A Tracer that can't claim a tool id disables
+      narrowing and recording/verifying alike for that run (`session.affected` stays unset)
+      rather than risk storing a vacuous, always-matching dependency set -- the "no tool id is
+      free" full run reason exists for exactly this. `tests/test_cli_affected.py` covers both
+      flags end to end: a first run, an unchanged second run skipping/verifying its only test, a
+      changed test rerunning, a still-failing test always rerunning, a genuine `--affected-verify`
+      mismatch (an env var flips a test's outcome without its code changing), the store's on-disk
+      location, and every new-flag usage error (`--watch`, `--lf`, combining the two siblings).
+      Still needed: the `N selected · M unaffected` summary line for plain `--affected`
       (`select.select()` currently folds an unaffected test into the same `deselected` count `-k`/
       `-m` use, so a fully-skipped run exits 5 same as a genuinely empty suite -- distinguishing
       the two needs a count carried alongside `CollectionResult`, not read back out of it); and

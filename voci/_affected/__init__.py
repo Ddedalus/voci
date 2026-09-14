@@ -32,20 +32,24 @@ criterion, not just `discover_files`' `ignore_dirs`) into the `World`/`files` ma
 `module`/`session`-scope fixture its plan reaches (`_di.runtime.ScopeStore.collectors_for`), once
 a run is otherwise done -- `@voci.isolated`'s own subprocess (`_isolated_worker.py`) passes this
 too, over its own fresh `ScopeStore`, so an isolated test's shipped record has the same shape as
-an in-process one's; `driver.py`'s `prior_selection`/`record_test` are the calls into
-`select.py`/`seeds.py`/`store.py` those two feed; `environment.py`'s `placeholder_env_key` is a
-deliberately coarse stand-in for M4's real environment key (too coarse only costs extra full runs,
+an in-process one's; `driver.py`'s `prior_selection`/`record_test`/`verify_prediction` are the
+calls into `select.py`/`seeds.py`/`store.py` those feed; `environment.py`'s `placeholder_env_key`
+is a deliberately coarse stand-in for M4's real environment key (too coarse costs extra full runs,
 never an unsound skip); `tracing.py`'s `traced` is a `Tracer`'s start/stop lifetime as a context
-manager. `cli.py` now wires all of it into `main`, behind a `--affected` flag that's
-`argparse.SUPPRESS`-hidden until M4: `_prepare_affected` opens the store/`World`/`Selection`
-before collection, `traced` wraps collection and the run, `_collect_and_narrow` applies
-`candidate_files`/`select` the same way it already does for `--lf`, and `_execute_suite`'s
-`on_test_dependencies` (bound through `_record_test_dependencies`) calls `record_test` per
-finished test. A `Tracer` that can't claim a tool id disables both narrowing and recording for
-that run rather than risk storing a vacuous, always-matching dependency set. Still missing:
-`--affected-verify`; the `N selected · M unaffected` summary line docs draft (today a fully-
-skipped run just exits 5, same as a genuinely empty suite); and unhiding the flags once M4 lands.
-`cli._installed_session` doesn't call `threads.install` yet either.
+manager. `cli.py` now wires all of it into `main`, behind `--affected` and its sibling
+`--affected-verify`, both `argparse.SUPPRESS`-hidden until M4: `_prepare_affected` opens the
+store/`World`/`Selection` before collection (either flag), `traced` wraps collection and the run,
+`_collect_and_narrow` applies `candidate_files`/`select` the same way it already does for `--lf`
+-- but only for plain `--affected` (`session.verify` gates it off, since `--affected-verify` runs
+everything) -- and `_execute_suite`'s `on_test_dependencies` (bound through
+`_record_test_dependencies`) calls `record_test` per finished test either way.
+`--affected-verify` additionally checks `verify_prediction` against each real outcome as it's
+known and reports any mismatch (`_report_verify`). A `Tracer` that can't claim a tool id disables
+narrowing and recording/verifying alike for that run rather than risk storing a vacuous,
+always-matching dependency set. Still missing: the `N selected · M unaffected` summary line for
+plain `--affected` (today a fully-skipped run just exits 5, same as a genuinely empty suite); and
+unhiding the flags once M4 lands. `cli._installed_session` doesn't call `threads.install` yet
+either.
 """
 
 from __future__ import annotations
