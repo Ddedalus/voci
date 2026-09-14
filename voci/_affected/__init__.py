@@ -30,12 +30,18 @@ turned into the `World`/`files` mapping `store.checksums` and `seeds.seeds_for_r
 `_run.run.run_suite`'s `on_test_dependencies` is the other piece already landed: a test's own
 `CollectorRecord`, folded together with every `module`/`session`-scope fixture its plan reaches
 (`_di.runtime.ScopeStore.collectors_for`), once the whole run -- session teardown included -- is
-otherwise done. Still to come: calling `store.checksums` against every stored key before a run,
-`seeds.seeds_for_record`/`World.closure`/`store.checksums`/`store_record` for every finished test
-after one, the environment-key computation `store_record`'s `env_key` takes as an opaque string
-today, and the `--affected`/`--affected-verify` flags that wire all of it together and read the
-store back. None of that exists yet, so the parent's own run still starts no `Tracer` of its own,
-and `cli._installed_session` doesn't call `threads.install` yet either.
+otherwise done. `driver.py` is the session-start/end driver itself: `prior_selection` builds a
+`Selection` against a stored `env_key`, or names `FULL_RUN_NO_MATCHING_ENV` if that environment
+has nothing stored yet; `record_test` runs `seeds.seeds_for_record`/`World.closure`/
+`store.checksums`/`store_record` for one finished test, skipping a CANCELLED outcome (which never
+got to say anything about the code under test) or a record `seeds_for_record` itself dropped.
+Still to come: starting a real `Tracer` around the parent's own run (today only `@voci.isolated`'s
+subprocess starts one, and its own inner `run_suite` call doesn't pass `on_test_dependencies`
+either); the environment-key computation `driver.py`'s `env_key` takes as an opaque string today
+(M4's real one, replacing a placeholder); and the `--affected`/`--affected-verify` flags
+themselves, wiring all of it into `cli.py`. None of that exists yet, so the parent's own run still
+starts no `Tracer` of its own, and `cli._installed_session` doesn't call `threads.install` yet
+either.
 """
 
 from __future__ import annotations

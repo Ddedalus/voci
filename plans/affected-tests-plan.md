@@ -87,12 +87,13 @@ dependencies, selection could skip a test it shouldn't.
       collectors_for` and `_run.run.run_suite`'s new `on_test_dependencies` give the session-end
       driver a test's fully-merged `CollectorRecord` (its own envelope plus every module/session
       fixture in its plan) once a run is otherwise done; `_affected/world.py`'s `build_world` gives
-      it a `World` over the whole first-party tree for `store.checksums`. Still needed: starting a
-      real `Tracer` for the parent's own run (today only `@voci.isolated`'s subprocess starts
-      one, and its own inner `run_suite` call doesn't pass `on_test_dependencies` yet either);
-      calling `store.checksums`/`select.Selection.of` before collection; `seeds.seeds_for_record`/
-      `World.closure`/`store.checksums`/`store_record` after; a placeholder `env_key` until M4's
-      real one lands; and the CLI flags themselves, hidden from `--help` until M4 (see the M4 note
+      it a `World` over the whole first-party tree for `store.checksums`; `_affected/driver.py`'s
+      `prior_selection`/`record_test` are the actual session-start/end calls over `select.py`/
+      `seeds.py`/`store.py`, both tested in isolation. Still needed: starting a real `Tracer` for
+      the parent's own run (today only `@voci.isolated`'s subprocess starts one, and its own inner
+      `run_suite` call doesn't pass `on_test_dependencies` yet either); a placeholder `env_key`
+      until M4's real one lands; and the CLI flags themselves, hidden from `--help` until M4 (see
+      the M4 note
       above). Report `N selected · M unaffected` as its
       own label, because `deselected` already means `-k`/`-m`, plus `full run: <reason>`; verify
       reports `N would have been skipped` plus a named `MISMATCH` line per disagreement. Matches
