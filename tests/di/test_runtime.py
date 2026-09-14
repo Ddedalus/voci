@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from types import CodeType
 from typing import cast
 
 import pytest
@@ -14,7 +15,15 @@ from _support import run_async as run
 import voci
 from voci import Depends
 from voci._affected import collector as _collector
-from voci._di.fixtures import BuiltinContext, Fixture, Scope, expand_cases, plan_for
+from voci._di.fixtures import (
+    BuiltinContext,
+    Fixture,
+    PlanStep,
+    ResolutionPlan,
+    Scope,
+    expand_cases,
+    plan_for,
+)
 from voci._di.runtime import ScopeStore, _construct, key_for, setup, teardown
 
 #: `_construct`'s tests below exercise ordinary (non-provider-backed) fixtures directly, so the
@@ -846,3 +855,113 @@ def test_session_scope_teardown_via_aclose_uses_its_own_collector_with_no_ambien
     run(scenario())
     assert seen["build"] is not None
     assert seen["build"] is seen["teardown"]
+
+
+# ScopeStore.collectors_for: the affected-test session driver's own read of a module/session
+# entry's finished collector, once `release`/`aclose` has torn it down and so deleted it from
+# `self._entries` (`plans/affected-tests-plan.md`, "What a passing test depends on", rule 1).
+# ------------------------------------------------------------------------------------------
+
+
+def test_collectors_for_is_empty_until_the_entry_is_actually_torn_down() -> None:
+    """A live entry's collector isn't reachable here yet -- `collectors_for` is meant to be
+    called once, after the whole run, not raced against a still-running one."""
+
+    async def build() -> tuple[str, None]:
+        return "value", None
+
+    fx = voci.fixture(scope="module")(lambda: None)
+    step = PlanStep(step_id=0, fixture=fx, args=())
+    plan = ResolutionPlan(steps=(step,), root_args=())
+
+    async def scenario() -> list[_collector.CollectorRecord]:
+        store = ScopeStore()
+        key = key_for(fx, step.step_id, test_id="t.py::test_a", module_path="t.py")
+        await store.acquire(key, "module", fx, build)
+        try:
+            return store.collectors_for(plan, test_id="t.py::test_a", module_path="t.py")
+        finally:
+            await store.release(key)
+
+    assert run(scenario()) == []
+
+
+def test_collectors_for_merges_construction_and_teardown_after_release() -> None:
+    """The record `release` snapshots covers what ran during both the fixture's own build and its
+    closer -- the same "one collector for construction and teardown" contract
+    `test_module_scope_fixture_uses_the_same_collector_for_construction_and_teardown` checks by
+    identity, read back here through `collectors_for` instead."""
+
+    async def build() -> tuple[str, Callable[[], Awaitable[None]]]:
+        current = _collector.current_collector.get()
+        assert current is not None
+        current.record(cast(CodeType, build.__code__))
+
+        async def closer() -> None:
+            inner = _collector.current_collector.get()
+            assert inner is not None
+            inner.record(cast(CodeType, closer.__code__))
+
+        return "value", closer
+
+    fx = voci.fixture(scope="module")(lambda: None)
+    step = PlanStep(step_id=0, fixture=fx, args=())
+    plan = ResolutionPlan(steps=(step,), root_args=())
+
+    async def scenario() -> list[_collector.CollectorRecord]:
+        store = ScopeStore()
+        key = key_for(fx, step.step_id, test_id="t.py::test_a", module_path="t.py")
+        await store.acquire(key, "module", fx, build)
+        await store.release(key)
+        return store.collectors_for(plan, test_id="t.py::test_a", module_path="t.py")
+
+    found = run(scenario())
+    assert len(found) == 1
+    assert found[0].untrusted is None
+    assert len(found[0].codes) == 2
+
+
+def test_collectors_for_reads_a_session_scope_entrys_record_after_aclose() -> None:
+    fx = voci.fixture(scope="session")(lambda: None)
+    step = PlanStep(step_id=0, fixture=fx, args=())
+    plan = ResolutionPlan(steps=(step,), root_args=())
+
+    async def build() -> tuple[str, None]:
+        current = _collector.current_collector.get()
+        assert current is not None
+        current.record(cast(CodeType, build.__code__))
+        return "value", None
+
+    async def scenario() -> list[_collector.CollectorRecord]:
+        store = ScopeStore()
+        key = key_for(fx, step.step_id, test_id="t.py::test_a", module_path="t.py")
+        await store.acquire(key, "session", fx, build)
+        assert store.collectors_for(plan, test_id="t.py::test_a", module_path="t.py") == []
+        await store.aclose()
+        return store.collectors_for(plan, test_id="t.py::test_a", module_path="t.py")
+
+    found = run(scenario())
+    assert len(found) == 1
+    assert len(found[0].codes) == 1
+
+
+@pytest.mark.parametrize("scope", ["function", "call"])
+def test_collectors_for_skips_function_or_call_scope_steps(scope: str) -> None:
+    """Neither scope gets a collector of its own (`_Entry.collector`'s own docstring) -- a plan
+    step at either one is simply not this method's business, whatever `self._entries` holds."""
+
+    async def build() -> tuple[str, None]:
+        return "value", None
+
+    fx = voci.fixture(scope=cast(Scope, scope))(lambda: None)
+    step = PlanStep(step_id=0, fixture=fx, args=())
+    plan = ResolutionPlan(steps=(step,), root_args=())
+
+    async def scenario() -> list[_collector.CollectorRecord]:
+        store = ScopeStore()
+        key = key_for(fx, step.step_id, test_id="t.py::test_a", module_path="t.py")
+        await store.acquire(key, cast(Scope, scope), fx, build)
+        await store.release(key)
+        return store.collectors_for(plan, test_id="t.py::test_a", module_path="t.py")
+
+    assert run(scenario()) == []

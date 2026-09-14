@@ -122,6 +122,13 @@ class ScopeStore:
 
     def __init__(self) -> None:
         self._entries: dict[CacheKey, _Entry] = {}
+        self._finished_collectors: dict[CacheKey, _collector.CollectorRecord] = {}
+        """A `module`/`session`-scope entry's own collector, snapshotted the moment that entry is
+        actually torn down -- `release` and `aclose` are also where `self._entries` drops the key,
+        so this is the only place left afterward to ask what one of them saw. Never shrinks: a key
+        deleted from `self._entries` stays answerable here for the rest of the store's life, which
+        is what lets `collectors_for` be called once, after the whole run (session teardown
+        included), rather than racing each fixture's own teardown to read it first."""
 
     async def acquire(
         self,
@@ -232,6 +239,8 @@ class ScopeStore:
                 with _construction_context(entry):
                     await entry.closer()
         finally:
+            if entry.collector is not None:
+                self._finished_collectors[key] = entry.collector.finish()
             del self._entries[key]
 
     async def aclose(self) -> None:
@@ -246,11 +255,12 @@ class ScopeStore:
         errors: list[BaseException] = []
         for key in reversed(list(self._entries)):
             entry = self._entries.pop(key, None)
-            if entry is None or entry.closer is None:
+            if entry is None:
                 continue
             try:
-                with _construction_context(entry):
-                    await entry.closer()
+                if entry.closer is not None:
+                    with _construction_context(entry):
+                        await entry.closer()
             except (Exception, Skipped, Failed) as exc:
                 # `Exception`, not `BaseException`: a KeyboardInterrupt/SystemExit/CancelledError
                 # raised by a closer must propagate immediately rather than being folded into the
@@ -260,8 +270,47 @@ class ScopeStore:
                 # can't swallow them -- but a teardown raising one is an ordinary teardown
                 # failure, not an interrupt, and folds in here alongside it explicitly.
                 errors.append(exc)
+            finally:
+                # Same snapshot-on-delete as `release`, after the closer -- construction plus
+                # teardown both recorded -- rather than before it.
+                if entry.collector is not None:
+                    self._finished_collectors[key] = entry.collector.finish()
         if errors:
             raise BaseExceptionGroup("session-scope teardown", errors)
+
+    def collectors_for(
+        self, plan: ResolutionPlan, *, test_id: str, module_path: str
+    ) -> list[_collector.CollectorRecord]:
+        """The finished `CollectorRecord` of every `module`/`session`-scope fixture in `plan.steps`
+        -- the affected-test seed computation's own reading of Tracer's "Which collector" bullet
+        ("A module/session fixture gets its own collector around construction and teardown") and
+        the plan's "What a passing test depends on", rule 1 ("def blocks its own collector
+        recorded, plus those of each module/session fixture in `record.plan.steps`").
+
+        Meant to be called once per test, after the whole run -- session teardown included, so
+        every entry this plan could reach has already had its chance to land in
+        `_finished_collectors` -- never mid-run, when a step's entry may still be alive in
+        `self._entries` and so absent here. `function`/`call`-scope steps have no collector of
+        their own (`_Entry.collector`'s own docstring) and are skipped, same as an entry this test
+        never actually reached (a step behind a `Depends(...)` this particular case's plan doesn't
+        specialize into) or whose key this store never saw at all (a plan built but never `setup`)
+        -- both look the same here: nothing to add.
+        """
+        found = []
+        for step in plan.steps:
+            if step.fixture.scope not in ("module", "session"):
+                continue
+            key = key_for(
+                step.fixture,
+                step.step_id,
+                test_id=test_id,
+                module_path=module_path,
+                param_key=step.case_key or None,
+            )
+            record = self._finished_collectors.get(key)
+            if record is not None:
+                found.append(record)
+        return found
 
 
 async def setup(
