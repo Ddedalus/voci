@@ -160,6 +160,26 @@ def test_affected_unaffected_count_ignores_a_keyword_deselection(
     assert "1 selected · 1 unaffected" in out
 
 
+def test_affected_a_keyword_typo_still_exits_5_despite_an_unrelated_unaffected_test(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `-k` pattern matching nothing is a real usage mistake `exit_code_for` flags with exit
+    5; an unrelated test elsewhere being confirmed unaffected must not mask that.
+    `unaffected_count_among`'s scope is `discovered`, this run's own roots/patterns, not what
+    `-k` additionally narrowed within them, so it can't by itself tell a real typo apart from
+    "everything here decided SKIP" -- `narrowed_by_selection` is what keeps the exit-code
+    rescue from firing whenever `-k`/`-m`/an id argument are also in play."""
+    _dir_with_two_tests(project)
+
+    assert main(["--affected", str(project.root)]) == 0
+    capsys.readouterr()
+
+    project.write("test_b.py", "async def test_b():\n    assert 1 == 1\n")  # test_b changes
+    status = main(["--affected", "-k", "no_such_test_matches_nothing", str(project.root)])
+
+    assert status == 5
+
+
 def test_affected_ignores_git_common_dir_and_reuses_a_store_under_a_worktree(
     project: Project,
 ) -> None:
@@ -206,7 +226,9 @@ def test_affected_collect_only_narrows_even_from_a_warm_collection_index(
 
     # The collection index is warm (both runs above collected this same file), so without the
     # fast-path fix this would answer from the index unnarrowed and print the test id anyway.
-    assert status == 5  # nothing left to run: the fast path was skipped and real narrowing applied
+    # The fast path was skipped and real narrowing applied -- nothing left to run, confirmed
+    # unaffected rather than a genuinely empty suite, so this exits 0 rather than 5.
+    assert status == 0
 
 
 def test_affected_closes_the_store_connection_even_when_prior_selection_raises(

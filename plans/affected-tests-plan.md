@@ -102,14 +102,16 @@ dependencies, selection could skip a test it shouldn't.
       location, and every new-flag usage error (`--watch`, `--lf`, combining the two siblings).
       The `N selected · M unaffected` summary line for plain `--affected` is in too
       (`_report_affected_summary`, `Selection.unaffected_count_among`), and with it the exit-code
-      fix: a fully-unaffected run used to exit 5, same as a genuinely empty suite, since
-      `candidate_files` narrows a wholly-`SKIP` file out before `select` ever sees it, so a count
-      built from `select`'s own `CollectionResult.deselected` couldn't tell the two apart --
-      `unaffected_count_among` reads `Selection` directly instead, scoped to what this run's own
-      roots/patterns discovered (a first pass read `decisions` unscoped, over the whole stored
-      environment, which a code review caught: a `voci --affected <narrow path>` run would count
-      an unrelated `SKIP` test outside that path). `tests/test_cli_affected.py` and
-      `tests/affected/test_select.py` cover both.
+      fix, in both `_report_run` and `_finish_collect_only`: a fully-unaffected run used to exit
+      5, same as a genuinely empty suite, since `candidate_files` narrows a wholly-`SKIP` file
+      out before `select` ever sees it, so a count built from `select`'s own
+      `CollectionResult.deselected` couldn't tell the two apart. `unaffected_count_among` reads
+      `Selection` directly instead, scoped to `discovered` -- this run's own roots/patterns, the
+      same set `candidate_files` works from -- and the rescue only fires when
+      `not narrowed_by_selection` too, since a `-k`/`-m`/id argument can itself be why nothing
+      matched, which `unaffected_count_among`'s scope alone can't tell apart from a confirmed
+      -unaffected run. `tests/test_cli_affected.py` and `tests/affected/test_select.py` cover
+      both.
       Still needed: unhiding the flags once M4 lands. Two review passes each caught and fixed a
       real bug (a leaked store connection, then a Ctrl-C escaping ungracefully); open,
       non-blocking style feedback from the second pass, worth a look before unhiding rather than
