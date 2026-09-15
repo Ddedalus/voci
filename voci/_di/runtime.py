@@ -13,7 +13,7 @@ A `module`/`session`-scope entry also gets its own affected-test collector (`_En
 `_construction_context`), current for its construction in `acquire` and its later teardown in
 `release`/`aclose` — whichever test's task those happen to run on. `function`/`call` scope needs
 none of its own: both only ever run inside the one test's envelope that owns them, whose collector
-is already current (see `plans/affected-tests-plan.md`, Tracer's "Which collector").
+is already current.
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ class ScopeStore:
                     raise
                 entry.closer = closer
                 entry.future.set_result(value)
-            # Refcount reserved before awaiting, not after — see plans/rationale/di.md ("refcount
+            # Refcount reserved before awaiting, not after — see rationale/di.md ("refcount
             # is reserved before the await") for the race this ordering closes.
             entry.refcount += 1
             try:
@@ -330,7 +330,7 @@ async def setup(
     that list.
 
     `partial_module_keys`, if given, is where already-acquired `module`-scope keys go instead of
-    being released immediately on failure — see `plans/rationale/run.md` ("module-scope fixtures
+    being released immediately on failure — see `rationale/run.md` ("module-scope fixtures
     are released by the suite") for why `module` scope needs this and the other three don't.
     """
     # One `BuiltinContext` per `setup()` call, not per step: every step of the same test's plan

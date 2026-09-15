@@ -1,5 +1,5 @@
 """`voci._affected.environment.placeholder_env_key`: the M3 stand-in for M4's real environment
-key (`plans/affected-tests-plan.md`, Environment key design section)."""
+key."""
 
 from __future__ import annotations
 

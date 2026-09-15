@@ -1,5 +1,5 @@
 """`voci._affected.store`: the git-common-dir location, schema, parse cache, checksum
-computation and record storage (`plans/affected-tests-plan.md`, M2's "store.py" bullet)."""
+computation and record storage."""
 
 from __future__ import annotations
 

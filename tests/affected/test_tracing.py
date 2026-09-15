@@ -1,6 +1,4 @@
-"""`voci._affected.tracing.traced`: a `Tracer`'s lifetime as a context manager
-(`plans/affected-tests-plan.md`, M3's still-missing "a real Tracer around the parent's own run"
-bullet)."""
+"""`voci._affected.tracing.traced`: a `Tracer`'s lifetime as a context manager."""
 
 from __future__ import annotations
 

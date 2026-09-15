@@ -39,7 +39,7 @@ Adjust the level of detail to the complexity of the task. Assume the user rememb
 > ## Next step
 > Phase 4: coverage implementation <link to plan>
 > ## Problems detected
-> Linter fails in worktree that is git-ignored. I run it on the main checkout and added a fix request to ROADMAP.md.
+> Linter fails in worktree that is git-ignored. I run it on the main checkout and added a fix request to the plan repo's ROADMAP.md.
 
 That is it, it's really enough. Only discuss details that actually require me to change course.
 
@@ -49,4 +49,4 @@ Generally you're autonomous and you will have to solve any problem in this works
 
 1. If the problem is blocking your task, spawn a sub-agent to solve it and merge into main, following usual protocol, but make sure to stay in the same worktree.
 2. If the problem is not blocking but vaguely related to your task, solve it if you have capacity, with a subagent.
-3. If the problem is not blocking and not related to your task, add an entry in ROADMAP.md and reference it in final answer.
+3. If the problem is not blocking and not related to your task, add an entry in the plan repo's ROADMAP.md and reference it in final answer.

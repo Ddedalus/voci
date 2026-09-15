@@ -119,7 +119,7 @@ def resolve(explicit_paths: Sequence[Path]) -> Config:
     `tests/unit` gives that invocation a second cache in a second id namespace. A `--lf` then
     reads an empty cache, which means "nothing recorded" — indistinguishable from "your recorded
     failures are all outside this selection", the one state `--lf` reports as a clean exit `0`.
-    See `plans/rationale/cache.md`.
+    See `rationale/cache.md`.
 
     Finding neither, the `.git` the walk stops at is recorded as `git_root` but does not anchor
     `rootdir`: it bounds the search without saying anything about where a suite's imports are

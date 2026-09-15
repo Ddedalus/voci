@@ -1,5 +1,4 @@
-"""A stand-in `env_key` for `driver.py`'s `store_record` calls, until M4 builds the real one
-(`plans/affected-tests-plan.md`, Environment key design section).
+"""A stand-in `env_key` for `driver.py`'s `store_record` calls, until M4 builds the real one.
 
 The real key covers interpreter implementation/version/platform, every entry-point group queried
 during the run, the resolved `[tool.voci]` plus `-W`/`--timeout`/concurrency/assert mode,

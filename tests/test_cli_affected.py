@@ -1,5 +1,5 @@
-"""`voci.cli.main`'s hidden `--affected` flag, end to end -- M3's CLI wiring
-(`plans/affected-tests-plan.md`). The flag is `argparse.SUPPRESS`-hidden until M4, so these are
+"""`voci.cli.main`'s hidden `--affected` flag, end to end -- M3's CLI wiring.
+The flag is `argparse.SUPPRESS`-hidden until M4, so these are
 the only tests exercising it at all; unit coverage for the pieces it wires together
 (`_di.runtime.ScopeStore.collectors_for`, `_run.run.run_suite`'s `on_test_dependencies`,
 `_affected/{world,driver,environment,tracing}.py`) lives in their own test modules.

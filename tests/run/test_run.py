@@ -379,10 +379,9 @@ def test_session_scope_fixture_is_torn_down_at_end_of_run() -> None:
     assert torn_down == ["db"]
 
 
-# Collectors: run_envelope makes a fresh, per-test collector current for a test's whole envelope
-# (`plans/affected-tests-plan.md`, Tracer's "Which collector" bullet); a module/session-scope
-# fixture built or torn down along the way gets its own instead (`_di.runtime` covers that half
-# directly -- these are the end-to-end proof through `run_suite`).
+# Collectors: run_envelope makes a fresh, per-test collector current for a test's whole envelope;
+# a module/session-scope fixture built or torn down along the way gets its own instead
+# (`_di.runtime` covers that half directly -- these are the end-to-end proof through `run_suite`).
 # ------------------------------------------------------------------------------------------
 
 
@@ -1506,7 +1505,7 @@ def test_run_suite_rejects_non_positive_or_non_finite_timeout(bad: float) -> Non
 def test_run_suite_rejects_an_isolated_record_without_isolated_config() -> None:
     """`@voci.isolated`'s subprocess needs a rootdir to re-collect from -- run_suite refuses to
     silently run it in-process instead of raising, which is exactly the bug this mark used to
-    have (ROADMAP.md, before the subprocess tier existed)."""
+    have, before the subprocess tier existed."""
 
     @voci.isolated
     async def test_func() -> None:

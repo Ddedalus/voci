@@ -1,6 +1,6 @@
 # Per-statement (name-level) module dependencies: analyzer, soundness cases, precision on fastapi/httpx
 
-> Subagent report from the 2026-09-12 research pass behind `plans/testmon-plan.md`, kept verbatim. Paths under `/tmp` were rewritten to their copies in `research/testmon/`; the venvs they ran in weren't kept (see `../README.md`).
+> Subagent report from the 2026-09-12 research pass, kept verbatim. Paths under `/tmp` were rewritten to their copies in `research/testmon/`; the venvs they ran in weren't kept (see `../README.md`).
 
 ## Summary
 

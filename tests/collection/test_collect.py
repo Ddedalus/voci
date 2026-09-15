@@ -1537,9 +1537,8 @@ def test_an_xfail_condition_is_evaluated_at_collection_not_at_import(tmp_path: P
     assert record.marks.xfail.reason == "computed"
 
 
-# Collectors: one per file `_import_module` imports (`plans/affected-tests-plan.md`, Tracer's
-# "Collection" bullet). Nothing consumes these yet -- only that each import gets its own, current
-# for the span of `exec_module` alone, is under test here.
+# Collectors: one per file `_import_module` imports. Nothing consumes these yet -- only that each
+# import gets its own, current for the span of `exec_module` alone, is under test here.
 # ------------------------------------------------------------------------------------------
 
 

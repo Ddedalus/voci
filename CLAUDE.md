@@ -25,7 +25,7 @@ alone is enough otherwise.
 ## References
 `oss/` - inspiration repo closes
 `spec/` - AI slop description of functionality
-`plans/` — AI work plans
+`rationale.md`, `rationale/` — why voci is shaped the way it is
 
 ## Documentation
 

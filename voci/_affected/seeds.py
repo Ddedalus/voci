@@ -1,6 +1,5 @@
 """Turns one test's finished `CollectorRecord` into `resolve.World.closure`'s seed keys, at
-session end (see `plans/affected-tests-plan.md`, M2's "code -> block resolution at session end"
-bullet). The actual `(filename, qualname) -> DefKey | NameKey` mapping is `World.resolve_code`;
+session end. The actual `(filename, qualname) -> DefKey | NameKey` mapping is `World.resolve_code`;
 this module is the thin per-record driver on top of it, plus the one rule that isn't a per-code
 lookup at all: a record naming a file that changed mid-run is dropped outright rather than
 resolved against stale qualnames.

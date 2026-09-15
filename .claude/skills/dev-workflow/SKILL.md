@@ -33,8 +33,8 @@ When asked to do work on a feature or larger refactor:
    `git branch -D <branch>` from the main checkout.
 
 If **material** uncertainty exists after plan or implementation, explain and only merge once
-clarified. When asked to implement a roadmap item, delete its entry from ROADMAP.md as part of the
-worktree.
+clarified. When asked to implement a roadmap item, delete its entry from the plan repo's `ROADMAP.md`
+(`../plan/ROADMAP.md`) as part of the worktree.
 
 > WARNING: EnterWorktree requires user approval. You must call this ASAP in the session, before user goes away. Do this before planning and code exploration.
  

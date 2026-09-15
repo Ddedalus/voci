@@ -1,5 +1,4 @@
-"""`voci._affected.world`: building a `resolve.World` over the whole first-party tree
-(`plans/affected-tests-plan.md`, M3's "still to come" driver bullet)."""
+"""`voci._affected.world`: building a `resolve.World` over the whole first-party tree."""
 
 from __future__ import annotations
 

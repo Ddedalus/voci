@@ -87,9 +87,9 @@ class XFail:
 
 @dataclass(frozen=True, slots=True)
 class Untrusted:
-    """A test's own declaration that affected-test selection can't vouch for it (see
-    `plans/affected-tests-plan.md`, "Self-declared untrusted"). `reason` is for whoever reads the
-    test next -- selection stacks this with any automatic mark and never reads `reason` back."""
+    """A test's own declaration that affected-test selection can't vouch for it. `reason` is for
+    whoever reads the test next -- selection stacks this with any automatic mark and never reads
+    `reason` back."""
 
     reason: str
 
@@ -320,10 +320,9 @@ def isolated[F: Callable[..., Any]](fn: F) -> F:
 def untrusted[F: Callable[..., Any]](reason: str) -> Callable[[F], F]:
     """Declare that affected-test selection can't vouch for this test: it always runs under
     `--affected`, the way an automatically-detected untrusted test does (an unattributed thread,
-    subprocess, or dynamic import -- see `plans/affected-tests-plan.md`, "Self-declared
-    untrusted"), and produces no skip prediction for `--affected-verify` to check against, so a
-    known gap doesn't need re-discovering on every `verify` run. `reason` is never read back by
-    voci; it's there for whoever reads the test next.
+    subprocess, or dynamic import), and produces no skip prediction for `--affected-verify` to
+    check against, so a known gap doesn't need re-discovering on every `verify` run. `reason` is
+    never read back by voci; it's there for whoever reads the test next.
     """
 
     def decorate(fn: F) -> F:

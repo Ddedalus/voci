@@ -1,7 +1,6 @@
 """Building a `resolve.World` over the whole first-party tree, the way the session-start/end
 driver needs one -- not just the test files `_collection.discovery` walks, since a test's closure
-can reach any first-party module (`plans/affected-tests-plan.md`, M3's "still to come" bullet in
-`_affected/__init__.py`).
+can reach any first-party module.
 
 Every candidate `discover_files` turns up is then filtered through `tracer.is_first_party`, the
 exact criterion a running `Tracer` classifies code by -- so a `CollectorRecord`'s `(filename,

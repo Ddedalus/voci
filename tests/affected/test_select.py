@@ -1,6 +1,5 @@
 """`voci._affected.select`: `decide`'s per-test rule, and the `candidate_files`/`select` pair that
-apply it at discovery- and collection-time (`plans/affected-tests-plan.md`, M3's "Narrow through
-`lastfailed.candidate_files`, then filter per test like `lastfailed.select`" bullet)."""
+apply it at discovery- and collection-time."""
 
 from __future__ import annotations
 

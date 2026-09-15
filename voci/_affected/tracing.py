@@ -1,7 +1,6 @@
 """A `Tracer`'s lifetime as a context manager, for the parent's own run -- the same start/stop
 shape `_isolated_worker.py` already uses per subprocess, factored out so `cli.py`'s own driver can
-share it without duplicating the `try`/`finally` (`plans/affected-tests-plan.md`, M3's still-
-missing "a real `Tracer` around the parent's own run" bullet).
+share it without duplicating the `try`/`finally`.
 """
 
 from __future__ import annotations

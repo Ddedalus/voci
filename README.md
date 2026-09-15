@@ -124,8 +124,7 @@ voci -s                           # live, id-prefixed output instead of captured
 
 - **[examples/](examples/)** — three worked suites: a FastAPI + async SQLAlchemy CRUD API, a
   pure-async library, and shared resources under concurrency. Each is runnable.
-- **[ROADMAP.md](ROADMAP.md)** — what isn't built yet, and what's next.
-- **[plans/rationale.md](plans/rationale.md)** — why voci is shaped the way it is. Read this before
+- **[rationale.md](rationale.md)** — why voci is shaped the way it is. Read this before
   changing anything central to it.
 
 ## Status
@@ -134,7 +133,7 @@ Pre-release, ahead of v0.1. The core is real and exercised by voci's own suite a
 examples: discovery, dependency injection with four scopes and inverted teardown, concurrent
 execution with per-test timeouts, capture, assertion introspection, selection, and the reporter.
 Fair scheduling around shared resources, the migration tool, and machine-readable reports are
-still ahead — see [ROADMAP.md](ROADMAP.md). The public API is not frozen yet.
+still ahead. The public API is not frozen yet.
 
 ## Trade-offs
 

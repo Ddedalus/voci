@@ -1,5 +1,4 @@
-"""Affected-test selection (`plans/affected-tests-plan.md`): re-running only the tests a change
-can reach.
+"""Affected-test selection: re-running only the tests a change can reach.
 
 `tracer.py` is the M1 "Recording" milestone's first piece: a `sys.monitoring` tool that
 classifies running code as first-party or not. `collector.py` is its second: the per-test,

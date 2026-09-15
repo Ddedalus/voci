@@ -1,5 +1,4 @@
-"""Name closure, effect folding, string index and whole-module fallback (see
-`plans/affected-tests-plan.md`, "What a passing test depends on", rules 2-5): resolves a set of
+"""Name closure, effect folding, string index and whole-module fallback: resolves a set of
 seed `Block`s -- what a test's collector, or a `module`/`session` fixture's, actually ran -- into
 every first-party dependency key reaching those blocks depends on, and separately answers what a
 given effect statement folds onto.
