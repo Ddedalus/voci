@@ -1,6 +1,5 @@
-"""The `sys.monitoring` tracer behind affected-test selection (see `plans/affected-tests-plan.md`,
-Tracer): a `PY_START` callback that classifies whether running code is first-party, plus the tool
-id's own lifecycle.
+"""The `sys.monitoring` tracer behind affected-test selection: a `PY_START` callback that
+classifies whether running code is first-party, plus the tool id's own lifecycle.
 
 Only classification lives here -- what to do with a classified code object (attribute it to a
 test, a fixture, or nothing at all; mark a test untrusted) is the next pieces of M1, still to

@@ -1,8 +1,7 @@
-"""What a `Tracer`'s `on_first_party` callback attributes running code to (see
-`plans/affected-tests-plan.md`, Tracer's "Recording" and "Which collector" bullets).
+"""What a `Tracer`'s `on_first_party` callback attributes running code to.
 
 Three collectors exist at once over the life of a run, nested by `ContextVar` the way
-`_capture.current_test_context` is (`plans/rationale/global.md`, "Everything per-test lives in a
+`_capture.current_test_context` is (`rationale/global.md`, "Everything per-test lives in a
 ContextVar"): a test's own, spanning its whole setup/call/teardown envelope
 (`_run.run._Session.run_envelope`); a `module`/`session`-scope fixture's own, spanning its
 construction *and* its later teardown, which can run on an unrelated task, or with no test's

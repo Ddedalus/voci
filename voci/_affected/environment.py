@@ -1,8 +1,7 @@
-"""M4's real environment key (`plans/affected-tests-plan.md`, Environment key design section): a
-mismatch means a full run, so the key only needs to cover what a test's own dependency closure
-can't already attribute to itself -- the interpreter, the locale, the resolved `[tool.voci]` plus
-the CLI options that change what every test sees, and first-party compiled extensions, which carry
-no source `DefKey`/`NameKey` closure could ever reach.
+"""M4's real environment key: a mismatch means a full run, so the key only needs to cover what a
+test's own dependency closure can't already attribute to itself -- the interpreter, the locale,
+the resolved `[tool.voci]` plus the CLI options that change what every test sees, and first-party
+compiled extensions, which carry no source `DefKey`/`NameKey` closure could ever reach.
 
 Built in one pass, `env_key`, over pieces small enough to keep separate for testing:
 

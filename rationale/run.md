@@ -67,7 +67,7 @@ head of a `deque` only as far as the free capacity allows and books each admissi
 for the ordinary case (a waiter with no exclusive tokens at the head) is one step. It walks *past*
 a waiter held up by a token or a solo lock rather than stopping there, since a later waiter may
 still fit in the slot that one cannot use — the same barge-ahead the `Condition` had, and the same
-absent fairness guarantee (`ROADMAP.md`). Booking the admission inside `release` rather than when
+absent fairness guarantee. Booking the admission inside `release` rather than when
 the waiter's coroutine resumes is what keeps two tests from ever being admitted into one slot; the
 cost is that a waiter cancelled in the tick between the two has to give the slot back itself,
 which `acquire`'s own `except asyncio.CancelledError` does. The mirror of that window is a waiter

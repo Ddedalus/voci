@@ -84,7 +84,7 @@ packages = ["voci"]
 [tool.uv]
 default-groups = ["dev", "docs"]
 
-# voci-migrate is a second distribution in this repo (plans/migration-tool-plan.md §2), kept in
+# voci-migrate is a second distribution in this repo, kept in
 # the same workspace so its generated output can be exercised against voci itself in one CI run.
 [tool.uv.workspace]
 members = ["voci-migrate"]

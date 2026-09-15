@@ -598,7 +598,7 @@ class AdmissionGate:
     acquired for its whole token set in one step, never one token at a time, so two tests can
     never deadlock each holding a token the other needs. A `solo` test is admitted only once
     nothing else is running, and blocks every other admission until it releases. Waiters have no
-    fairness guarantee (`ROADMAP.md`).
+    fairness guarantee.
 
     Releasing hands the freed slot straight to a waiter rather than waking the queue to race for
     it: `run_suite` creates every test's task up front, so the queue is the whole suite, and
@@ -620,7 +620,7 @@ class AdmissionGate:
         # held up by a token or a solo lock, not by anything this caller could wait behind,
         # and making it wait anyway would leave a free slot idle. This is the same
         # barge-ahead the previous `Condition` had, and the same lack of a fairness
-        # guarantee (`ROADMAP.md`).
+        # guarantee.
         if self._admits(tokens, solo=solo):
             self._take(tokens, solo=solo)
             return

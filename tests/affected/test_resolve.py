@@ -1,7 +1,7 @@
 """Soundness cases for `voci._affected.resolve`: the name closure, effect folding, string index
-and whole-module fallback (`plans/affected-tests-plan.md`, "What a passing test depends on").
-Mirrors the cases from `research/affected/reports/name-deps.md`'s probe, adapted to voci's own
-`(path, name)`/`(path, qualname)` keys rather than the prototype's positional `BlockKey`s -- see
+and whole-module fallback. Mirrors the cases from `research/affected/reports/name-deps.md`'s
+probe, adapted to voci's own `(path, name)`/`(path, qualname)` keys rather than the prototype's
+positional `BlockKey`s -- see
 `resolve.py`'s own module docstring for where the two designs diverge (a `World.closure` on
 static references alone; `World.effect_fold_target` as a separate query, not folded into the
 same BFS).

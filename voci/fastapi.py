@@ -5,7 +5,7 @@ runs against one module-level `app = FastAPI()`. This module swaps each attribut
 for a proxy layering a `ContextVar` of per-test values over what the app already had, so
 concurrent tests read and write their own layer through the same app object. `client` yields an
 `httpx.AsyncClient` bound to one such layer, which lasts for the block and needs no cleanup. See
-`plans/rationale/fastapi.md` for why this is safe from outside FastAPI's own code.
+`rationale/fastapi.md` for why this is safe from outside FastAPI's own code.
 
 Requires `fastapi` and `httpx`, which `voci/__init__.py` does not import. Use
 `import voci.fastapi`.
@@ -200,7 +200,7 @@ class _LayeredState(State):
         # default `copy`/`deepcopy` machinery does before `__copy__`/`__deepcopy__` intercept it)
         # has no `_layers` slot, and a plain `self._layers` there would recurse into this method
         # unboundedly. `object.__getattribute__` is used instead so "is this set" can be asked
-        # without risking another call into `__getattr__` — see plans/rationale/fastapi.md
+        # without risking another call into `__getattr__` — see rationale/fastapi.md
         # ("the view of it becomes per-test") for the fuller shape of this.
         try:
             layers = object.__getattribute__(self, "_layers")

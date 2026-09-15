@@ -1,5 +1,4 @@
-"""`voci._affected.driver`: the session-start/end calls over `store.py`/`select.py`/`seeds.py`
-(`plans/affected-tests-plan.md`, M3's "still to come" driver bullet)."""
+"""`voci._affected.driver`: the session-start/end calls over `store.py`/`select.py`/`seeds.py`."""
 
 from __future__ import annotations
 

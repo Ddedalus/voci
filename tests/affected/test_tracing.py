@@ -1,6 +1,5 @@
 """`voci._affected.tracing.traced`: a `Tracer`'s lifetime as a context manager, now also covering
-M4's audit hook and `os.environ` recorder (`plans/affected-tests-plan.md`, M3's "a real Tracer
-around the parent's own run" bullet, and M4's own)."""
+M4's audit hook and `os.environ` recorder."""
 
 from __future__ import annotations
 

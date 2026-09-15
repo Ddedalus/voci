@@ -1,5 +1,4 @@
-"""`voci._affected.environment.env_key`: M4's real environment key
-(`plans/affected-tests-plan.md`, Environment key design section)."""
+"""`voci._affected.environment.env_key`: M4's real environment key."""
 
 from __future__ import annotations
 

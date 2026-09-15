@@ -1,5 +1,4 @@
-"""Splits one file's source into statement and def blocks (see `plans/affected-tests-plan.md`,
-Fingerprints), from a single `ast.parse`.
+"""Splits one file's source into statement and def blocks, from a single `ast.parse`.
 
 A **statement block** covers one module top-level statement -- for a bare `def`, just its name
 and decorators (the part that runs at import); for a `class`, its bases, keywords, decorators,

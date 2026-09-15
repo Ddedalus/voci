@@ -1,5 +1,4 @@
-"""Opt-in `[tool.voci] affected_trace_threads` (`plans/affected-tests-plan.md`, Tracer's
-"Threads" and "Async offload" bullets): for the duration of a run, `install()` patches
+"""Opt-in `[tool.voci] affected_trace_threads`: for the duration of a run, `install()` patches
 `Thread.start` and `loop.run_in_executor` so code that ends up running on a thread inherits
 whichever collector was current in the thread or task that created it, instead of running with
 none -- which `collector.record_first_party` would otherwise read as "one of the tests in flight

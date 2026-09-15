@@ -35,8 +35,7 @@ attributed to that file rather than aborting the run. The assertion-rewriting me
 installed, is consulted explicitly (`_import_module`) — `spec_from_file_location` alone never
 gives it the chance to run. The packages above a test file go through the same import, ahead of
 the file itself. Every such import also gets its own affected-test collector
-(`CollectionResult.collectors`) -- unused so far, alongside `_di.runtime` and `_run.run`'s own two
-(`plans/affected-tests-plan.md`).
+(`CollectionResult.collectors`) -- unused so far, alongside `_di.runtime` and `_run.run`'s own two.
 
 Both `async def test_*` and plain `def test_*` functions are collected; `_run.py` runs the sync
 ones on the context-propagating executor rather than inline. A `class Test*` is pure namespacing:
@@ -179,9 +178,9 @@ class CollectionResult:
     collectors: Mapping[Path, Collector] = field(default_factory=dict)
     """Every file `_import_module` imported for this call -- a test file or a package
     `__init__.py` alike -- keyed by its resolved path, with the affected-test collector that was
-    current for that one import (`plans/affected-tests-plan.md`, Tracer's "Collection" bullet).
-    Nothing reads this yet; `_di.runtime` and `_run.run` wire the other two collectors the same
-    way, and a later milestone is what resolves any of the three into a dependency."""
+    current for that one import. Nothing reads this yet; `_di.runtime` and `_run.run` wire the
+    other two collectors the same way, and a later milestone is what resolves any of the three
+    into a dependency."""
 
 
 def module_name_for(path: Path, rootdir: Path) -> str:
@@ -851,7 +850,7 @@ def _import_module(path: Path, module_name: str, *, collectors: dict[Path, Colle
     submodule import without needing `sys.path` or a real `voci_tests` package to exist. When the
     hook applies it hands back a spec with itself as the loader, and `exec_module` below runs the
     AST rewrite; when it doesn't (or no hook is installed), `find_spec` returns `None` and this
-    falls back to plain `spec_from_file_location`. See `plans/rationale/collection.md` ("rewrite
+    falls back to plain `spec_from_file_location`. See `rationale/collection.md` ("rewrite
     hook is consulted by hand") for the symlink edge case this leaves unresolved.
 
     importlib-only, no `sys.path` insertion. Any exception during `exec_module` propagates to the
@@ -859,9 +858,8 @@ def _import_module(path: Path, module_name: str, *, collectors: dict[Path, Colle
     `sys.modules` first so a later, unrelated import of the same dotted name can't observe it.
 
     `collectors[path.resolve()]` gets a fresh `Collector`, current for the span of `exec_module`
-    alone -- the module body, decorator application and class creation it runs, per
-    `plans/affected-tests-plan.md` (Tracer's "Collection" bullet) -- whether or not that call
-    raises, so a broken module's partial top-level effects are still attributed to it.
+    alone -- the module body, decorator application and class creation it runs -- whether or not
+    that call raises, so a broken module's partial top-level effects are still attributed to it.
     """
     hook = _rewrite.installed_hook()
     spec = hook.find_spec(module_name, [str(path.parent)]) if hook is not None else None

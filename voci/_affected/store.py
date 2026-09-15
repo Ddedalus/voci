@@ -1,6 +1,5 @@
 """The affected-test store: where dependency checksums live between runs, and the checksum
-computation that feeds it (`plans/affected-tests-plan.md`, M2's "Fingerprints and store" -- the
-"store.py" bullet, and the Storage design section).
+computation that feeds it.
 
 Three things this module owns, kept separate because each has its own cache key:
 

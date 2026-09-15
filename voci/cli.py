@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Hidden (help=SUPPRESS) until M4 lands the non-code dependencies (data files, directory
     # listings, env vars) -- without those, a test that only depends on one of them could be
     # skipped when it shouldn't be. The mechanism underneath is real and exercised by its own
-    # tests; only advertising it to users waits (plans/affected-tests-plan.md, M3/M4).
+    # tests; only advertising it to users waits.
     parser.add_argument(
         "--affected",
         dest="affected",
@@ -976,7 +976,7 @@ def _settle(
     loaded at startup, and merging into it here would leave the window for a lost update open for
     the entire length of the run -- long enough that a scoped run finishing after a full one drops
     the full run's new failures. `update` re-reads the freshest cache on disk at the write instead,
-    falling back to `last_run` only if that re-read fails. See `plans/rationale/cache.md`.
+    falling back to `last_run` only if that re-read fails. See `rationale/cache.md`.
     """
     resolved_rootdir = rootdir.resolve()
     attempted = {str(_collect.display_path(path, resolved_rootdir)) for path in files}

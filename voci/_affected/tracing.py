@@ -1,14 +1,13 @@
 """A `Tracer`'s lifetime as a context manager, for the parent's own run -- the same start/stop
 shape `_isolated_worker.py` already uses per subprocess, factored out so `cli.py`'s own driver can
-share it without duplicating the `try`/`finally` (`plans/affected-tests-plan.md`, M3's still-
-missing "a real `Tracer` around the parent's own run" bullet).
+share it without duplicating the `try`/`finally`.
 
 M4's audit hook and `os.environ` recorder share this same lifetime: both are as inert as a `Tracer`
-with no free tool id would leave code recording (Non-code dependencies design section: the audit
-hook is "a no-op without a collector"), so there's nothing to gain from a separate context manager
--- one `with traced(rootdir):` around collection and the run, in both the parent (`cli.py`) and
-`@voci.isolated`'s own subprocess (`_isolated_worker.py`), turns on every M1-M4 recording mechanism
-together and always tears all three down on the way out, exception or not.
+with no free tool id would leave code recording (the audit hook is "a no-op without a collector"),
+so there's nothing to gain from a separate context manager -- one `with traced(rootdir):` around
+collection and the run, in both the parent (`cli.py`) and `@voci.isolated`'s own subprocess
+(`_isolated_worker.py`), turns on every M1-M4 recording mechanism together and always tears all
+three down on the way out, exception or not.
 """
 
 from __future__ import annotations

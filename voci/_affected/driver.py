@@ -1,8 +1,7 @@
 """The affected-test session driver: the two calls a real run needs on top of `store.py`/
 `select.py`/`seeds.py`/`world.py`'s separate pieces -- a `Selection` before collection,
-`store_record` once per finished test after (`plans/affected-tests-plan.md`, M3's "still to come"
-driver bullet). Not yet wired into `cli.py`; `env_key` is a placeholder string the caller supplies,
-pending M4's real computation (`environment.py`).
+`store_record` once per finished test after. Not yet wired into `cli.py`; `env_key` is a
+placeholder string the caller supplies, pending M4's real computation (`environment.py`).
 """
 
 from __future__ import annotations

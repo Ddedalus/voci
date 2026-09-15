@@ -45,7 +45,8 @@ When asked to do work on a feature or larger refactor:
 If **material** uncertainty exists after plan or implementation, explain and only merge once
 clarified — or, if the plan lives in `~/voci/plan/plans/<slug>.md`, record the question there
 under `status: needs-input` and stop; that's what the janitor's notifier watches for. When asked
-to implement a roadmap item, delete its entry from ROADMAP.md as part of the slot's work.
+to implement a roadmap item, delete its entry from the plan repo's `ROADMAP.md`
+(`../plan/ROADMAP.md`) as part of the slot's work.
 
 ## Ad hoc worktree workflow
 

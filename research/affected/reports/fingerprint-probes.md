@@ -1,6 +1,6 @@
 # Probes: qualname mapping, fingerprint coverage, module-level attribution, assertion rewriting, callback cost
 
-> Subagent report from the 2026-09-12 research pass behind `plans/testmon-plan.md`, kept verbatim. Paths under `/tmp` were rewritten to their copies in `research/testmon/`; the venvs they ran in weren't kept (see `../README.md`).
+> Subagent report from the 2026-09-12 research pass, kept verbatim. Paths under `/tmp` were rewritten to their copies in `research/testmon/`; the venvs they ran in weren't kept (see `../README.md`).
 
 > **Correction (2026-09-12):** the Q8 numbers below are wrong. Re-measured with `../probes/sysmon_callback_cost.py`, a callback that records costs ~3x on a trivial function whether or not it dedups, an empty callback ~1.8x, and `DISABLE` ~1x. The plan's Tracer section has the corrected figures.
 

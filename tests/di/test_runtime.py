@@ -759,8 +759,7 @@ def test_setup_never_shares_a_construction_across_two_independent_parametrized_f
 
 
 # Collectors: a module/session-scope entry gets its own, current for its construction and its
-# later teardown; function/call scope leaves whichever collector is already ambient in place
-# (`plans/affected-tests-plan.md`, Tracer's "Which collector" bullet).
+# later teardown; function/call scope leaves whichever collector is already ambient in place.
 # ------------------------------------------------------------------------------------------
 
 
@@ -859,7 +858,7 @@ def test_session_scope_teardown_via_aclose_uses_its_own_collector_with_no_ambien
 
 # ScopeStore.collectors_for: the affected-test session driver's own read of a module/session
 # entry's finished collector, once `release`/`aclose` has torn it down and so deleted it from
-# `self._entries` (`plans/affected-tests-plan.md`, "What a passing test depends on", rule 1).
+# `self._entries`.
 # ------------------------------------------------------------------------------------------
 
 

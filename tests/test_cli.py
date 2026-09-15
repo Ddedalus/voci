@@ -2810,7 +2810,7 @@ def test_watch_scope_never_raises_on_a_broken_config(chdir_project: Project) -> 
 
 # ------------------------------------------------------------------------------------------
 # _settle: what a run may write back to the failure cache, pinned directly rather than
-# through a real run -- see plans/cli-main-decomposition-plan.md.
+# through a real run.
 # ------------------------------------------------------------------------------------------
 
 

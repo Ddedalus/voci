@@ -1,7 +1,5 @@
 """Which of the store's tests the current tree lets you skip, at both discovery-narrowing and
-per-test granularity (`plans/affected-tests-plan.md`, M3's "Narrow through
-`lastfailed.candidate_files`, then filter per test like `lastfailed.select`" bullet, and the
-Selection design section).
+per-test granularity.
 
 Mirrors `_collection.lastfailed`'s own two-step shape -- a file-level narrow, `candidate_files`,
 then a per-test filter, `select` -- but the criterion differs: `lastfailed` matches a bare id
